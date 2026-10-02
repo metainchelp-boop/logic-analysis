@@ -122,6 +122,14 @@ def load(store: S.Store, now: datetime, org: Optional[O.Org] = None) -> Ctx:
     deadline = datetime.combine(today, DEADLINE_AT, KST)
     prospects = {p["possibility_id"]: p for p in store.prospects()}
     owns = {pid: SC.ownership_for_client(org, pid, pid, SC.MATCH_PID) for pid in prospects}
+    # 전체 목록의 숨김/알 수 없는 단계 근거가 들어오면 이전 조직 담당이 남아 있어도
+    # 모든 기존 상세·이슈·매칭 경로에서 직원의 접근을 막는다. 대표 진단 범위는 유지한다.
+    catalog = store.account_catalog()
+    if catalog is not None:
+        for row in catalog["items"]:
+            pid = row["possibility_id"]
+            if pid in owns and (row["stage_hidden"] or not row["stage_known"]):
+                owns[pid] = SC.Ownership(client_id=pid, main=None, match=SC.MATCH_UNKNOWN)
     pairing = store.last_pairing(S.SYNC_ACCEPTED)
     rows: Dict[int, List[dict]] = {}
     if pairing is not None:
@@ -469,17 +477,15 @@ def escalations(ctx: Ctx, store: S.Store, scope: SC.Scope, ids: Iterable[int]) -
 
 # ── 화면 자료 ────────────────────────────────────────────────────────
 def me(ctx: Ctx, scope: SC.Scope) -> dict:
-    """나 — 이름 · 범위 종류 · 좁힘 · 고를 수 있는 팀·사람(범위 안만)."""
+    """나 — 대표는 재직 관리팀 명단, 직원은 본인만. 부서 계층은 제공하지 않는다."""
     idx = scope.viewer_idx
     person = ctx.org.people.get(idx)
-    teams = [{"idx": t, "name": _team_name(ctx.org, t), "parent_idx": ctx.org.parent_of(t)}
-             for t in sorted(scope.teams) if not ctx.org.is_system_team(t)]
     people = [{"idx": p, "name": _person_name(ctx.org, p), "team_idx": ctx.org.people[p].team_idx,
                "active": ctx.org.people[p].active} for p in sorted(scope.people) if p in ctx.org.people]
     return {"idx": idx, "name": None if person is None else person.name, "scope": scope.kind,
             "narrowed": scope.narrowed, "team_idx": None if person is None else person.team_idx,
             "team_name": None if person is None else _team_name(ctx.org, person.team_idx),
-            "teams": teams, "people": people, "org_freshness": ctx.freshness,
+            "teams": [], "people": people, "org_freshness": ctx.freshness,
             "org_generated_at": ctx.org.generated_at}
 
 
@@ -722,17 +728,27 @@ def unlinked(ctx: Ctx, scope: SC.Scope) -> dict:
 
 
 def bell(store: S.Store, viewer_idx: int, now: datetime) -> dict:
-    """🔔 — 나에게 온 알림만(남겨 둔 것 포함) · 문구는 ``alerts.render`` 한 곳."""
+    """🔔 — 현재 접근권한 재검증. PID 없는 과거 집계는 직원에게 숫자·원래 경로를 주지 않는다."""
     _need_time(now)
+    scope = SC.scope_of(load_org(store), viewer_idx)
+    if scope.kind == SC.NONE:
+        return {"items": [], "unread": 0}
+    ceo = scope.kind == SC.ALL
     since = now.astimezone(KST).date() - timedelta(days=BELL_DAYS - 1)
     items = []
     for r in store.my_alerts(viewer_idx, since):
+        if not ceo and r["template"] not in ("digest", "weekly_unlinked"):
+            continue  # 시스템·전사·옛 팀장 집계는 대표만. 모르는 틀도 닫힌 쪽.
         try:
             title, lines = AL.render(r["template"], r["source"], r["codes"], r["params"])
         except AL.RenderError:
             title, lines = "알림", ()
+        link = r["link_path"]
+        if not ceo:
+            # 과거 집계에는 광고주 번호가 없어 현재 담당 집합으로 재계산할 수 없다.
+            title, lines, link = "관제 알림", ("현재 담당 광고주는 관제 화면에서 확인해 주세요",), "/naver/"
         items.append({"recipient_id": r["recipient_id"], "kind": r["kind"], "day": r["day"], "severity": r["severity"],
-                      "title": title, "lines": list(lines), "link": r["link_path"], "status": r["status"],
+                      "title": title, "lines": list(lines), "link": link, "status": r["status"],
                       "held_reason": r["held_reason"], "read": r["read_at"] is not None})
     return {"items": items, "unread": sum(1 for i in items if not i["read"])}
 

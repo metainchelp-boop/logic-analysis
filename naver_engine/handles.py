@@ -26,6 +26,7 @@ KST = timezone(timedelta(hours=9))
 
 PURPOSE_CHECK = "check"
 PURPOSE_PREVIEW = "preview"
+PURPOSE_INVENTORY = "inventory"
 _PURPOSES = frozenset({PURPOSE_CHECK, PURPOSE_PREVIEW})
 
 LINK_CONFIRMED = "confirmed"  # 사람이 「이 계정 맞음」을 눌렀다
@@ -138,6 +139,42 @@ class AccountHandle(_Frozen):
         return f"AccountHandle({self.purpose}, …{str(self.customer_id)[-4:]}, 가망 {self.possibility_id}, {self.issued_on})"
 
 
+class InventoryHandle(_Frozen):
+    """전산 귀속 없는 원천 읽기 전용. 발급한 목록과 현재 위임을 요청마다 확인한다."""
+    __slots__ = ("customer_id", "snapshot_at", "issued_on", "validate", "_tag")
+
+    def __init__(self, customer_id, snapshot_at, issued_on, validate, tag):
+        for key, value in (("customer_id", customer_id), ("snapshot_at", snapshot_at),
+                           ("issued_on", issued_on), ("validate", validate), ("_tag", tag)):
+            object.__setattr__(self, key, value)
+
+    def __repr__(self):
+        return f"InventoryHandle(…{str(self.customer_id)[-4:]}, {self.issued_on})"
+
+
+def issue_inventory_handle(*, customer_id, snapshot_at, now, validate):
+    cid = normalize_customer_id(customer_id)
+    today = _kst_today(now)
+    if not callable(validate) or not isinstance(snapshot_at, datetime) or snapshot_at.tzinfo is None:
+        raise NotEligible("inventory-invalid")
+    handle = InventoryHandle(cid, snapshot_at, today, validate,
+                             _tag("I", cid, snapshot_at.isoformat(), today, id(validate)))
+    return require_inventory(handle, now)
+
+
+def require_inventory(handle, now):
+    if type(handle) is not InventoryHandle:
+        raise HandleInvalid("계정 원천 읽기 손잡이가 아닙니다")
+    expect = _tag("I", handle.customer_id, handle.snapshot_at.isoformat(), handle.issued_on, id(handle.validate))
+    if not hmac.compare_digest(expect, handle._tag) or handle.issued_on != _kst_today(now):
+        raise HandleInvalid("원천 읽기 손잡이가 유효하지 않습니다")
+    if not timedelta(0) <= now - handle.snapshot_at <= timedelta(hours=30):
+        raise NotEligible("inventory-stale")
+    if not handle.validate(handle.customer_id, handle.snapshot_at, now):
+        raise NotEligible("inventory-revoked")
+    return handle
+
+
 def _check_stage(stage, stage_as_of: datetime, latest_end_date: Optional[date], now: datetime) -> None:
     key = stage_key(stage)
     if key not in MONITORED_STAGES:
@@ -234,6 +271,8 @@ def issue_manager_handle(customer_id, now: datetime) -> ManagerHandle:
 
 def require_account(handle, now: datetime, purposes: Iterable[str]) -> AccountHandle:
     """읽기 관문이 부른다. 오늘 발급한 진짜 손잡이이고 목적이 맞을 때만 돌려준다."""
+    if type(handle) is InventoryHandle and PURPOSE_INVENTORY in purposes:
+        return require_inventory(handle, now)
     if type(handle) is not AccountHandle:
         raise HandleInvalid("계정 손잡이가 아닙니다(날 번호는 받지 않습니다)")
     allowed = frozenset(purposes)

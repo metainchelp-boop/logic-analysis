@@ -521,7 +521,7 @@ class MetricsStoreTest(Base):
             raw.execute("DROP TABLE naver_auto_metrics_delivery")
             raw.execute("UPDATE naver_auto_meta SET value = '6' WHERE key = 'schema_version'")
         self.st = S.open_writer(self.path, clock=self.fc.now)
-        self.assertEqual(self.st.meta("schema_version"), "7")
+        self.assertEqual(self.st.meta("schema_version"), str(S.SCHEMA_VERSION))
         self.assertEqual(len(self.st.runs_on(TODAY)), 1)
         self.assertEqual(len(self.st.link_decisions()[0]), 1)
         self.assertEqual(self.st.metrics_work(context["fingerprint"], NOW, 2), [11])

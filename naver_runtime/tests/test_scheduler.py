@@ -12,6 +12,21 @@ NOW = datetime(2026, 10, 1, 7, 20, tzinfo=S.KST)
 
 
 class SchedulerTest(TestCase):
+    def test_inventory_runs_without_morning_or_pairing_and_keeps_bounded_tick(self):
+        config = Config("/synthetic/data/db", "/synthetic/socket/sock", inventory_enabled=True)
+        calls = []
+        task = Scheduler(config, Mock(), erp_factory=lambda: object(), naver_factory=lambda: object(), clock=lambda: NOW)
+        with patch.object(L, "accounts_due", return_value=True), \
+             patch.object(L, "sync_accounts", side_effect=lambda *a: calls.append("accounts")), \
+             patch.object(L, "pairing_due", side_effect=AssertionError("계약 매칭 불필요")), \
+             patch("naver_runtime.scheduler.IC.sync_catalog_due", return_value=True), \
+             patch("naver_runtime.scheduler.IC.sync_catalog", side_effect=lambda *a: calls.append("catalog")), \
+             patch("naver_runtime.scheduler.IR.run_inventory", side_effect=lambda *a:
+                   calls.append("inventory") or SimpleNamespace(code="DONE", counts={})):
+            self.assertEqual(task.tick()["state"], "ok")
+            task.tick()
+        self.assertEqual(calls, ["accounts", "catalog", "inventory"])
+
     def test_all_off_does_not_create_readers_or_touch_store(self):
         store, factory = Mock(), Mock(side_effect=AssertionError("외부 호출 금지"))
         task = Scheduler(Config("/synthetic/data/db", "/synthetic/socket/sock"), store,

@@ -5,6 +5,7 @@ import logging
 import threading
 
 from naver_engine import alerts as A, links as L, morning as M, store as S, sync as Y, metrics as G, naver_read as N
+from naver_engine import inventory as IC, inventory_reads as IR
 from naver_runtime import collection_requests as CR
 
 log = logging.getLogger("naver_runtime.scheduler")
@@ -135,9 +136,10 @@ class Scheduler:
                     self._step("org", lambda: Y.sync_org(self.erp_factory(), st, self.clock()))
                 if Y.stages_due(st, self.clock()):
                     self._step("stages", lambda: Y.sync_stages(self.erp_factory(), st, self.clock()))
-            if c.links_enabled:
+            if c.links_enabled or c.inventory_enabled:
                 if L.accounts_due(st, self.clock()):
                     self._step("accounts", lambda: L.sync_accounts(self.naver_factory(), st, self.clock()))
+            if c.links_enabled:
                 if L.pairing_due(st, self.clock()):
                     self._step("pairing", lambda: L.pair_links(self.erp_factory(), st, self.clock()))
             if c.morning_enabled:
@@ -157,6 +159,10 @@ class Scheduler:
             if c.metrics_enabled:
                 # 공유 성과 재수집/재전송은 아침 심박·백업 뒤에 제한된 회차로 수행한다.
                 self._step("metrics", lambda: self._metrics(), note=False)
+            if c.inventory_enabled:
+                if IC.sync_catalog_due(st, self.clock()):
+                    self._step("inventory_catalog", lambda: IC.sync_catalog(self.erp_factory(), st, self.clock()), note=False)
+                self._step("inventory", lambda: self._inventory(), note=False)
             self.last_tick = self.clock()
             self.last_errors = tuple(self._errors)
             return {"state": "failed" if self.last_errors else "ok", "errors": list(self.last_errors)}
@@ -170,6 +176,12 @@ class Scheduler:
         if result.code not in ("WAITING_FOR_MORNING", "RETRY_WAIT", "ALREADY_BACKED_UP", "OFFSITE_OK"):
             self._errors.append("backup")
             A.record_system_alert(self.store, self.clock(), "morning", ["BACKUP_FAILED"])
+        return result
+
+    def _inventory(self):
+        result = IR.run_inventory(self.naver_factory(), self.store, self.clock)
+        if result.code in ("NOT_READY", "SOURCE_CHANGED") or any(result.counts.get(s, 0) for s in ("retry", "reauth_required", "limited")):
+            self._errors.append("inventory")
         return result
 
     def _metrics(self):

@@ -28,7 +28,7 @@ class RuntimeGuardTest(TestCase):
             "urllib": {"urllib.parse", "urllib.parse.urlsplit", "urllib.parse.parse_qsl", "urllib.parse.urlencode"},
             "os": {"os.fsencode", "os.geteuid", "os.lstat"},
             "socket": {"socket.socket", "socket.AF_UNIX", "socket.SOCK_STREAM"},
-            "E": {"E.ERP_HOST", "E.ERP_SCHEME", "E.PATH_CONTRACTS", "E.PATH_ORG_SNAPSHOT", "E.PATH_NAVER_IDS",
+            "E": {"E.ERP_HOST", "E.ERP_SCHEME", "E.PATH_CONTRACTS", "E.PATH_ORG_SNAPSHOT", "E.PATH_NAVER_IDS", "E.PATH_ACCOUNT_CATALOG",
                   "E.KEY_MIN_LENGTH", "E.KEY_MAX_LENGTH", "E.MAX_BODY", "E.TIMEOUT",
                   "E.STAGE_SPELLINGS", "E.STAGE_SPELLINGS.values"},
             "EP": {"EP.ERP_SCHEME", "EP.PATH_EXCHANGE", "EP.MAX_BODY", "EP.TIMEOUT"},

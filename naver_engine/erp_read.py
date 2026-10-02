@@ -25,7 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from . import handles as H
@@ -40,7 +40,8 @@ BASE_URL = ERP_SCHEME + "://" + ERP_HOST
 PATH_CONTRACTS = "/api/ad-sync/contracts"
 PATH_ORG_SNAPSHOT = "/api/ad-sync/org-snapshot"
 PATH_NAVER_IDS = "/api/ad-sync/naver-customer-ids"
-_PATHS = frozenset({PATH_CONTRACTS, PATH_ORG_SNAPSHOT, PATH_NAVER_IDS})
+PATH_ACCOUNT_CATALOG = "/api/ad-sync/naver-account-catalog"
+_PATHS = frozenset({PATH_CONTRACTS, PATH_ORG_SNAPSHOT, PATH_NAVER_IDS, PATH_ACCOUNT_CATALOG})
 _ALLOWED_METHODS = frozenset({"GET"})
 
 # 엔진 전용 키(2026-09-29 대표 확정) — ③ 계약 동기화의 ERP_SYNC_API_KEY(= ① AD_SYNC_API_KEY)와 <b>다른</b> 값이다.
@@ -165,6 +166,39 @@ def _pid(v) -> Optional[int]:
     if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
         return None
     return v
+
+
+def validate_account_catalog(body, now: datetime) -> dict:
+    """전체 업체 존재 증거. 계약 단계별 부분 목록은 이 계약을 대신할 수 없다."""
+    def bad():
+        return ErpIncomplete("catalog-incomplete", PATH_ACCOUNT_CATALOG)
+    if not isinstance(body, dict) or body.get("complete") is not True:
+        raise bad()
+    items, total = body.get("items"), body.get("total")
+    if not isinstance(items, list) or type(total) is not int or total != len(items) or total > 250000:
+        raise bad()
+    try:
+        at = datetime.fromisoformat(body["generated_at"])
+    except (KeyError, TypeError, ValueError):
+        raise bad() from None
+    if at.tzinfo is None or not -timedelta(minutes=5) <= now-at <= H.STAGE_MAX_AGE:
+        raise bad()
+    clean, seen = [], set()
+    for row in items:
+        if not isinstance(row, dict):
+            raise bad()
+        pid = _pid(row.get("possibility_id"))
+        name, stage = row.get("company_name"), row.get("stage")
+        if pid is None or pid in seen or (name is not None and not _display_text(name)) or (stage is not None and not _display_text(stage)):
+            raise bad()
+        if type(row.get("stage_known")) is not bool or type(row.get("stage_hidden")) is not bool:
+            raise bad()
+        if row["stage_known"] and not stage:
+            raise bad()
+        seen.add(pid)
+        clean.append({"possibility_id": pid, "company_name": name, "stage": stage,
+                      "stage_known": row["stage_known"], "stage_hidden": row["stage_hidden"]})
+    return {"generated_at": at.isoformat(), "total": total, "complete": True, "items": clean}
 
 
 class ErpReader:
@@ -299,8 +333,14 @@ class ErpReader:
         """조직 스냅숏 원문(``result``) — 건전성 검사는 ``app.naver_auto.org_snapshot`` 이 한다."""
         return self._get(PATH_ORG_SNAPSHOT)
 
+    def read_account_catalog(self) -> dict:
+        return validate_account_catalog(self._get(PATH_ACCOUNT_CATALOG), self._clock.now())
+
     def read_naver_customer_ids(self) -> Tuple[NaverIdRow, ...]:
-        res = self._get(PATH_NAVER_IDS)
+        return self._naver_customer_id_rows(self._get(PATH_NAVER_IDS))
+
+    @staticmethod
+    def _naver_customer_id_rows(res) -> Tuple[NaverIdRow, ...]:
         items = res.get("items")
         if not isinstance(items, list):
             raise ErpIncomplete("bad-shape", PATH_NAVER_IDS, 200, "목록 모양")
@@ -321,6 +361,21 @@ class ErpReader:
             out.append(NaverIdRow(pid, vendor if isinstance(vendor, str) else None,
                                   raw, ad_no))
         return tuple(out)
+
+    def read_naver_customer_ids_snapshot(self) -> Tuple[NaverIdRow, ...]:
+        """전체 업체 분류용: 생성 후 2시간 이내 번호만 수락한다(시계 오차 5분).
+
+        기존 번호 읽기는 시각을 요구하지 않는다. 이 경로만 같은 응답의 시각과 모든 행을
+        검사하므로 catalog 갱신 중 실패한 번호 자료를 새 정상 자료로 캐시하지 않는다.
+        """
+        res = self._get(PATH_NAVER_IDS)
+        try:
+            at = datetime.fromisoformat(res["generated_at"])
+        except (KeyError, TypeError, ValueError):
+            raise ErpIncomplete("ids-snapshot-incomplete", PATH_NAVER_IDS) from None
+        if at.tzinfo is None or not -timedelta(minutes=5) <= self._clock.now()-at <= timedelta(hours=2):
+            raise ErpIncomplete("ids-snapshot-incomplete", PATH_NAVER_IDS)
+        return self._naver_customer_id_rows(res)
 
 
 def handle_inputs(row: StageRow) -> Optional[Tuple[str, Optional[date]]]:

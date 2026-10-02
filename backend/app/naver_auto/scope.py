@@ -1,4 +1,4 @@
-"""보는 범위 판정 — /naver/ 의 **한 곳** (설계 v1.4 §1~§8 · v1.5 확정 P1~P4).
+"""보는 범위 판정 — /naver/ 의 **한 곳** (2026-10-02 계정 우선 관제 정책).
 
 누가 어떤 광고주를 보는지, 알림을 누가 받는지, 할 일 줄이 누구에게 가는지, 누가 승인하는지,
 누가 무엇을 멈출 수 있는지를 모두 여기서 정한다. 화면 API(3차)와 엔진(2차)이 이 파일을 그대로 import 한다.
@@ -18,11 +18,14 @@
 (설계 v1.4 §4 「누르는 순간 다시 판정」 · §10 「옛 담당은 즉시 못 봄」). 로그인 때 ① my-profile 로 **좁히는** 것(§9)은
 ``profile_narrows`` · ``narrowed_scope_of`` 한 곳(S11) — 좁힌 표시는 자체 토큰에 실리고, 요청마다 좁힌 채로 다시 계산한다.
 
-확정된 규칙:
+현재 규칙(종전 팀 계층 권한보다 우선):
+- 재직 대표만 ALL. 재직 관리팀(``is_management is True``)은 직급과 무관하게 MINE. 그 밖과 필드 누락은 NONE.
+- 직원 고르기는 재직 관리팀만, 직원에게는 본인만. 부서 계층 조회·팀 비상정지는 폐지한다.
+- 팀장 승인·알림 사슬은 대표로 바로 이어진다. 받는 사람과 승인자는 현재 열람 가능한 사람의 부분집합이다.
 - P1 ⓑ 서브 관리 담당도 보인다(배지 「서브」). 보기·승인·되돌리기·멈추기는 메인과 같다(자기 승인 금지도 메인과 같다).
   주의 알림·할 일 줄은 메인에게만, 긴급은 메인·서브 둘 다.
 - P2 ⓐ 전체를 보는 사람은 대표(``is_top_manager``)뿐이다.
-- P3 ⓐ 팀장의 비상 정지 = 본인 팀 + 하부 팀(주인 팀 기준). 회사 전체 정지는 대표만.
+- 회사 전체 정지는 대표만. 관리팀 직원·팀장은 본인 광고주의 단건 동작만 가능하다.
 
 범위 밖과 없는 것은 **같은 예외 · 같은 문구**다(존재를 드러내지 않는다).
 """
@@ -35,14 +38,14 @@ from .org_snapshot import OWNER_SOURCE_PREV, SYSTEM_EMPLOYEE_IDX, Org, OrgPerson
 
 # ── 범위 종류 ──
 ALL = "ALL"      # 대표 — 전부 + 담당 미정
-TEAM = "TEAM"    # 팀장(is_manager · 시스템 팀 아님) — 본인 팀 + 모든 하부 팀
-MINE = "MINE"    # 그 밖의 재직자 — 본인 담당만
+TEAM = "TEAM"    # 구 범위/위조 판정 호환값. 새 요청에는 절대 발급하지 않는다.
+MINE = "MINE"    # 재직 관리팀 직원·팀장 — 본인 담당만
 NONE = "NONE"    # 조직 표에 없음 · 재직 아님 · 음수 번호 · 낡은/손으로 만든 Scope — 0곳 (0번은 대표 — 사람이다)
 
 # ── 광고주 담당 상태 ──
 NORMAL = "normal"          # 메인 담당이 재직 중
-PREV = "prev"              # 계약 만료(① owner_source=prev) — 직전 담당은 보기·멈추기만, 주인은 그 팀 팀장 사슬
-VACANT = "vacant"          # 메인이 퇴사·정지·삭제 — 그 사람 팀의 팀장 사슬이 대신
+PREV = "prev"              # 계약 만료(① owner_source=prev) — 직전 담당은 보기·멈추기만, 승인은 대표
+VACANT = "vacant"          # 메인이 퇴사·정지·삭제 — 대표가 대신(재직 관리팀 서브의 기존 권한은 유지)
 UNASSIGNED = "unassigned"  # 빈칸 · 모르는 번호 · 이름으로만 이어짐 · 스냅숏에 없는 가망 — 대표만
 
 # ── 광고주와 보는 사람의 관계(배지) ──
@@ -128,8 +131,8 @@ class ActionNotAllowed(ScopeError):
 class Scope:
     kind: str                   # ALL · TEAM · MINE · NONE
     viewer_idx: Optional[int]   # ① 직원 번호(NONE 이면 None)
-    teams: frozenset[int]       # TEAM = 본인 팀 + 하부 팀 · ALL = 모든 팀 · 그 밖 = 빈 집합
-    people: frozenset[int]      # 고를 수 있는 사람(TEAM = 범위 팀 소속 전원(퇴사자 포함) + 본인)
+    teams: frozenset[int]       # 호환 응답. 새 범위는 항상 빈 집합(부서 계층 없음).
+    people: frozenset[int]      # ALL = 재직 관리팀 · MINE = 본인 · NONE = 빈 집합
     generated_at: Optional[str]  # 기준 스냅숏 시각 — 판정 때 조직의 시각과 다르면 「범위 없음」
     narrowed: bool = False      # 로그인 때 ① my-profile 로 좁힌 범위(v1.4 §9 · S11) — 판정 때도 좁힌 채로 다시 계산한다
 
@@ -222,18 +225,20 @@ def _live(org: Org, scope: Any) -> Scope:
 
 # ── 1. 보는 범위 ──────────────────────────────────────────────────
 
+def management_people(org: Org) -> frozenset[int]:
+    """① 권한 유형으로 확인된 재직 관리팀 명단. 팀 이름·팀장 표시로 추측하지 않는다."""
+    return frozenset(p.idx for p in org.people.values() if p.active and p.is_management is True)
+
+
 def scope_of(org: Org, viewer_idx: Any) -> Scope:
     """이 사람의 최대 범위. 화면에서 고르는 것은 이 안에서 좁히기만 한다."""
     p = _person(org, viewer_idx)
     if p is None or not p.active:
         return _none_scope(org)
     if p.is_top_manager:
-        return Scope(ALL, p.idx, frozenset(org.teams), frozenset(org.people), org.generated_at)
-    if _can_lead(org, p):
-        teams = org.subtree(p.team_idx)
-        people = {m for t in teams for m in org.members.get(t, ())}
-        people.add(p.idx)
-        return Scope(TEAM, p.idx, teams, frozenset(people), org.generated_at)
+        return Scope(ALL, p.idx, frozenset(), management_people(org), org.generated_at)
+    if p.is_management is not True:
+        return _none_scope(org)
     return Scope(MINE, p.idx, frozenset(), frozenset({p.idx}), org.generated_at)
 
 
@@ -247,7 +252,7 @@ def narrowed_scope_of(org: Org, viewer_idx: Any) -> Scope:
 
 
 def profile_narrows(org: Org, viewer_idx: Any, profile_is_manager: Any, profile_team_idx: Any) -> bool:
-    """① my-profile 이 스냅숏보다 좁은가 — 팀장이 아니라고 하거나 · 가장 깊은 팀이 스냅숏과 다르면(v1.4 §9 「즉시 좁힌다」).
+    """구 세션 호환. 새 정책은 처음부터 MINE이라 직급·팀 변경으로 더 좁힐 TEAM이 없다.
 
     ``profile_is_manager`` 가 참거짓이 아니거나 팀 번호가 정수·None 이 아니면(모양을 모름) 좁힌다 — 닫힌 쪽.
     스냅숏이 팀 범위가 아니면(담당·대표·범위 없음) 좁힐 것이 없다."""
@@ -455,45 +460,30 @@ def clients_in(org: Org, scope: Scope, rows: Rows, selection: Any = "all") -> fr
     if kind == "unassigned":
         return frozenset(o.client_id for o in visible if owner_state(org, o) == UNASSIGNED)
     if kind == "person":
-        return frozenset(o.client_id for o in visible if owner_key(org, o) == sel[1])
+        target = scope_of(org, sel[1])
+        return frozenset(o.client_id for o in visible
+                         if _relation(org, target, o) in (REL_MAIN, REL_SUB, REL_PREV))
     # team
     under = org.subtree(sel[1])
     return frozenset(o.client_id for o in visible if _home_team(org, o) in under)
 
 
 def _person_selectable(org: Org, scope: Scope, idx: int) -> bool:
-    if scope.kind == ALL:
-        return idx in org.people
-    if scope.kind in (TEAM, MINE):
+    if scope.kind in (ALL, MINE):
         return idx in scope.people
     return False
 
 
 def _team_selectable(org: Org, scope: Scope, team_idx: int) -> bool:
-    if scope.kind == ALL:
-        return team_idx in org.teams and not org.is_system_team(team_idx)
-    if scope.kind == TEAM:
-        return team_idx in scope.teams
+    # 팀 계층 보기는 폐지됐다. 존재하는 팀과 없는 팀을 같은 응답으로 닫는다.
     return False
 
 
 # ── 5. 팀장 사슬 ──────────────────────────────────────────────────
 
 def _lead_tiers(org: Org, start_team: Optional[int], exclude: frozenset[int]) -> list[frozenset[int]]:
-    """주인 팀에서 위로 가며 만나는 팀장 묶음들(가까운 순). 그 팀장이 실제로 이 팀을 볼 수 있을 때만 넣는다."""
-    tiers: list[frozenset[int]] = []
-    seen: set[int] = set()
-    t = start_team
-    while t is not None and t > 0 and t in org.teams and t not in seen:
-        seen.add(t)
-        if org.can_root_team_scope(t) and start_team in org.subtree(t):
-            leads = frozenset(
-                m for m in org.members.get(t, ())
-                if m not in exclude and _can_lead(org, org.people.get(m)))
-            if leads:
-                tiers.append(leads)
-        t = org.parent_of(t)
-    return tiers
+    """관리팀장도 본인 담당만 본다. 조직 계층을 알림·승인으로 되살리지 않는다."""
+    return []
 
 
 def _owner_lead_tiers(org: Org, own: Ownership, exclude: frozenset[int]) -> list[frozenset[int]]:
@@ -520,14 +510,19 @@ def _dedupe(tiers: Iterable[frozenset[int]]) -> tuple[frozenset[int], ...]:
     return tuple(out)
 
 
+def _visible_people(org: Org, own: Ownership, people: Iterable[int]) -> frozenset[int]:
+    """알림·승인·할 일도 지금 광고주를 볼 수 있는 사람만(부서 변경 포함)."""
+    return frozenset(p for p in people if _can_see(org, scope_of(org, p), own))
+
+
 # ── 6. 알림 받는 사람 ─────────────────────────────────────────────
 
 def alert_recipients(org: Org, own: Ownership, level: str) -> frozenset[int]:
     """받는 사람(① 번호). 불변식: 받는 사람 ⊆ 그 광고주를 여는 사람.
 
-    - 긴급 = 메인(·서브) + 가장 가까운 팀장(담당·서브 본인 제외 · 대표 담당이면 없음) + 대표
-    - 주의 = 메인만(팀장은 ``digest_recipients`` 로 하루 요약)
-    - 담당 공백·이전 담당 → 주의는 주인 팀의 가장 가까운 팀장(없으면 대표) · 긴급은 거기에 서브(·직전 담당)와 대표
+    - 긴급 = 열람 가능한 메인(·서브) + 대표
+    - 주의 = 열람 가능한 메인만(없으면 대표). 팀장 요약은 폐지.
+    - 담당 공백·이전 담당 → 주의는 대표 · 긴급은 열람 가능한 서브(·직전 담당)와 대표
     - 담당 미정 → 대표만
     """
     if level not in (URGENT, CAUTION):
@@ -538,13 +533,14 @@ def alert_recipients(org: Org, own: Ownership, level: str) -> frozenset[int]:
         return ceos
 
     sub = _sub_person(org, own)
-    subs = frozenset({sub.idx}) if sub is not None and sub.active else frozenset()
+    subs = _visible_people(org, own, {sub.idx}) if sub is not None and sub.active else frozenset()
     nearest = _nearest_leads(org, own)
 
     if st == NORMAL:
+        mains = _visible_people(org, own, {own.main})
         if level == CAUTION:
-            return frozenset({own.main})
-        return frozenset({own.main}) | subs | nearest | ceos
+            return mains if len(mains) else ceos
+        return mains | subs | nearest | ceos
 
     if st == VACANT:
         if level == CAUTION:
@@ -555,12 +551,12 @@ def alert_recipients(org: Org, own: Ownership, level: str) -> frozenset[int]:
     prev = _person(org, own.prev)
     if level == CAUTION:
         return nearest or ceos
-    prevs = frozenset({prev.idx}) if prev is not None and prev.active else frozenset()
+    prevs = _visible_people(org, own, {prev.idx}) if prev is not None and prev.active else frozenset()
     return prevs | subs | nearest | ceos
 
 
 def digest_recipients(org: Org, own: Ownership) -> frozenset[int]:
-    """주의 알림의 팀장 하루 요약 받는 사람 — 정상 담당일 때 가장 가까운 팀장(메인·서브 본인 제외 · 대표 담당이면 없음)."""
+    """구 호출 호환. 다른 직원 담당에 대한 팀장 하루 요약은 발급하지 않는다."""
     if owner_state(org, own) != NORMAL:
         return frozenset()
     return _nearest_leads(org, own)
@@ -579,9 +575,9 @@ def _check_level_and_requester(level: str, requester_idx: Any) -> None:
 def approvers(org: Org, own: Ownership, level: str, requester_idx: Any = None) -> tuple[frozenset[int], ...]:
     """승인할 수 있는 사람들 — 가까운 순 묶음(tier). 받을 사람은 저장하지 않고 누를 때마다 계산한다.
 
-    - 담당자 등급: [메인·서브] → 팀장 사슬(가까운 순) → 대표. 누구나 누를 수 있다.
+    - 담당자 등급: [열람 가능한 메인·서브] → 대표.
       (할 일 줄은 여기 첫 묶음이 아니라 ``todo_chain`` 이 정한다 — P1 ⓑ 로 서브에게는 가지 않는다.)
-    - 팀장 등급: 팀장 사슬(요청자·담당(메인·서브·직전) 제외) → 대표(요청자·담당 제외).
+    - 팀장 등급: 대표(요청자·담당 제외).
       자기 승인 금지 — 팀장이 자기 광고주에 올린 팀장 등급 일은 윗사람에게 간다.
       요청자나 기준 담당이 대표면 위가 없으므로 대표 묶음만. 대표가 비켜 줄 대표가 없으면 대표 본인이 승인한다
       (호출하는 쪽이 기록해 하루 요약에 올린다). 대표가 둘 이상이면 요청자 본인은 끝까지 빠진다.
@@ -616,7 +612,7 @@ def approvers(org: Org, own: Ownership, level: str, requester_idx: Any = None) -
         if not top:
             top = (ceos - {requester_idx}) or ceos
         tiers.append(top)
-    return _dedupe(tiers)
+    return _dedupe(_visible_people(org, own, tier) for tier in tiers)
 
 
 def can_approve(org: Org, own: Ownership, level: str, requester_idx: Any, approver_idx: Any) -> bool:
@@ -634,8 +630,8 @@ def can_approve(org: Org, own: Ownership, level: str, requester_idx: Any, approv
 def todo_chain(org: Org, own: Ownership, level: str, requester_idx: Any = None) -> tuple[frozenset[int], ...]:
     """할 일 줄이 가는 순서 — 첫 묶음이 지금 받는 사람, 다음 묶음이 12시간 뒤 올려 받는 사람(설계 v1.4 §6·§7).
 
-    - 담당자 등급: 정상 = [메인] → 팀장 사슬 → 대표(P1 ⓑ — 서브에게는 할 일 줄이 가지 않는다).
-      담당 공백·이전 담당 = 주인 팀의 팀장 사슬 → 대표(서브·직전 담당 제외). 담당 미정 = 대표.
+    - 담당자 등급: 정상 = [열람 가능한 메인] → 대표(P1 ⓑ — 서브에게는 할 일 줄이 가지 않는다).
+      담당 공백·이전 담당·담당 미정 = 대표.
     - 팀장 등급: ``approvers`` 와 같은 사슬(요청자·담당 제외 · 가장 가까운 팀장부터).
     불변식: 받는 사람 ⊆ 승인할 수 있는 사람(``approvers``) ⊆ 그 광고주를 여는 사람.
     """
@@ -650,7 +646,7 @@ def todo_chain(org: Org, own: Ownership, level: str, requester_idx: Any = None) 
     if st != UNASSIGNED:
         tiers.extend(_owner_lead_tiers(org, own, _owners_of(org, own)))
     tiers.append(ceos)
-    return _dedupe(tiers)
+    return _dedupe(_visible_people(org, own, tier) for tier in tiers)
 
 
 def todo_recipients(org: Org, own: Ownership, level: str, requester_idx: Any = None) -> frozenset[int]:

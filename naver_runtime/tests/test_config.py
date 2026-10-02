@@ -34,6 +34,14 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(Config.from_env({}).web_enabled)
         self.assertTrue(Config.from_env({"NAVER_ENGINE_WEB_ENABLED": "true"}).web_enabled)
 
+    def test_inventory_is_off_by_default_and_does_not_require_erp_contract_checks(self):
+        self.assertFalse(Config.from_env({}).inventory_enabled)
+        config = Config.from_env({"NAVER_ENGINE_INVENTORY_ENABLED": "true"})
+        self.assertTrue(config.inventory_enabled)
+        self.assertFalse(config.morning_enabled)
+        self.assertFalse(config.metrics_enabled)
+        self.assertTrue(config.switches()["inventory"])
+
     def test_paths_cannot_point_into_code_or_be_relative(self):
         for db in ("engine.db", str(Path(__file__).resolve().parents[2] / "engine.db")):
             with self.subTest(db=db), self.assertRaises(ConfigError):

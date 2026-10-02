@@ -47,6 +47,7 @@ print(json.dumps({"external_canary": "ENETUNREACH", "loopback": "ok", "uid": os.
 PY
 
 nv_ci_status=0
+export NAVER_SCREEN_SHOTS="$nv_ci_output/screenshots"
 for nv_ci_suite in naver_engine/tests backend/tests naver_runtime/tests tests; do
   nv_ci_label="${nv_ci_suite//\//-}"
   if python -m unittest discover -s "$nv_ci_suite" -v 2>&1 | tee "$nv_ci_output/$nv_ci_label.txt"; then

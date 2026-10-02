@@ -44,13 +44,14 @@ from . import session as SE
 from . import store as S
 from . import sync as Y
 from . import views as W
+from . import inventory as INV
 
 log = logging.getLogger("naver_engine.web")
 
 PREFIX = "/api/naver-auto"
 GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일은 나가는 요청을 만들지 않는다)
 # 제한판은 새 경로가 추가돼도 자동으로 열지 않는다. 로그인/갱신은 기술 쓰기만 허용한다.
-_VERIFICATION_GETS = frozenset({"/me", "/board", "/links/pending", "/ended", "/unlinked",
+_VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/links/pending", "/ended", "/unlinked",
                                "/bell", "/settings", "/health"})
 _VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
 _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/request"),
@@ -356,6 +357,8 @@ class App:
             scope = SC.narrowed_scope_of(org, who) if claims.narrowed else SC.scope_of(org, who)
             if scope.kind == SC.NONE:
                 raise HttpError(401, "no-scope")   # 퇴사 · 조직 표에서 빠짐 — 다음 요청부터 0곳
+            if scope.kind != SC.ALL and Y.org_freshness(store, now) in (O.FRESH_STALE, O.FRESH_NONE):
+                raise HttpError(503, "org-stale")
             return Viewer(who, scope, claims, store, org)
         except BaseException:
             store.close()
@@ -490,12 +493,23 @@ class App:
 
     # ── 읽기 ──
     def _h_me(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
-        out = W.me(v.ctx(now), v.scope)
+        ctx = v.ctx(now)
+        out = W.me(ctx, v.scope)
+        counts = INV.staff_counts(ctx, v.store, v.scope)
+        for person in out["people"]:
+            person["account_count"] = counts.get(person["idx"], 0)
+        out["inventory_enabled"] = True
         out["bell_unread"] = W.bell(v.store, v.idx, now)["unread"]
         if self._owner_verification:
             out["owner_verification"] = True
         out["verified_linking"] = self._verified_linking and v.scope.kind == SC.ALL and not v.claims.narrowed
         return 200, out
+
+    def _h_accounts(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if set(req.query) - {"selection", "workflow", "mapping"}:
+            raise HttpError(400, "bad-query")
+        return 200, INV.board(v.ctx(now), v.store, v.scope, req.query.get("selection", "all"),
+                              req.query.get("workflow", "all"), req.query.get("mapping", "all"))
 
     def _h_board(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         sel = req.query.get("selection", "all")
@@ -774,6 +788,9 @@ class App:
         n = int(rid)
         if not 0 < n < 2 ** 63:
             raise HttpError(404, "not-found")
+        if n not in {r["recipient_id"] for r in W.bell(v.store, v.idx, now)["items"]}:
+            self._audit(v.idx, "bell-read", "alert", n, "not-found", now, required=False)
+            raise HttpError(404, "not-found")
         try:
             changed = self._write(lambda st: st.mark_alert_read(n, v.idx, now))
         except S.ScreenRefused:
@@ -783,8 +800,8 @@ class App:
         return 200, {"read": True, "changed": changed}
 
     def _h_bell_read_all(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
-        since = now.astimezone(KST).date() - timedelta(days=W.BELL_DAYS - 1)
-        n = self._write(lambda st: st.mark_alerts_read_all(v.idx, since, now))
+        visible = [r["recipient_id"] for r in W.bell(v.store, v.idx, now)["items"] if not r["read"]]
+        n = self._write(lambda st: sum(st.mark_alert_read(rid, v.idx, now) for rid in visible))
         self._audit(v.idx, "bell-read-all", "alert", None, "ok", now, required=False)
         return 200, {"changed": n}
 
@@ -827,6 +844,7 @@ ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a i
     (POST, r"/session/refresh", App._h_refresh, True),
     (GET, r"/me", App._h_me, True),
     (GET, r"/board", App._h_board, True),
+    (GET, r"/accounts", App._h_accounts, True),
     (GET, r"/clients/(?P<pid>[0-9]{1,18})", App._h_client, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/ack", App._h_issue_ack, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/resolve", App._h_issue_resolve, True),

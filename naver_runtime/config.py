@@ -60,6 +60,7 @@ class Config:
     morning_enabled: bool = False
     alerts_enabled: bool = False
     metrics_enabled: bool = False
+    inventory_enabled: bool = False
     backup_enabled: bool = False
     web_enabled: bool = False
     issue_alerts_enabled: bool = False
@@ -70,7 +71,7 @@ class Config:
     @classmethod
     def from_env(cls, env: Mapping[str, str]):
         flags = {name.lower() + "_enabled": _flag(env, f"NAVER_ENGINE_{name}_ENABLED")
-                 for name in ("SYNC", "LINKS", "MORNING", "ALERTS", "METRICS", "BACKUP", "WEB", "ISSUE_ALERTS")}
+                 for name in ("SYNC", "LINKS", "MORNING", "ALERTS", "METRICS", "INVENTORY", "BACKUP", "WEB", "ISSUE_ALERTS")}
         # S16 연결 구현 후에도 기본은 꺼짐. 실제 실행은 전용 교환 키·자체 서명 값이 없으면 시작 전 거절한다.
         if flags["morning_enabled"] and not (flags["sync_enabled"] and flags["links_enabled"]):
             raise ConfigError("아침 점검에는 조직·단계 동기화와 연결 목록 설정이 모두 필요합니다")
@@ -90,7 +91,7 @@ class Config:
                    erp_tunnel_socket=tunnel)
 
     def validate_runtime(self, env: Mapping[str, str]):
-        """승인된 ERP 네 경로만 조립한다. 독립 core 예약 시험의 설정은 바꾸지 않는다."""
+        """승인된 ERP 다섯 경로만 조립한다. 독립 core 예약 시험의 설정은 바꾸지 않는다."""
         if self.alerts_enabled or self.metrics_enabled or self.issue_alerts_enabled:
             raise ConfigError("제한판 실행은 ERP 알림·심박·성과 전송을 지원하지 않습니다")
         tunnel = Path(_tunnel_path(self.erp_tunnel_socket)).parent.resolve()
@@ -106,5 +107,6 @@ class Config:
             ("sync", self.sync_enabled), ("links", self.links_enabled),
             ("morning", self.morning_enabled), ("alerts", self.alerts_enabled),
             ("metrics", self.metrics_enabled),
+            ("inventory", self.inventory_enabled),
             ("backup", self.backup_enabled), ("web", self.web_enabled),
             ("issue_alerts", self.issue_alerts_enabled))}

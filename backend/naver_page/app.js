@@ -25,7 +25,8 @@
     client: null, clientId: null, ctab: 'now', spane: 'th', settings: null, health: null, bell: null,
     linksOpen: false, endedOpen: false, doneOpen: false, gen: 0, timer: null, focus: null,
     lastInput: Date.now(), refreshing: false, retryAt: 0, retryN: 0, warned: false, bellGen: 0,
-    filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null
+    filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
+    inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: ''
   };
 
   // ── 작은 도구 ─────────────────────────────────────────────────────
@@ -106,7 +107,7 @@
     listed: ['p-green', '이관됨'], missing: ['p-amber', '오늘 목록에 없음'], broken: ['p-red', '🔌 이관 빠짐'],
     not_linked: ['p-gray', '이관 안 됨'], none: ['p-gray', '이어진 계정 없음'], pending: ['p-gray', '짝 맞추기 전']
   };
-  var BLOCKED = { 'org-stale': '🙈 조직 자료가 낡아 예외는 잠시 막힘', 'actor-too-low': '🙈 긴급 예외는 팀장 이상',
+  var BLOCKED = { 'org-stale': '🙈 조직 자료가 낡아 예외는 잠시 막힘', 'actor-too-low': '🙈 긴급 예외는 대표만',
                   'exception-active': '🙈 끝난 예외 — 다음 아침 점검 뒤 다시 줄 수 있음' };
   var STATE = { 'new': '🆕 새로', ack: '👀 확인 중', resolved: '✅ 해결', auto_resolved: '🔁 저절로 풀림',
                 exception: '🙈 예외', closed_unlinked: '짝이 사라져 닫힘' };
@@ -154,7 +155,7 @@
     'bad-input': '사유에 쓸 수 없는 글자가 있습니다(줄바꿈·특수 서식 글자를 빼고 다시)',
     'org-unavailable': '조직 자료를 아직 받지 못했습니다 — 잠시 뒤 다시', 'store-unavailable': '관제 저장소에 닿지 않습니다 — 잠시 뒤 다시',
     internal: '관제 엔진 오류 — 잠시 뒤 다시', 'engine-timeout': '관제 엔진이 늦게 답합니다 — 잠시 뒤 다시',
-    'actor-too-low': '🔴 긴급 예외는 팀장 이상만 줄 수 있습니다', 'exception-too-long': '예외 기간이 한도보다 깁니다',
+    'actor-too-low': '🔴 긴급 예외는 대표만 줄 수 있습니다', 'exception-too-long': '예외 기간이 한도보다 깁니다',
     'exception-in-past': '끝나는 날이 지났습니다', 'note-required': '사유를 적어 주세요', 'bad-body': '입력이 올바르지 않습니다',
     'revoke-refused': '이미 거둔 판단입니다', 'selection-rejected': '고를 수 없는 보기 범위입니다', 'no-change': '바뀐 값이 없습니다',
     'too-many-logins': '들어오기 시도가 많습니다. 잠시 뒤 전산에서 다시 들어와 주세요', network: '네트워크 오류 — 잠시 뒤 다시'
@@ -225,6 +226,8 @@
   function lost(kind) {
     dropSession();
     state.me = null;              // 뒤로 가기가 옛 화면을 다시 그리지 않게
+    state.inventory = null;
+    state.inventoryGen++;
     clearInterval(state.timer);
     closeModals();
     closeBell();
@@ -322,15 +325,16 @@
     $('collectionControls').hidden = !verifiedLinking();
     $('bellAll').hidden = readOnly();
     var kind = { ALL: '대표', TEAM: '팀장', MINE: '담당자' }[me.scope] || '';
-    put($('me'), h('b', null, me.name || ''), ' · ' + kind + (me.narrowed ? ' (내 담당만 보기)' : ''));
+    var mine = (me.people || []).filter(function (p) { return p.idx === me.idx; })[0];
+    put($('me'), h('b', null, me.name || ''), ' · ' + kind + (me.narrowed ? ' (내 담당만 보기)' : ''),
+      mine ? ' · ' + num(mine.account_count) + '계정' : '');
     $('menuSettings').hidden = !(me.scope === 'ALL' || me.scope === 'TEAM');
     var sel = $('scope');
-    if (me.scope === 'ALL' || me.scope === 'TEAM') {
-      var opts = [['all', me.scope === 'ALL' ? '전체' : '우리 팀 전체'], ['me', '내 담당만']];
+    if (me.scope === 'ALL') {
+      var opts = [['all', '전체 이관 계정'], ['me', '내 담당만']];
       if (me.scope === 'ALL') opts.push(['unassigned', '담당 미정']);
-      (me.teams || []).forEach(function (t) { opts.push(['team:' + t.idx, '팀 · ' + (t.name || t.idx)]); });
       (me.people || []).forEach(function (p) {
-        if (p.idx !== me.idx) opts.push(['person:' + p.idx, '사람 · ' + (p.name || p.idx) + (p.active ? '' : ' (퇴사·정지)')]);
+        if (p.idx !== me.idx && p.active) opts.push(['person:' + p.idx, (p.name || p.idx) + ' · ' + num(p.account_count) + '계정']);
       });
       put(sel, opts.map(function (o) { return h('option', { value: o[0], selected: o[0] === state.selection }, o[1]); }));
       sel.hidden = false;
@@ -351,6 +355,7 @@
     var gen = state.gen;
     show('watch');
     var sel = state.selection;
+    loadInventory();
     if (!state.board) put($('issues'), h('div', { class: 'loading' }, '불러오는 중…'));
     return api('GET', '/board?selection=' + encodeURIComponent(sel) + '&attention=0').then(function (b) {
       if (gen !== state.gen || sel !== state.selection) return;   // 늦게 온 옛 응답(범위를 빨리 바꿈)은 버린다
@@ -377,6 +382,53 @@
       $('iss-n').textContent = '';
       $('tbl-n').textContent = '';
     });
+  }
+  var INVENTORY_MAPPING = { matched: '전산 업체 매칭', no_erp_record: '전산 내에 등록된 업체 정보 없음', unclassified: '미분류 · 확인 필요' };
+  function loadInventory() {
+    var gen = ++state.inventoryGen, sel = state.selection;
+    state.inventory = null;
+    $('inventoryCount').textContent = '';
+    $('inventorySource').textContent = '현재 권한으로 목록을 불러오는 중입니다.';
+    put($('inventoryRows'), h('tr', null, h('td', { colspan: 8, class: 'empty' }, '불러오는 중…')));
+    return api('GET', '/accounts?selection=' + encodeURIComponent(sel) + '&workflow=' +
+      encodeURIComponent(state.inventoryWorkflow) + '&mapping=' + encodeURIComponent(state.inventoryMapping)).then(function (data) {
+      if (gen !== state.inventoryGen || sel !== state.selection || !state.me) return;
+      state.inventory = data;
+      renderInventory();
+    }, function (e) {
+      if (gen !== state.inventoryGen || sel !== state.selection || (e && e.status === 401)) return;
+      $('inventorySource').textContent = '목록을 불러오지 못했습니다. 목록 새로고침으로 다시 확인해 주세요.';
+      put($('inventoryRows'), h('tr', null, h('td', { colspan: 8, class: 'empty' }, errText(e))));
+    });
+  }
+  function renderInventory() {
+    var data = state.inventory;
+    if (!data) return;
+    var query = state.inventoryQ.toLocaleLowerCase();
+    var rows = data.rows.filter(function (r) {
+      return [r.account_name, r.company_name, r.ad_account_no].join(' ').toLocaleLowerCase().indexOf(query) !== -1;
+    });
+    $('inventoryCount').textContent = num(rows.length) + ' / ' + num(data.total) + '계정 · 매칭 ' +
+      num(data.counts.matched) + ' · 업체 미확인 ' + num(data.counts.no_erp_record) + ' · 미분류 ' + num(data.counts.unclassified);
+    $('inventorySource').textContent = '이관 목록 ' + (mdhm(data.accounts_at) || '수신 전') + ' · 전산 전체 목록 ' +
+      (mdhm(data.catalog_at) || '수신 전') + (data.catalog_status !== 'accepted' || !data.accounts_current ?
+      ' · 원본 확인 필요: 미등록 판정 및 직원 연결 표시를 보류합니다.' : ' · 목록 새로고침은 저장된 최신 결과를 다시 표시합니다.');
+    var collection = { ok: '수집 완료', partial: '일부 수집', pending: '수집 대기', failed: '수집 실패',
+      retry: '재시도 대기', reading: '수집 중', running: '수집 중', reauth_required: '네이버 접근 권한 확인',
+      limited: '수집 미완료 · 한도 확인', denied: '접근 권한 확인', blocked: '접근 권한 확인' };
+    put($('inventoryRows'), rows.length ? rows.map(function (r) {
+      var c = r.collection || {}, status = collection[c.status] || c.status || '수집 대기';
+      var company = r.detail_available ? h('button', { type: 'button', class: 'btn sm', onclick: function () {
+        go('/naver/clients/' + r.possibility_id);
+      } }, r.company_name || '전산 업체') : r.company_name || '—';
+      return h('tr', null,
+        h('td', null, r.account_name || '계정 이름 없음', h('span', { class: 'w' }, 'ID ' + (r.ad_account_no || '확인 필요'))),
+        h('td', null, company),
+        h('td', { title: r.mapping === 'no_erp_record' ? data.no_erp_note : '' }, INVENTORY_MAPPING[r.mapping] || '미분류'),
+        h('td', null, r.workflow), h('td', null, r.owner && r.owner.name || '담당 미확인'),
+        h('td', null, status, c.error_code ? h('span', { class: 'w' }, c.error_code) : null,
+          h('span', { class: 'w' }, mdhm(c.checked_at))), h('td', null, won(c.yday_spend)), h('td', null, won(c.bizmoney)));
+    }) : h('tr', null, h('td', { colspan: 8, class: 'empty' }, '이 조건에 해당하는 계정이 없습니다. 매칭 상태·업무 단계·검색어를 확인해 주세요.')));
   }
   function fail(e) {
     if (e && e.status === 401) return;
@@ -646,7 +698,7 @@
     put($('mx-days'), opts.map(function (d) {
       return h('option', { value: addDays(today, d - 1) }, (d === 1 ? '오늘까지' : d + '일(오늘 포함)') + ' · ' + md(addDays(today, d - 1)) + '까지');
     }));
-    $('mx-rule').textContent = i.severity === 'red' ? '🔴 긴급 예외는 팀장 이상 · 오늘 포함 최대 7일 · 기간이 끝나면 저절로 다시 봅니다' :
+    $('mx-rule').textContent = i.severity === 'red' ? '🔴 긴급 예외는 대표만 · 오늘 포함 최대 7일 · 기간이 끝나면 저절로 다시 봅니다' :
       '🟡 주의 · ⓘ 예외는 오늘 포함 최대 30일 · 기간이 끝나면 저절로 다시 봅니다';
     $('mx-why').value = '';
     openModal('m-except', btn);
@@ -1233,6 +1285,10 @@
       b.addEventListener('click', function () { setFilter(b.getAttribute('data-f')); });
     });
     $('q').addEventListener('input', function () { state.q = this.value.trim(); renderTable(); });
+    $('inventorySearch').addEventListener('input', function () { state.inventoryQ = this.value.trim(); renderInventory(); });
+    $('inventoryMapping').addEventListener('change', function () { state.inventoryMapping = this.value; loadInventory(); });
+    $('inventoryWorkflow').addEventListener('change', function () { state.inventoryWorkflow = this.value; loadInventory(); });
+    $('inventoryReload').addEventListener('click', loadInventory);
     $('collectNow').addEventListener('click', requestCollection);
     $('confirmAuto').addEventListener('click', confirmAutomatic);
     $('scope').addEventListener('change', function () { state.selection = this.value; state.gen++; openWatch(); });

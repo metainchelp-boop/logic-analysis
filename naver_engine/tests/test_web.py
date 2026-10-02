@@ -348,7 +348,7 @@ class StoreV6Test(WebBase):
         raw.commit()
         raw.close()
         self.st = S.open_writer(self.path, clock=self.fc.now)
-        self.assertEqual(self.st.meta("schema_version"), "7")
+        self.assertEqual(self.st.meta("schema_version"), str(S.SCHEMA_VERSION))
         self.assertEqual(self.st.access_log(), [])
         self.assertEqual(self.st.thresholds(), W.T.DEFAULTS)
 
@@ -413,9 +413,9 @@ class ScopeAdditionsTest(WebBase):
     def org(self):
         return W.load_org(self.st)
 
-    def test_narrowing_team_to_mine_only(self):
+    def test_management_lead_is_already_mine_only(self):
         org = self.org()
-        self.assertEqual(SC.scope_of(org, 1).kind, SC.TEAM)
+        self.assertEqual(SC.scope_of(org, 1).kind, SC.MINE)
         n = SC.narrowed_scope_of(org, 1)
         self.assertEqual((n.kind, n.people, n.narrowed), (SC.MINE, frozenset({1}), True))
         self.assertEqual(SC.narrowed_scope_of(org, 0).kind, SC.ALL)       # 대표는 좁히지 않는다
@@ -430,10 +430,10 @@ class ScopeAdditionsTest(WebBase):
     def test_profile_narrows(self):
         org = self.org()
         self.assertFalse(SC.profile_narrows(org, 1, True, 11))
-        self.assertTrue(SC.profile_narrows(org, 1, False, 11))           # 팀장 아님
-        self.assertTrue(SC.profile_narrows(org, 1, True, 10))            # 다른 팀
-        self.assertTrue(SC.profile_narrows(org, 1, None, 11))            # 모름 = 좁힌다
-        self.assertTrue(SC.profile_narrows(org, 1, True, "11"))
+        self.assertFalse(SC.profile_narrows(org, 1, False, 11))         # 이미 본인 담당만
+        self.assertFalse(SC.profile_narrows(org, 1, True, 10))
+        self.assertFalse(SC.profile_narrows(org, 1, None, 11))
+        self.assertFalse(SC.profile_narrows(org, 1, True, "11"))
         self.assertFalse(SC.profile_narrows(org, 100, False, 11))        # 담당은 좁힐 것이 없다
         self.assertFalse(SC.profile_narrows(org, 0, False, None))        # 대표는 my-profile 로 좁히지 않는다
 
@@ -443,7 +443,7 @@ class ScopeAdditionsTest(WebBase):
         self.assertEqual(I.ACTOR_LEAD, "lead")
         self.assertEqual(I.ACTOR_OWNER, "owner")
         self.assertEqual(SC.issue_actor(org, SC.scope_of(org, 100), owns[11]), "owner")
-        self.assertEqual(SC.issue_actor(org, SC.scope_of(org, 1), owns[11]), "lead")
+        self.assertIsNone(SC.issue_actor(org, SC.scope_of(org, 1), owns[11]))
         self.assertEqual(SC.issue_actor(org, SC.scope_of(org, 0), owns[11]), "lead")
         self.assertIsNone(SC.issue_actor(org, SC.scope_of(org, 101), owns[11]))   # 볼 수 없음
         prev_own = SC.Ownership(client_id=99, main=None, prev=100, source="prev", match=SC.MATCH_PID)
@@ -525,16 +525,16 @@ class LoginTest(WebBase):
         _s, me, _h, _p = self.call("GET", "/me", b["token"])
         self.assertEqual((me["idx"], me["scope"]), (0, SC.ALL))   # 대표 0번 → 전체
 
-    def test_lead_narrowed_when_profile_says_not_manager(self):
+    def test_profile_cannot_grant_team_access(self):
         self.erp.person(MARK_SSO, 1, manager=False, teams=((11, 10), (10, 0)))
         s, b = self.login()
-        self.assertEqual((s, b["narrowed"]), (200, True))
+        self.assertEqual((s, b["narrowed"]), (200, False))
         s, board, _h, _p = self.call("GET", "/board", b["token"], query="attention=0")
         self.assertEqual(board["counts"]["total"], 0)   # 팀 범위가 아니라 본인 담당만(0곳)
         self.erp.person(MARK_SSO, 1, manager=True, teams=((11, 10), (10, 0)))
         s, b = self.login()
         s, board, _h, _p = self.call("GET", "/board", b["token"], query="attention=0")
-        self.assertEqual((b["narrowed"], board["counts"]["total"]), (False, 3))
+        self.assertEqual((b["narrowed"], board["counts"]["total"]), (False, 0))
 
     def test_refused_logins(self):
         s, b = self.login()
@@ -698,23 +698,22 @@ class LoginTest(WebBase):
         self.assertEqual((s, b["expires_in"]), (200, 1800))
 
     def test_refresh_keeps_narrowing(self):
-        self.erp.person(MARK_SSO, 1, manager=False)
-        _s, b = self.login()
+        b = {"token": self.token(1, narrowed=True)}  # 구 버전에서 발급된 좁힘 표시도 갱신 뒤 유지
         self.at(self.fc.now() + timedelta(minutes=50))
         s, r, _h, _p = self.call("POST", "/session/refresh", b["token"])
         self.assertEqual((s, r["narrowed"], self.signer.verify(r["token"], self.fc.now()).narrowed), (200, True, True))
         _s, board, _h, _p = self.call("GET", "/board", r["token"], query="attention=0")
         self.assertEqual(board["counts"]["total"], 0)
 
-    def test_login_narrows_on_any_doubt(self):
-        """my-profile 이 팀장이 아니라 하거나 · 다른 팀이거나 · 모양이 모르겠으면 좁힌다(늘리지 않는다 · 검토 test-gap)."""
+    def test_login_profile_doubt_never_adds_team_access(self):
+        """팀 정보가 달라져도 본인 담당 범위를 넘지 않는다."""
         cases = [dict(manager=True, teams=((11, 10), (12, 10), (10, 0))),    # 끝 팀이 둘 — 모름
                  dict(manager=True, teams=((10, 0),)),                     # 가장 깊은 팀이 조직 표와 다름
                  dict(manager="false"), dict(manager=1), dict(manager="Y")]  # 참거짓이 아님
         for i, kw in enumerate(cases):
             self.erp.person(tok(i), 1, **kw)
             s, b = self.login(tok(i))
-            self.assertEqual((s, b["narrowed"]), (200, True), kw)
+            self.assertEqual((s, b["narrowed"]), (200, False), kw)
             _s, board, _h, _p = self.call("GET", "/board", b["token"], query="attention=0")
             self.assertEqual(board["counts"]["total"], 0, kw)
 
@@ -779,7 +778,7 @@ class InitialStageBandTest(WebBase):
 
 class VisibilityTest(WebBase):
     def test_board_scoped(self):
-        for idx, want in ((100, {11, 14}), (101, {12}), (1, {11, 12, 14}), (0, {11, 12, 13, 14})):
+        for idx, want in ((100, {11, 14}), (101, {12}), (1, set()), (0, {11, 12, 13, 14})):
             s, b = self.get("/board", idx, query="attention=0")
             self.assertEqual(s, 200)
             self.assertEqual({r["possibility_id"] for r in b["rows"]}, want, idx)
@@ -879,6 +878,8 @@ class VisibilityTest(WebBase):
         self.assertEqual(len(bodies), 1)                                                   # 없는 사람·팀과 같은 본문
         self.assertEqual(json.loads(bodies.pop())["message"], SC.TARGET_NOT_VISIBLE)
         s, b = self.get("/board", 1, query="selection=person%3A101&attention=0")
+        self.assertEqual(s, 404)
+        s, b = self.get("/board", 0, query="selection=person%3A101&attention=0")
         self.assertEqual((s, {r["possibility_id"] for r in b["rows"]}), (200, {12}))
         s, b = self.get("/board", 0, query="selection=unassigned&attention=0")
         self.assertEqual({r["possibility_id"] for r in b["rows"]}, {13})
@@ -916,7 +917,7 @@ class VisibilityTest(WebBase):
         """📦 계약 끝남 · ⚪ 이관 안 됨 목록도 범위 안만(검토 test-gap-ended-unlinked-scope)."""
         self.repair([(12, B), (14, 9999999)],
                     stages={12: TM.srow(12, stage="계약만료", end=TODAY - timedelta(days=3))})
-        want = {0: ({12}, {14}), 1: ({12}, {14}), 100: (set(), {14}), 101: ({12}, set())}
+        want = {0: ({12}, {14}), 1: (set(), set()), 100: (set(), {14}), 101: ({12}, set())}
         for idx, (ended, unlinked) in want.items():
             _s, e = self.get("/ended", idx)
             _s, u = self.get("/unlinked", idx)
@@ -960,8 +961,7 @@ class VisibilityTest(WebBase):
 
     def test_settings_scope(self):
         self.assertEqual(self.get("/settings", 100)[0], 403)
-        s, team = self.get("/settings", 1)
-        self.assertEqual((s, team["can_edit"], "holds" in team), (200, False, False))
+        self.assertEqual(self.get("/settings", 1)[0], 403)
         s, ceo = self.get("/settings", 0)
         self.assertEqual((s, ceo["can_edit"], ceo["holds"]), (200, True, []))
 
@@ -1045,7 +1045,9 @@ class IssueHandsTest(WebBase):
         s, b = self.post(f"/issues/{red}/except", 100, {"until": until, "note": "사유"})
         self.assertEqual((s, b["error"]), (409, I.E_ACTOR))            # 담당은 🔴 예외를 못 준다
         s, b = self.post(f"/issues/{red}/except", 1, {"until": until, "note": "사유"})
-        self.assertEqual((s, b["state"]), (200, "exception"))          # 팀장은 된다(7일 안)
+        self.assertEqual(s, 404)                                      # 본인 담당 아닌 팀장도 거절
+        s, b = self.post(f"/issues/{red}/except", 0, {"until": until, "note": "사유"})
+        self.assertEqual((s, b["state"]), (200, "exception"))          # 대표는 가능(7일 안)
         s, b = self.post(f"/issues/{yellow}/except", 101, {"until": (TODAY + timedelta(days=40)).isoformat(),
                                                            "note": "사유"})
         self.assertEqual(s, 409)                                       # 30일 넘음
@@ -1055,13 +1057,15 @@ class IssueHandsTest(WebBase):
                     {"until": until, "note": "x" * 201}, {"until": 5, "note": "x"}):
             self.assertEqual(self.post(f"/issues/{red}/except", 0, bad)[0], 400, bad)
 
-    def test_stale_org_blocks_exception_not_ack(self):
+    def test_stale_org_blocks_every_staff_request(self):
         self.at(self.fc.now() + timedelta(hours=30))
         yellow = self.issue_of(12, "yellow")["issue_id"]
         s, b = self.post(f"/issues/{yellow}/except", 101, {"until": (self.fc.now().date()).isoformat(),
                                                            "note": "사유"})
-        self.assertEqual((s, b["error"]), (409, "org-stale"))
-        self.assertEqual(self.post(f"/issues/{yellow}/ack", 101)[0], 200)
+        self.assertEqual((s, b["error"]), (503, "org-stale"))
+        self.assertEqual(self.post(f"/issues/{yellow}/ack", 101)[0], 503)
+        self.assertEqual(self.get("/board", 101)[0], 503)
+        self.assertEqual(self.get("/board", 0)[0], 200)  # 대표의 복구 진단은 유지
 
     def test_prev_owner_cannot_handle(self):
         owners = [TA.owner(11, 100), TA.owner(12, 101), TA.owner(13, None),
@@ -1132,16 +1136,17 @@ class LinksTest(WebBase):
         self.assertEqual(self.post("/links/confirm", 100, {"refs": [row["ref"]]}), (409, {"error": "not-linkable"}))
         self.assertEqual([(d.decision_id, d.possibility_id) for d in self.st.current_decisions()], before)
         self.assertEqual(self.st.access_log(viewer_idx=100)[0]["result"], "not-linkable")   # 거절도 기록
-        # ② 자동 짝(12)과 100 의 ① 이 같은 번호 → 둘 다 「여러 가망이 적음」 — 100 은 못 가져간다 · 두 가망을 다 보는 팀장은 된다
+        # ② 자동 짝(12)과 100의 번호 중복 — 둘 다 보는 대표만 확인할 수 있다.
         self.st.revoke_decision([d for d in self.st.current_decisions() if d.possibility_id == 12][0].decision_id,
                                 0, self.fc.now(), "시험")
         self.repair([(12, B), (14, B)])
         row = self.ref_of(100, 14)
         self.assertEqual((row["code"], row["can_confirm"], row["account_name"]), ("claimed-by-several", False, None))
         self.assertEqual(self.post("/links/confirm", 100, {"refs": [row["ref"]]})[0], 409)
-        lead = self.ref_of(1, 14)
+        self.assertEqual(self.get("/links/pending", 1)[1]["rows"], [])
+        lead = self.ref_of(0, 14)
         self.assertEqual((lead["can_confirm"], lead["account_name"]), (True, TM.shop(12)))
-        self.assertEqual(self.post("/links/confirm", 1, {"refs": [lead["ref"]]})[0], 200)
+        self.assertEqual(self.post("/links/confirm", 0, {"refs": [lead["ref"]]})[0], 200)
         # ③ 이름 후보의 계정을 범위 밖 가망이 쥔 경우는 test_name_candidate_held_by_out_of_scope_prospect
 
     def test_name_candidate_held_by_out_of_scope_prospect(self):
@@ -1165,7 +1170,8 @@ class LinksTest(WebBase):
         """같은 번호를 관리 대상 밖 가망(계약 끝난 지 오래 · 짝 줄이 없다)도 ① 에 적었다 — 누가 주장하는지 화면이 모르므로
         대표만 잇는다(담당·팀장 모두 409 · 이름 없이)."""
         self.repair([(12, B), (14, D), (15, D)])
-        for idx in (100, 1):
+        self.assertEqual(self.get("/links/pending", 1)[1]["rows"], [])
+        for idx in (100,):
             row = self.ref_of(idx, 14)
             self.assertEqual((row["code"], row["can_confirm"], row["account_name"], row["other_candidate"]),
                              ("claimed-by-several", False, None, True), idx)
@@ -1371,6 +1377,41 @@ class LinksTest(WebBase):
 
 
 # ── 🔔 · 설정 ────────────────────────────────────────────────────────
+class ManagementScreenTest(WebBase):
+    def test_roster_is_management_only_and_staff_cannot_list_colleagues(self):
+        payload = TA.org_body(self.fc.now(), extra_people=(
+            TA.emp(102, "영업", 11, management=False),
+            TA.emp(103, "퇴사", 11, status="RESIGNED")))
+        self.st.record_org(payload, self.fc.now())
+        status, mine = self.get("/me", 100)
+        self.assertEqual(status, 200)
+        self.assertEqual([p["idx"] for p in mine["people"]], [100])
+        self.assertEqual(mine["teams"], [])
+        status, ceo = self.get("/me", 0)
+        self.assertEqual(status, 200)
+        self.assertEqual({p["idx"] for p in ceo["people"]}, {0, 1, 100, 101})
+        self.assertEqual(ceo["teams"], [])
+
+    def test_staff_bell_redacts_old_counts_and_ceo_only_alerts(self):
+        self.st.record_alert(S.ALERT_DIGEST, TODAY, "compose", "digest", (), "/naver/issues",
+                             [{"emp_idx": who, "severity": "NORMAL", "params": {"red": 991, "yellow": 992}}
+                              for who in (0, 100)], self.fc.now())
+        self.st.record_alert(S.ALERT_SYSTEM, TODAY, "org", "system", ("STALE",), "/naver/settings",
+                             [{"emp_idx": who, "severity": "NORMAL", "params": {}}
+                              for who in (0, 100)], self.fc.now())
+        body = TA.org_body(self.fc.now(), owners=[TA.owner(11, 101), TA.owner(12, 101), TA.owner(14, 101)])
+        self.st.record_org(body, self.fc.now())
+        status, bell = self.get("/bell", 100)
+        self.assertEqual((status, bell["unread"], len(bell["items"])), (200, 1, 1))
+        self.assertEqual(bell["items"][0]["title"], "관제 알림")
+        self.assertEqual(bell["items"][0]["link"], "/naver/")
+        self.assertNotIn("1983", json.dumps(bell))
+        self.assertNotIn("991", json.dumps(bell))
+        ceo = self.get("/bell", 0)[1]
+        self.assertEqual(len(ceo["items"]), 2)
+        self.assertTrue(any("1983" in item["title"] for item in ceo["items"]))
+
+
 class BellSettingsTest(WebBase):
     def test_bell_only_mine(self):
         aid = self.st.record_alert(S.ALERT_DIGEST, TODAY, "compose", "digest", (), "/naver/issues",
@@ -1380,7 +1421,7 @@ class BellSettingsTest(WebBase):
         rs = {r["emp_idx"]: r["recipient_id"] for r in self.st.alert_recipients(aid)}
         s, b = self.get("/bell", 100)
         self.assertEqual((s, b["unread"], len(b["items"])), (200, 1, 1))
-        self.assertEqual(b["items"][0]["title"], "오늘 확인할 광고주 3곳")
+        self.assertEqual(b["items"][0]["title"], "관제 알림")
         self.assertEqual(self.post(f"/bell/{rs[101]}/read", 100)[0], 404)
         self.assertEqual(self.post(f"/bell/{rs[100]}/read", 100), (200, {"read": True, "changed": True}))
         self.assertEqual(self.get("/bell", 100)[1]["unread"], 0)
@@ -1406,8 +1447,7 @@ class BellSettingsTest(WebBase):
             if e["idx"] == 0:
                 e["name"] = "김대표"
         self.st.record_org(body, self.fc.now())
-        _s, st = self.get("/settings", 1)
-        self.assertEqual((st["thresholds"]["zero_spend_days"], st["history"][0]["by"]), (4, "대표"))   # 이름 없이
+        self.assertEqual(self.get("/settings", 1)[0], 403)
         self.assertEqual(self.get("/settings", 0)[1]["history"][0]["by"], "김대표")                  # 대표 화면만 이름
 
     def test_hold_confirm_ceo_only(self):
@@ -1424,9 +1464,9 @@ class EscalationTest(WebBase):
         self.assertEqual(lead["escalated_to_me"], [])
         self.at(T0 + timedelta(hours=12, minutes=1))
         _s, lead = self.get("/board", 1)
-        self.assertEqual({e["possibility_id"] for e in lead["escalated_to_me"]}, {12})   # 🟡 둘(가망 12)
+        self.assertEqual(lead["escalated_to_me"], [])                  # 팀장 계층으로 보내지 않음
         self.assertEqual(self.get("/board", 101)[1]["escalated_to_me"], [])            # 담당 본인은 아님
-        self.assertEqual(self.get("/board", 0)[1]["escalated_to_me"], [])              # 아직 대표 차례 아님
+        self.assertEqual({e["possibility_id"] for e in self.get("/board", 0)[1]["escalated_to_me"]}, {12})
         self.at(T0 + timedelta(hours=24, minutes=1))
         self.assertEqual({e["possibility_id"] for e in self.get("/board", 0)[1]["escalated_to_me"]}, {12})
         for i in self.st.issues(12, open_only=True):
@@ -1439,14 +1479,14 @@ class EscalationTest(WebBase):
         """나에게 올라온 일은 고르기와 상관없다 — 좁힌 팀장에게는 없다(검토 escalation-hidden-by-selection · test-gap)."""
         self.at(T0 + timedelta(hours=12, minutes=1))
         for q in ("", "selection=me", "selection=person%3A100", "selection=person%3A101"):
-            got = {e["possibility_id"] for e in self.get("/board", 1, query=q)[1]["escalated_to_me"]}
+            got = {e["possibility_id"] for e in self.get("/board", 0, query=q)[1]["escalated_to_me"]}
             self.assertEqual(got, {12}, q)
         self.assertEqual(self.get("/board", 1, narrowed=True)[1]["escalated_to_me"], [])
 
     def test_expired_exception_counts_and_escalates(self):
         """기간이 끝난 예외는 🆕 로 센다 — 판의 줄 숫자·원인별 묶음·올리기가 판정과 같다(검토 expired-exception)."""
         red = self.issue_of(11, "red")["issue_id"]
-        self.assertEqual(self.post(f"/issues/{red}/except", 1, {"until": TODAY.isoformat(), "note": "사유"})[0], 200)
+        self.assertEqual(self.post(f"/issues/{red}/except", 0, {"until": TODAY.isoformat(), "note": "사유"})[0], 200)
         yellow = self.issue_of(12, "yellow")["issue_id"]
         self.assertEqual(self.post(f"/issues/{yellow}/except", 101, {"until": TODAY.isoformat(), "note": "사유"})[0], 200)
         _s, b = self.get("/board", 100, query="attention=0")
@@ -1458,7 +1498,7 @@ class EscalationTest(WebBase):
         self.assertIn("bizmoney_low", {g["code"] for g in b["issues"]})
         self.assertEqual(self.get("/board", 1)[1]["escalated_to_me"], [])                     # 끝난 지 12시간 전
         self.at(at(TODAY + timedelta(days=1), 12, 1))
-        self.assertIn(12, {e["possibility_id"] for e in self.get("/board", 1)[1]["escalated_to_me"]})
+        self.assertIn(12, {e["possibility_id"] for e in self.get("/board", 0)[1]["escalated_to_me"]})
 
     def test_single_tier_chain_never_escalates_to_itself(self):
         """담당 미정(대표만) 광고주의 🟡 — 사슬이 한 칸이라 올릴 곳이 없다(대표 자신의 일이 「올라온 일」로 뜨지 않는다)."""

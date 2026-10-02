@@ -76,13 +76,14 @@ class OwnerVerificationTest(TW.WebBase):
         self.assertEqual(self.call("GET", "/clients/11", token)[0], 404)
         self.assertEqual(self.call("POST", "/session/refresh", token)[0], 200)
 
-    def test_staff_lead_and_existing_nonzero_top_keep_their_scopes(self):
+    def test_staff_and_lead_are_mine_and_existing_nonzero_top_is_all(self):
         body = TW.TA.org_body(self.fc.now() - timedelta(minutes=1),
                               extra_people=(TW.TA.emp(7, "여분 대표", 0, manager=True, top=True),))
         self.st.record_org(body, self.fc.now())
         for idx, scope, pids, manager, teams in (
             (100, TW.SC.MINE, {11, 14}, False, ((11, 10), (10, 0))),
-            (1, TW.SC.TEAM, {11, 12, 14}, True, ((11, 10), (10, 0))),
+            # 2026-10-02 명세: 관리팀장도 본인 담당만. 직접 담당이 없는 이 fixture는 빈 목록이다.
+            (1, TW.SC.MINE, set(), True, ((11, 10), (10, 0))),
             (7, TW.SC.ALL, {11, 12, 13, 14}, True, ((0, None),)),
         ):
             with self.subTest(idx=idx):
@@ -105,14 +106,15 @@ class OwnerVerificationTest(TW.WebBase):
         self.assertEqual(self.get("/settings", 100)[0], 403)
         self.assertEqual(self.get("/me", 1, narrowed=True)[1]["scope"], TW.SC.MINE)
 
-    def test_team_subtree_does_not_include_sibling_team(self):
+    def test_team_hierarchy_never_grants_other_staff_clients(self):
+        """2026-10-02 명세: 부서 계층 권한을 없앴으므로 하부·형제 팀 모두 본인 담당이 아니면 거절한다."""
         body = TW.TA.org_body(self.fc.now() - timedelta(minutes=1), owners=[
             TW.TA.owner(11, 100), TW.TA.owner(12, 102), TW.TA.owner(13, 103), TW.TA.owner(14, 100)],
             extra_people=(TW.TA.emp(102, "하부", 12), TW.TA.emp(103, "다른 팀", 20)))
         body["teams"] += [TW.TA.team(12, "하부 팀", 3, 11), TW.TA.team(20, "다른 팀", 2, 10)]
         self.st.record_org(body, self.fc.now())
-        self.assertEqual({r["possibility_id"] for r in self.get("/board", 1, query="attention=0")[1]["rows"]}, {11, 12, 14})
-        self.assertEqual(self.get("/clients/12", 1)[0], 200)
+        self.assertEqual({r["possibility_id"] for r in self.get("/board", 1, query="attention=0")[1]["rows"]}, set())
+        self.assertEqual(self.get("/clients/12", 1)[0], 404)
         self.assertEqual(self.get("/clients/13", 1)[0], 404)
         self.assertEqual(self.get("/board", 1, query="selection=team:20")[0], 404)
 

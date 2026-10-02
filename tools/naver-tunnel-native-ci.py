@@ -250,9 +250,10 @@ def exercise(root, processes):
         info = socket_path.lstat()
         check(stat.S_ISSOCK(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o660 and info.st_uid == 0 and info.st_gid == 10001)
 
-        stage("four-routes-and-header-normalization")
+        stage("five-routes-and-header-normalization")
         targets = ("/api/ad-sync/contracts?stage=%EC%A7%84%ED%96%89%EC%A4%91&has_contract=true",
-                   "/api/ad-sync/org-snapshot", "/api/ad-sync/naver-customer-ids", "/api/sso/exchange")
+                   "/api/ad-sync/org-snapshot", "/api/ad-sync/naver-customer-ids", "/api/sso/exchange",
+                   "/api/ad-sync/naver-account-catalog")
         for target in targets:
             method = "POST" if target.endswith("exchange") else "GET"
             status, payload = request(socket_path, method, target, b"{}" if method == "POST" else None,

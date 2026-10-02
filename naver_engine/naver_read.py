@@ -34,6 +34,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -435,6 +436,7 @@ class NaverReader:
         self.pauses = 0
         self._last_sent: Optional[float] = None
         self._rate_hits: collections.deque = collections.deque()
+        self._request_limits = []
 
     def __repr__(self) -> str:
         return f"NaverReader(calls={self.calls}, pauses={self.pauses})"
@@ -443,15 +445,51 @@ class NaverReader:
     def manager_handle(self) -> H.ManagerHandle:
         return H.issue_manager_handle(self._cred.customer_id, self._clock.now())
 
+    @contextmanager
+    def bounded_requests(self, *, max_calls: int, max_seconds: float):
+        """재시도·쪽 넘김도 실제 HTTP 관문에서 예산을 쓴다. 기존 속도·읽기전용 규칙은 유지한다."""
+        if type(max_calls) is not int or max_calls < 1 or type(max_seconds) not in (int, float) \
+                or not math.isfinite(max_seconds) or not 0 < max_seconds <= 60:
+            raise ValueError("읽기 예산이 올바르지 않습니다")
+        bound = (self.calls + max_calls, self._clock.monotonic() + max_seconds, time.monotonic() + max_seconds)
+        self._request_limits.append(bound)
+        try:
+            yield
+        finally:
+            self._request_limits.remove(bound)
+
+    def check_budget(self):
+        """마지막 응답 뒤에도 호출자가 마감을 검증할 수 있다(요청 횟수는 추가하지 않는다)."""
+        self._remaining()
+
+    def _remaining(self, *, request=False):
+        remaining = float(TIMEOUT)
+        for call_cap, clock_end, wall_end in self._request_limits:
+            if request and self.calls >= call_cap:
+                raise RunAbort("bounded-call-cap")
+            remaining = min(remaining, clock_end - self._clock.monotonic(), wall_end - time.monotonic())
+        if remaining <= 0:
+            raise RunAbort("bounded-deadline")
+        return remaining
+
+    def _sleep(self, seconds):
+        if self._request_limits and seconds >= self._remaining():
+            raise RunAbort("bounded-deadline")
+        self._clock.sleep(seconds)
+
     # 한 곳 — 모든 요청이 여기서 만들어진다
-    def _gate(self, method: str, path: str, params: Optional[Mapping[str, Any]], customer_id: int) -> Tuple[int, bytes]:
+    def _gate(self, method: str, path: str, params: Optional[Mapping[str, Any]], customer_id: int, ah=None) -> Tuple[int, bytes]:
         if method not in _ALLOWED_METHODS:
             raise WriteForbidden(f"GET 이 아닌 요청은 만들지 않습니다: {method}")
         if not any(p.fullmatch(path) for p in _PATHS):
             raise PathForbidden(f"허용하지 않은 경로: {path_shape(path)}")
         if self.calls >= self._max_calls:
             raise RunAbort("call-cap")
+        self._remaining(request=True)
         self._pace()
+        timeout = self._remaining(request=True)
+        if type(ah) is H.InventoryHandle:
+            H.require_inventory(ah, self._clock.now())
         self.calls += 1
         ts = str(self._clock.epoch_ms())
         headers = {
@@ -470,7 +508,7 @@ class NaverReader:
             raise PathForbidden("허용하지 않은 호스트")
         del headers
         try:
-            return self._transport.send(req, TIMEOUT)
+            return self._transport.send(req, timeout)
         except (urllib.error.URLError, OSError, http.client.HTTPException):
             raise  # 연결 실패 — _request 가 종류 이름만 남기고 다시 보낸다
         except Exception as e:  # 뜻밖의 오류 — 문구에 키가 섞일 수 있어 종류 이름만 남기고 가린다
@@ -480,7 +518,7 @@ class NaverReader:
         gap = 1.0 / CALLS_PER_SEC
         now = self._clock.monotonic()
         if self._last_sent is not None and now - self._last_sent < gap:
-            self._clock.sleep(gap - (now - self._last_sent))
+            self._sleep(gap - (now - self._last_sent))
         self._last_sent = self._clock.monotonic()
 
     def _note_rate(self) -> None:
@@ -494,16 +532,16 @@ class NaverReader:
             if self.pauses >= MAX_PAUSES:
                 raise RunAbort("rate-paused-twice")
             log.warning("[네이버 읽기] 속도 제한이 몰려 5분 멈춤(이번 회차 %d번째)", self.pauses)
-            self._clock.sleep(RATE_PAUSE)
+            self._sleep(RATE_PAUSE)
 
-    def _request(self, customer_id: int, path: str, params: Optional[Mapping[str, Any]] = None):
+    def _request(self, customer_id: int, path: str, params: Optional[Mapping[str, Any]] = None, *, ah=None):
         shape = path_shape(path)
         tries = {KIND_RATE: 0, KIND_SERVER: 0, KIND_NETWORK: 0}
         while True:
             status: Optional[int] = None
             code: Optional[int] = None
             try:
-                status, body = self._gate("GET", path, params, customer_id)
+                status, body = self._gate("GET", path, params, customer_id, ah)
             except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
                 kind, detail = KIND_NETWORK, type(e).__name__
             else:
@@ -519,12 +557,12 @@ class NaverReader:
                     raise NaverApiError(kind, shape, status, code, customer_id)
                 wait = RATE_BACKOFF[tries[KIND_RATE]]
                 tries[KIND_RATE] += 1
-                self._clock.sleep(wait + self._rng.uniform(0, wait / 4))
+                self._sleep(wait + self._rng.uniform(0, wait / 4))
                 continue
             if kind in (KIND_SERVER, KIND_NETWORK):
                 if tries[kind] >= len(RETRY_BACKOFF):
                     raise NaverApiError(kind, shape, status, code, customer_id, detail)
-                self._clock.sleep(RETRY_BACKOFF[tries[kind]])
+                self._sleep(RETRY_BACKOFF[tries[kind]])
                 tries[kind] += 1
                 continue
             log.warning("[네이버 읽기] %s %s HTTP %s 코드 %s 계정 %s", kind, shape, status, code, customer_tail(customer_id))
@@ -655,8 +693,8 @@ class NaverReader:
             raise NaverApiError(KIND_MISMATCH, shape, 200, None, h.customer_id, "응답의 고객 번호가 다름")
 
     def get_campaigns(self, ah) -> List[dict]:
-        h = self._account(ah, (H.PURPOSE_CHECK, H.PURPOSE_PREVIEW))
-        body = self._request(h.customer_id, "/ncc/campaigns")
+        h = self._account(ah, (H.PURPOSE_CHECK, H.PURPOSE_PREVIEW, H.PURPOSE_INVENTORY))
+        body = self._request(h.customer_id, "/ncc/campaigns", ah=h)
         if not isinstance(body, list):
             raise NaverApiError(KIND_BAD_RESPONSE, "/ncc/campaigns", 200, None, h.customer_id, "목록 아님")
         out = []
@@ -668,8 +706,8 @@ class NaverReader:
         return out
 
     def get_bizmoney(self, ah) -> dict:
-        h = self._account(ah, (H.PURPOSE_CHECK,))
-        body = self._request(h.customer_id, "/billing/bizmoney")
+        h = self._account(ah, (H.PURPOSE_CHECK, H.PURPOSE_INVENTORY))
+        body = self._request(h.customer_id, "/billing/bizmoney", ah=h)
         if not isinstance(body, Mapping):
             raise NaverApiError(KIND_BAD_RESPONSE, "/billing/bizmoney", 200, None, h.customer_id, "사전 아님")
         self._same_customer(body.get("customerId"), h, "/billing/bizmoney")
@@ -689,7 +727,7 @@ class NaverReader:
     def get_stats_summary(self, ah, ids: Iterable[str], since: date, until: date,
                           fields: Sequence[str] = ("impCnt", "clkCnt", "salesAmt", "ccnt")) -> StatsResult:
         """여러 번호의 기간 합계. 100개씩 나눠 부르고 합친다 — 한 묶음이라도 모양을 모르면 전체가 실패."""
-        h = self._account(ah, (H.PURPOSE_CHECK,))
+        h = self._account(ah, (H.PURPOSE_CHECK, H.PURPOSE_INVENTORY))
         _check_period(since, until, H._kst_today(self._clock.now()))
         flds = _check_fields(fields)
         want = [i if isinstance(i, str) else "" for i in ids]
@@ -705,7 +743,7 @@ class NaverReader:
                 "ids": chunk,
                 "fields": json.dumps(list(flds)),
                 "timeRange": json.dumps({"since": since.isoformat(), "until": until.isoformat()}),
-            })
+            }, ah=h)
             part = parse_stats(body, chunk, flds, until)
             rows.update(part.rows)
             missing.extend(part.missing_ids)

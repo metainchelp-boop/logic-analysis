@@ -47,9 +47,9 @@ def team(idx, name, level=1, parent=0, system=False):
     return {"idx": idx, "name": name, "level": level, "parent_idx": parent, "is_system": system}
 
 
-def emp(idx, name, team_idx, manager=False, top=False, status="ACTIVE", deleted=False):
+def emp(idx, name, team_idx, manager=False, top=False, status="ACTIVE", deleted=False, management=True):
     return {"idx": idx, "name": name, "team_idx": team_idx, "is_manager": manager, "is_top_manager": top,
-            "status": status, "is_deleted": deleted}
+            "status": status, "is_deleted": deleted, "is_management": management}
 
 
 def owner(pid, main, sub=None):
@@ -179,8 +179,9 @@ class MigrationTest(Base):
         self.assertIsNone(self.st.stage_as_of())
         self.assertIsNone(self.st.hold(S.SYNC_STAGES))
 
-    def test_version_is_seven(self):
-        self.assertEqual(S.SCHEMA_VERSION, 7)   # 판을 올리면 기존 표·행 보존 시험도 함께 본다(test_alerts/test_web/test_metrics)
+    def test_version_is_eight(self):
+        # 2026-10-02 명세: 기존 계약 이력을 보존하면서 독립 계정×일 원천 수집 표를 더한 판이다.
+        self.assertEqual(S.SCHEMA_VERSION, 8)   # 기존 표·행 보존 시험도 함께 본다(test_alerts/test_web/test_metrics)
 
 
 # ── 목록 급감 브레이크 — 가망 ──────────────────────────────────────────
@@ -1445,8 +1446,10 @@ class SyncGuardTest(unittest.TestCase):
         self.assertEqual(set(found), {"sync.py", "links.py", "morning.py", "alerts.py", "web.py", "metrics.py"})
         self.assertEqual(found["metrics.py"], {"begin_metrics_attempt", "record_metrics_snapshot", "finish_metrics_attempt"})
         # 사람 판단 · 이슈 손길 · 읽음 · 기준값 · 열람 기록 — scope 로 누를 수 있는 사람을 정한 화면 API 한 곳(S11)
+        # 2026-10-02 명세: 현재 보이는 알림만 읽음 처리하므로 전체 일괄 함수는 호출하지 않는다.
+        # PRIVILEGED에는 계속 남겨 우회 호출이 추가되면 이 정확한 허용 집합 검사로 거절한다.
         self.assertEqual(found["web.py"], {"record_decisions", "revoke_decision", "ack_issue", "resolve_issue",
-                                           "except_issue", "record_access", "mark_alert_read", "mark_alerts_read_all",
+                                           "except_issue", "record_access", "mark_alert_read",
                                            "record_thresholds"})
         self.assertEqual(found["alerts.py"], {"record_alert", "record_delivery", "record_heartbeat"})
         self.assertEqual(found["sync.py"], {"record_org", "refuse_org", "refuse_stages", "confirm_prospects_hold"})

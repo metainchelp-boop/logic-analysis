@@ -51,9 +51,9 @@ def team(idx, name, level=1, parent=0, system=False):
     return {"idx": idx, "name": name, "level": level, "parent_idx": parent, "is_system": system}
 
 
-def emp(idx, name, team_idx, manager=False, top=False, status="ACTIVE", deleted=False):
+def emp(idx, name, team_idx, manager=False, top=False, status="ACTIVE", deleted=False, management=True):
     return {"idx": idx, "name": name, "team_idx": team_idx, "is_manager": manager, "is_top_manager": top,
-            "status": status, "is_deleted": deleted}
+            "status": status, "is_deleted": deleted, "is_management": management}
 
 
 def owner(pid, main, sub=None):
@@ -136,7 +136,7 @@ class StoreAlertTest(Base):
         return self.st.record_alert(**base)
 
     def test_version_and_constants(self):
-        self.assertEqual(S.SCHEMA_VERSION, 7)   # 7 = 공유 성과 원천·재시도 — 옛 판 이관은 test_web/test_metrics도 본다
+        self.assertEqual(S.SCHEMA_VERSION, 8)   # 8 = 읽기 전용 계정 inventory
         self.assertEqual(S.ALERT_SEVERITIES, EA.SEVERITIES)
         self.assertEqual(S.ALERT_TTL, timedelta(hours=12))
         for link in (AL.LINK_HOME, AL.LINK_ISSUES, AL.LINK_SYSTEM, AL.LINK_UNLINKED):
@@ -153,7 +153,7 @@ class StoreAlertTest(Base):
         raw.commit()
         raw.close()
         self.st = S.open_writer(self.path, clock=self.fc.now)
-        self.assertEqual(self.st.meta("schema_version"), "7")
+        self.assertEqual(self.st.meta("schema_version"), str(S.SCHEMA_VERSION))
         self.assertEqual(self.st.alerts_on(TUE), [])
         self.rec()
 
@@ -409,9 +409,9 @@ class ComposeTest(Base):
         out = AL.compose(self.st, self.now(at(TUE, 8, 0)), ON)
         self.assertEqual(out.made, (S.ALERT_DIGEST,))
         rs = self.recips(S.ALERT_DIGEST)
-        # 🔴 11 → 담당 100 + 팀장 1 + 대표 0 · 🟡 12 → 담당 101 · 🟡 13(담당 없음) → 대표
+        # 🔴 11 → 담당 100 + 대표 0 · 🟡 12 → 담당 101 · 🟡 13(담당 없음) → 대표
         self.assertEqual({p: (r["params"]["red"], r["params"]["yellow"], r["severity"]) for p, r in rs.items()},
-                         {100: (1, 0, "URGENT"), 1: (1, 0, "URGENT"), 0: (1, 1, "URGENT"), 101: (0, 1, "NORMAL")})
+                         {100: (1, 0, "URGENT"), 0: (1, 1, "URGENT"), 101: (0, 1, "NORMAL")})
         self.assertTrue(all(r["status"] == "pending" for r in rs.values()))
         self.assertEqual(AL.compose(self.st, self.fc.now(), ON).made, ())   # 하루 한 번
 
@@ -432,7 +432,7 @@ class ComposeTest(Base):
         AL.compose(self.st, self.now(at(TUE, 8, 0)), ON)
         rs = self.recips(S.ALERT_DIGEST)
         self.assertEqual((rs[100]["params"], rs[100]["severity"]), ({"red": 1, "yellow": 0}, "URGENT"))
-        self.assertEqual(rs[1]["params"], {"red": 1, "yellow": 0})   # 팀장도 🔴 로(🟡 로 내려가 빠지지 않음)
+        self.assertNotIn(1, rs)                                     # 팀장은 다른 직원 담당 알림을 받지 않는다
 
     def test_acked_still_counted(self):
         [i11] = [i for i in self.st.issues() if i["possibility_id"] == 11]
@@ -451,8 +451,7 @@ class ComposeTest(Base):
         self.issues(TUE, [(15, D, "yellow")])
         AL.compose(self.st, self.now(at(TUE, 9, 30)), ON)
         rs = self.recips(S.ALERT_LEAD_DIGEST)
-        self.assertEqual({p: r["params"] for p, r in rs.items()}, {1: {"count": 2, "people": 2}})   # 12(101) · 15(100)
-        self.assertEqual(rs[1]["severity"], "NORMAL")
+        self.assertEqual(rs, {})                                   # 팀장 집계 폐지
 
     def test_shadow_holds_issue_alerts_and_sends_ceo_summary(self):
         out = AL.compose(self.st, self.now(at(TUE, 8, 0)), AL.SHADOW)
@@ -463,11 +462,11 @@ class ComposeTest(Base):
         sm = self.recips(S.ALERT_SHADOW_SUMMARY)
         self.assertEqual(set(sm), {0})
         p = sm[0]["params"]
-        # 받을 사람 4명(100 · 1 · 0 · 101) · 5통 = 아침 요약 4 + 09:30 팀장 묶음 1(팀장 1 — 🟡 12 의 담당 101)
-        self.assertEqual((p["ok"], p["red"], p["yellow"], p["new"], p["people"], p["msgs"]), (3, 1, 2, 3, 4, 5))
+        # 본인 담당 100·101과 대표 0에게만 세 통, 팀장 묶음 없음
+        self.assertEqual((p["ok"], p["red"], p["yellow"], p["new"], p["people"], p["msgs"]), (3, 1, 2, 3, 3, 3))
         self.assertEqual((sm[0]["status"], sm[0]["severity"]), ("pending", "NORMAL"))
         AL.compose(self.st, self.now(at(TUE, 9, 30)), AL.SHADOW)
-        self.assertEqual({r["held_reason"] for r in self.recips(S.ALERT_LEAD_DIGEST).values()}, {"shadow"})
+        self.assertEqual(self.recips(S.ALERT_LEAD_DIGEST), {})
 
     def test_shadow_needs_date_and_switch(self):
         self.assertTrue(AL.AlertPolicy().in_shadow(TUE))
@@ -485,17 +484,17 @@ class ComposeTest(Base):
         AL.compose(self.st, self.now(at(SAT, 8, 0)), ON)
         rs = self.recips(S.ALERT_DIGEST, SAT)
         self.assertEqual({p: (r["status"], r["held_reason"]) for p, r in rs.items()},
-                         {100: ("pending", None), 1: ("pending", None), 0: ("pending", None), 101: ("held", "weekend")})
+                         {100: ("pending", None), 0: ("pending", None), 101: ("held", "weekend")})
         AL.compose(self.st, self.now(at(SAT, 9, 30)), ON)
-        self.assertEqual({r["held_reason"] for r in self.recips(S.ALERT_LEAD_DIGEST, SAT).values()}, {"weekend"})
+        self.assertEqual(self.recips(S.ALERT_LEAD_DIGEST, SAT), {})
 
     def test_weekend_shadow_summary_counts_only_what_would_go(self):
         self.issues(SAT, [(11, A, "red"), (12, B, "yellow"), (13, C_, "yellow")])
         self.org()
         AL.compose(self.st, self.now(at(SAT, 8, 0)), AL.SHADOW)
         p = self.recips(S.ALERT_SHADOW_SUMMARY, SAT)[0]["params"]
-        # 주말: 🔴 가 든 요약만 갔을 것(100 · 1 · 0) — 🟡 만인 101 의 요약과 09:30 팀장 묶음은 주말이라 남겨 둔다
-        self.assertEqual((p["people"], p["msgs"]), (3, 3))
+        # 주말: 🔴 가 든 요약만 갔을 것(100 · 0), 팀장 집계 없음
+        self.assertEqual((p["people"], p["msgs"]), (2, 2))
 
     def test_weekend_shadow_summary_only_with_red(self):
         AL.compose(self.st, self.now(at(SAT, 8, 0)), AL.SHADOW)   # 🔴 가 열려 있다(화요일부터)
@@ -567,8 +566,8 @@ class DispatchTest(Base):
 
     def test_sends_all_urgent_first_and_text_has_no_names(self):
         out = AL.dispatch(self.st, self.fc.now(), self.poster())
-        self.assertEqual(out.counts, {"sent": 4})
-        self.assertEqual(self.statuses(), {100: "sent", 1: "sent", 0: "sent", 101: "sent"})
+        self.assertEqual(out.counts, {"sent": 3})
+        self.assertEqual(self.statuses(), {100: "sent", 0: "sent", 101: "sent"})
         order = [c["body"]["target_emp_idx"] for c in self.erp.calls]
         self.assertEqual(order[-1], 101)                                  # 🟡 만인 사람이 마지막
         for _d, _t, key, sev, content in self.erp.messages:
@@ -585,7 +584,7 @@ class DispatchTest(Base):
         self.assertEqual(len(self.erp.calls), 1)
         for _ in range(3):
             AL.dispatch(self.st, t, self.poster())                      # 같은 시각 — 남은 줄을 한 차례에 하나씩
-        self.assertEqual(len(self.erp.calls), 4)
+        self.assertEqual(len(self.erp.calls), 3)
         self.assertEqual(AL.dispatch(self.st, t + timedelta(minutes=1), self.poster()).counts, {})   # 2분 기다림
         gaps = [2, 5, 15, 30]
         for g in gaps:
@@ -630,7 +629,7 @@ class DispatchTest(Base):
         AL.record_system_alert(self.st, self.fc.now(), "org", ["network"])
         out = AL.dispatch(self.st, self.fc.now(), self.poster(), kind=S.ALERT_SYSTEM)
         self.assertEqual(out.counts, {"sent": 1})
-        self.assertEqual(self.statuses(), {100: "pending", 1: "pending", 0: "pending", 101: "pending"})
+        self.assertEqual(self.statuses(), {100: "pending", 0: "pending", 101: "pending"})
         with self.assertRaises(S.StoreRefused):
             self.st.due_deliveries(self.fc.now(), 10, "nope")
 
@@ -645,12 +644,12 @@ class DispatchTest(Base):
         out = AL.dispatch(self.st, self.fc.now(), p)
         self.assertEqual((out.counts, out.stopped), ({"retry": 1}, "status-401"))
         self.assertEqual(len(self.erp.calls), 1)
-        self.assertEqual(sorted(self.statuses().values()), ["pending"] * 4)
+        self.assertEqual(sorted(self.statuses().values()), ["pending"] * 3)
 
     def test_caps_and_duplicate_recorded(self):
         self.erp.cap_target = 0
         out = AL.dispatch(self.st, self.fc.now(), self.poster())
-        self.assertEqual(out.counts, {"cap_target": 4})
+        self.assertEqual(out.counts, {"cap_target": 3})
         self.assertEqual(set(self.statuses().values()), {"cap_target"})
 
     def test_total_cap_stops(self):
@@ -681,13 +680,13 @@ class DispatchTest(Base):
 
     def test_expired_not_sent(self):
         out = AL.dispatch(self.st, self.now(at(TUE, 20, 1)), self.poster())
-        self.assertEqual(out.counts, {"expired": 4})
+        self.assertEqual(out.counts, {"expired": 3})
         self.assertEqual(self.erp.calls, [])
 
     def test_held_never_sent(self):
         AL.compose(self.st, self.now(at(TUE, 9, 30)), AL.SHADOW)   # 팀장 묶음 — 그림자라 남겨 둠
         AL.dispatch(self.st, self.fc.now(), self.poster())
-        self.assertEqual({r["status"] for r in self.recips(S.ALERT_LEAD_DIGEST).values()}, {"held"})
+        self.assertEqual(self.recips(S.ALERT_LEAD_DIGEST), {})
 
     def test_broken_row_fails_as_render(self):
         aid = self.st.record_alert(S.ALERT_SYSTEM, TUE, "morning", "no_such", ["RUN_ABORT"], AL.LINK_SYSTEM,

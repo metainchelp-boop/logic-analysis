@@ -75,9 +75,9 @@ def _team(idx, name, level, parent, system=False):
     return {"idx": idx, "name": name, "level": level, "parent_idx": parent, "is_system": system}
 
 
-def _emp(idx, name, team, manager=False, top=False, status="ACTIVE", deleted=False):
+def _emp(idx, name, team, manager=False, top=False, status="ACTIVE", deleted=False, management=True):
     return {"idx": idx, "name": name, "team_idx": team, "is_manager": manager,
-            "is_top_manager": top, "status": status, "is_deleted": deleted}
+            "is_top_manager": top, "status": status, "is_deleted": deleted, "is_management": management}
 
 
 def _pn(v):
@@ -156,12 +156,89 @@ def viewers_of(org, own):
 
 # ── 시안 숫자 ──────────────────────────────────────────────────────
 
+class ManagementAccessTest(unittest.TestCase):
+    def test_management_revocation_and_owner_transfer_revalidate_old_scope(self):
+        org, rows = build()
+        former = sc.scope_of(org, KIM)
+        payload = mockup_payload()
+        for employee in payload["employees"]:
+            if employee["idx"] == KIM:
+                employee["is_management"] = False
+        changed = snap.parse_org_snapshot(payload)
+        self.assertEqual(sc.scope_of(changed, KIM).kind, sc.NONE)
+        self.assertEqual(sc.clients_in(changed, former, rows_of(changed)), set())
+        payload = mockup_payload()
+        for owner in payload["owners"]:
+            if owner["possibility_id"] == PID_BASE + CID["dara"]:
+                owner["manage_emp_idx"] = BAK
+        transferred = snap.parse_org_snapshot(payload)
+        latest_rows = rows_of(transferred)
+        self.assertNotIn(CID["dara"], visible(transferred, latest_rows, KIM))
+        self.assertIn(CID["dara"], visible(transferred, latest_rows, BAK))
+
+    def test_person_selection_matches_main_sub_and_previous_owner_scope(self):
+        org, rows = build(extended=True)
+        self.assertEqual(visible(org, rows, CEO, f"person:{KIM}"), visible(org, rows, KIM))
+
+    def test_only_active_management_and_ceo_have_scope(self):
+        payload = mockup_payload()
+        for employee in payload["employees"]:
+            employee["is_management"] = employee["idx"] in (LEE, KIM)
+        org = snap.parse_org_snapshot(payload)
+        self.assertEqual(sc.scope_of(org, CEO).kind, sc.ALL)
+        self.assertEqual(sc.scope_of(org, LEE).kind, sc.MINE)
+        self.assertEqual(sc.scope_of(org, KIM).kind, sc.MINE)
+        for who in (HAN, BAK, CHOI, OH, SUSPENDED, DELETED):
+            self.assertEqual(sc.scope_of(org, who).kind, sc.NONE, who)
+        self.assertEqual(visible(org, rows_of(org), LEE), ids(["chaka", "haga", "nada"]))
+
+    def test_missing_or_invalid_management_flag_is_closed(self):
+        for flag in (None, False, 1, "true"):
+            payload = mockup_payload()
+            for employee in payload["employees"]:
+                if flag is not None:
+                    employee["is_management"] = flag
+                else:
+                    employee.pop("is_management", None)
+            org = snap.parse_org_snapshot(payload)
+            self.assertEqual(sc.scope_of(org, KIM).kind, sc.NONE, flag)
+            self.assertEqual(sc.scope_of(org, CEO).kind, sc.ALL, flag)
+
+    def test_picker_has_active_management_only_and_no_team_selection(self):
+        payload = mockup_payload()
+        for employee in payload["employees"]:
+            employee["is_management"] = employee["idx"] in (LEE, KIM, OH, DELETED)
+        org = snap.parse_org_snapshot(payload)
+        scope = sc.scope_of(org, CEO)
+        self.assertEqual(scope.people, {LEE, KIM})
+        self.assertEqual(scope.teams, set())
+        for selection in (f"person:{OH}", f"person:{BAK}", f"team:{T_1}"):
+            with self.assertRaises(sc.TargetNotVisible):
+                sc.clients_in(org, scope, rows_of(org), selection)
+
+    def test_notifications_and_approvals_do_not_restore_team_access(self):
+        org, rows = build()
+        own = rows[CID["dara"]]
+        self.assertEqual(sc.alert_recipients(org, own, sc.URGENT), {KIM, CEO})
+        self.assertEqual(sc.approvers(org, own, sc.LEVEL_STAFF), (frozenset({KIM}), frozenset({CEO})))
+        self.assertEqual(sc.approvers(org, own, sc.LEVEL_LEAD), (frozenset({CEO}),))
+        self.assertEqual(sc.digest_recipients(org, own), set())
+        self.assertEqual(sc.todo_chain(org, own, sc.LEVEL_STAFF), (frozenset({KIM}), frozenset({CEO})))
+        payload = mockup_payload()
+        for employee in payload["employees"]:
+            if employee["idx"] == KIM:
+                employee["is_management"] = False
+        changed = snap.parse_org_snapshot(payload)
+        self.assertEqual(sc.alert_recipients(changed, own, sc.CAUTION), {CEO})
+        self.assertEqual(sc.approvers(changed, own, sc.LEVEL_STAFF), (frozenset({CEO}),))
+
+
 class MockupNumbersTest(unittest.TestCase):
     def setUp(self):
         self.org, self.rows = build()
 
     def test_보이는_광고주_수가_시안과_같다(self):
-        expect = {KIM: 9, LEE: 16, HAN: 29, CEO: 31, PARK: 0, CHOI: 11, JEONG: 6, BAK: 5}
+        expect = {KIM: 9, LEE: 3, HAN: 2, CEO: 31, PARK: 0, CHOI: 4, JEONG: 6, BAK: 5}
         got = {who: len(visible(self.org, self.rows, who)) for who in expect}
         self.assertEqual(got, expect)
 
@@ -180,7 +257,7 @@ class MockupNumbersTest(unittest.TestCase):
                  (CEO, HAN, LEE, CHOI, KIM, BAK, JEONG, PARK, OH, SUSPENDED, DELETED, YOON,
                   SYS_MGR_RESIGNED_TEAM, SYS_MGR_UNSORTED)}
         self.assertEqual(kinds, {
-            CEO: sc.ALL, HAN: sc.TEAM, LEE: sc.TEAM, CHOI: sc.TEAM,
+            CEO: sc.ALL, HAN: sc.MINE, LEE: sc.MINE, CHOI: sc.MINE,
             KIM: sc.MINE, BAK: sc.MINE, JEONG: sc.MINE, PARK: sc.MINE,
             OH: sc.NONE, SUSPENDED: sc.NONE, DELETED: sc.NONE, YOON: sc.NONE,
             SYS_MGR_RESIGNED_TEAM: sc.MINE, SYS_MGR_UNSORTED: sc.MINE,
@@ -193,25 +270,22 @@ class MockupNumbersTest(unittest.TestCase):
             self.assertEqual(s.kind, sc.NONE, bad)
             self.assertEqual(sc.clients_in(self.org, s, self.rows, "all"), frozenset())
 
-    def test_팀_범위는_본인_팀과_하부_팀(self):
-        self.assertEqual(sc.scope_of(self.org, LEE).teams, {T_1})
-        self.assertEqual(sc.scope_of(self.org, CHOI).teams, {T_2})
-        self.assertEqual(sc.scope_of(self.org, HAN).teams, {T_HQ, T_1, T_2})
+    def test_관리팀장에게도_팀_범위는_없다(self):
+        for who in (LEE, CHOI, HAN):
+            self.assertEqual(sc.scope_of(self.org, who).teams, set())
 
     def test_좁히기(self):
         o, r = self.org, self.rows
         self.assertEqual(visible(o, r, LEE, "me"), ids(["chaka", "haga", "nada"]))
-        self.assertEqual(len(visible(o, r, LEE, f"person:{KIM}")), 8)       # 메인 기준(서브 곳은 박담당 몫)
-        self.assertEqual(len(visible(o, r, LEE, f"person:{BAK}")), 5)
-        self.assertEqual(len(visible(o, r, HAN, f"team:{T_1}")), 16)
-        self.assertEqual(len(visible(o, r, HAN, f"team:{T_2}")), 11)
-        self.assertEqual(visible(o, r, HAN, f"person:{OH}"), ids(["taga"]))  # 담당 공백도 사람으로 고른다
-        self.assertEqual(visible(o, r, CHOI, f"person:{OH}"), ids(["taga"]))
+        for who, selection in ((LEE, f"person:{KIM}"), (LEE, f"person:{BAK}"),
+                               (HAN, f"team:{T_1}"), (HAN, f"team:{T_2}"),
+                               (HAN, f"person:{OH}"), (CHOI, f"person:{OH}"), (CEO, f"team:{T_HQ}")):
+            with self.assertRaises(sc.TargetNotVisible):
+                visible(o, r, who, selection)
         self.assertEqual(visible(o, r, CEO, "unassigned"), ids(["hana", "gada"]))
-        self.assertEqual(len(visible(o, r, CEO, f"team:{T_HQ}")), 29)
         self.assertEqual(visible(o, r, CEO, f"person:{HAN}"), ids(["gaha", "nama"]))
         self.assertEqual(len(visible(o, r, KIM, "me")), 9)
-        self.assertEqual(len(visible(o, r, KIM, f"person:{KIM}")), 8)
+        self.assertEqual(len(visible(o, r, KIM, f"person:{KIM}")), 9)
         self.assertEqual(visible(o, r, CEO, "me"), frozenset())
 
     def test_담당_상태(self):
@@ -336,21 +410,21 @@ class AlertRecipientsTest(unittest.TestCase):
         return sc.alert_recipients(self.org, self.rows[cid], level)
 
     def test_시안과_같은_받는_사람(self):
-        self.assertEqual(self.rcpt("dara", sc.URGENT), {KIM, LEE, CEO})
+        self.assertEqual(self.rcpt("dara", sc.URGENT), {KIM, CEO})
         self.assertEqual(self.rcpt("dara", sc.CAUTION), {KIM})
-        self.assertEqual(sc.digest_recipients(self.org, self.rows[CID["dara"]]), {LEE})
-        self.assertEqual(self.rcpt("paha", sc.URGENT), {JEONG, CHOI, CEO})
-        self.assertEqual(self.rcpt("chaka", sc.URGENT), {LEE, HAN, CEO})   # 팀장 본인 담당 → 다음 윗사람
-        self.assertEqual(sc.digest_recipients(self.org, self.rows[CID["chaka"]]), {HAN})
+        self.assertEqual(sc.digest_recipients(self.org, self.rows[CID["dara"]]), set())
+        self.assertEqual(self.rcpt("paha", sc.URGENT), {JEONG, CEO})
+        self.assertEqual(self.rcpt("chaka", sc.URGENT), {LEE, CEO})
+        self.assertEqual(sc.digest_recipients(self.org, self.rows[CID["chaka"]]), set())
         self.assertEqual(self.rcpt("gaha", sc.URGENT), {HAN, CEO})
-        self.assertEqual(self.rcpt("taga", sc.CAUTION), {CHOI})            # 담당 공백 → 팀장이 대신
-        self.assertEqual(self.rcpt("taga", sc.URGENT), {CHOI, CEO})
+        self.assertEqual(self.rcpt("taga", sc.CAUTION), {CEO})            # 담당 공백 → 대표
+        self.assertEqual(self.rcpt("taga", sc.URGENT), {CEO})
         for n in ("hana", "gada"):
             self.assertEqual(self.rcpt(n, sc.URGENT), {CEO})
             self.assertEqual(self.rcpt(n, sc.CAUTION), {CEO})
 
     def test_서브는_긴급만_받는다(self):
-        self.assertEqual(self.rcpt("tapa", sc.URGENT), {BAK, KIM, LEE, CEO})
+        self.assertEqual(self.rcpt("tapa", sc.URGENT), {BAK, KIM, CEO})
         self.assertEqual(self.rcpt("tapa", sc.CAUTION), {BAK})
         self.assertIn(KIM, self.rcpt("tapa", sc.URGENT))
         self.assertNotIn(KIM, self.rcpt("tapa", sc.CAUTION))
@@ -358,8 +432,8 @@ class AlertRecipientsTest(unittest.TestCase):
     def test_이전_담당(self):
         own = self.rows[PREV_CLIENT]
         self.assertEqual(sc.owner_state(self.org, own), sc.PREV)
-        self.assertEqual(sc.alert_recipients(self.org, own, sc.CAUTION), {LEE})
-        self.assertEqual(sc.alert_recipients(self.org, own, sc.URGENT), {KIM, LEE, CEO})
+        self.assertEqual(sc.alert_recipients(self.org, own, sc.CAUTION), {CEO})
+        self.assertEqual(sc.alert_recipients(self.org, own, sc.URGENT), {KIM, CEO})
 
     def test_받는_사람은_그_광고주를_여는_사람(self):
         for cid, own in self.rows.items():
@@ -386,19 +460,19 @@ class ApproversTest(unittest.TestCase):
         return sc.approvers(self.org, self.rows[CID.get(cid, cid)], level, requester)
 
     def test_팀장_등급_사슬(self):
-        self.assertEqual(self.chain("maba", sc.LEVEL_LEAD, KIM), ({LEE}, {HAN}, {CEO}))
-        self.assertEqual(self.chain("chaka", sc.LEVEL_LEAD, LEE), ({HAN}, {CEO}))   # 자기 광고주 → 윗사람
+        self.assertEqual(self.chain("maba", sc.LEVEL_LEAD, KIM), ({CEO},))
+        self.assertEqual(self.chain("chaka", sc.LEVEL_LEAD, LEE), ({CEO},))
         self.assertEqual(self.chain("gaha", sc.LEVEL_LEAD, HAN), ({CEO},))
-        self.assertEqual(self.chain("taga", sc.LEVEL_LEAD, CHOI), ({HAN}, {CEO}))
+        self.assertEqual(self.chain("taga", sc.LEVEL_LEAD, CHOI), ({CEO},))
         self.assertEqual(self.chain("hana", sc.LEVEL_LEAD, None), ({CEO},))
         self.assertEqual(self.chain(CEO_CLIENT, sc.LEVEL_LEAD, CEO), ({CEO},))     # 대표는 위가 없다
-        self.assertEqual(self.chain(PREV_CLIENT, sc.LEVEL_LEAD, None), ({LEE}, {HAN}, {CEO}))
+        self.assertEqual(self.chain(PREV_CLIENT, sc.LEVEL_LEAD, None), ({CEO},))
 
     def test_담당자_등급_사슬(self):
-        self.assertEqual(self.chain("dara", sc.LEVEL_STAFF, None), ({KIM}, {LEE}, {HAN}, {CEO}))
-        self.assertEqual(self.chain("tapa", sc.LEVEL_STAFF, None), ({BAK, KIM}, {LEE}, {HAN}, {CEO}))
-        self.assertEqual(self.chain("taga", sc.LEVEL_STAFF, None), ({CHOI}, {HAN}, {CEO}))
-        self.assertEqual(self.chain(PREV_CLIENT, sc.LEVEL_STAFF, None), ({LEE}, {HAN}, {CEO}))
+        self.assertEqual(self.chain("dara", sc.LEVEL_STAFF, None), ({KIM}, {CEO}))
+        self.assertEqual(self.chain("tapa", sc.LEVEL_STAFF, None), ({BAK, KIM}, {CEO}))
+        self.assertEqual(self.chain("taga", sc.LEVEL_STAFF, None), ({CEO},))
+        self.assertEqual(self.chain(PREV_CLIENT, sc.LEVEL_STAFF, None), ({CEO},))
 
     def test_이전_담당은_보기와_멈추기만(self):
         own = self.rows[PREV_CLIENT]
@@ -408,7 +482,7 @@ class ApproversTest(unittest.TestCase):
         self.assertEqual(sc.allowed_actions(self.org, s, own), {sc.ACT_VIEW, sc.ACT_STOP})
         self.assertFalse(sc.can_see(self.org, sc.scope_of(self.org, BAK), own))
         self.assertEqual(len(visible(self.org, self.rows, KIM)), 10)
-        self.assertEqual(len(visible(self.org, self.rows, LEE)), 17)
+        self.assertEqual(len(visible(self.org, self.rows, LEE)), 3)
 
     def _requesters(self):
         return list(self.org.people) + [None, YOON]
@@ -436,8 +510,8 @@ class ApproversTest(unittest.TestCase):
 
     def test_누를_때_다시_판정(self):
         own = self.rows[CID["maba"]]
-        self.assertTrue(sc.can_approve(self.org, own, sc.LEVEL_LEAD, KIM, LEE))
-        self.assertTrue(sc.can_approve(self.org, own, sc.LEVEL_LEAD, KIM, HAN))   # 상위 팀장은 언제든
+        self.assertFalse(sc.can_approve(self.org, own, sc.LEVEL_LEAD, KIM, LEE))
+        self.assertFalse(sc.can_approve(self.org, own, sc.LEVEL_LEAD, KIM, HAN))
         self.assertFalse(sc.can_approve(self.org, own, sc.LEVEL_LEAD, KIM, KIM))
         self.assertFalse(sc.can_approve(self.org, own, sc.LEVEL_LEAD, KIM, CHOI))
         self.assertFalse(sc.can_approve(self.org, own, sc.LEVEL_LEAD, LEE, LEE))
@@ -483,17 +557,16 @@ class KillSetTest(unittest.TestCase):
         self.org, self.rows = build()
 
     def test_범위별_정지_집합(self):
-        lee = sc.kill_set(self.org, sc.scope_of(self.org, LEE), self.rows)
-        self.assertEqual((lee.kind, len(lee.client_ids), lee.by_idx), ("TEAM", 16, LEE))
-        han = sc.kill_set(self.org, sc.scope_of(self.org, HAN), self.rows)
-        self.assertEqual((han.kind, len(han.client_ids)), ("TEAM", 29))
+        for who in (LEE, HAN):
+            with self.assertRaises(sc.StopNotAllowed):
+                sc.kill_set(self.org, sc.scope_of(self.org, who), self.rows)
         ceo = sc.kill_set(self.org, sc.scope_of(self.org, CEO), self.rows)
         self.assertEqual((ceo.kind, ceo.client_ids), ("GLOBAL", None))
 
     def test_정지는_보기_좁히기와_무관(self):
         self.assertEqual(len(visible(self.org, self.rows, LEE, "me")), 3)
-        lee = sc.kill_set(self.org, sc.scope_of(self.org, LEE), list(self.rows.values()))
-        self.assertEqual(lee.client_ids, visible(self.org, self.rows, LEE, "all"))
+        with self.assertRaises(sc.StopNotAllowed):
+            sc.kill_set(self.org, sc.scope_of(self.org, LEE), list(self.rows.values()))
 
     def test_담당자와_범위_없음은_묶음_정지_불가(self):
         for who in (KIM, PARK, BAK, OH, YOON, SYS_MGR_RESIGNED_TEAM):
@@ -526,7 +599,7 @@ class TeamTreeTest(unittest.TestCase):
         self.assertEqual(org.subtree(T_HQ), {T_HQ, T_1, T_2})
         # 최상위 팀(부모 0) 팀장은 다른 최상위 팀(대표실)의 광고주를 보지 못한다
         self.assertNotIn(CEO_CLIENT, visible(org, rows, HAN))
-        self.assertEqual(len(visible(org, rows, HAN)), 30)   # 29 + 이전 담당(1팀) 1곳
+        self.assertEqual(len(visible(org, rows, HAN)), 2)   # 직급과 무관하게 본인 담당만
         self.assertEqual(len(visible(org, rows, CEO)), 33)
 
     def test_퇴사자_팀으로_옮겨진_공백_담당은_대표만(self):
@@ -550,9 +623,9 @@ class TeamTreeTest(unittest.TestCase):
         org, rows = build(payload=p)
         own = rows[62]
         self.assertNotIn(62, visible(org, rows, HAN))
-        self.assertEqual(viewers_of(org, own), {621, 620, CEO})
+        self.assertEqual(viewers_of(org, own), {621, CEO})
         self.assertEqual(sc.approvers(org, own, sc.LEVEL_LEAD, 620), ({CEO},))
-        self.assertEqual(sc.approvers(org, own, sc.LEVEL_STAFF, None), ({621}, {620}, {CEO}))
+        self.assertEqual(sc.approvers(org, own, sc.LEVEL_STAFF, None), ({621}, {CEO}))
         for level in (sc.URGENT, sc.CAUTION):
             self.assertLessEqual(sc.alert_recipients(org, own, level), viewers_of(org, own))
         for req in list(org.people) + [None]:
@@ -579,12 +652,13 @@ class TeamTreeTest(unittest.TestCase):
         self.assertEqual(sc.scope_of(org, 401).kind, sc.MINE)       # 순환 팀 팀장 → 본인 범위
         self.assertEqual(sc.scope_of(org, 431).kind, sc.MINE)
         s421 = sc.scope_of(org, 421)
-        self.assertEqual((s421.kind, s421.teams), (sc.TEAM, {42}))
-        self.assertEqual(sc.clients_in(org, s421, rows, "all"), {42})
+        self.assertEqual((s421.kind, s421.teams), (sc.MINE, set()))
+        self.assertEqual(sc.clients_in(org, s421, rows, "all"), set())
         self.assertEqual(viewers_of(org, rows[40]), {402, CEO})
-        self.assertEqual(sc.alert_recipients(org, rows[42], sc.URGENT), {422, 421, CEO})
-        self.assertEqual(sc.approvers(org, rows[42], sc.LEVEL_LEAD, 422), ({421}, {CEO}))
-        self.assertIsInstance(sc.clients_in(org, sc.scope_of(org, CEO), rows, "team:40"), frozenset)
+        self.assertEqual(sc.alert_recipients(org, rows[42], sc.URGENT), {422, CEO})
+        self.assertEqual(sc.approvers(org, rows[42], sc.LEVEL_LEAD, 422), ({CEO},))
+        with self.assertRaises(sc.TargetNotVisible):
+            sc.clients_in(org, sc.scope_of(org, CEO), rows, "team:40")
         # 건전성 검사는 순환을 버린다 — 이전 조직을 그대로 쓴다
         prev, _ = build()
         d = snap.accept_snapshot(p, prev)
@@ -789,11 +863,11 @@ class ErpContractShapeTest(unittest.TestCase):
         self.assertEqual(sc.owner_state(org, own1), sc.NORMAL)
         self.assertEqual(sc.owner_state(org, own2), sc.PREV)         # -1 이 아니라 null + prev
         lead = sc.scope_of(org, 101)
-        self.assertEqual((lead.kind, lead.teams), (sc.TEAM, {11}))
-        self.assertEqual(sc.clients_in(org, lead, [own1, own2]), {1, 2})
-        self.assertEqual(sc.relation(org, lead, own2), sc.REL_TEAM)
+        self.assertEqual((lead.kind, lead.teams), (sc.NONE, set()))  # 구 계약에는 is_management가 없어 닫힘
+        self.assertEqual(sc.clients_in(org, lead, [own1, own2]), set())
+        self.assertIsNone(sc.relation(org, lead, own2))
         self.assertEqual(sc.scope_of(org, 102).kind, sc.NONE)        # 퇴사 → 범위 없음
-        self.assertEqual(sc.alert_recipients(org, own2, sc.CAUTION), {101})
+        self.assertEqual(sc.alert_recipients(org, own2, sc.CAUTION), {CEO})
         self.assertNotIn("TOP_MANAGER_COUNT", {f.code for f in d.check.warnings})   # 대표는 0번 한 명
         ceo = sc.scope_of(org, 0)                                                  # 0 = 대표 — 전사
         self.assertEqual(ceo.kind, sc.ALL)
@@ -809,8 +883,8 @@ class ErpContractShapeTest(unittest.TestCase):
         self.assertEqual(sc.owner_state(org, own), sc.PREV)
         s = sc.scope_of(org, KIM)
         self.assertEqual(sc.allowed_actions(org, s, own), {sc.ACT_VIEW, sc.ACT_STOP})
-        self.assertTrue(sc.can_see(org, sc.scope_of(org, LEE), own))
-        self.assertEqual(viewers_of(org, own), {KIM, LEE, HAN, CEO})
+        self.assertFalse(sc.can_see(org, sc.scope_of(org, LEE), own))
+        self.assertEqual(viewers_of(org, own), {KIM, CEO})
 
     def test_출처가_prev_가_아니면_이전_담당이_아니다(self):
         org, _ = build()
@@ -837,7 +911,7 @@ class ErpContractShapeTest(unittest.TestCase):
         self.assertAlmostEqual(d.org.blank_owner_ratio(), prev.blank_owner_ratio())
         rows = rows_of(d.org)
         self.assertEqual({sc.owner_state(d.org, rows[c]) for c in expired}, {sc.PREV})
-        self.assertEqual(len(visible(d.org, rows, LEE)), 16)
+        self.assertEqual(len(visible(d.org, rows, LEE)), 3)
 
     def test_모르는_출처_글자는_경고(self):
         p = mockup_payload()
@@ -892,7 +966,7 @@ class StaleScopeTest(unittest.TestCase):
         org2, rows2 = build(payload=mockup_payload(), prev=self.old_org)
         old_han = sc.scope_of(self.old_org, HAN)
         self.assert_none_behaviour(org2, rows2, old_han)
-        self.assertEqual(len(sc.clients_in(org2, sc.scope_of(org2, HAN), rows2)), 29)   # 새로 계산하면 그대로
+        self.assertEqual(len(sc.clients_in(org2, sc.scope_of(org2, HAN), rows2)), 2)
 
     def test_손으로_만든_범위(self):
         org, rows = self.old_org, self.old_rows
@@ -980,13 +1054,12 @@ class CeoHasNoOneAboveTest(unittest.TestCase):
         self.assertEqual(sc.digest_recipients(self.org, own), frozenset())
         self.assertEqual(sc.alert_recipients(self.org, own, sc.URGENT), {CEO})
         self.assertEqual(sc.todo_chain(self.org, own, sc.LEVEL_STAFF), ({CEO},))
-        # 담당자 등급은 보는 사람이면 누를 수 있다(대표실 팀장은 팀 범위로 이 광고주를 본다)
-        self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_STAFF, None), ({CEO}, {self.CEO_TEAM_LEAD}))
+        self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_STAFF, None), ({CEO},))
 
     def test_대표실_직원_광고주는_대표실_팀장부터(self):
         own = self.rows[self.CEO_STAFF_CLIENT]
         self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_LEAD, self.CEO_TEAM_STAFF),
-                         ({self.CEO_TEAM_LEAD}, {CEO}))
+                         ({CEO},))
 
     def test_대표가_올린_팀장_등급은_대표_묶음만(self):
         own = self.rows[CID["maba"]]
@@ -1007,10 +1080,10 @@ class SubLeadTest(unittest.TestCase):
     def test_메인과_서브가_뒤바뀌어도_같다(self):
         for cid in (40, 41):
             own = self.rows[cid]
-            self.assertEqual(sc.alert_recipients(self.org, own, sc.URGENT), {KIM, LEE, HAN, CEO}, cid)
-            self.assertEqual(sc.digest_recipients(self.org, own), {HAN}, cid)
-            self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_LEAD, KIM), ({HAN}, {CEO}), cid)
-            self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_LEAD, LEE), ({HAN}, {CEO}), cid)
+            self.assertEqual(sc.alert_recipients(self.org, own, sc.URGENT), {KIM, LEE, CEO}, cid)
+            self.assertEqual(sc.digest_recipients(self.org, own), set(), cid)
+            self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_LEAD, KIM), ({CEO},), cid)
+            self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_LEAD, LEE), ({CEO},), cid)
         self.assertFalse(sc.can_approve(self.org, self.rows[40], sc.LEVEL_LEAD, KIM, LEE))
         self.assertEqual(sc.alert_recipients(self.org, self.rows[40], sc.CAUTION), {KIM})
 
@@ -1064,20 +1137,20 @@ class TodoChainTest(unittest.TestCase):
     def test_서브가_있는_광고주(self):
         own = self.rows[CID["tapa"]]
         self.assertEqual(sc.todo_recipients(self.org, own, sc.LEVEL_STAFF), {BAK})
-        self.assertEqual(sc.todo_chain(self.org, own, sc.LEVEL_STAFF), ({BAK}, {LEE}, {HAN}, {CEO}))
-        self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_STAFF, None), ({BAK, KIM}, {LEE}, {HAN}, {CEO}))
+        self.assertEqual(sc.todo_chain(self.org, own, sc.LEVEL_STAFF), ({BAK}, {CEO}))
+        self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_STAFF, None), ({BAK, KIM}, {CEO}))
 
     def test_담당_공백에_서브가_있으면_할_일은_팀장(self):
         own = self.rows[self.VACANT_WITH_SUB]
         self.assertEqual(sc.owner_state(self.org, own), sc.VACANT)
-        self.assertEqual(sc.todo_recipients(self.org, own, sc.LEVEL_STAFF), {CHOI})
-        self.assertEqual(sc.todo_chain(self.org, own, sc.LEVEL_STAFF), ({CHOI}, {HAN}, {CEO}))
-        self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_STAFF, None), ({JEONG}, {CHOI}, {HAN}, {CEO}))
-        self.assertEqual(sc.alert_recipients(self.org, own, sc.CAUTION), {CHOI})       # 주의도 팀장 사슬
-        self.assertEqual(sc.alert_recipients(self.org, own, sc.URGENT), {CHOI, JEONG, CEO})
+        self.assertEqual(sc.todo_recipients(self.org, own, sc.LEVEL_STAFF), {CEO})
+        self.assertEqual(sc.todo_chain(self.org, own, sc.LEVEL_STAFF), ({CEO},))
+        self.assertEqual(sc.approvers(self.org, own, sc.LEVEL_STAFF, None), ({JEONG}, {CEO}))
+        self.assertEqual(sc.alert_recipients(self.org, own, sc.CAUTION), {CEO})
+        self.assertEqual(sc.alert_recipients(self.org, own, sc.URGENT), {JEONG, CEO})
 
     def test_이전_담당과_담당_미정(self):
-        self.assertEqual(sc.todo_chain(self.org, self.rows[PREV_CLIENT], sc.LEVEL_STAFF), ({LEE}, {HAN}, {CEO}))
+        self.assertEqual(sc.todo_chain(self.org, self.rows[PREV_CLIENT], sc.LEVEL_STAFF), ({CEO},))
         self.assertEqual(sc.todo_chain(self.org, self.rows[CID["hana"]], sc.LEVEL_STAFF), ({CEO},))
         self.assertEqual(sc.todo_chain(self.org, self.rows[CID["maba"]], sc.LEVEL_LEAD, KIM),
                          sc.approvers(self.org, self.rows[CID["maba"]], sc.LEVEL_LEAD, KIM))
@@ -1142,11 +1215,9 @@ class TeamKillSetScopeTest(unittest.TestCase):
         lee = sc.scope_of(org, LEE)
         self.assertIn(CID["paha"], sc.clients_in(org, lee, rows))          # 보이기는 한다(서브)
         self.assertEqual(sc.relation(org, lee, rows[CID["paha"]]), sc.REL_SUB)
-        ks = sc.kill_set(org, lee, rows)
-        self.assertEqual(len(ks.client_ids), 16)
-        self.assertNotIn(CID["paha"], ks.client_ids)
-        self.assertIn(CID["paha"], sc.kill_set(org, sc.scope_of(org, CHOI), rows).client_ids)
-        self.assertEqual(len(sc.kill_set(org, sc.scope_of(org, HAN), rows).client_ids), 29)
+        for who in (LEE, CHOI, HAN):
+            with self.assertRaises(sc.StopNotAllowed):
+                sc.kill_set(org, sc.scope_of(org, who), rows)
 
 
 class FixtureGapTest(unittest.TestCase):
@@ -1172,15 +1243,14 @@ class FixtureGapTest(unittest.TestCase):
 
     def test_같은_팀_팀장_둘은_둘_다(self):
         s2 = sc.scope_of(self.org, self.LEE2)
-        self.assertEqual((s2.kind, s2.teams), (sc.TEAM, {T_1}))
-        self.assertEqual(sc.clients_in(self.org, s2, self.rows), sc.clients_in(self.org, sc.scope_of(self.org, LEE), self.rows))
-        self.assertEqual(len(sc.clients_in(self.org, s2, self.rows)), 18)
+        self.assertEqual((s2.kind, s2.teams), (sc.MINE, set()))
+        self.assertEqual(sc.clients_in(self.org, s2, self.rows), set())
+        self.assertEqual(len(sc.clients_in(self.org, sc.scope_of(self.org, LEE), self.rows)), 3)
         maba, dara = self.rows[CID["maba"]], self.rows[CID["dara"]]
-        self.assertEqual(sc.approvers(self.org, maba, sc.LEVEL_LEAD, KIM), ({LEE, self.LEE2}, {HAN}, {CEO}))
-        self.assertLessEqual({LEE, self.LEE2}, sc.alert_recipients(self.org, dara, sc.URGENT))
-        self.assertEqual(sc.digest_recipients(self.org, dara), {LEE, self.LEE2})
-        # 팀장 본인 광고주의 팀장 등급 — 같은 팀 다른 팀장이 먼저 받는다(① teamManagersOf 방식: 요청자만 빠짐)
-        self.assertEqual(sc.approvers(self.org, self.rows[CID["chaka"]], sc.LEVEL_LEAD, LEE), ({self.LEE2}, {HAN}, {CEO}))
+        self.assertEqual(sc.approvers(self.org, maba, sc.LEVEL_LEAD, KIM), ({CEO},))
+        self.assertFalse({LEE, self.LEE2} & sc.alert_recipients(self.org, dara, sc.URGENT))
+        self.assertEqual(sc.digest_recipients(self.org, dara), set())
+        self.assertEqual(sc.approvers(self.org, self.rows[CID["chaka"]], sc.LEVEL_LEAD, LEE), ({CEO},))
 
     def test_이전_담당_광고주의_서브도_보기_멈추기만(self):
         own = self.rows[self.PREV_WITH_SUB]
@@ -1192,9 +1262,9 @@ class FixtureGapTest(unittest.TestCase):
         for level in (sc.LEVEL_STAFF, sc.LEVEL_LEAD):
             union = frozenset().union(*sc.approvers(self.org, own, level, None))
             self.assertFalse(union & {KIM, BAK}, level)
-        self.assertEqual(sc.todo_recipients(self.org, own, sc.LEVEL_STAFF), {LEE, self.LEE2})
-        self.assertEqual(sc.alert_recipients(self.org, own, sc.URGENT), {KIM, BAK, LEE, self.LEE2, CEO})
-        self.assertEqual(sc.alert_recipients(self.org, own, sc.CAUTION), {LEE, self.LEE2})
+        self.assertEqual(sc.todo_recipients(self.org, own, sc.LEVEL_STAFF), {CEO})
+        self.assertEqual(sc.alert_recipients(self.org, own, sc.URGENT), {KIM, BAK, CEO})
+        self.assertEqual(sc.alert_recipients(self.org, own, sc.CAUTION), {CEO})
 
     def test_불변식(self):
         assert_invariants(self, self.org, self.rows)
@@ -1551,7 +1621,7 @@ class ScreenAdditionsTest(unittest.TestCase):
                 self.assertTrue(n.narrowed)
                 # 좁힌 범위 = 좁히기 전 범위의 「내 담당」(메인·서브·직전) — 좁힌 범위도 판정 함수가 믿어야 한다
                 self.assertEqual(got, sc.clients_in(self.org, sc.scope_of(self.org, who), self.rows, "me"), who)
-        lead_own = [w for w in self.org.people if sc.scope_of(self.org, w).kind == sc.TEAM
+        lead_own = [w for w in self.org.people if self.org.people[w].is_manager and sc.scope_of(self.org, w).kind == sc.MINE
                     and sc.clients_in(self.org, sc.scope_of(self.org, w), self.rows, "me")]
         self.assertTrue(lead_own)                                   # 자기 담당이 있는 팀장이 예시에 있다
         for w in lead_own:
@@ -1560,13 +1630,13 @@ class ScreenAdditionsTest(unittest.TestCase):
     def test_좁힘_표시를_떼거나_붙인_손_범위는_범위_없음(self):
         for who in self.org.people:
             s = sc.scope_of(self.org, who)
-            if s.kind != sc.TEAM:
+            if s.kind != sc.MINE:
                 continue
-            forged = sc.Scope(s.kind, s.viewer_idx, s.teams, s.people, s.generated_at, True)
+            forged = sc.Scope(sc.TEAM, s.viewer_idx, s.teams, s.people, s.generated_at, True)
             self.assertEqual(sc.clients_in(self.org, forged, self.rows), frozenset())
             n = sc.narrowed_scope_of(self.org, who)
             unmarked = sc.Scope(n.kind, n.viewer_idx, n.teams, n.people, n.generated_at, False)
-            self.assertEqual(sc.clients_in(self.org, unmarked, self.rows), frozenset())
+            self.assertEqual(sc.clients_in(self.org, unmarked, self.rows), sc.clients_in(self.org, s, self.rows))
             weird = sc.Scope(n.kind, n.viewer_idx, n.teams, n.people, n.generated_at, 1)
             self.assertEqual(sc.clients_in(self.org, weird, self.rows), frozenset())
 
@@ -1598,15 +1668,15 @@ class ScreenAdditionsTest(unittest.TestCase):
                 sc.require_client(self.org, s, self.rows, PREV_CLIENT, a)
 
     def test_my_profile_좁히기_판단(self):
-        leads = [w for w in self.org.people if sc.scope_of(self.org, w).kind == sc.TEAM]
+        leads = [w for w in self.org.people if self.org.people[w].is_manager and sc.scope_of(self.org, w).kind == sc.MINE]
         self.assertTrue(leads)
         for w in leads:
             team = self.org.people[w].team_idx
             self.assertFalse(sc.profile_narrows(self.org, w, True, team))
-            self.assertTrue(sc.profile_narrows(self.org, w, False, team))
-            self.assertTrue(sc.profile_narrows(self.org, w, True, None))
-            self.assertTrue(sc.profile_narrows(self.org, w, None, team))
-            self.assertTrue(sc.profile_narrows(self.org, w, 1, team))
+            self.assertFalse(sc.profile_narrows(self.org, w, False, team))
+            self.assertFalse(sc.profile_narrows(self.org, w, True, None))
+            self.assertFalse(sc.profile_narrows(self.org, w, None, team))
+            self.assertFalse(sc.profile_narrows(self.org, w, 1, team))
         self.assertFalse(sc.profile_narrows(self.org, CEO, False, None))   # 대표는 my-profile 로 좁히지 않는다
         self.assertFalse(sc.profile_narrows(self.org, KIM, False, None))   # 담당은 좁힐 것이 없다
 

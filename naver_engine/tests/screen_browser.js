@@ -375,27 +375,60 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await ctx.close();
     }
 
-    // ── 팀장(1) — 🔴 예외 창 ──
+    // ── 2026-10-02 명세: 관리팀장(1)도 본인 담당만 — 이 fixture에는 직접 담당이 없다 ──
     {
       const { ctx, log } = await newCtx(browser);
       const p = await page(ctx, log);
       const url = base + '/naver/';
       await enter(p, url, cfg.sso.lead);
+      await p.waitForSelector('#s-watch.on #kpis .kpi');
+      const me = (await api(p, '/me')).body;
+      ok('관리팀장: TEAM이 아니라 MINE', me.scope === 'MINE', me.scope);
+      ok('관리팀장: 팀 목록 없음 · 직원 명단은 본인만', me.teams.length === 0 &&
+        JSON.stringify(me.people.map((person) => person.idx)) === '[1]', { teams: me.teams, people: me.people });
+      ok('관리팀장: 설정과 범위 고르기가 없다', await p.isHidden('#menuSettings') && await p.isHidden('#scope'));
+      const board = (await api(p, '/board?attention=0')).body;
+      ok('관리팀장: 직접 담당이 없으면 팀원 광고주·이슈도 0', board.rows.length === 0 &&
+        board.issue_rows.length === 0 && board.done_rows.length === 0, board.rows);
+      ok('관리팀장: 화면에 팀원 광고주·승인 버튼이 없다',
+        await p.locator('#tbody tr[data-pid], #issues .iss .act button').count() === 0);
+      const denied = ['/clients/11', '/clients/12', '/board?selection=person:100', '/board?selection=team:11'];
+      for (const path of denied) {
+        const result = await api(p, path);
+        ok('관리팀장: 직접 요청도 범위 밖 404 ' + path, result.status === 404, result);
+      }
+      const exceptPath = '/issues/' + cfg.red + '/except';
+      const refused = await api(p, exceptPath, 'POST', { until: board.band.today, note: '타 담당 직접 요청' });
+      ok('관리팀장: 타 담당 긴급 예외 직접 승인도 404', refused.status === 404, refused);
+      await shot(p, '5-관리팀장-본인담당');
+      // 의도한 권한 거절만 제외한다. 화면 파일 404와 뜻밖의 응답 검사는 그대로 유지한다.
+      const expected404 = new Set(denied.concat(exceptPath).map((path) => '/api/naver-auto' + path));
+      log.statuses = log.statuses.filter((entry) => !(entry[0] === 404 && expected404.has(entry[1])));
+      await hygiene('관리팀장', p, log, url);
+      await ctx.close();
+    }
+
+    // ── 2026-10-02 명세: 타 담당 🔴 예외 승인은 대표만 — 기간·사유 저장 회귀는 유지한다 ──
+    {
+      const { ctx, log } = await newCtx(browser);
+      const p = await page(ctx, log);
+      const url = base + '/naver/';
+      await enter(p, url, cfg.sso.exceptionCeo);
       const row = '#issues .iss[data-issue="' + cfg.red + '"]';
       await p.waitForSelector(row);
       await p.click(row + ' button:has-text("예외")');
       await p.waitForSelector('#m-except.on');
-      await shot(p, '5-팀장-예외창');
+      await shot(p, '5b-대표-예외창');
       const opts = await p.$$eval('#mx-days option', (els) => els.map((e) => e.value));
-      ok('팀장: 🔴 예외 기간은 7일 안에서만 고른다', opts.length >= 2 && opts.length <= 3, opts);
+      ok('대표: 🔴 예외 기간은 7일 안에서만 고른다', opts.length >= 2 && opts.length <= 3, opts);
       await p.fill('#mx-why', '광고주가 자동 충전 켬');
       await p.selectOption('#mx-days', opts[1]);
       await p.click('#mx-ok');
       await p.waitForFunction(() => document.getElementById('toast').textContent.includes('예외'));
       const b = (await api(p, '/board?attention=0')).body;
       const got = b.done_rows.filter((r) => r.issue_id === cfg.red)[0];
-      ok('팀장: 예외가 서버에 · 고른 끝날 · 사유', got && got.state === 'exception' && got.exception_until === opts[1] && got.hand && got.hand.note === '광고주가 자동 충전 켬', got);
-      await hygiene('팀장', p, log, url);
+      ok('대표: 예외가 서버에 · 고른 끝날 · 사유', got && got.state === 'exception' && got.exception_until === opts[1] && got.hand && got.hand.note === '광고주가 자동 충전 켬', got);
+      await hygiene('대표 예외', p, log, url);
       await ctx.close();
     }
 
@@ -458,6 +491,7 @@ async function hygiene(tag, p, log, firstNavUrl) {
         issues: [], link: 'listed', unlinked: false, account_unconfirmed: false,
         yday_spend: null, bizmoney: 5000, yday_imp: null, yday_clk: 3,
         days: [{ day: '2026-09-28', yday_spend: 100, complete: false }, { day: '2026-09-29', yday_spend: 200, complete: true }],
+        // 기존 API의 lead 등급은 이제 대표에게만 부여된다(팀장 직책 권한을 뜻하지 않는다).
         report: 'preparing', actions: { handle_issue: true, confirm_link: true, exception_actor: 'lead', exception_max_days: { red: 7, yellow: 30 }, raising_allowed: true }
       };
       await ctx.route('**/api/naver-auto/clients/901', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fakeClient) }));
@@ -474,7 +508,9 @@ async function hygiene(tag, p, log, firstNavUrl) {
       ok('가짜 값: 묶음 머리 「곳」은 광고주 수(한 광고주의 계정 둘 = 1곳 · 계정 2개)', head.includes('1곳 · 계정 2개'), head);
       const note = await p.$$eval('#issues .iss .blocked-note', (els) => els.map((e) => e.textContent));
       const dis = await p.$$eval('#issues .iss button[disabled]', (els) => els.length);
-      ok('가짜 값: 막힌 🙈 는 흐린 단추가 아니라 까닭 글자', note.length === 2 && note.every((t) => t.includes('팀장 이상')) && dis === 0, { note, dis });
+      // 2026-10-02 명세: 긴급 예외를 팀장 권한으로 안내하지 않는다.
+      ok('가짜 값: 막힌 🙈 는 흐린 단추가 아니라 대표 승인 안내', note.length === 2 &&
+        note.every((t) => t.includes('대표') && !t.includes('팀장')) && dis === 0, { note, dis });
       await p.click('#tblChips .chip[data-f="all"]');
       const drawn = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => [e.getAttribute('data-pid'), e.querySelector('.sig').className, e.querySelector('.hint').textContent, e.children[2].textContent, e.children[3].textContent]));
       ok('가짜 값: 열린 🔴 가 있어도 서버가 🟢 라면 🟢(화면이 판정하지 않는다)', drawn.some((d) => d[0] === '901' && d[1] === 'sig green' && d[2] === '정상' && d[3] === '—'), drawn);

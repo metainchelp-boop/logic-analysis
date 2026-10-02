@@ -87,7 +87,7 @@ __all__ = ("open_writer", "open_reader", "Store", "StoreError", "StoreBusy", "St
            "AlertExists", "DeliveryRefused", "ScreenRefused", "inspect_snapshot")
 
 KST = timezone(timedelta(hours=9))
-SCHEMA_VERSION = 7   # 2~6 = S7~S11 · 7 = G1~G3(공유 성과 완결 스냅샷·재시도). 옛 판은 표만 더한다.
+SCHEMA_VERSION = 8   # 8 = 전산 귀속과 분리한 계정우선 원천 수집. 옛 판은 표만 더한다.
 BUSY_TIMEOUT_MS = 5000
 FUTURE_SLACK = timedelta(minutes=5)   # 시계가 조금 어긋나도 받는다 · 그보다 앞선 시각은 거절
 ORG_FUTURE_SLACK = timedelta(minutes=10)   # ① 스냅숏 시각 — app.naver_auto.org_snapshot.FUTURE_TOLERANCE 와 같다(시험이 대조)
@@ -473,6 +473,23 @@ _SCHEMA = (
         next_try_at TEXT NOT NULL,
         error_kind TEXT,
         PRIMARY KEY (day, possibility_id))""",
+    """CREATE TABLE IF NOT EXISTS naver_auto_inventory_check (
+        customer_id INTEGER NOT NULL CHECK (customer_id > 0),
+        day TEXT NOT NULL,
+        snapshot_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('reading', 'partial', 'ok', 'retry', 'reauth_required', 'limited')),
+        checked_at TEXT NOT NULL,
+        error_code TEXT,
+        bizmoney REAL,
+        yday_spend REAL,
+        yday_imp REAL,
+        yday_clk REAL,
+        campaigns_json TEXT,
+        progress_json TEXT,
+        progress_hash TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 4),
+        next_try_at TEXT NOT NULL,
+        PRIMARY KEY (customer_id, day))""",
 )
 
 # ── 연결 거절 규칙 ────────────────────────────────────────────────
@@ -2670,6 +2687,42 @@ class Store:
             out[int(iid)] = t
         return out
 
+    # ── 전체 전산 업체 목록: 기존 계약별 점검/성과 원장을 변경하지 않는다 ──
+    def record_account_catalog(self, body, ids, received_at: datetime) -> None:
+        clean = E.validate_account_catalog(body, received_at)
+        at = _kst_text(received_at, "전체 업체 수신 시각")
+        self._not_future(received_at, "전체 업체 수신 시각")
+        rows = []
+        for r in ids:
+            if not isinstance(r, E.NaverIdRow):
+                raise StoreRefused("네이버 번호 자료 모양이 다릅니다")
+            _pos_int(r.possibility_id, "가망 번호")
+            vals = (r.vendor, r.customer_id_raw, r.ad_account_no_raw)
+            if any(v is not None and (not isinstance(v, str) or len(v) > 200) for v in vals):
+                raise StoreRefused("네이버 번호 자료 길이가 다릅니다")
+            rows.append(asdict(r))
+        with self._tx() as c:
+            old = self._meta_json(c, "account_catalog")
+            if old is not None:
+                if datetime.fromisoformat(clean["generated_at"]) < datetime.fromisoformat(old["generated_at"]):
+                    raise StoreRefused("전체 업체 자료 시각이 역행합니다")
+                if old["total"] and clean["total"] < old["total"] * 0.8:
+                    raise StoreRefused("전체 업체 자료 급감: 이전 수락본을 유지합니다")
+            self._set_meta(c, "account_catalog", json.dumps({**clean, "ids": rows, "received_at": at}, ensure_ascii=False))
+            self._set_meta(c, "account_catalog_status", json.dumps({"at": at, "state": "accepted"}))
+
+    def record_account_catalog_failure(self, at: datetime, code: str) -> None:
+        code = _code(code, _ERROR_KIND, "목록 동기화 실패 코드")
+        with self._tx() as c:
+            self._set_meta(c, "account_catalog_status", json.dumps({"at": _kst_text(at, "시각"),
+                                                                  "state": "failed", "code": code}))
+
+    def account_catalog(self):
+        return self._meta_json(self._conn, "account_catalog")
+
+    def account_catalog_status(self):
+        return self._meta_json(self._conn, "account_catalog_status")
+
     # ── 읽기 ──
     def meta(self, key: str) -> Optional[str]:
         row = self._conn.execute("SELECT value FROM naver_auto_meta WHERE key = ?", (key,)).fetchone()
@@ -3238,3 +3291,137 @@ class Store:
         if out["last_try_at"] is None or (v["sent_at"] is not None and out["sent_at"] is None):
             raise StoreError("저장된 심박 기록을 읽지 못했습니다")
         return out
+
+    # ── 계정우선 원천 수집: 전산 귀속·기존 점검 이력과 독립 ──
+    def inventory_snapshot(self, now: datetime) -> Optional[datetime]:
+        read_at, last = self.accounts_read_at(), self.last_sync(SYNC_ACCOUNTS)
+        if read_at is None or last is None or last["outcome"] != SYNC_ACCEPTED \
+                or not timedelta(0) <= now - read_at <= timedelta(hours=30):
+            return None
+        return read_at
+
+    def inventory_account_valid(self, customer_id, snapshot_at, now):
+        if self.inventory_snapshot(now) != snapshot_at:
+            return False
+        row = self._conn.execute("SELECT present FROM naver_auto_account WHERE customer_id = ?",
+                                 (_customer_id(customer_id, "고객 번호"),)).fetchone()
+        return row is not None and row[0] == 1
+
+    def inventory_checks_on(self, day: date) -> dict:
+        cur = self._conn.execute("""SELECT customer_id, status, checked_at, error_code, bizmoney,
+            yday_spend, yday_imp, yday_clk FROM naver_auto_inventory_check WHERE day = ?""",
+                                 (_day_text(day, "날짜"),))
+        names = [d[0] for d in cur.description][1:]
+        return {r[0]: dict(zip(names, r[1:])) for r in cur}
+
+    def inventory_work(self, now: datetime, limit: int = 3) -> list:
+        if type(limit) is not int or not 1 <= limit <= 3:
+            raise StoreRefused("원천 수집 회차는 1~3개 계정입니다")
+        if self.inventory_snapshot(now) is None:
+            return []
+        at = _kst_text(now, "지금")
+        return [r[0] for r in self._conn.execute("""SELECT a.customer_id FROM naver_auto_account a
+            LEFT JOIN naver_auto_inventory_check i ON i.customer_id = a.customer_id AND i.day = ?
+            WHERE a.present = 1 AND (i.customer_id IS NULL OR
+              (i.status NOT IN ('ok', 'reauth_required', 'limited') AND i.attempts < 4 AND i.next_try_at <= ?))
+            ORDER BY CASE WHEN i.customer_id IS NULL THEN 0 ELSE 1 END, i.checked_at, a.customer_id LIMIT ?""",
+            (at[:10], at, limit))]
+
+    def begin_inventory_check(self, customer_id, snapshot_at, now):
+        self._need_writer()
+        if not self.inventory_account_valid(customer_id, snapshot_at, now):
+            raise StoreRefused("원천 수집의 계정 목록이 바뀌었습니다")
+        at = _kst_text(now, "읽기 시작")
+        with self._tx() as c:
+            previous = c.execute("""SELECT status, attempts, next_try_at FROM naver_auto_inventory_check
+                WHERE customer_id = ? AND day = ?""", (customer_id, at[:10])).fetchone()
+            if previous is not None and (previous[0] in ("ok", "reauth_required", "limited") or previous[1] >= 4 or previous[2] > at):
+                raise StoreRefused("계정 원천을 다시 읽을 때가 아닙니다")
+            attempts = 0 if previous is None else previous[1]
+            next_at = _kst_text(now + timedelta(minutes=2), "재시도 시각")
+            c.execute("""INSERT INTO naver_auto_inventory_check
+                (customer_id, day, snapshot_at, status, checked_at, attempts, next_try_at)
+                VALUES (?, ?, ?, 'reading', ?, ?, ?)
+                ON CONFLICT (customer_id, day) DO UPDATE SET status = 'reading', checked_at = excluded.checked_at,
+                  attempts = excluded.attempts, next_try_at = excluded.next_try_at, snapshot_at = excluded.snapshot_at""",
+                (customer_id, at[:10], _kst_text(snapshot_at, "목록 시각"), at, attempts, next_at))
+
+    def inventory_progress(self, customer_id, day):
+        from . import inventory_reads as IR
+        row = self._conn.execute("""SELECT progress_json, progress_hash FROM naver_auto_inventory_check
+            WHERE customer_id = ? AND day = ?""", (customer_id, _day_text(day, "날짜"))).fetchone()
+        if row is None or row[0] is None:
+            return None
+        try:
+            if not isinstance(row[0], str) or hashlib.sha256(row[0].encode()).hexdigest() != row[1]:
+                raise IR.CheckpointInvalid("원천 이어읽기 지문이 다릅니다")
+            source = json.loads(row[0])
+            IR.validate_progress(source, customer_id, day)
+            return source
+        except (ValueError, TypeError, RecursionError):
+            raise IR.CheckpointInvalid("보관한 원천 이어읽기를 확인하지 못했습니다") from None
+
+    def record_inventory_progress(self, customer_id, snapshot_at, now, source):
+        from . import inventory_reads as IR
+        self._need_writer()
+        if not self.inventory_account_valid(customer_id, snapshot_at, now):
+            raise StoreRefused("원천 수집의 계정 목록이 바뀌었습니다")
+        at = _kst_text(now, "원천 배치 시각")
+        IR.validate_progress(source, customer_id, now.astimezone(KST).date())
+        raw = json.dumps(source, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        with self._tx() as c:
+            previous = self.inventory_progress(customer_id, now.astimezone(KST).date())
+            progressed = previous is not None and previous["fingerprint"] == source["fingerprint"] \
+                and source["next_index"] > previous["next_index"]
+            cur = c.execute("""UPDATE naver_auto_inventory_check SET progress_json = ?, progress_hash = ?,
+                attempts = CASE WHEN ? THEN 0 ELSE attempts END
+                WHERE customer_id = ? AND day = ? AND status = 'reading' AND snapshot_at = ?""",
+                (raw, hashlib.sha256(raw.encode()).hexdigest(), progressed, customer_id, at[:10],
+                 _kst_text(snapshot_at, "목록 시각")))
+            if cur.rowcount != 1:
+                raise StoreRefused("시작하지 않은 원천 이어읽기입니다")
+
+    def record_inventory_check(self, customer_id, snapshot_at, now, values):
+        from . import inventory_reads as IR
+        self._need_writer()
+        if not self.inventory_account_valid(customer_id, snapshot_at, now):
+            raise StoreRefused("원천 수집의 계정 목록이 바뀌었습니다")
+        at = _kst_text(now, "읽은 시각")
+        self._not_future(now, "읽은 시각")
+        values = dict(values)
+        if values.get("status") not in {"partial", "ok", "retry", "reauth_required", "limited"}:
+            raise StoreRefused("원천 수집 상태가 아닙니다")
+        _num(values.get("bizmoney"), "잔액")
+        if values["status"] != "ok":
+            for key in ("yday_spend", "yday_imp", "yday_clk"):
+                values[key] = None
+        else:
+            source = self.inventory_progress(customer_id, now.astimezone(KST).date())
+            if source is None or source["next_index"] != len(source["campaign_ids"]):
+                raise StoreRefused("완결된 원천이 아닙니다")
+            totals = IR.validate_progress(source, customer_id, now.astimezone(KST).date())
+            if any(values.get(target) != totals[name] for name, target in
+                   zip(IR.FIELDS, ("yday_imp", "yday_clk", "yday_spend"))):
+                raise StoreRefused("완결 원천과 공개 합계가 다릅니다")
+        with self._tx() as c:
+            current = c.execute("""SELECT attempts FROM naver_auto_inventory_check
+                WHERE customer_id = ? AND day = ? AND status = 'reading'""", (customer_id, at[:10])).fetchone()
+            if current is None:
+                raise StoreRefused("시작하지 않은 원천 수집입니다")
+            attempts = current[0] + (values["status"] == "retry")
+            next_at = _kst_text(now + timedelta(minutes=(2, 5, 15, 30)[min(attempts, 4) - 1]), "재시도 시각") \
+                if values["status"] == "retry" else at
+            cur = c.execute("""UPDATE naver_auto_inventory_check SET
+                status = CASE WHEN ? = 'retry' AND ? >= 4 THEN 'limited' ELSE ? END,
+                checked_at = ?, error_code = CASE WHEN ? = 'retry' AND ? >= 4 THEN 'RETRY_EXHAUSTED' ELSE ? END,
+                bizmoney = ?, yday_spend = ?, yday_imp = ?, yday_clk = ?, campaigns_json = ?,
+                attempts = ?, next_try_at = ?
+                WHERE customer_id = ? AND day = ? AND status = 'reading' AND snapshot_at = ?""",
+                (values["status"], attempts, values["status"], at, values["status"], attempts, values.get("error_code"), values.get("bizmoney"), values.get("yday_spend"),
+                 values.get("yday_imp"), values.get("yday_clk"),
+                 json.dumps([F.keep(c, F.CAMPAIGN) for c in values.get("campaigns", [])]), attempts, next_at, customer_id, at[:10],
+                 _kst_text(snapshot_at, "목록 시각")))
+            if cur.rowcount != 1:
+                raise StoreRefused("시작하지 않은 원천 수집입니다")
+            return c.execute("SELECT status FROM naver_auto_inventory_check WHERE customer_id = ? AND day = ?",
+                             (customer_id, at[:10])).fetchone()[0]

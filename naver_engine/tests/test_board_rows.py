@@ -36,14 +36,17 @@ class IssueRowsTest(TW.WebBase):
 
     def test_rows_are_scoped(self):
         """이슈 한 줄씩도 범위 안만 — 보이는 가망의 열린 이슈와 정확히 같다(더도 덜도)."""
-        for idx, pids in ((100, (11, 14)), (101, (12,)), (1, (11, 12, 14)), (0, (11, 12, 13, 14))):
+        # 2026-10-02 명세: 관리팀장도 MINE — 이 fixture의 팀장 1에게 직접 담당은 없다.
+        for idx, pids in ((100, (11, 14)), (101, (12,)), (1, ()), (0, (11, 12, 13, 14))):
             b = self.rows(idx)
             self.assertEqual({r["issue_id"] for r in b["issue_rows"]}, self.open_ids(pids), idx)
             self.assertTrue({r["possibility_id"] for r in b["issue_rows"]} <= set(pids), idx)
 
     def test_rows_follow_selection(self):
         """고르기(사람)로 좁히면 이슈 줄도 좁아진다 — 표와 같은 가망."""
-        b = self.rows(1, query="selection=person%3A101&attention=0")
+        # 2026-10-02 명세: 다른 직원 고르기는 대표만, 관리팀장은 거절한다.
+        self.assertEqual(self.get("/board", 1, query="selection=person%3A101&attention=0")[0], 404)
+        b = self.rows(0, query="selection=person%3A101&attention=0")
         self.assertEqual({r["possibility_id"] for r in b["issue_rows"]}, {12})
         self.assertEqual({r["possibility_id"] for r in b["rows"]}, {12})
 
@@ -60,7 +63,7 @@ class IssueRowsTest(TW.WebBase):
         self.assertEqual(sev[0], "red")
 
     def test_can_owner_lead_ceo(self):
-        """누를 수 있는 것 = 서버 규칙 — 담당은 🔴 예외 불가 · 팀장·대표는 7일 · 🟡 는 담당도 30일."""
+        """2026-10-02 명세: 담당은 🔴 예외 불가 · 대표만 7일 · 팀장에게 타 담당 줄은 없다."""
         red = self.issue_of(11, "red")["issue_id"]
         yellow = self.issue_of(12, "yellow")["issue_id"]
 
@@ -69,9 +72,9 @@ class IssueRowsTest(TW.WebBase):
             return r["can"]
         c = can(100, red)
         self.assertEqual((c["ack"], c["resolve"], c["except"], c["except_blocked"]), (True, True, False, "actor-too-low"))
-        for idx in (1, 0):
-            c = can(idx, red)
-            self.assertEqual((c["except"], c["except_until_max"]), (True, (TODAY + timedelta(days=6)).isoformat()), idx)
+        self.assertNotIn(red, {r["issue_id"] for r in self.rows(1)["issue_rows"]})
+        c = can(0, red)
+        self.assertEqual((c["except"], c["except_until_max"]), (True, (TODAY + timedelta(days=6)).isoformat()))
         c = can(101, yellow)
         self.assertEqual((c["except"], c["except_until_max"]), (True, (TODAY + timedelta(days=29)).isoformat()))
 
@@ -117,20 +120,21 @@ class IssueRowsTest(TW.WebBase):
                          (False, False, False, None))
         self.assertEqual(r["relation"], "prev")
 
-    def test_stale_org_blocks_except_button(self):
+    def test_stale_org_blocks_staff_board_before_rendering_buttons(self):
+        """2026-10-02 명세: 낡은 조직은 직원 전체 응답을 503으로 닫고 대표 진단만 남긴다."""
         self.at(self.fc.now() + timedelta(hours=30))
         yellow = self.issue_of(12, "yellow")["issue_id"]
-        [r] = [r for r in self.get("/board", 101, query="attention=0")[1]["issue_rows"] if r["issue_id"] == yellow]
+        self.assertEqual(self.get("/board", 101, query="attention=0"), (503, {"error": "org-stale"}))
+        [r] = [r for r in self.rows(0)["issue_rows"] if r["issue_id"] == yellow]
         self.assertEqual((r["can"]["ack"], r["can"]["except"], r["can"]["except_blocked"]), (True, False, "org-stale"))
 
     def test_stale_org_reason_before_too_low(self):
-        """🔴 는 담당(층이 모자람)이라도 조직이 낡았으면 까닭 = 「조직 낡음」 — 서버가 먼저 거절하는 까닭과 같은 순서."""
+        """2026-10-02 명세: 직원은 이슈 권한보다 조직 최신성을 먼저 확인하여 읽기·쓰기를 503으로 닫는다."""
         self.at(self.fc.now() + timedelta(hours=30))
         red = self.issue_of(11, "red")["issue_id"]
-        [r] = [r for r in self.get("/board", 100, query="attention=0")[1]["issue_rows"] if r["issue_id"] == red]
-        self.assertEqual((r["can"]["except"], r["can"]["except_blocked"]), (False, "org-stale"))
+        self.assertEqual(self.get("/board", 100, query="attention=0"), (503, {"error": "org-stale"}))
         s, b = self.post(f"/issues/{red}/except", 100, {"until": TODAY.isoformat(), "note": "사유"})
-        self.assertEqual((s, b["error"]), (409, "org-stale"))
+        self.assertEqual((s, b["error"]), (503, "org-stale"))
         self.st.record_org(TA.org_body(self.fc.now() - timedelta(minutes=1)), self.fc.now())
         [r] = [r for r in self.get("/board", 100, query="attention=0")[1]["issue_rows"] if r["issue_id"] == red]
         self.assertEqual(r["can"]["except_blocked"], "actor-too-low")   # 조직을 새로 받은 뒤에야 층 까닭
@@ -150,20 +154,24 @@ class IssueRowsTest(TW.WebBase):
         self.assertEqual((d["can"]["ack"], d["can"]["resolve"], d["can"]["except"]), (False, False, False))
         red = self.issue_of(11, "red")["issue_id"]
         until = (TODAY + timedelta(days=2)).isoformat()
-        self.assertEqual(self.post(f"/issues/{red}/except", 1, {"until": until, "note": "광고주 자동 충전"})[0], 200)
-        [e] = [r for r in self.rows(1)["done_rows"] if r["issue_id"] == red]
+        # 2026-10-02 명세: 타 담당 이슈의 예외 승인·완료 열람은 팀장이 아니라 대표 몫이다.
+        self.assertEqual(self.post(f"/issues/{red}/except", 1, {"until": until, "note": "광고주 자동 충전"})[0], 404)
+        self.assertEqual(self.post(f"/issues/{red}/except", 0, {"until": until, "note": "광고주 자동 충전"})[0], 200)
+        [e] = [r for r in self.rows(0)["done_rows"] if r["issue_id"] == red]
         self.assertEqual((e["state"], e["exception_until"], e["hand"]["note"]), ("exception", until, "광고주 자동 충전"))
         # 범위 밖(101)에게는 11 의 예외 줄이 없다
         self.assertNotIn(red, {r["issue_id"] for r in self.rows(101)["done_rows"]})
 
     def test_closed_today_scoped(self):
-        """오늘 닫힌 이슈도 범위·고르기 안만 — 팀장이 닫은 11 의 🔴 는 101 · 「사람: 101」 고르기에 없다."""
+        """2026-10-02 명세: 대표가 닫은 11의 🔴도 타 담당 직원·팀장·사람101 선택에는 없다."""
         red = self.issue_of(11, "red")["issue_id"]
-        self.assertEqual(self.post(f"/issues/{red}/resolve", 1)[0], 200)
-        self.assertIn(red, {r["issue_id"] for r in self.rows(1)["done_rows"]})
+        self.assertEqual(self.post(f"/issues/{red}/resolve", 1)[0], 404)
+        self.assertEqual(self.post(f"/issues/{red}/resolve", 0)[0], 200)
+        self.assertIn(red, {r["issue_id"] for r in self.rows(0)["done_rows"]})
+        self.assertNotIn(red, {r["issue_id"] for r in self.rows(1)["done_rows"]})
         self.assertIn(red, {r["issue_id"] for r in self.rows(100)["done_rows"]})
         self.assertNotIn(red, {r["issue_id"] for r in self.rows(101)["done_rows"]})
-        self.assertNotIn(red, {r["issue_id"] for r in self.rows(1, query="selection=person%3A101&attention=0")["done_rows"]})
+        self.assertNotIn(red, {r["issue_id"] for r in self.rows(0, query="selection=person%3A101&attention=0")["done_rows"]})
 
     def test_closed_yesterday_not_in_done(self):
         yellow = self.issue_of(12, "yellow")["issue_id"]
@@ -177,19 +185,21 @@ class IssueRowsTest(TW.WebBase):
         self.assertEqual(self.post(f"/issues/{yellow}/except", 101, {"until": TODAY.isoformat(), "note": "사유"})[0], 200)
         self.assertIn(yellow, {r["issue_id"] for r in self.rows(101)["done_rows"]})
         self.at(self.fc.now() + timedelta(days=1))
-        [r] = [r for r in self.get("/board", 101, query="attention=0")[1]["issue_rows"] if r["issue_id"] == yellow]
+        # 2026-10-02 명세: 직원은 낡은 조직에서 행 자체를 받지 않는다. 대표 진단으로 만료 상태를 검사한다.
+        self.assertEqual(self.get("/board", 101, query="attention=0"), (503, {"error": "org-stale"}))
+        [r] = [r for r in self.rows(0)["issue_rows"] if r["issue_id"] == yellow]
         self.assertEqual((r["state"], r["stored_state"], r["can"]["ack"], r["can"]["except"]),
                          ("new", "exception", True, False))   # 점검이 다시 보기 전에는 예외를 이어 붙이지 않는다
         # 막힌 까닭 = 서버가 먼저 거절하는 까닭(하루가 지나 조직 자료가 낡음) · 지난 예외 사유는 🆕 줄에 붙지 않는다
         self.assertEqual((r["can"]["except_blocked"], r["hand"]), ("org-stale", None))
         s, b = self.post(f"/issues/{yellow}/except", 101, {"until": TODAY.isoformat(), "note": "다시"})
-        self.assertEqual((s, b["error"]), (409, "org-stale"))
+        self.assertEqual((s, b["error"]), (503, "org-stale"))
         # 조직을 새로 받으면 다음 까닭 = 「예외 중」(층이 아니다 · 검토 exception-active)
         self.st.record_org(TA.org_body(self.fc.now() - timedelta(minutes=1)), self.fc.now())
-        for idx in (101, 1):
+        for idx in (101, 0):   # 새 정책상 타 담당 팀장 대신 대표에게 같은 차단 이유가 보여야 한다.
             [r] = [r for r in self.get("/board", idx, query="attention=0")[1]["issue_rows"] if r["issue_id"] == yellow]
             self.assertEqual(r["can"]["except_blocked"], "exception-active", idx)
-        s, b = self.post(f"/issues/{yellow}/except", 1, {"until": TODAY.isoformat(), "note": "다시"})
+        s, b = self.post(f"/issues/{yellow}/except", 0, {"until": TODAY.isoformat(), "note": "다시"})
         self.assertEqual((s, b["error"]), (409, "exception-active"))
         s, b = self.post(f"/issues/{yellow}/ack", 101)
         self.assertEqual(s, 200)
@@ -207,7 +217,7 @@ class IssueRowsTest(TW.WebBase):
         yellow = self.issue_of(12, "yellow")["issue_id"]
         until = (TODAY + timedelta(days=2)).isoformat()
         self.assertEqual(self.post(f"/issues/{yellow}/except", 101, {"until": until, "note": "사유"})[0], 200)
-        for idx in (101, 1):
+        for idx in (101, 0):   # 2026-10-02 명세: 완료 줄도 현재 담당 또는 대표만 열람한다.
             [e] = [r for r in self.rows(idx)["done_rows"] if r["issue_id"] == yellow]
             self.assertEqual((e["can"]["except"], e["can"]["except_blocked"]), (False, None), idx)
 
@@ -280,7 +290,9 @@ class IssueRowsTest(TW.WebBase):
         _s, c = self.get("/clients/11", 100)
         [red] = [i for i in c["issues"] if i["severity"] == "red"]
         self.assertEqual((red["state_now"], red["can"]["except_blocked"]), ("new", "actor-too-low"))
-        _s, c = self.get("/clients/11", 1)
+        # 2026-10-02 명세: 타 담당 팀장의 상세 열람은 404, 대표의 승인 버튼만 남는다.
+        self.assertEqual(self.get("/clients/11", 1)[0], 404)
+        _s, c = self.get("/clients/11", 0)
         [red] = [i for i in c["issues"] if i["severity"] == "red"]
         self.assertTrue(red["can"]["except"])
 

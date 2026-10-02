@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
 PATHS = ("/api/ad-sync/contracts", "/api/ad-sync/org-snapshot",
-         "/api/ad-sync/naver-customer-ids", "/api/sso/exchange")
+         "/api/ad-sync/naver-customer-ids", "/api/ad-sync/naver-account-catalog", "/api/sso/exchange")
 
 
 def nginx_nodes(source):
@@ -220,17 +220,18 @@ class PolicyTests(unittest.TestCase):
             return False
 
         for value in ("GET:/api/ad-sync/contracts?stage=%EC%A7%84%ED%96%89+%EC%A4%91&has_contract=true",
-                      "GET:" + PATHS[1], "GET:" + PATHS[2], "POST:" + PATHS[3]):
+                      "GET:" + PATHS[1], "GET:" + PATHS[2], "GET:" + PATHS[3], "POST:" + PATHS[4]):
             self.assertTrue(accepts("$naver_erp_route", value), value)
         for method in ("HEAD", "OPTIONS", "DELETE", "PUT", "PATCH", "CONNECT", "TRACE"):
             for path in PATHS:
                 self.assertFalse(accepts("$naver_erp_route", method + ":" + path))
-        for value in ("POST:" + PATHS[1], "GET:" + PATHS[3], "POST:" + PATHS[3] + "?destination=LOGIC",
+        for value in ("POST:" + PATHS[1], "POST:" + PATHS[3], "GET:" + PATHS[4], "POST:" + PATHS[4] + "?destination=LOGIC",
                       "GET:/api/ad-sync/contracts?stage=a&has_contract=false",
                       "GET:/api/ad-sync/contracts?stage=a&has_contract=true&extra=a",
                       "GET:/api/ad-sync/contracts/../org-snapshot", "GET:/api//ad-sync/org-snapshot",
                       "GET:/api/ad-sync/%6frg-snapshot", "GET:/api/ad-sync/org-snapshot/",
-                      "GET:/api/ad-sync/naver-alerts", "GET:/api/ad-sync/org-snapshot?x=y"):
+                      "GET:/api/ad-sync/naver-alerts", "GET:/api/ad-sync/org-snapshot?x=y",
+                      "GET:/api/ad-sync/naver-account-catalog?x=y", "GET:/api/ad-sync/naver-account-catalog/"):
             self.assertFalse(accepts("$naver_erp_route", value), value)
         for value in ("GET::", "GET:0:", "POST:140:", "POST:1024:"):
             self.assertTrue(accepts("$naver_erp_framing", value))
@@ -240,7 +241,7 @@ class PolicyTests(unittest.TestCase):
         for name in maps:
             self.assertIn((("if", "(" + name, "=", "0)"), [(("return", "400"), None)]), server)
 
-    def test_loopback_ingress_has_only_four_exact_routes_and_active_upstream(self):
+    def test_loopback_ingress_has_only_five_exact_routes_and_active_upstream(self):
         nodes = nginx_nodes((ROOT / "be-nginx.conf").read_text())
         servers = [children for words, children in nodes if words == ("server",)]
         self.assertEqual(len(servers), 1)
@@ -256,8 +257,8 @@ class PolicyTests(unittest.TestCase):
 
     def test_mutant_policy_expansions_fail_closed(self):
         mutants = (
-            ("be-nginx.conf", "127.0.0.1:18081", "0.0.0.0:18081", "test_loopback_ingress_has_only_four_exact_routes_and_active_upstream"),
-            ("be-nginx.conf", "http://sales_be_up", "http://127.0.0.1:6060", "test_loopback_ingress_has_only_four_exact_routes_and_active_upstream"),
+            ("be-nginx.conf", "127.0.0.1:18081", "0.0.0.0:18081", "test_loopback_ingress_has_only_five_exact_routes_and_active_upstream"),
+            ("be-nginx.conf", "http://sales_be_up", "http://127.0.0.1:6060", "test_loopback_ingress_has_only_five_exact_routes_and_active_upstream"),
             ("be-nginx.conf", "X-Metainc-Naver-Ingress 1", "X-Metainc-Naver-Ingress $http_x_metainc_naver_ingress", "test_ingress_replaces_trust_headers_and_never_logs_or_caches_payload"),
             ("be-nginx.conf", "proxy_pass_request_headers off", "proxy_pass_request_headers on", "test_ingress_replaces_trust_headers_and_never_logs_or_caches_payload"),
             ("be-nginx.conf", "access_log off", "access_log /tmp/requests.log", "test_ingress_replaces_trust_headers_and_never_logs_or_caches_payload"),

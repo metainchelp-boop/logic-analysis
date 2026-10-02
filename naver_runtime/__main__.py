@@ -106,11 +106,11 @@ def dependencies(config, env, clock):
     """켜진 기능에 필요한 키만 읽는다. 이 함수는 업무 API를 호출하지 않는다."""
     config.validate_runtime(env)
     erp_factory = naver_factory = alert_factory = metrics_factory = backup_job = None
-    if config.sync_enabled or config.links_enabled:
+    if config.sync_enabled or config.links_enabled or config.inventory_enabled:
         key = E.load_erp_key(env)
         erp_factory = lambda: E.ErpReader(key, clock=clock, transport=StopAwareTransport(
             clock, ErpTunnelTransport(config.erp_tunnel_socket)))
-    if config.links_enabled or config.morning_enabled:
+    if config.links_enabled or config.morning_enabled or config.inventory_enabled:
         credentials = load_manager_credentials(env)
         naver_factory = lambda: N.NaverReader(credentials, clock=clock, transport=StopAwareTransport(clock))
     if config.backup_enabled:

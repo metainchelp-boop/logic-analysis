@@ -6,7 +6,7 @@
     {
       generated_at,
       teams:     [{idx, name, level, parent_idx, is_system}],
-      employees: [{idx, name, team_idx, is_manager, is_top_manager, status, is_deleted}],
+      employees: [{idx, name, team_idx, is_manager, is_top_manager, status, is_deleted, is_management}],
       owners:    [{possibility_id, manage_emp_idx, sub_manage_emp_idx,
                    prev_manage_owner_idx, sales_emp_idx, owner_source}]
     }
@@ -106,6 +106,7 @@ class OrgPerson:
     is_top_manager: bool
     status: Optional[str]   # ① null 이면 None — 재직이 아니다
     is_deleted: bool
+    is_management: bool = False  # ① authority.departmentType == MANAGEMENT. 누락·모르는 값은 접근 불가.
 
     @property
     def active(self) -> bool:
@@ -389,6 +390,7 @@ def parse_org_snapshot(payload: Any) -> Org:
             is_top_manager=_bool(r, "is_top_manager", w),
             status=_str(r, "status", w, nullable=True),   # ① 계약: 비었으면 null(재직 아님)
             is_deleted=_bool(r, "is_deleted", w),
+            is_management=r.get("is_management") is True,
         )
 
     owners: list[OwnerRow] = []

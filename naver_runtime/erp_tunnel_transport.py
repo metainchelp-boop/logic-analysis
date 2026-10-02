@@ -22,7 +22,7 @@ from naver_engine import erp_profile as EP
 from naver_engine import erp_read as E
 from naver_engine.naver_read import MAX_BODY as _URLLIB_MAX_BODY
 
-_READ_PATHS = frozenset((E.PATH_CONTRACTS, E.PATH_ORG_SNAPSHOT, E.PATH_NAVER_IDS))
+_READ_PATHS = frozenset((E.PATH_CONTRACTS, E.PATH_ORG_SNAPSHOT, E.PATH_NAVER_IDS, E.PATH_ACCOUNT_CATALOG))
 _STAGES = frozenset(s for spellings in E.STAGE_SPELLINGS.values() for s in spellings)
 
 

@@ -31,7 +31,7 @@ CHANNEL = ("nccBusinessChannelId", "customerId", "name", "channelTp", "channelKe
 # ① 전산 조직 스냅숏(``GET /api/ad-sync/org-snapshot``) — 엔진 저장소가 수락본을 남길 칸(설계 v1.8 S7 · M12).
 # ① 계약 §9 에 적힌 칸 그대로다. 전화·주민번호·급여·로그인 아이디는 ① 가 보내지 않고, 보내더라도 여기 없으면 남지 않는다.
 ORG_TEAM = ("idx", "name", "level", "parent_idx", "is_system")
-ORG_EMPLOYEE = ("idx", "name", "team_idx", "is_manager", "is_top_manager", "status", "is_deleted")
+ORG_EMPLOYEE = ("idx", "name", "team_idx", "is_manager", "is_top_manager", "status", "is_deleted", "is_management")
 ORG_OWNER = ("possibility_id", "manage_emp_idx", "sub_manage_emp_idx", "prev_manage_owner_idx", "sales_emp_idx",
              "owner_source")
 
