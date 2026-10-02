@@ -6,11 +6,24 @@ import threading
 from time import monotonic
 
 from naver_engine import alerts as A, links as L, morning as M, store as S, sync as Y, metrics as G, naver_read as N
-from naver_engine import inventory as IC, inventory_reads as IR
-from naver_engine import monthly_reads as MR
+from naver_engine import inventory as IC, performance_reads as PR, management_store as MS, structure_reads as SR
 from naver_runtime import collection_requests as CR
 
 log = logging.getLogger("naver_runtime.scheduler")
+
+
+class _ManagedMorningStore:
+    """자동 아침 상세 점검도 실관리 대상만 읽게 한다. 이관 부재 판정은 유지한다."""
+    def __init__(self, store, now):
+        self.store = store
+        self.daily = {cid for cid,row in MS.snapshot(store,now).items() if row["decision"].cadence == "daily"}
+
+    def __getattr__(self, name):
+        return getattr(self.store,name)
+
+    def pairing_rows(self, pairing_id):
+        return [r for r in self.store.pairing_rows(pairing_id)
+                if r.get("customer_id") in self.daily or r["state"] in (S.PAIR_BROKEN,S.PAIR_MISSING)]
 
 
 class Scheduler:
@@ -149,7 +162,8 @@ class Scheduler:
                 if M.CHECK_START <= now.time().replace(tzinfo=None) < M.CHECK_DEADLINE:
                     self._step("readiness", lambda: M.readiness(st, self.clock()))
                 if M.morning_due(st, self.clock()):
-                    self._step("morning", lambda: M.run_morning(self.naver_factory(), st, self.clock,
+                    self._step("morning", lambda: M.run_morning(self.naver_factory(),
+                                                                _ManagedMorningStore(st,self.clock()) if c.inventory_enabled else st, self.clock,
                                                                 th=st.thresholds()))
             # 긴 암호화/전송 때문에 시스템 알림과 아침 심박이 밀리지 않도록 먼저 처리한다.
             if c.alerts_enabled:
@@ -165,6 +179,7 @@ class Scheduler:
                 if IC.sync_catalog_due(st, self.clock()):
                     self._step("inventory_catalog", lambda: IC.sync_catalog(self.erp_factory(), st, self.clock()), note=False)
                 self._step("inventory", lambda: self._inventory(), note=False)
+                self._step("reports", lambda: st.generate_reports(self.clock()), note=False)
             self.last_tick = self.clock()
             self.last_errors = tuple(self._errors)
             return {"state": "failed" if self.last_errors else "ok", "errors": list(self.last_errors)}
@@ -182,18 +197,18 @@ class Scheduler:
 
     def _inventory(self):
         reader = self.naver_factory()
-        now, started, initial, pauses = self.clock(), monotonic(), reader.calls, reader.pauses
-        # 월간은 별도 회차가 아니다. 전일이 쓴 호출·시간을 포함한 동일 바깥 예산이다.
+        # 전일·일요일·수동·보고기간 보충이 한 대기열과 같은 호출 예산을 공유한다.
+        started = reader._clock.monotonic()
+        before = reader.calls
         with reader.bounded_requests(max_calls=24, max_seconds=30):
-            result = IR.run_inventory(reader, self.store, self.clock)
-            elapsed = max((self.clock() - now).total_seconds(), monotonic() - started)
-            left = 24 - (reader.calls - initial)
-            if result.code not in ("NOT_READY", "SOURCE_CHANGED") and not reader.rate_limited and reader.pauses == pauses \
-                    and left >= 2 and elapsed < 30:
-                monthly = MR.run_monthly(reader, self.store, self.clock, max_calls=left,
-                                         max_seconds=30-elapsed, exclude_checked_after=now)
-                if monthly.code in ("NOT_READY", "SOURCE_CHANGED"):
-                    self._errors.append("monthly")
+            result = PR.run_performance(reader, self.store, self.clock, max_calls=18, max_seconds=20)
+            calls_left = 24-(reader.calls-before)
+            seconds_left = 30-(reader._clock.monotonic()-started)
+            if calls_left>0 and seconds_left>0 and not reader.rate_limited \
+                    and result.code not in ("NOT_READY","SOURCE_CHANGED"):
+                # 실적 단계에서 읽은 계정은 다음 회차에 구조를 읽는다. 계정당 8건·10초도 합산 제한이다.
+                SR.run_structure(reader,self.store,self.clock,max_calls=min(6,calls_left),max_seconds=seconds_left,
+                                 exclude_customers=reader.called_customers)
         # 개별 계정의 실패·재시도는 원장 경고로 남고, 원천 무효만 서비스 실패이다.
         if result.code in ("NOT_READY", "SOURCE_CHANGED"):
             self._errors.append("inventory")

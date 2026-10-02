@@ -19,6 +19,17 @@ def monthly(imp=100, clk=10, spend=1000, conv=3000, **kw):
 
 
 class DashboardAggregateTest(unittest.TestCase):
+    def test_daily_ledger_requires_all_days_and_keeps_confirmed_zero_conversion(self):
+        rows = [{"customer_id": 1, "day": day, "basic_complete": True,
+                 "conversion_complete": True, "imp": 100, "clk": 10, "spend": 1000,
+                 "conversion_value": 0, "checked_at": NOW.isoformat()}
+                for day in ("2026-10-01", "2026-10-02")]
+        checks = D.daily_checks(rows,NOW)
+        out = D.aggregate([account(1)],checks,NOW,ready=True)
+        self.assertEqual(out["totals"]["spend"],2000)
+        self.assertEqual(out["ratios"]["roas"],0)
+        self.assertEqual(D.daily_checks(rows[:1],NOW)[1]["status"],"partial")
+
     def test_month_to_yesterday_and_empty_scope_are_explicit(self):
         out = D.aggregate([], {}, NOW, ready=True)
         self.assertEqual(out["period"], {"start": "2026-10-01", "end": "2026-10-02",

@@ -39,6 +39,30 @@ def _collected(check, now, start, end):
         return None
 
 
+def daily_checks(rows,now):
+    """일별 보관 자료를 월간 화면 계약으로 변환. 누락 날짜를 0으로 채우지 않는다."""
+    today = now.astimezone(KST).date()
+    start,end = today.replace(day=1),today-timedelta(days=1)
+    dates = {(start+timedelta(days=n)).isoformat() for n in range(max(0,(end-start).days+1))}
+    groups = defaultdict(list)
+    for row in rows:
+        if row.get("day") in dates:
+            groups[row["customer_id"]].append(row)
+    checks = {}
+    for cid, values in groups.items():
+        complete = len(values) == len(dates) and {r["day"] for r in values} == dates \
+            and all(r.get("basic_complete") is True for r in values)
+        conversion = complete and all(r.get("conversion_complete") is True for r in values)
+        checks[cid] = {"period_start":start.isoformat(),"period_end":end.isoformat(),
+            "status":"ok" if complete else "partial","checked_at":max(r["checked_at"] for r in values),
+            "conversion_confirmed":conversion,
+            **{k:_sum(r.get(k) for r in values) if complete and all(_number(r.get(k)) for r in values) else None
+               for k in ("imp","clk","spend")},
+            "conversion_value":_sum(r["conversion_value"] for r in values) if conversion else None,
+            "enabled_campaigns":None,"campaign_count":None}
+    return checks
+
+
 def aggregate(rows, checks, now, *, ready):
     today = now.astimezone(KST).date()
     start, end = today.replace(day=1), today - timedelta(days=1)
@@ -86,7 +110,8 @@ def aggregate(rows, checks, now, *, ready):
     totals = {target: _sum(r[source] for r in known) if may_sum else None
               for source, target in (("imp", "impressions"), ("clk", "clicks"), ("spend", "spend"))}
     # 0 전환매출은 추적 미설정과 구분할 근거가 없다. 해당 계정의 비용도 ROAS 분모에서 제외한다.
-    conversions = [r for r in known if _number(r.get("conversion_value")) and r["conversion_value"] > 0]
+    conversions = [r for r in known if _number(r.get("conversion_value"))
+                   and (r["conversion_value"] > 0 or r.get("conversion_confirmed") is True)]
     revenue = _sum(r["conversion_value"] for r in conversions) if conversions else None
     roas_spend = _sum(r["spend"] for r in conversions) if conversions else None
     totals["conversion_value"] = revenue
@@ -122,6 +147,21 @@ def board(ctx, store, scope, selection="all"):
     source = INV.board(ctx, store, scope, selection, _include_customer_ids=True)
     start, end = ctx.today.replace(day=1), ctx.today-timedelta(days=1)
     checks = store.monthly_checks_on(start, end) if start <= end else {}
-    result = aggregate(source["rows"], checks, ctx.now, ready=source["matching_ready"])
+    rows = source["rows"]
+    if callable(getattr(store,"daily_performance",None)):
+        if start <= end:
+            owners = {r["customer_id"]:r["possibility_id"] for r in rows}
+            raw = store.daily_performance(list(owners),start,end)
+            # 계정 재연결 이전의 업체 실적을 현재 업체 평균에 섞지 않는다.
+            usable = [r for r in raw if r.get("possibility_id") == owners.get(r["customer_id"])]
+            for cid in {r["customer_id"] for r in raw}:
+                checks.pop(cid,None)
+            for row in rows:
+                if row.get("collection",{}).get("attribution_changed"):
+                    checks.pop(row["customer_id"],None)
+            checks.update(daily_checks(usable,ctx.now))
+    result = aggregate(rows, checks, ctx.now, ready=source["matching_ready"])
     return {**result, "selection": selection, "accounts_at": source["accounts_at"],
+            "collection_scope":"visible_accounts",
+            "daily_managed_accounts":sum(r.get("management",{}).get("cadence") == "daily" for r in rows),
             "catalog_at": source["catalog_at"], "catalog_status": source["catalog_status"]}

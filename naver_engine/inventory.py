@@ -4,8 +4,9 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 import math
 
-from app.naver_auto import matching as M, scope as SC
+from app.naver_auto import matching as M, scope as SC, org_snapshot as O
 from . import erp_read as E, handles as H, links as L, store as S, views as W
+from .management import DAILY_STAGES
 
 WORKFLOWS = ("진행중", "전략관리", "사후관리", "재계약진행중", "환불중", "홀딩중", "환불완료", "계약만료", "미분류")
 MAPPINGS = ("matched", "no_erp_record", "unclassified")
@@ -45,7 +46,7 @@ def catalog_status(store, now):
     return body, "accepted"
 
 
-def _matching(ctx, catalog, *, include_absent=False):
+def _matching(ctx, catalog, *, include_absent=False, candidate_counts=None):
     current = {cid: {"customerId": cid, "adAccountNo": a["ad_account_no"], "adAccountName": a["account_name"]}
                for cid, a in ctx.accounts.items() if a["present"] == 1 or include_absent}
     # 전체 가망 × 계정의 이중 루프를 피한다. 번호 주장/사람 확인은 전부 유지하고,
@@ -69,7 +70,7 @@ def _matching(ctx, catalog, *, include_absent=False):
             anchors.setdefault(anchor, set()).add(cid)
     relevant = {r["possibility_id"] for r in catalog["ids"]}
     relevant.update(d.possibility_id for d in ctx.live_decisions)
-    people, possible_accounts, related_cache = [], set(), {}
+    people, possible_accounts, related_cache, related_by_pid = [], set(), {}, {}
     for row in catalog["items"]:
         pid, name = row["possibility_id"], row["company_name"]
         key = M.loose_name(name)
@@ -94,12 +95,24 @@ def _matching(ctx, catalog, *, include_absent=False):
             # 동명이름은 한 번만 합치되 표시용 후보 상한/이미 매칭된 업체와 무관하게 모두 보존한다.
             possible_accounts.update(related)
         related = related_cache[key]
+        if candidate_counts is not None:
+            related_by_pid[pid] = key
         if pid in relevant or related:
             people.append(M.ErpProspect(pid, name))
     ids = [M.ErpCredential(r["possibility_id"], r["vendor"], r["customer_id_raw"],
                            ad_account_no_raw=r["ad_account_no_raw"]) for r in catalog["ids"]]
     decisions = [M.HumanDecision(d.possibility_id, d.customer_id, d.decision) for d in ctx.live_decisions]
-    return M.match(people, ids, current, decisions, accounts_complete=True), possible_accounts
+    result = M.match(people, ids, current, decisions, accounts_complete=True)
+    if candidate_counts is not None:
+        paired_pids = {p.possibility_id for p in result.pairs}
+        paired_cids = {p.customer_id for p in result.pairs}
+        rejected = {(d.possibility_id, d.customer_id) for d in decisions if d.decision == M.DECISION_REJECTED}
+        free_counts = {key: sum(cid not in paired_cids for cid in related) for key, related in related_cache.items()}
+        rejected_counts = Counter(pid for pid, cid in rejected if cid not in paired_cids
+                                  and cid in related_cache.get(related_by_pid.get(pid), ()))
+        candidate_counts.update({pid: 0 if pid in paired_pids else
+                                 free_counts[key] - rejected_counts[pid] for pid, key in related_by_pid.items()})
+    return result, possible_accounts
 
 
 def _known_balance(value):
@@ -144,6 +157,53 @@ def _lost_rows(ctx, store, catalog, visible, owns, ceo, selection):
     return rows
 
 
+def _managed_coverage(ctx, companies, catalog, visible, owns, result, candidate_counts, ready):
+    """실관리 업체 분모. 계정 연결이 없어도 담당 범위 안의 전산 업체는 빠지지 않는다."""
+    ready = ready and O.allows_raising(O.org_freshness(ctx.org.generated_dt, ctx.now))
+    paired = Counter(p.possibility_id for p in result.pairs) if ready else Counter()
+    has_id = {r["possibility_id"] for r in catalog["ids"] if r["vendor"] == M.VENDOR_NAVER
+              and any(v is not None and (not isinstance(v, str) or v.strip())
+                      for v in (r["customer_id_raw"], r["ad_account_no_raw"]))} if catalog else set()
+    blocked = {}
+    if ready:
+        for row in result.blocked:
+            blocked.setdefault(row.possibility_id, set()).add(row.reason)
+        for pid, _cid in result.confirmed_missing:
+            blocked.setdefault(pid, set()).add("CONFIRMED_ACCOUNT_NOT_LISTED")
+    conflicts = {M.B_IDENTIFIER_CONFLICT, M.B_AMBIGUOUS_SPACE, M.B_CLAIMED_BY_SEVERAL,
+                 M.B_CONFIRMED_ELSEWHERE, M.B_NAME_ELSEWHERE}
+    invalid = {M.B_FORMAT, M.B_LENGTH, M.B_AD_FORMAT, M.B_AD_ACCOUNT_NO}
+    unlisted = {M.B_NOT_LINKED, M.B_AD_NOT_LINKED, "CONFIRMED_ACCOUNT_NOT_LISTED"}
+    items = []
+    for pid in sorted(visible):
+        company = companies[pid]
+        stage = H.stage_key(company["stage"])
+        if company["stage_hidden"] or not company["stage_known"] or stage not in DAILY_STAGES:
+            continue
+        count = paired[pid]
+        candidates = candidate_counts.get(pid, 0)
+        reasons = blocked.get(pid, set())
+        state = ("identifier_conflict" if reasons & conflicts else "identifier_invalid" if reasons & invalid else
+                 "transfer_unconfirmed" if reasons & unlisted else "multiple_candidates" if candidates > 1 else
+                 "candidate_pending" if candidates or M.B_NAME_DIFFERENT in reasons else
+                 "no_candidate" if reasons else "matched" if count else
+                 "id_missing" if pid not in has_id else "no_candidate")
+        codes = sorted(reasons)
+        if not count and pid not in has_id:
+            codes.insert(0, "ID_MISSING")
+        if candidates:
+            codes.append("MULTIPLE_CANDIDATES" if candidates > 1 else "CANDIDATE_PENDING")
+        elif not count and not reasons:
+            codes.append("NO_CANDIDATE")
+        items.append({"possibility_id": pid, "company_name": company["company_name"], "workflow": stage,
+                      "owner": W._owner(ctx, owns[pid]), "state": state if ready else "source_unavailable",
+                      "codes": codes if ready else ["SOURCE_UNAVAILABLE"],
+                      "matched_account_count": count if ready else None, "candidate_count": candidates if ready else None})
+    matched = sum(r["state"] == "matched" for r in items)
+    return {"ready": ready, "total": len(items) if ready else None,
+            "matched": matched if ready else None, "missing": len(items)-matched if ready else None, "items": items}
+
+
 def board(ctx, store, scope, selection="all", workflow="all", mapping="all", view="current", *, _include_customer_ids=False):
     if workflow not in ("all", *WORKFLOWS) or mapping not in ("all", *MAPPINGS) \
             or view not in ("current", "lost", "balance_known"):
@@ -157,11 +217,12 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
     ceo = scope == all_scope and scope.kind == SC.ALL
     at = store.accounts_read_at()
     accounts_current = store.inventory_snapshot(ctx.now) is not None
-    pairs, ambiguous = {}, set()
+    pairs, ambiguous, candidate_counts = {}, set(), {}
+    result = None
     match_ok = state == "accepted" and accounts_current
     if match_ok:
         try:
-            result, possible_accounts = _matching(ctx, catalog)
+            result, possible_accounts = _matching(ctx, catalog, candidate_counts=candidate_counts)
             for p in result.pairs:
                 if p.customer_id in pairs:
                     ambiguous.add(p.customer_id)
@@ -181,7 +242,24 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
         except M.BadInput:
             match_ok = False
     checks = store.inventory_checks_on(ctx.today)
+    structure = store.structure_checks(ctx.accounts.keys(),ctx.now) if callable(getattr(store,"structure_checks",None)) else {}
+    campaign_reasons = store.observed_campaign_reasons(ctx.accounts.keys()) if callable(getattr(store,"observed_campaign_reasons",None)) else {}
+    managed = store.performance_checks(ctx.now) if callable(getattr(store,"performance_checks",None)) else {}
+    legacy = store.latest_inventory_successes() if managed else {}
+    for cid, current in managed.items():
+        if not current.get("attribution_changed") and not current.get("last_success_at") and cid in legacy:
+            current = {**current, **legacy[cid], "stale": True}
+        previous = checks.get(cid,{})
+        if not current.get("attribution_changed") and current.get("bizmoney") is None and _known_balance(previous.get("bizmoney")):
+            # 기존 회차가 통계 부분 수신이어도 별도로 확인한 잔액은 그 시각과 함께 보존한다.
+            current = {**current,"bizmoney":previous["bizmoney"],"bizmoney_at":previous.get("checked_at")}
+        # 7일 합계는 전일 필드에 넣지 않는다. 실제 전일 자료인 경우만 하위 호환한다.
+        yday = (ctx.today-timedelta(days=1)).isoformat()
+        if current.get("period_start") == current.get("period_end") == yday:
+            current = {**current, **{"yday_"+key: current.get(key) for key in ("spend","imp","clk")}}
+        checks[cid] = current
     rows, counts, stages = [], Counter({m: 0 for m in MAPPINGS}), Counter({s: 0 for s in WORKFLOWS})
+    plan = {kind:Counter(total=0,complete=0,pending=0,retry=0,limited=0) for kind in ("daily","weekly","blocked")}
     balances = []
     for cid, account in sorted(ctx.accounts.items()):
         if account["present"] != 1:
@@ -202,6 +280,13 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
         counts[status] += 1
         stages[stage] += 1
         check = checks.get(cid)
+        policy = managed.get(cid,{})
+        cadence = policy.get("cadence","blocked")
+        plan[cadence]["total"] += 1
+        check_status = (check or {}).get("status","pending")
+        plan[cadence]["complete" if check_status == "ok" and not (check or {}).get("stale") else
+                      "limited" if check_status in ("limited","reauth_required") else
+                      "retry" if check_status == "retry" else "pending"] += 1
         balance = None if check is None else check.get("bizmoney")
         known = match_ok and _known_balance(balance)
         if known:
@@ -211,6 +296,8 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
         if view == "balance_known" and not known:
             continue
         owner = W._owner(ctx, owns[pid]) if pid is not None else None
+        actionable = match_ok and O.allows_raising(O.org_freshness(ctx.org.generated_dt,ctx.now)) and not uncertain \
+            and (ceo or pid in visible) and account["ad_account_no"] is not None
         # 원천 지표를 전산 계약/보고서에 자동 귀속하거나 이전 이력을 덮어쓰지 않는다.
         rows.append({**({"customer_id": cid} if _include_customer_ids else {}),
                      "ad_account_no": None if account["ad_account_no"] is None else str(account["ad_account_no"]),
@@ -218,6 +305,16 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
                      "possibility_id": pid, "company_name": None if company is None else company["company_name"],
                      "mapping": status, "workflow": stage, "erp_stage": None if company is None else company["stage"],
                      "owner": owner, "collection": check or {"status": "pending", "checked_at": None},
+                     "ad_reasons": structure.get(cid,{}).get("reasons") or
+                        ([] if (check or {}).get("attribution_changed") else campaign_reasons.get(cid,[])),
+                     "structure_status": structure.get(cid,{}).get("status","pending"),
+                     "structure_checked_at": structure.get(cid,{}).get("checked_at"),
+                     "management": {"cadence":policy.get("cadence","blocked"),
+                                    "reason":policy.get("policy_reason"),"stage_revision":policy.get("stage_revision"),
+                                    "excluded":policy.get("excluded",False),
+                                    "can_manage":bool(actionable and pid is not None and policy.get("stage_revision")
+                                                      and not policy["stage_revision"].startswith("pending:")),
+                                    "can_collect":bool(actionable and policy.get("cadence") != "blocked")},
                      "detail_available": pid in ctx.prospects and ctx.prospects[pid]["present"] == 1 and not uncertain,
                      "reason": "SOURCE_UNAVAILABLE" if not match_ok else
                                ("MATCH_REVIEW" if uncertain else ("NO_ERP_MATCH" if company is None else None))})
@@ -239,6 +336,8 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
                "balance": {"known_count": len(balances), "total_count": total, "known_sum": amount,
                            "complete": match_ok and len(balances) == total and (total == 0 or amount is not None)}}
     return {"rows": rows, "total": total, "filtered_total": len(rows), "view": view, "summary": summary,
+            "collection_plan": {kind:dict(value) for kind,value in plan.items()},
+            "managed_coverage": _managed_coverage(ctx, companies, catalog, visible, owns, result, candidate_counts, match_ok),
             "counts": dict(counts), "workflows": dict(stages), "selection": selection,
             "catalog_status": state, "catalog_at": None if catalog is None else catalog["generated_at"],
             "accounts_at": None if at is None else at.isoformat(), "accounts_current": accounts_current,

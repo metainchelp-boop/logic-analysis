@@ -32,7 +32,7 @@
 </header>
 
 <main id="main">
-  <p id="verificationNotice" class="runbar" role="status" hidden>읽기 전용 검증판입니다. 기존 권한 범위 안의 자료만 보이며 광고·업무 변경·자동입찰·알림 전송은 꺼져 있습니다. 대표는 검증된 계정의 연결을 확정하고 즉시 조회할 수 있습니다. 아침 점검은 예약 시각에 실행되므로 현재 시간대에는 미수집·미점검일 수 있습니다. 자료 기준 시각을 확인해 주세요. 미점검은 정상 판정이 아닙니다.</p>
+  <p id="verificationNotice" class="runbar" role="status" hidden>기존 담당 권한 범위 안의 자료만 보입니다. 서버에서 허용한 계정 연결·관제 포함/제외·조회·보고서 검토만 할 수 있으며, 네이버 광고 변경·자동입찰·외부 전송은 꺼져 있습니다. 예약 전에는 미수집·미점검일 수 있습니다. 자료 기준 시각을 확인해 주세요. 미점검은 정상 판정이 아닙니다.</p>
   <section class="screen on" id="s-loading"><div class="loading">불러오는 중…</div></section>
 
   <section class="screen" id="s-blocked" aria-labelledby="b-t">
@@ -148,9 +148,11 @@
 
   <!-- 📄 보고서 -->
   <section class="screen" id="s-reports" aria-labelledby="t-reports">
-    <h1 class="pt" id="t-reports">📄 보고서</h1>
-    <p class="ps">광고주별 주간·월간 네이버 광고 보고서입니다. 매주·매월 저절로 만들어지고, 게시하면 전산 광고주 공유 화면에 링크로 올라갑니다.</p>
-    <div class="auto-soon"><b>4차에 엽니다.</b> 아침 점검이 쌓은 기록(광고비·노출·클릭·이슈 기록)이 보고서 재료가 됩니다. 「계정 확인 전」 광고주는 보고서를 만들지 않습니다.</div>
+    <div class="report-heading"><div><h1 class="pt" id="t-reports">📄 보고서 · 담당 검토</h1>
+      <p class="ps">확정된 계정의 주간·월간 실적입니다. 생성·집계 상태와 담당 검토는 별개입니다. 승인해도 광고주에게 게시하거나 전송하지 않습니다.</p></div>
+      <button type="button" class="btn sm" id="reportsReload">보고서 새로고침</button></div>
+    <div class="card report-source"><p id="reportsSchedule"></p><p id="reportsStatus" role="status" aria-live="polite"></p></div>
+    <div id="reportsRows"></div>
   </section>
 
   <!-- 📋 이관 현황 -->
@@ -158,6 +160,13 @@
     <h1 class="pt" id="t-transfers">📋 이관 현황</h1>
     <p class="ps">선택한 담당 범위의 현황입니다. 카드를 누르면 아래 목록을 해당 조건으로 볼 수 있습니다.</p>
     <div id="inventorySummary" class="inventory-summary" role="group" aria-label="이관 현황 요약 카드"></div>
+    <p class="ps" id="inventoryCadence" role="status"></p>
+    <div class="card flat" id="managedCoverage">
+      <div class="kh"><h2>전산 실관리 업체 · 계정 누락 대조</h2><span class="n" id="coverageStatus" role="status"></span></div>
+      <p class="ps">진행중 · 사후관리 · 전략관리 · 재계약진행중 업체가 기준입니다. 계정이 아직 연결되지 않은 업체도 포함합니다. 아래 계정 목록의 검색·필터와 별도로 현재 담당 범위를 대조합니다.</p>
+      <div class="tblwrap"><table aria-label="전산 실관리 업체 계정 대조"><thead><tr><th>전산 업체 · 단계</th><th>계정 확인 상태</th><th>연결 / 전체 후보</th><th>확인할 곳</th></tr></thead><tbody id="coverageRows"></tbody></table></div>
+      <p class="ps">번호 입력: 광고주 관리 → 업체 계정 정보 → 네이버 관제용 광고 계정 ID. 기존 API 고객 ID나 비밀키는 변경하지 않습니다. 번호 충돌은 대표에게 확인을 요청해 주세요.</p>
+    </div>
     <div class="card flat" id="inventoryCard">
       <div class="kh"><h2>이관 광고 계정 전체</h2><span class="n" id="inventoryCount"></span></div>
       <p class="ps">회사에 이관된 계정을 기준으로 전산 업체와 연결합니다. 매칭 상태·업무 단계·수집 결과는 서로 다른 정보입니다. 관리직원은 본인 담당 계정만 보입니다.</p>
@@ -170,11 +179,11 @@
         <button type="button" class="btn sm" id="inventoryReload">목록 새로고침</button>
       </div>
       <div class="tblwrap"><table aria-label="이관 광고 계정 목록">
-        <thead><tr><th>광고 계정 · ID</th><th>전산 업체</th><th>매칭 상태</th><th>업무 단계</th><th>담당</th><th>수집 결과</th><th>어제 광고비</th><th>비즈머니</th></tr></thead>
+        <thead><tr><th>광고 계정 · ID</th><th>전산 업체</th><th>매칭 상태</th><th>업무 단계</th><th>담당</th><th>수집 결과</th><th>확인된 실적 · 기간</th><th>비즈머니 · 확인 시각</th><th>관제 관리</th></tr></thead>
         <tbody id="inventoryRows"></tbody>
       </table></div>
       <p class="ps" id="inventoryNote">전산에 번호를 입력할 곳: 광고주 관리 → 업체 계정 정보 → 네이버 관제용 광고 계정 ID. 기존 API 고객 ID나 비밀키는 바꾸지 않습니다.</p>
-      <p class="ps">수집 대기: 오늘 아직 수집하지 않은 계정 · 재시도 대기: 수집을 시도했지만 완료하지 못한 계정입니다. 아침 점검의 처리 수와 전체 이관 계정의 수집 완료 수는 다릅니다.</p>
+      <p class="ps">실관리 4단계는 일일 점검, 그 외·수동 제외 계정은 일요일에 완료된 최근 7일을 점검합니다. 수집 대기는 아직 조회 전, 재시도 대기는 조회를 완료하지 못한 상태입니다. 이전 성공값은 표시된 실적 기간의 값이며 현재 상태를 뜻하지 않습니다. 비즈머니는 확인 시각의 잔액으로, 증감만으로 충전을 판단하지 않습니다.</p>
     </div>
   </section>
 
@@ -222,5 +231,19 @@
 </div></div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="modal" id="m-management" role="dialog" aria-modal="true" aria-labelledby="managementTitle"><div class="box">
+  <h3 id="managementTitle">관제 관리 변경</h3>
+  <p class="sub" id="managementDescription"></p>
+  <p class="hint">전산 단계나 네이버 광고를 바꾸지 않습니다. 포함하면 일일 점검, 제외하면 일요일 7일 점검 대상이 됩니다. 단계가 바뀌면 기존 선택은 다시 확인합니다.</p>
+  <div class="fg"><label for="managementReason">변경 사유 (필수)</label><input type="text" id="managementReason" maxlength="200" autocomplete="off" placeholder="예: 광고주 확인 후 휴면 계정 제외"></div>
+  <div class="foot"><button type="button" class="btn" data-close>취소</button><button type="button" class="btn blue" id="managementSave">저장</button></div>
+</div></div>
+<div class="modal" id="m-report-review" role="dialog" aria-modal="true" aria-labelledby="reviewTitle"><div class="box">
+  <h3 id="reviewTitle">보고서 검토</h3>
+  <p class="sub" id="reviewDescription"></p>
+  <p class="hint">담당 검토 기록만 남깁니다. 광고주에게 게시하거나 외부로 전송하지 않습니다.</p>
+  <div class="fg"><label for="reviewNote">검토 메모 (필수)</label><input type="text" id="reviewNote" maxlength="200" autocomplete="off" placeholder="예: 보고 기간·실적·누락 여부 확인"></div>
+  <div class="foot"><button type="button" class="btn" data-close>취소</button><button type="button" class="btn blue" id="reviewSave">검토 저장</button></div>
+</div></div>
 </body>
 </html>

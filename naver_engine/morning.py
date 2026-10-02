@@ -289,8 +289,11 @@ def _campaign_infos(raw: Sequence[Mapping], cid: int) -> Optional[Tuple[C.Campai
                 or any(type(x) is not bool for x in flags):
             return None
         end = c.get("periodEndDt")
+        reason = c.get("statusReason")
+        if reason is not None and not isinstance(reason, str):
+            return None
         out.append(C.CampaignInfo(ccid, tp, status, lock, flags[0], flags[1],
-                                  end if isinstance(end, str) else None, flags[2]))
+                                  end if isinstance(end, str) else None, flags[2], status_reason=reason))
     return tuple(out)
 
 
@@ -445,7 +448,7 @@ def account_input(cid: int, r: _Reads, today: date, th: Thresholds) -> Tuple[C.A
         w = [camp(c.campaign_id, d, "impCnt") for d in week]
         infos.append(C.CampaignInfo(c.campaign_id, c.tp, c.status, c.user_lock, c.del_flag, c.use_period,
                                     c.period_end, c.shared_budget_lock, camp(c.campaign_id, yday, "impCnt"),
-                                    None if any(v is None for v in w) else int(sum(w))))
+                                    None if any(v is None for v in w) else int(sum(w)), status_reason=c.status_reason))
     last = yday if not late else (None if through is None else min(through, yday - timedelta(days=1)))
     avg = None
     if last is not None:

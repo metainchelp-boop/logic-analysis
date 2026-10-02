@@ -181,7 +181,7 @@ class MigrationTest(Base):
 
     def test_version_is_nine(self):
         # 2026-10-02 명세: 기존 계약 이력을 보존하면서 독립 계정×일 원천 수집 표를 더한 판이다.
-        self.assertEqual(S.SCHEMA_VERSION, 9)   # 월간 원천 표 추가 후에도 기존 표·행을 보존한다.
+        self.assertEqual(S.SCHEMA_VERSION, 10)   # 실관리 수집 원장 추가 후에도 기존 표·행을 보존한다.
 
 
 # ── 목록 급감 브레이크 — 가망 ──────────────────────────────────────────

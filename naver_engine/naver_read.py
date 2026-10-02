@@ -70,6 +70,10 @@ _PATHS = (
     re.compile(r"/billing/bizmoney"),
     re.compile(r"/stats"),
     re.compile(r"/ncc/channels"),
+    re.compile(r"/ncc/adgroups"),
+    re.compile(r"/ncc/ads"),
+    re.compile(r"/ncc/keywords"),
+    re.compile(r"/ncc/ad-extensions"),
 )
 _CYCLE = re.compile(r"[0-9]{12}")
 # 통계는 당분간 **캠페인 번호만** — 광고그룹·키워드 번호는 캠페인 종류가 섞이면 네이버가 400(11003)으로 거절한다.
@@ -433,6 +437,7 @@ class NaverReader:
         self._rng = rng if rng is not None else random.Random()
         self._max_calls = max_calls
         self.calls = 0
+        self._called_customers = set()
         self.pauses = 0
         self._rate_limited = False
         self._last_sent: Optional[float] = None
@@ -446,6 +451,11 @@ class NaverReader:
     def rate_limited(self) -> bool:
         """이 읽기 객체가 RATE 응답을 겪었는지. 추가 작업 생략용이며 재시도 정책은 바꾸지 않는다."""
         return self._rate_limited
+
+    @property
+    def called_customers(self) -> frozenset:
+        """이번 읽기 객체에서 실제 요청 예산을 쓴 계정. 서로 다른 수집기의 중복 예산 방지용."""
+        return frozenset(self._called_customers)
 
     # 손잡이
     def manager_handle(self) -> H.ManagerHandle:
@@ -497,6 +507,7 @@ class NaverReader:
         if type(ah) is H.InventoryHandle:
             H.require_inventory(ah, self._clock.now())
         self.calls += 1
+        self._called_customers.add(customer_id)
         ts = str(self._clock.epoch_ms())
         headers = {
             "X-Timestamp": ts,
@@ -730,6 +741,57 @@ class NaverReader:
             if not isinstance(kept.get(lock), bool):
                 raise NaverApiError(KIND_BAD_RESPONSE, "/billing/bizmoney", 200, None, h.customer_id, "잠금 모름")
         return kept
+
+    def get_structure_page(self, ah, entity, parent_id=None, *, page_token=None):
+        """상태 사유의 원천만 읽는다. 문구·URL·입찰가·개인정보는 보관하지 않는다.
+
+        공식 목록 명세의 그룹/키워드는 NEXT 페이지를 끝까지 이어야 완료이다.
+        다른 목록은 배열 전체 응답이며 임의 페이지 추측을 하지 않는다.
+        """
+        specs = {
+            "adgroup": ("/ncc/adgroups", "nccAdgroupId", "nccCampaignId", True),
+            "ad": ("/ncc/ads", "nccAdId", "nccAdgroupId", False),
+            "keyword": ("/ncc/keywords", "nccKeywordId", "nccAdgroupId", True),
+            "ad_extension": ("/ncc/ad-extensions", "nccAdExtensionId", "ownerId", False),
+            "business_channel": ("/ncc/channels", "nccBusinessChannelId", None, False),
+        }
+        if entity not in specs:
+            raise ValueError("허용하지 않은 구조 계층입니다")
+        path, id_key, parent_key, paged = specs[entity]
+        valid_id = lambda v: isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", v)
+        if ((parent_key and not valid_id(parent_id)) or (not parent_key and parent_id is not None)
+                or (page_token is not None and (not paged or not valid_id(page_token)))):
+            raise ValueError("구조 계층의 부모 또는 페이지 번호가 잘못되었습니다")
+        h = self._account(ah, (H.PURPOSE_INVENTORY,))
+        params = {parent_key: parent_id} if parent_key else {}
+        if paged:
+            params.update(recordSize=PAGE_SIZE, selector="NEXT")
+            if page_token is not None:
+                params["baseSearchId"] = page_token
+        body = self._request(h.customer_id, path, params, ah=h)
+        if not isinstance(body, list) or (paged and len(body) > PAGE_SIZE):
+            raise NaverApiError(KIND_BAD_RESPONSE, path, 200, customer=h.customer_id, detail="목록 모양 이상")
+        allowed = {id_key, "customerId", "status", "statusReason", "userLock", "inspectStatus",
+                   "pcInspectStatus", "mobileInspectStatus", "pcChannelId", "mobileChannelId", "enable"}
+        if parent_key:
+            allowed.add(parent_key)
+        out, seen = [], set()
+        for row in body:
+            if not isinstance(row, Mapping) or not valid_id(row.get(id_key)):
+                raise NaverApiError(KIND_BAD_RESPONSE, path, 200, customer=h.customer_id, detail="구조 번호 없음")
+            self._same_customer(row.get("customerId"), h, path)
+            if parent_key and row.get(parent_key) != parent_id:
+                raise NaverApiError(KIND_MISMATCH, path, 200, customer=h.customer_id, detail="부모 번호 다름")
+            rid = row[id_key]
+            if rid in seen or rid == page_token:
+                raise NaverApiError(KIND_BAD_RESPONSE, path, 200, customer=h.customer_id, detail="구조 번호 중복")
+            seen.add(rid)
+            kept = {key: value for key, value in row.items() if key in allowed}
+            for key in ("status", "statusReason", "inspectStatus", "pcInspectStatus", "mobileInspectStatus"):
+                if kept.get(key) is not None and (not isinstance(kept[key], str) or len(kept[key]) > 160):
+                    raise NaverApiError(KIND_BAD_RESPONSE, path, 200, customer=h.customer_id, detail="상태 코드 모양 이상")
+            out.append(kept)
+        return out, out[-1][id_key] if paged and len(out) == PAGE_SIZE else None
 
     def get_stats_summary(self, ah, ids: Iterable[str], since: date, until: date,
                           fields: Sequence[str] = ("impCnt", "clkCnt", "salesAmt", "ccnt")) -> StatsResult:

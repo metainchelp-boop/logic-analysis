@@ -68,6 +68,7 @@ class CampaignInfo:
     shared_budget_lock: bool = False
     yday_imp: Optional[int] = None        # 어제 노출 · None = 모름
     week_imp: Optional[int] = None        # 최근 7일(D-7~D-1) 노출 합계 · None = 모름
+    status_reason: Optional[str] = None   # 네이버 원문. 보존·표시용이며 검증되지 않은 자동 판정은 하지 않는다.
 
 
 @dataclass(frozen=True)

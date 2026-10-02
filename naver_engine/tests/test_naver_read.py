@@ -142,7 +142,7 @@ class GateTest(Base):
         self.assertEqual(self.naver.calls, [], "만든 뒤 호스트 검사가 막아야 한다")
 
     def test_path_not_allowed(self):
-        for p in ("/ncc/keywords", "/ncc/adgroups", "/ncc/campaigns/abc", "/manager-accounts/x/child-ad-accounts",
+        for p in ("/ncc/keywords/abc", "/ncc/adgroups/abc", "/ncc/campaigns/abc", "/manager-accounts/x/child-ad-accounts",
                   "/billing/bizmoney/histories/charge", "//evil.example/stats", "/stats/../ncc/keywords"):
             self.expect(R.PathForbidden, self.reader._gate, "GET", p, None, ACC)
         self.assertEqual(self.naver.calls, [])

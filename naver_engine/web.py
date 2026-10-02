@@ -46,6 +46,7 @@ from . import sync as Y
 from . import views as W
 from . import inventory as INV
 from . import dashboard as DASH
+from . import management_store as MS
 
 log = logging.getLogger("naver_engine.web")
 
@@ -53,10 +54,11 @@ PREFIX = "/api/naver-auto"
 GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일은 나가는 요청을 만들지 않는다)
 # 제한판은 새 경로가 추가돼도 자동으로 열지 않는다. 로그인/갱신은 기술 쓰기만 허용한다.
 _VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/dashboard", "/links/pending", "/ended", "/unlinked",
-                               "/bell", "/settings", "/health"})
+                               "/bell", "/settings", "/health", "/reports"})
 _VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
 _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/request"),
-                                (GET, "/collection/status")})
+                                (GET, "/collection/status"), (POST, "/management/update"),
+                                (POST, "/management/collect"), (POST, "/reports/review")})
 _VERIFICATION_CLIENT = re.compile(r"/clients/[0-9]{1,18}")
 BODY_MAX = 64 * 1024                 # ③ 중계 상한과 같다(S12)
 QUERY_MAX = 2048
@@ -503,7 +505,7 @@ class App:
         out["bell_unread"] = W.bell(v.store, v.idx, now)["unread"]
         if self._owner_verification:
             out["owner_verification"] = True
-        out["verified_linking"] = self._verified_linking and v.scope.kind == SC.ALL and not v.claims.narrowed
+        out["verified_linking"] = self._verified_linking and v.scope.kind in (SC.ALL, SC.MINE)
         return 200, out
 
     def _h_accounts(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
@@ -517,6 +519,120 @@ class App:
         if set(req.query) - {"selection"}:
             raise HttpError(400, "bad-query")
         return 200, DASH.board(v.ctx(now), v.store, v.scope, req.query.get("selection", "all"))
+
+    def _fresh_for_write(self, v: Viewer, store, now: datetime) -> Viewer:
+        """쓰기 큐 실행 시점의 신원·조직을 다시 읽는다. 요청 당시 scope를 재사용하지 않는다."""
+        if now >= v.claims.expires_at:
+            raise HttpError(401, "token-expired")
+        org = W.load_org(store)
+        scope = SC.narrowed_scope_of(org, v.idx) if v.claims.narrowed else SC.scope_of(org, v.idx)
+        if scope.kind == SC.NONE:
+            raise HttpError(401, "no-scope")
+        if not O.allows_raising(Y.org_freshness(store, now)):
+            raise HttpError(409, "org-stale")
+        return Viewer(v.idx, scope, v.claims, store, org)
+
+    def _management_account(self, v: Viewer, now: datetime, ad_account_no: str, *, allow_unmatched=False):
+        rows = [a for a in v.store.accounts() if a["present"] == 1
+                and a["ad_account_no"] is not None and str(a["ad_account_no"]) == ad_account_no]
+        if len(rows) != 1:
+            raise SC.ClientNotVisible()
+        cid = rows[0]["customer_id"]
+        return cid, MS.require_action(v.store, now, v.idx, cid, allow_unmatched=allow_unmatched)
+
+    def _control_write(self, v: Viewer, now: datetime, action: str, fn):
+        try:
+            result = self._write(fn)
+        except (SC.ScopeError, HttpError, S.StoreRefused):
+            self._audit(v.idx, action, "board", None, "denied", now, required=False)
+            raise
+        self._audit(v.idx, action, "board", None, "ok", now, required=False)
+        return result
+
+    def _h_management_update(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        body = _body(req, frozenset({"ad_account_no", "stage_revision", "included", "reason"}),
+                     frozenset({"ad_account_no", "stage_revision", "included", "reason"}))
+        ad_no = _text(body["ad_account_no"], 15)
+        revision, reason = _text(body["stage_revision"], 200), _text(body["reason"], NOTE_MAX)
+        if not re.fullmatch(r"[1-9][0-9]{0,14}", ad_no) or type(body["included"]) is not bool:
+            raise HttpError(400, "bad-body")
+        def update(st):
+            current = self._now()
+            fresh = self._fresh_for_write(v, st, current)
+            cid, row = self._management_account(fresh, current, ad_no)
+            if row["stage_revision"] != revision:
+                raise HttpError(409, "stage-changed")
+            return st.record_management_override(cid, revision, body["included"], v.idx, current, reason)
+        result = self._control_write(v, now, "management-update", update)
+        return 200, {"updated": True, "stage_revision": result["stage_revision"], "included": body["included"]}
+
+    def _h_management_collect(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        body = _body(req, frozenset({"ad_account_no"}), frozenset({"ad_account_no"}))
+        ad_no = _text(body["ad_account_no"], 15)
+        if not re.fullmatch(r"[1-9][0-9]{0,14}", ad_no):
+            raise HttpError(400, "bad-body")
+        def collect(st):
+            current = self._now()
+            fresh = self._fresh_for_write(v, st, current)
+            cid, _row = self._management_account(fresh, current, ad_no, allow_unmatched=True)
+            return st.performance_manual_request(cid, v.idx, current)
+        self._control_write(v, now, "management-collect", collect)
+        return 200, {"status": "accepted"}
+
+    def _report_context(self, v: Viewer, now: datetime):
+        """단계별 구 목록에 없는 업체도 현재 전체 전산 목록의 담당으로 대조한다."""
+        ctx = v.ctx(now)
+        owns = dict(ctx.owns)
+        names = {pid: row["name"] for pid, row in ctx.prospects.items()}
+        catalog, state = INV.catalog_status(v.store, now)
+        if state != "accepted":
+            if v.scope.kind != SC.ALL:
+                raise HttpError(503, "catalog-stale")
+            return ctx, owns, names, False
+        for company in catalog["items"]:
+            pid = company["possibility_id"]
+            known = company["stage_known"] and not company["stage_hidden"]
+            owns[pid] = SC.ownership_for_client(ctx.org, pid, pid, SC.MATCH_PID if known else SC.MATCH_UNKNOWN)
+            names[pid] = company["company_name"]
+        return ctx, owns, names, True
+
+    def _h_reports(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if set(req.query) - {"selection"}:
+            raise HttpError(400, "bad-query")
+        ctx, owns, names, catalog_current = self._report_context(v, now)
+        visible = SC.clients_in(ctx.org, v.scope, owns, req.query.get("selection", "all"))
+        rows = []
+        for report in v.store.report_snapshots():
+            pid = report["possibility_id"]
+            if pid not in visible:
+                continue
+            own = owns[pid]
+            rows.append({**report, "company_name": names[pid], "owner": W._owner(ctx, own),
+                         "can_review": catalog_current and report["status"] == "ready" and O.allows_raising(ctx.freshness)
+                         and SC.ACT_APPROVE in SC.allowed_actions(ctx.org, v.scope, own)})
+        return 200, {"rows": rows, "schedule": {"timezone": "Asia/Seoul", "weekly": "월요일 10:00",
+                                                  "monthly": "매월 3일 10:00"}}
+
+    def _h_report_review(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        body = _body(req, frozenset({"report_id", "decision", "note"}), frozenset({"report_id", "decision", "note"}))
+        report_id, note = _pos(body["report_id"]), _text(body["note"], NOTE_MAX)
+        if body["decision"] not in ("approved", "held"):
+            raise HttpError(400, "bad-body")
+        def review(st):
+            current = self._now()
+            fresh = self._fresh_for_write(v, st, current)
+            report = next((row for row in st.report_snapshots() if row["report_id"] == report_id), None)
+            if report is None:
+                raise SC.ClientNotVisible()
+            ctx, owns, _names, catalog_current = self._report_context(fresh, current)
+            if not catalog_current:
+                raise HttpError(409, "catalog-stale")
+            SC.require_client(ctx.org, fresh.scope, owns, report["possibility_id"], SC.ACT_APPROVE)
+            if body["decision"] == "approved" and report["status"] != "ready":
+                raise HttpError(409, "report-incomplete")
+            return st.record_report_review(report_id, v.idx, current, body["decision"], note)
+        self._control_write(v, now, "report-review", review)
+        return 200, {"report_id": report_id, "review_status": body["decision"]}
 
     def _h_board(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         sel = req.query.get("selection", "all")
@@ -546,11 +662,14 @@ class App:
 
     def _verified_row_allowed(self, v: Viewer, row, now: datetime) -> bool:
         ctx = v.ctx(now)
-        if v.scope.kind != SC.ALL or v.claims.narrowed or row is None or not ctx.pairing_today:
+        if v.scope.kind not in (SC.ALL, SC.MINE) or row is None or not ctx.pairing_today:
             return False
         if row["state"] != S.PAIR_AUTO and not (row["state"] == S.PAIR_BLOCKED and row["code"] == "name-different"):
             return False
         pid, cid = row["possibility_id"], row["customer_id"]
+        own = ctx.owns.get(pid)
+        if own is None or SC.ACT_CONFIRM_LINK not in SC.allowed_actions(ctx.org, v.scope, own):
+            return False
         a, p = ctx.accounts.get(cid), ctx.prospects.get(pid)
         if not a or a["present"] != 1 or not p or p["present"] != 1 or p["stage_conflict"] or p["end_unreadable"]:
             return False
@@ -712,16 +831,11 @@ class App:
 
     def _h_links_confirm(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         if self._owner_verification and self._verified_linking:
-            self._ceo_only(v, "link-confirm", "link", now)
             body = _body(req, frozenset({"refs", "ad_account_no"}), frozenset({"refs"}))
             # 저장 큐 차례에 최신 조직/계정/계약/짝을 다시 읽는다. 앞 요청의 읽기 스냅샷을 쓰지 않는다.
             def confirm(st):
                 current = self._now()
-                org = W.load_org(st)
-                scope = SC.narrowed_scope_of(org, v.idx) if v.claims.narrowed else SC.scope_of(org, v.idx)
-                if scope.kind != SC.ALL:
-                    raise HttpError(403, "ceo-only")
-                fresh = Viewer(v.idx, scope, v.claims, st, org)
+                fresh = self._fresh_for_write(v, st, current)
                 rows = self._link_rows(fresh, current, body["refs"], holders_checked=True)
                 if not O.allows_raising(fresh.ctx(current).freshness):
                     raise HttpError(409, "org-stale")
@@ -853,6 +967,10 @@ ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a i
     (GET, r"/board", App._h_board, True),
     (GET, r"/accounts", App._h_accounts, True),
     (GET, r"/dashboard", App._h_dashboard, True),
+    (POST, r"/management/update", App._h_management_update, True),
+    (POST, r"/management/collect", App._h_management_collect, True),
+    (GET, r"/reports", App._h_reports, True),
+    (POST, r"/reports/review", App._h_report_review, True),
     (GET, r"/clients/(?P<pid>[0-9]{1,18})", App._h_client, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/ack", App._h_issue_ack, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/resolve", App._h_issue_resolve, True),

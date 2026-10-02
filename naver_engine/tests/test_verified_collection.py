@@ -37,7 +37,7 @@ class VerifiedCollectionTest(TW.WebBase):
 
     def test_owner_can_request_but_staff_team_and_narrowed_cannot(self):
         self.assertTrue(self.get('/me', 0)[1]['verified_linking'])
-        self.assertFalse(self.get('/me', 100)[1]['verified_linking'])
+        self.assertTrue(self.get('/me', 100)[1]['verified_linking'])
         for idx in (1, 100):
             self.assertEqual(self.post('/collection/request', idx, {})[0], 403)
             self.assertEqual(self.get('/collection/status', idx)[0], 403)
@@ -52,7 +52,7 @@ class VerifiedCollectionTest(TW.WebBase):
         candidate = next(r for r in rows if r['state'] == TW.S.PAIR_CANDIDATE)
         self.assertTrue(auto['can_confirm'])
         self.assertFalse(candidate['can_confirm'])
-        self.assertEqual(self.post('/links/confirm', 100, {'refs': [auto['ref']]})[0], 403)
+        self.assertEqual(self.post('/links/confirm', 100, {'refs': [auto['ref']]})[0], 404)
         before = self.st.link_decisions()
         self.assertEqual(self.post('/links/confirm', 0, {'refs': [candidate['ref']]})[0], 409)
         self.assertEqual(before, self.st.link_decisions())

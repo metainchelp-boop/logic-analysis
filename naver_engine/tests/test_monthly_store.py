@@ -135,7 +135,7 @@ class MonthlyStoreTest(unittest.TestCase):
             raw.execute("DROP TABLE naver_auto_monthly_check")
             raw.execute("UPDATE naver_auto_meta SET value = '8' WHERE key = 'schema_version'")
         self.store = S.open_writer(self.path, clock=self.clock.now)
-        self.assertEqual(self.store.meta("schema_version"), "9")
+        self.assertEqual(self.store.meta("schema_version"), str(S.SCHEMA_VERSION))
         self.assertEqual(self.store.inventory_checks_on(self.clock.now().date()), prior)
         self.assertEqual(self.rows(), {})
         self.assertEqual(self.collect().counts, {"ok": 1})
@@ -148,7 +148,7 @@ class MonthlyStoreTest(unittest.TestCase):
         counts = B.restore_archive(result.local_path, restored, S.inspect_snapshot)
         self.assertEqual(counts["naver_auto_monthly_check"], 1)
         with S.open_reader(str(restored)) as reader:
-            self.assertEqual(reader.meta("schema_version"), "9")
+            self.assertEqual(reader.meta("schema_version"), str(S.SCHEMA_VERSION))
             self.assertEqual(reader.monthly_checks_on(*M.window(self.clock.now().date())), self.rows())
 
 

@@ -28,7 +28,8 @@ class OwnerScreenCopyTest(unittest.TestCase):
         self.assertIn('알림 전송·자동입찰은 꺼져 있습니다', source)
         self.assertIn("readOnly() ?", source)
         notice = (PAGE / 'index.html').read_text()
-        self.assertIn('읽기 전용 검증판입니다. 기존 권한 범위 안의 자료만 보이며', notice)
+        self.assertIn('기존 담당 권한 범위 안의 자료만 보입니다. 서버에서 허용한', notice)
+        self.assertIn('네이버 광고 변경·자동입찰·외부 전송은 꺼져 있습니다', notice)
         self.assertNotIn('대표 전용 읽기 검증판', notice)
 
 

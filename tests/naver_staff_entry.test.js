@@ -150,7 +150,7 @@ test('암호화 작업이 늦게 완료되어도 실제 준비 메시지와 화�
   assert.equal(run.messages[0].data.type, 'METAINC_SSO_READY');
   run.message();
   await until(() => run.elements.get('s-reports').classList.contains('on'));
-  assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me']);
+  assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me', '/api/naver-auto/reports?selection=all']);
 });
 
 test('암호화가 끝나지 않으면 대기 제한 시간에 실패하며 무한히 기다리지 않는다', { timeout: 1000 }, async () => {
@@ -263,9 +263,9 @@ test('허용 출처의 정상 로그인은 실제 PKCE와 한 번의 교환을 �
       assert.match(payload.codeVerifier, /^[A-Za-z0-9_-]{43}$/);
       const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(payload.codeVerifier));
       assert.equal(Buffer.from(digest).toString('base64url'), run.messages[0].data.codeChallenge);
-      assert.deepEqual(run.trace, ['clean-url', 'ready', 'fetch', 'fetch']);
+      assert.deepEqual(run.trace, ['clean-url', 'ready', 'fetch', 'fetch', 'fetch']);
       assert.equal(run.location.search, '');
-      assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me']);
+      assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me', '/api/naver-auto/reports?selection=all']);
       assert.equal(run.requests[1].init.headers.Authorization, 'Bearer synthetic-session-token');
       for (const request of run.requests) {
         assert.equal(request.init.credentials, 'omit');
@@ -281,7 +281,8 @@ test('허용 출처의 정상 로그인은 실제 PKCE와 한 번의 교환을 �
       assert.ok(!saved.includes(payload.codeVerifier));
       await assert.rejects(run.window.__metaincSso.consume(), /이미 사용한/);
       run.message({ origin });
-      assert.equal(run.requests.length, 2);
+      assert.equal(run.requests.length, 3);
+      assert.equal(run.requests.filter(request => request.url === '/api/naver-auto/session').length, 1);
     });
   }
 });
