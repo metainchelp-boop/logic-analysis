@@ -6,7 +6,7 @@ from threading import Event, Thread
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
-from naver_engine import links as L, inventory as IC, naver_read as N, store as S
+from naver_engine import links as L, inventory as IC, naver_read as N, store as S, morning as M
 from naver_engine.tests.fake_naver import FakeClock, FakeNaver
 from naver_engine.tests.test_morning import A as CUSTOMER, creds
 from naver_engine.tests.test_performance_reads import MemoryPerformance
@@ -109,6 +109,104 @@ class SchedulerCadenceTests(TestCase):
         task.tick()
         self.assertEqual(len(self.readers), 2)
         self.assertFalse(self.readers[1].rate_limited)
+
+    def automatic_naver_stages(self):
+        """예약 연결만 분리한다. 단계 내부 HTTP/429 판정은 실제 reader를 사용한다."""
+        stages = []
+        self.store.thresholds = lambda: None
+        self.http.route(r"/manager-accounts", lambda call: (200, {"content": [], "totalElements": 0}))
+        def read(name, reader):
+            stages.append(name)
+            reader.list_manager_accounts(reader.manager_handle())
+        self.context.enter_context(patch.object(L, "accounts_due", return_value=True))
+        self.context.enter_context(patch.object(L, "sync_accounts", side_effect=lambda reader, *a: read("accounts", reader)))
+        self.context.enter_context(patch.object(M, "morning_due", return_value=True))
+        self.context.enter_context(patch.object(M, "readiness", return_value=None))
+        self.context.enter_context(patch.object(M, "run_morning", side_effect=lambda reader, *a, **kw: read("morning", reader)))
+        self.context.enter_context(patch("naver_runtime.scheduler._ManagedMorningStore", side_effect=lambda store, now: store))
+        return stages
+
+    def test_inventory_rate_limit_blocks_same_tick_morning_but_not_reports(self):
+        self.performance_jobs()
+        stages = self.automatic_naver_stages()
+        self.http.script("/ncc/campaigns", *[(429, {"code": 429})]*3)
+        task = self.scheduler(inventory_enabled=True, morning_enabled=True)
+        self.assertEqual(task.tick()["state"], "ok")
+        self.assertEqual(stages, ["accounts"])
+        self.assertEqual(len(self.readers), 2)
+        self.assertEqual(len(self.reports), 1)
+        self.clock.advance(299)
+        task.tick()
+        self.assertEqual(len(self.readers), 2)
+        self.assertEqual(len(self.reports), 2)
+        self.clock.advance(1)
+        task.tick()
+        self.assertEqual(stages, ["accounts", "accounts", "morning"])
+        self.assertEqual(len(self.readers), 5)
+
+    def test_accounts_rate_limit_blocks_later_naver_stages_even_after_retry_success(self):
+        self.performance_jobs()
+        stages = self.automatic_naver_stages()
+        self.http.script("/manager-accounts", (429, {"code": 429}))
+        task = self.scheduler(inventory_enabled=True, morning_enabled=True)
+        self.assertEqual(task.tick()["state"], "ok")
+        self.assertTrue(self.readers[0].rate_limited)
+        self.assertEqual(stages, ["accounts"])
+        self.assertEqual(len(self.readers), 1)
+        self.assertEqual(len(self.reports), 1)
+        self.clock.advance(299)
+        task.tick()
+        self.assertEqual(len(self.readers), 1)
+        self.clock.advance(1)
+        task.tick()
+        self.assertEqual(stages, ["accounts", "accounts", "morning"])
+        self.assertEqual(len(self.readers), 4)
+
+    def test_morning_rate_limit_blocks_next_accounts_and_inventory_until_300_seconds(self):
+        self.performance_jobs()
+        stages = self.automatic_naver_stages()
+        self.http.script("/manager-accounts", (200, {"content": [], "totalElements": 0}), (429, {"code": 429}))
+        task = self.scheduler(inventory_enabled=True, morning_enabled=True)
+        self.assertEqual(task.tick()["state"], "ok")
+        self.assertEqual(stages, ["accounts", "morning"])
+        self.assertEqual(len(self.readers), 3)
+        self.assertTrue(self.readers[-1].rate_limited)
+        self.clock.advance(299)
+        task.tick()
+        self.assertEqual(len(self.readers), 3)
+        self.assertEqual(len(self.reports), 2)
+        self.clock.advance(1)
+        task.tick()
+        self.assertEqual(stages, ["accounts", "morning"]*2)
+        self.assertEqual(len(self.readers), 6)
+
+    def test_normal_inventory_pause_does_not_starve_morning(self):
+        self.performance_jobs()
+        stages = self.automatic_naver_stages()
+        task = self.scheduler(inventory_enabled=True, morning_enabled=True)
+        for _ in range(2):
+            self.assertEqual(task.tick()["state"], "ok")
+            self.clock.advance(60)
+        self.assertEqual(stages, ["accounts", "morning"]*2)
+        self.assertEqual(len(self.readers), 6)
+        self.assertTrue(all(not reader.rate_limited for reader in self.readers))
+
+    def test_morning_only_rate_pause_survives_a_raised_stage_error(self):
+        self.automatic_naver_stages()
+        self.http.script("/manager-accounts", (429, {"code": 429}))
+        def interrupted(reader, *args, **kwargs):
+            reader.list_manager_accounts(reader.manager_handle())
+            raise S.StoreError("합성 단계 정리 오류")
+        task = self.scheduler(morning_enabled=True)
+        with patch.object(M, "run_morning", side_effect=interrupted), \
+             self.assertLogs("naver_runtime.scheduler", level="ERROR"):
+            self.assertEqual(task.tick(), {"state": "failed", "errors": ["morning"]})
+        self.clock.advance(299)
+        task.tick()
+        self.assertEqual(len(self.readers), 1)
+        self.clock.advance(1)
+        self.assertEqual(task.tick()["state"], "ok")
+        self.assertEqual(len(self.readers), 2)
 
     def test_runtime_wait_uses_scheduler_deadline_with_its_monotonic_clock(self):
         self.performance_jobs()

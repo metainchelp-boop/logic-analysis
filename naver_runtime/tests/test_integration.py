@@ -74,6 +74,7 @@ class LinuxIntegrationTest(unittest.TestCase):
                                        "NAVER_ENGINE_SYNC_ENABLED": "true", "NAVER_ENGINE_LINKS_ENABLED": "true",
                                        "NAVER_ENGINE_MORNING_ENABLED": "true", "NAVER_ENGINE_ALERTS_ENABLED": "true"})
                 scheduler = Scheduler(cfg, writer.proxy, clock=fixture.fc.now, erp_factory=erp,
+                                      monotonic_clock=fixture.fc.monotonic,
                                       naver_factory=fixture.reader, alert_factory=lambda: TEA.poster(poster))
                 first = scheduler.tick()
                 self.assertEqual(first["state"], "ok", first)
@@ -81,7 +82,7 @@ class LinuxIntegrationTest(unittest.TestCase):
                 runs = writer.proxy.runs_on(TM.TODAY)
                 self.assertEqual([r["status"] for r in runs], [S.RUN_DONE])
                 self.assertEqual(id_reads, [])
-                fixture.fc._now = TM.T0.replace(hour=8, minute=0)
+                fixture.fc.advance((TM.T0.replace(hour=8, minute=0)-fixture.fc.now()).total_seconds())
                 second = scheduler.tick()
                 self.assertEqual(second["state"], "ok", second)
                 self.assertEqual(id_reads, [fixture.fc.now()])

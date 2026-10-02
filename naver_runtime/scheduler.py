@@ -55,6 +55,7 @@ class Scheduler:
         self._last = {}
         self._next_steps = {}
         self._inventory_ready_at = 0.0
+        self._naver_rate_ready_at = 0.0
         self.last_tick = None
         self.last_errors = ()
         self._collection_lock = threading.Lock()
@@ -138,6 +139,8 @@ class Scheduler:
         due = last + interval if last is not None else now
         if name == "inventory":
             due = max(due, self._inventory_ready_at)
+        if name in ("accounts", "inventory", "morning"):
+            due = max(due, self._naver_rate_ready_at)
         self._next_steps[name] = due
         if now < due:
             return
@@ -163,6 +166,14 @@ class Scheduler:
             return 60.0
         return min(60.0, max(0.0, min(self._next_steps.values()) - self._monotonic()))
 
+    def _hold_naver_rate(self, reader):
+        """자동 네이버 단계만 429 휴식을 공유한다. 일반 수집 간격과는 별개다."""
+        if getattr(reader, "rate_limited", False) is True:
+            self._naver_rate_ready_at = max(self._naver_rate_ready_at, self._monotonic() + N.RATE_PAUSE)
+            for name in ("accounts", "inventory", "morning"):
+                if name in self._next_steps:
+                    self._next_steps[name] = max(self._next_steps[name], self._naver_rate_ready_at)
+
     def tick(self):
         if not self._lock.acquire(blocking=False):
             return {"state": "busy"}
@@ -182,7 +193,7 @@ class Scheduler:
                     self._step("stages", lambda: Y.sync_stages(self.erp_factory(), st, self.clock()))
             if c.links_enabled or c.inventory_enabled:
                 if L.accounts_due(st, self.clock()):
-                    self._step("accounts", lambda: L.sync_accounts(self.naver_factory(), st, self.clock()))
+                    self._step("accounts", self._accounts)
             if c.links_enabled:
                 if L.pairing_due(st, self.clock()):
                     self._step("pairing", lambda: L.pair_links(self.erp_factory(), st, self.clock()))
@@ -235,15 +246,25 @@ class Scheduler:
         at = Y._aware(state.get("at"))
         return at is None or at < start or at > now
 
+    def _accounts(self):
+        reader = self.naver_factory()
+        try:
+            return L.sync_accounts(reader, self.store, self.clock())
+        finally:
+            self._hold_naver_rate(reader)
+
     def _morning(self):
         reader = self.naver_factory()
-        if not self.config.inventory_enabled:
-            return M.run_morning(reader, self.store, self.clock, th=self.store.thresholds())
-        # 기존 경보/준비검사는 유지하되 상세 점검이 다음 성과 회차를 장시간 막지 않는다.
-        with reader.bounded_requests(max_calls=24, max_seconds=30):
-            return M.run_morning(reader,
-                _ManagedMorningStore(self.store, self.clock()) if self.config.inventory_enabled else self.store,
-                self.clock, th=self.store.thresholds())
+        try:
+            if not self.config.inventory_enabled:
+                return M.run_morning(reader, self.store, self.clock, th=self.store.thresholds())
+            # 기존 경보/준비검사는 유지하되 상세 점검이 다음 성과 회차를 장시간 막지 않는다.
+            with reader.bounded_requests(max_calls=24, max_seconds=30):
+                return M.run_morning(reader,
+                    _ManagedMorningStore(self.store, self.clock()) if self.config.inventory_enabled else self.store,
+                    self.clock, th=self.store.thresholds())
+        finally:
+            self._hold_naver_rate(reader)
 
     def _backup(self):
         if self.backup_job is None:
@@ -270,12 +291,11 @@ class Scheduler:
                     SR.run_structure(reader,self.store,self.clock,max_calls=min(6,calls_left),max_seconds=seconds_left,
                                      exclude_customers=reader.called_customers)
         finally:
-            if reader.rate_limited or reader.calls > before:
+            if reader.calls > before:
                 # 새 reader의 호출이 이전 회차 후반과 같은 연속 30초 창에 겹치지 않는다.
-                # 성과뿐 아니라 구조 단계의 429·예외 뒤에도 5분 휴식을 새 reader가 이어받는다.
-                pause = max(30, N.RATE_PAUSE) if reader.rate_limited else 30
-                self._inventory_ready_at = max(self._inventory_ready_at, self._monotonic() + pause)
+                self._inventory_ready_at = max(self._inventory_ready_at, self._monotonic() + 30)
                 self._next_steps["inventory"] = self._inventory_ready_at
+            self._hold_naver_rate(reader)
         # 개별 계정의 실패·재시도는 원장 경고로 남고, 원천 무효만 서비스 실패이다.
         if result.code in ("NOT_READY", "SOURCE_CHANGED"):
             self._errors.append("inventory")
