@@ -235,12 +235,18 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        # Only the summary page/read-side API are included; no collector or storage changes.
+        self.assertEqual(module.OLD_COMMIT, 'd6542c37d1b247801f3f10259b2098d14e7b6dc8')
+        self.assertEqual(module.TARGET_COMMIT, '367a03dcae3a4a3b9da6e6c56918a439b995a40e')
+        self.assertEqual(module.OLD_SOURCE_SHA256,
+                         '77a1eec35ad3de820f2f068a6a166f54b52656e876d0a65183601c6319f6fc3e')
+        # Exact git archive delta: top-level tests, docs and seal tooling are not bundled.
         self.assertEqual(module.CODE_PATHS, {
-            'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
-            'naver_engine/inventory.py', 'naver_engine/web.py'})
+            'backend/naver_page/app.js', 'backend/naver_page/sso-bootstrap.js',
+            'naver_engine/inventory_reads.py', 'naver_engine/naver_read.py', 'naver_engine/store.py'})
         self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/inventory_screen_browser.js', 'naver_engine/tests/test_inventory_summary.py'})
+            'naver_engine/tests/screen_browser.js', 'naver_engine/tests/test_inventory_fair_queue.py',
+            'naver_engine/tests/test_inventory_reads.py', 'naver_engine/tests/test_inventory_throughput.py',
+            'naver_engine/tests/test_inventory_zero_completion.py', 'naver_runtime/tests/test_main.py'})
 
     def scenario(self, failure=None, mode='apply'):
         code = load('naver_preview_code_upgrade')
@@ -258,7 +264,7 @@ class ContractTest(unittest.TestCase):
         def setup(root, release):
             infrastructure = {'Dockerfile.naver-engine': b'FROM fixture', 'Dockerfile.naver-relay': b'FROM fixture',
                 'backend/requirements.txt': b'fixture', 'naver_runtime/bootstrap.py': b'# unchanged bootstrap',
-                'naver_engine/store.py': b'SCHEMA_VERSION=8\n_SCHEMA=("CREATE TABLE fixture (id INTEGER)",)\ndef _migrate():\n    pass\n'}
+                'naver_engine/store.py': StoreScopeTest.SOURCE}
             infrastructure.update({name: b'new fixture compose' for name in
                 ('compose.naver-engine.yml','compose.naver-relay.yml','deploy/naver-engine-backup.override.yml')})
             for path in (root/'releases').iterdir():
@@ -451,11 +457,11 @@ class ContractTest(unittest.TestCase):
             for root in (old,new):
                 (root/'backend/naver_page').mkdir(parents=True)
                 (root/'backend/naver_page/app.js').write_bytes(b'old')
-                (root/'backend/naver_page/sso-bootstrap.js').write_bytes(b'unchanged')
+                (root/'backend/naver_page/index.html').write_bytes(b'unchanged')
             (new/'backend/naver_page/app.js').write_bytes(b'new')
-            added=new/'backend/naver_page/index.html';added.write_bytes(b'approved')
+            added=new/'backend/naver_page/sso-bootstrap.js';added.write_bytes(b'approved')
             module.compatible_code_scope(old,new,upgrade)
-            forbidden=new/'backend/naver_page/sso-bootstrap.js';forbidden.write_bytes(b'changed')
+            forbidden=new/'backend/naver_page/index.html';forbidden.write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                 module.compatible_code_scope(old,new,upgrade)
             forbidden.write_bytes(b'unchanged')
@@ -466,7 +472,7 @@ class ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_transfer_page_allows_only_exact_page_route_and_tests(self):
+    def test_staff_entry_reliability_allows_only_exact_runtime_and_test_paths(self):
         module=load('naver_preview_code_upgrade')
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -477,10 +483,11 @@ class ContractTest(unittest.TestCase):
                 for name in approved:
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
             for name in approved:
-                (new/name).write_bytes(b'approved page update')
+                (new/name).write_bytes(b'approved reliability update')
             module.compatible_code_scope(old,new,upgrade)
-            for name in ('naver_runtime/writer.py','naver_engine/store.py','naver_engine/inventory_reads.py',
-                         'naver_runtime/__main__.py','backend/app/naver_auto/scope.py'):
+            for name in ('naver_runtime/writer.py','naver_engine/inventory.py','naver_engine/web.py',
+                         'naver_runtime/__main__.py','backend/app/naver_auto/scope.py',
+                         'backend/naver_page/app.css','backend/naver_page/index.html'):
                 forbidden=new/name;forbidden.parent.mkdir(parents=True,exist_ok=True);forbidden.write_bytes(b'not approved')
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)
@@ -653,6 +660,95 @@ class ContractTest(unittest.TestCase):
             encode({'source':'x'*131072})
         with self.assertRaisesRegex(ValueError,'PREPARE_WIRE_SIZE'):
             encode({'source':random.Random(0).randbytes(60000).hex()})
+
+
+class StoreScopeTest(unittest.TestCase):
+    SOURCE = b'''SCHEMA_VERSION=8
+_SCHEMA=("CREATE TABLE fixture (id INTEGER)",)
+def _migrate():
+    pass
+class Store:
+    def inventory_work(self, now, limit=3):
+        return []
+    def record_inventory_progress(self, customer_id, snapshot_at, now, source):
+        self._need_writer()
+        return None
+    def _need_writer(self):
+        return True
+'''
+
+    def setUp(self):
+        self.code = load('naver_preview_code_upgrade')
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.old = Path(self.temporary.name).resolve()/'old'
+        self.new = Path(self.temporary.name).resolve()/'new'
+        self.upgrade = Mock()
+        self.upgrade.read_file.side_effect = lambda path, **kwargs: Path(path).read_bytes()
+        for root in (self.old, self.new):
+            for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
+                         'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
+                         'Dockerfile.naver-relay', 'backend/requirements.txt', 'naver_runtime/bootstrap.py'):
+                path = root/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'unchanged')
+            path = root/'naver_engine/store.py'
+            path.parent.mkdir(parents=True)
+            path.write_bytes(self.SOURCE)
+            for name in ('engine', 'relay'):
+                body = ('image: '+self.code.OLD_COMMIT).encode()
+                if root == self.new:
+                    body = self.code.target_override(body, name)
+                (root/('preview-'+name+'.override.yml')).write_bytes(body)
+
+    def test_approved_two_method_bodies_pass_without_changing_the_storage_contract(self):
+        source = self.SOURCE.replace(b'return []', b'return [42]')
+        source = source.replace(b'return None', b'return source.get("zero_ids", [])')
+        (self.new/'naver_engine/store.py').write_bytes(source)
+        self.code.compatible_source(self.old, self.new, self.upgrade)
+
+    def test_schema_version_sql_and_migration_changes_refuse_even_with_approved_methods(self):
+        for before, after in ((b'SCHEMA_VERSION=8', b'SCHEMA_VERSION=9'),
+                              (b'id INTEGER', b'id TEXT'),
+                              (b'    pass', b'    return 1')):
+            source = self.SOURCE.replace(before, after)
+            self.assertNotEqual(source, self.SOURCE)
+            (self.new/'naver_engine/store.py').write_bytes(source)
+            with self.subTest(change=before), self.assertRaisesRegex(ValueError, 'CODE_SCHEMA_CHANGED'):
+                self.code.compatible_source(self.old, self.new, self.upgrade)
+
+    def test_every_other_store_ast_change_and_method_signature_refuses(self):
+        changes = (
+            self.SOURCE.replace(b'return True', b'return False'),
+            self.SOURCE+b'UNAPPROVED = True\n',
+            self.SOURCE.replace(b'class Store:', b'class Store:\n    UNAPPROVED = True'),
+            self.SOURCE.replace(b'limit=3', b'limit=24'),
+            self.SOURCE.replace(b'    def inventory_work', b'    @staticmethod\n    def inventory_work'),
+            self.SOURCE.replace(b'    def inventory_work', b'    async def inventory_work'),
+            self.SOURCE.replace(b'    def inventory_work', b'    def unapproved_work'),
+            self.SOURCE+b'    def inventory_work(self, now, limit=3):\n        return [1]\n',
+            self.SOURCE+b'class Store:\n    pass\n',
+            self.SOURCE+b'def inventory_work():\n    return [1]\n',
+        )
+        for source in changes:
+            self.assertNotEqual(source, self.SOURCE)
+            (self.new/'naver_engine/store.py').write_bytes(source)
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'CODE_STORE_CHANGED'):
+                self.code.compatible_source(self.old, self.new, self.upgrade)
+
+    def test_unchanged_wrong_schema_or_missing_approved_methods_is_not_a_contract(self):
+        for source, error in ((self.SOURCE.replace(b'SCHEMA_VERSION=8', b'SCHEMA_VERSION=7'), 'CODE_SCHEMA_CHANGED'),
+                              (self.SOURCE.split(b'class Store:')[0], 'CODE_STORE_CHANGED'),
+                              (self.SOURCE.replace(b'    def record_inventory_progress',
+                                                   b'    def missing_progress'), 'CODE_STORE_CHANGED')):
+            for root in (self.old, self.new):
+                (root/'naver_engine/store.py').write_bytes(source)
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                self.code.compatible_source(self.old, self.new, self.upgrade)
+
+    def test_comments_and_whitespace_do_not_expand_the_two_method_exception(self):
+        (self.new/'naver_engine/store.py').write_bytes(b'# reviewed comment\n'+self.SOURCE+b'\n')
+        self.code.compatible_source(self.old, self.new, self.upgrade)
 
 
 class StoppedWriterTest(unittest.TestCase):

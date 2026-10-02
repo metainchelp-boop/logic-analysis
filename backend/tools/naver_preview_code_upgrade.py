@@ -1,4 +1,4 @@
-"""Pinned transfer-page release with an unchanged schema8 rollback snapshot."""
+"""Pinned staff-entry/read-side reliability release with a matching schema8 rollback snapshot."""
 import ast
 from contextlib import closing
 import fcntl
@@ -13,14 +13,15 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = 'f8daabe19ee4bdd4d6e79159f431a5dfd49058e6'
-TARGET_COMMIT = 'd6542c37d1b247801f3f10259b2098d14e7b6dc8'
+OLD_COMMIT = 'd6542c37d1b247801f3f10259b2098d14e7b6dc8'
+TARGET_COMMIT = '367a03dcae3a4a3b9da6e6c56918a439b995a40e'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = '67ee1cd94f40efb7d701ed7cdba53562a8e344763153240e08c7ffc4eb7b7a5e'
-CODE_PATHS = {'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
-              'naver_engine/inventory.py', 'naver_engine/web.py'}
-TEST_PATHS = {'naver_engine/tests/inventory_screen_browser.js',
-              'naver_engine/tests/test_inventory_summary.py'}
+OLD_SOURCE_SHA256 = '77a1eec35ad3de820f2f068a6a166f54b52656e876d0a65183601c6319f6fc3e'
+CODE_PATHS = {'backend/naver_page/app.js', 'backend/naver_page/sso-bootstrap.js',
+              'naver_engine/inventory_reads.py', 'naver_engine/naver_read.py', 'naver_engine/store.py'}
+TEST_PATHS = {'naver_engine/tests/screen_browser.js', 'naver_engine/tests/test_inventory_fair_queue.py',
+              'naver_engine/tests/test_inventory_reads.py', 'naver_engine/tests/test_inventory_throughput.py',
+              'naver_engine/tests/test_inventory_zero_completion.py', 'naver_runtime/tests/test_main.py'}
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'
@@ -41,7 +42,7 @@ FAILURE_CODES = frozenset('CODE_TARGET_NOT_PINNED CODE_PACKAGE CODE_TARGET CODE_
     'CODE_OPERATION_ID CODE_ALREADY_ATTEMPTED CODE_POST_STATE CODE_FAILED_ROLLED_BACK_DB_PRESERVED '
     'CODE_ROLLBACK_FAILED HOST_BASELINE OLD_BASELINE OLD_SOURCE_CHANGED OLD_UNIT_CHANGED OLD_UNIT_NOT_ENABLED '
     'DEPENDENCY_NOT_ACTIVE BOOTSTRAP_REQUEST BOOTSTRAP_NOT_FINISHED BOOTSTRAP_CHANGED TMPFILES_CHANGED '
-    'CODE_INFRASTRUCTURE_CHANGED CODE_SCHEMA_CHANGED CODE_OVERRIDE_CHANGED CODE_SOURCE_PATH CODE_SOURCE_MODE_CHANGED '
+    'CODE_INFRASTRUCTURE_CHANGED CODE_SCHEMA_CHANGED CODE_STORE_CHANGED CODE_OVERRIDE_CHANGED CODE_SOURCE_PATH CODE_SOURCE_MODE_CHANGED '
     'CODE_SOURCE_REMOVED CODE_SCOPE_CHANGED SCHEMA_CONTRACT_MISSING CODE_PROBE_SOURCE CODE_ROUTE_STATUS '
     'CODE_SERVICE_NOT_ACTIVE CODE_SERVICE_NOT_ENABLED VERIFIED_WRITE_AUTH_NOT_REQUIRED '
     'ACCOUNT_WRITER_NOT_STOPPED DB_IDENTITY DB_OLD_SCHEMA DB_SNAPSHOT_INTEGRITY DB_SNAPSHOT_CHANGED '
@@ -158,8 +159,29 @@ def schema_contract(body):
     return selected
 
 
+def store_contract(body):
+    """Only two reviewed Store method bodies may differ; signatures and all other AST stay fixed."""
+    tree = ast.parse(body)
+    versions = [node for node in tree.body if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == 'SCHEMA_VERSION' for target in node.targets)]
+    if (len(versions) != 1 or len(versions[0].targets) != 1
+            or not isinstance(versions[0].value, ast.Constant)
+            or type(versions[0].value.value) is not int or versions[0].value.value != 8):
+        raise ValueError('CODE_SCHEMA_CHANGED')
+    stores = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'Store']
+    if len(stores) != 1:
+        raise ValueError('CODE_STORE_CHANGED')
+    for name in ('inventory_work', 'record_inventory_progress'):
+        methods = [node for node in stores[0].body
+                   if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name]
+        if len(methods) != 1 or not isinstance(methods[0], ast.FunctionDef):
+            raise ValueError('CODE_STORE_CHANGED')
+        methods[0].body = [ast.Pass()]
+    return ast.dump(tree, include_attributes=False)
+
+
 def compatible_source(old, new, upgrade):
-    # This read-side summary release cannot change storage, runtime, infrastructure or credentials.
+    # Only reviewed read-side bodies may change; schema, other storage, runtime and credentials stay fixed.
     read = lambda path: upgrade.read_file(path, mode=0o644, maximum=1024*1024, minimum=0)
     for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
                  'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
@@ -167,8 +189,10 @@ def compatible_source(old, new, upgrade):
         if read(old/name) != read(new/name):
             raise ValueError('CODE_INFRASTRUCTURE_CHANGED')
     before, after = read(old/'naver_engine/store.py'), read(new/'naver_engine/store.py')
-    if before != after:
+    if schema_contract(before) != schema_contract(after):
         raise ValueError('CODE_SCHEMA_CHANGED')
+    if store_contract(before) != store_contract(after):
+        raise ValueError('CODE_STORE_CHANGED')
     for name in ('engine', 'relay'):
         before = upgrade.read_file(old/('preview-'+name+'.override.yml'), mode=0o600)
         after = upgrade.read_file(new/('preview-'+name+'.override.yml'), mode=0o600)
