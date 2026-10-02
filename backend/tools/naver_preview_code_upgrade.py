@@ -1,4 +1,4 @@
-"""Pinned account-first release with a stopped-writer schema rollback snapshot."""
+"""Pinned transfer-page release with an unchanged schema8 rollback snapshot."""
 import ast
 from contextlib import closing
 import fcntl
@@ -13,26 +13,13 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = 'abf24060eaf907416439bf3e57d83242bb1b7bb5'
-TARGET_COMMIT = '317dac8b145669dd9d78f1c35f9bf5ba6ae85418'
+OLD_COMMIT = '317dac8b145669dd9d78f1c35f9bf5ba6ae85418'
+TARGET_COMMIT = 'e1c3de6cc672be7bccb2c244e4f70e27ad999bb3'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = '99482e833f9bb1035bc2c87e2fd662cc3900c908f5276b7e936ad68d279111e5'
-STORE_HASHES = ('a3ba0734762ae256ef564f824c0b04b8ea3def01da45070bc92623d6d1c79d19',
-                'd674c3224097d61ac173aa87fa59b3fd80c2f6433371c8e90339b00958e64a8f')
-CODE_PATHS = {'backend/app/naver_auto/org_snapshot.py', 'backend/app/naver_auto/scope.py',
-    'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
-    'deploy/naver-erp-tunnel/be-nginx.conf', 'naver_engine/erp_read.py', 'naver_engine/fields.py',
-    'naver_engine/handles.py', 'naver_engine/inventory.py', 'naver_engine/inventory_reads.py',
-    'naver_engine/naver_read.py', 'naver_engine/store.py', 'naver_engine/views.py', 'naver_engine/web.py',
-    'naver_runtime/__main__.py', 'naver_runtime/config.py', 'naver_runtime/erp_tunnel_transport.py',
-    'naver_runtime/scheduler.py', 'naver_runtime/writer.py'}
-TEST_PATHS = {'deploy/naver-erp-tunnel/test_policy.py',
-    *('naver_engine/tests/'+name for name in ('inventory_screen_browser.js', 'screen_browser.js',
-        'test_account_catalog.py', 'test_alerts.py', 'test_board_rows.py', 'test_inventory_name_index.py',
-        'test_inventory_reads.py', 'test_inventory_screen.py', 'test_metrics.py', 'test_naver_ids_snapshot.py',
-        'test_owner_verification.py', 'test_screen.py', 'test_sync.py', 'test_web.py')),
-    *('naver_runtime/tests/'+name for name in ('test_config.py', 'test_erp_tunnel_transport.py',
-        'test_guardrails.py', 'test_scheduler.py', 'test_main.py', 'test_writer.py'))}
+OLD_SOURCE_SHA256 = '43ef7126669eccef7db290e0a3dba9ad50fcc31286ec17fcfd36aeaaf8242bfa'
+CODE_PATHS = {'backend/app/naver_relay.py', 'backend/naver_page/app.js', 'backend/naver_page/index.html'}
+TEST_PATHS = {'naver_engine/tests/inventory_screen_browser.js',
+              'naver_engine/tests/test_inventory_screen.py', 'naver_engine/tests/test_screen.py'}
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'
@@ -171,7 +158,7 @@ def schema_contract(body):
 
 
 def compatible_source(old, new, upgrade):
-    # Infrastructure and credentials stay identical. Only the exact reviewed schema 7->8 is allowed.
+    # This page-only release cannot change storage, runtime, infrastructure or credentials.
     read = lambda path: upgrade.read_file(path, mode=0o644, maximum=1024*1024, minimum=0)
     for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
                  'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
@@ -179,9 +166,8 @@ def compatible_source(old, new, upgrade):
         if read(old/name) != read(new/name):
             raise ValueError('CODE_INFRASTRUCTURE_CHANGED')
     before, after = read(old/'naver_engine/store.py'), read(new/'naver_engine/store.py')
-    if schema_contract(before) != schema_contract(after):
-        if tuple(hashlib.sha256(body).hexdigest() for body in (before, after)) != STORE_HASHES:
-            raise ValueError('CODE_SCHEMA_CHANGED')
+    if before != after:
+        raise ValueError('CODE_SCHEMA_CHANGED')
     for name in ('engine', 'relay'):
         before = upgrade.read_file(old/('preview-'+name+'.override.yml'), mode=0o600)
         after = upgrade.read_file(new/('preview-'+name+'.override.yml'), mode=0o600)
@@ -191,10 +177,7 @@ def compatible_source(old, new, upgrade):
 
 
 def target_override(before, name):
-    body = before.replace(OLD_COMMIT.encode(), TARGET_COMMIT.encode())
-    if name == 'engine':
-        body += b'      NAVER_ENGINE_INVENTORY_ENABLED: "true"\n'
-    return body
+    return before.replace(OLD_COMMIT.encode(), TARGET_COMMIT.encode())
 
 
 def stopped_writer(release, lifecycle, path, images, unit):
@@ -257,7 +240,7 @@ def db_snapshot(identity, release, upgrade):
         release.write_new(destination, b'')
         with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as source, closing(sqlite3.connect(destination)) as target:
             OPERATION = 'snapshot_schema'
-            if source.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != ('7',):
+            if source.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != ('8',):
                 raise ValueError('DB_OLD_SCHEMA')
             OPERATION = 'snapshot_copy'
             source.backup(target)
@@ -279,7 +262,7 @@ def db_snapshot(identity, release, upgrade):
 
 
 def restore_db(snapshot, identity, release, upgrade):
-    """Keep the failed schema8 files recoverable; restore matching schema7 before old image."""
+    """Keep failed files recoverable; restore the matching schema8 snapshot before the old image."""
     path, digest = snapshot
     raw = upgrade.read_file(path, mode=0o600, maximum=1024**3)
     if hashlib.sha256(raw).hexdigest() != digest:

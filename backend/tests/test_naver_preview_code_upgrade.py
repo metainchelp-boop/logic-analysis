@@ -235,23 +235,12 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        # Exact account-first delta plus the approved writer-adapter recovery; no glob.
+        # Only the transfer page and its route are included; no runtime or storage changes.
         self.assertEqual(module.CODE_PATHS, {
-            'backend/app/naver_auto/org_snapshot.py', 'backend/app/naver_auto/scope.py',
-            'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
-            'deploy/naver-erp-tunnel/be-nginx.conf', 'naver_engine/erp_read.py', 'naver_engine/fields.py',
-            'naver_engine/handles.py', 'naver_engine/inventory.py', 'naver_engine/inventory_reads.py',
-            'naver_engine/naver_read.py', 'naver_engine/store.py', 'naver_engine/views.py', 'naver_engine/web.py',
-            'naver_runtime/__main__.py', 'naver_runtime/config.py', 'naver_runtime/erp_tunnel_transport.py',
-            'naver_runtime/scheduler.py', 'naver_runtime/writer.py'})
+            'backend/app/naver_relay.py', 'backend/naver_page/app.js', 'backend/naver_page/index.html'})
         self.assertEqual(module.TEST_PATHS, {
-            'deploy/naver-erp-tunnel/test_policy.py',
-            *('naver_engine/tests/'+name for name in ('inventory_screen_browser.js', 'screen_browser.js',
-                'test_account_catalog.py', 'test_alerts.py', 'test_board_rows.py', 'test_inventory_name_index.py',
-                'test_inventory_reads.py', 'test_inventory_screen.py', 'test_metrics.py', 'test_naver_ids_snapshot.py',
-                'test_owner_verification.py', 'test_screen.py', 'test_sync.py', 'test_web.py')),
-            *('naver_runtime/tests/'+name for name in ('test_config.py', 'test_erp_tunnel_transport.py',
-                'test_guardrails.py', 'test_scheduler.py', 'test_main.py', 'test_writer.py'))})
+            'naver_engine/tests/inventory_screen_browser.js', 'naver_engine/tests/test_inventory_screen.py',
+            'naver_engine/tests/test_screen.py'})
 
     def scenario(self, failure=None, mode='apply'):
         code = load('naver_preview_code_upgrade')
@@ -269,7 +258,7 @@ class ContractTest(unittest.TestCase):
         def setup(root, release):
             infrastructure = {'Dockerfile.naver-engine': b'FROM fixture', 'Dockerfile.naver-relay': b'FROM fixture',
                 'backend/requirements.txt': b'fixture', 'naver_runtime/bootstrap.py': b'# unchanged bootstrap',
-                'naver_engine/store.py': b'SCHEMA_VERSION=7\n_SCHEMA=("CREATE TABLE fixture (id INTEGER)",)\ndef _migrate():\n    pass\n'}
+                'naver_engine/store.py': b'SCHEMA_VERSION=8\n_SCHEMA=("CREATE TABLE fixture (id INTEGER)",)\ndef _migrate():\n    pass\n'}
             infrastructure.update({name: b'new fixture compose' for name in
                 ('compose.naver-engine.yml','compose.naver-relay.yml','deploy/naver-engine-backup.override.yml')})
             for path in (root/'releases').iterdir():
@@ -278,7 +267,7 @@ class ContractTest(unittest.TestCase):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(body)
                 for name in ('engine','relay'):
-                    # Account-first alone adds the approved inventory switch to the inherited override.
+                    # The UI update inherits all flags without adding or changing them.
                     body = ('image: '+code.OLD_COMMIT).encode()
                     if path.name != 'naver-'+code.OLD_COMMIT:
                         body = code.target_override(body, name)
@@ -460,39 +449,38 @@ class ContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             old=Path(folder).resolve()/'old';new=Path(folder).resolve()/'new'
             for root in (old,new):
-                (root/'naver_runtime').mkdir(parents=True)
-                (root/'naver_runtime/scheduler.py').write_bytes(b'old')
-                (root/'naver_runtime/bootstrap.py').write_bytes(b'unchanged')
-            (new/'naver_runtime/scheduler.py').write_bytes(b'new')
-            added=new/'naver_runtime/erp_tunnel_transport.py';added.write_bytes(b'approved')
+                (root/'backend/naver_page').mkdir(parents=True)
+                (root/'backend/naver_page/app.js').write_bytes(b'old')
+                (root/'backend/naver_page/sso-bootstrap.js').write_bytes(b'unchanged')
+            (new/'backend/naver_page/app.js').write_bytes(b'new')
+            added=new/'backend/naver_page/index.html';added.write_bytes(b'approved')
             module.compatible_code_scope(old,new,upgrade)
-            forbidden=new/'naver_runtime/bootstrap.py';forbidden.write_bytes(b'changed')
+            forbidden=new/'backend/naver_page/sso-bootstrap.js';forbidden.write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                 module.compatible_code_scope(old,new,upgrade)
             forbidden.write_bytes(b'unchanged')
             added.unlink();added.symlink_to(forbidden)
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
                 module.compatible_code_scope(old,new,upgrade)
-            added.unlink();(new/'naver_runtime/scheduler.py').unlink()
+            added.unlink();(new/'backend/naver_page/app.js').unlink()
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_writer_recovery_allows_only_exact_runtime_and_two_test_files(self):
+    def test_transfer_page_allows_only_exact_page_route_and_tests(self):
         module=load('naver_preview_code_upgrade')
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
-        approved=('naver_runtime/writer.py','naver_runtime/tests/test_main.py','naver_runtime/tests/test_writer.py')
+        approved=tuple(module.CODE_PATHS | module.TEST_PATHS)
         with tempfile.TemporaryDirectory() as folder:
             old=Path(folder).resolve()/'old';new=Path(folder).resolve()/'new'
             for root in (old,new):
                 for name in approved:
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
             for name in approved:
-                (new/name).write_bytes(b'approved writer recovery')
+                (new/name).write_bytes(b'approved page update')
             module.compatible_code_scope(old,new,upgrade)
-            for name in ('naver_runtime/writer_extra.py','naver_runtime/tests/test_writer_extra.py',
-                         'naver_runtime/tests/test_main_extra.py'):
-                forbidden=new/name;forbidden.write_bytes(b'not approved')
+            for name in ('naver_runtime/writer.py','naver_engine/store.py','backend/app/naver_auto/scope.py'):
+                forbidden=new/name;forbidden.parent.mkdir(parents=True,exist_ok=True);forbidden.write_bytes(b'not approved')
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)
                 forbidden.unlink()
@@ -855,7 +843,7 @@ class DatabaseRollbackTest(unittest.TestCase):
         self.db=self.data/'engine.db'
         with closing(sqlite3.connect(self.db)) as connection, connection:
             connection.executescript("CREATE TABLE naver_auto_meta (key TEXT PRIMARY KEY,value TEXT);"
-                "INSERT INTO naver_auto_meta VALUES ('schema_version','7');"
+                "INSERT INTO naver_auto_meta VALUES ('schema_version','8');"
                 "CREATE TABLE business (id INTEGER PRIMARY KEY,value TEXT);"
                 "INSERT INTO business VALUES (1,'preserved');")
         self.db.chmod(0o600)
@@ -891,7 +879,7 @@ class DatabaseRollbackTest(unittest.TestCase):
                 "INSERT INTO inventory VALUES (99);"
                 "UPDATE business SET value='new-schema-write';")
 
-    def test_real_schema7_snapshot_restores_after_schema8_write_and_retains_failed_data(self):
+    def test_real_schema8_snapshot_restores_prior_data_and_retains_failed_data(self):
         snapshot=self.code.db_snapshot(self.identity,self.release,self.upgrade)
         path,digest=snapshot
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),digest)
@@ -901,7 +889,7 @@ class DatabaseRollbackTest(unittest.TestCase):
             (self.data/('engine.db'+suffix)).write_bytes(('failed'+suffix).encode())
         self.code.restore_db(snapshot,self.identity,self.release,self.upgrade)
         with closing(sqlite3.connect(self.db)) as connection, connection:
-            self.assertEqual(connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone(),('7',))
+            self.assertEqual(connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone(),('8',))
             self.assertEqual(connection.execute('SELECT value FROM business').fetchone(),('preserved',))
             self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='inventory'").fetchall(),[])
             self.assertEqual(connection.execute('PRAGMA integrity_check').fetchall(),[('ok',)])
@@ -930,8 +918,10 @@ class DatabaseRollbackTest(unittest.TestCase):
         self.assertEqual(self.db.read_bytes(),before)
         self.assertFalse((self.data/('.account-failed-db-'+self.identity)).exists())
 
-    def test_schema8_is_not_accepted_as_the_schema7_rollback_snapshot(self):
-        self.mutate_schema8();before=self.db.read_bytes()
+    def test_other_schema_is_not_accepted_as_the_schema8_rollback_snapshot(self):
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            connection.execute("UPDATE naver_auto_meta SET value='7' WHERE key='schema_version'")
+        before=self.db.read_bytes()
         with self.assertRaisesRegex(ValueError,'DB_OLD_SCHEMA'):
             self.code.db_snapshot(self.identity,self.release,self.upgrade)
         self.assertEqual(self.db.read_bytes(),before)
