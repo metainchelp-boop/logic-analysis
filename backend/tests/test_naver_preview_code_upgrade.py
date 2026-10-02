@@ -235,12 +235,12 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        # Only the transfer page and its route are included; no runtime or storage changes.
+        # Only the summary page/read-side API are included; no collector or storage changes.
         self.assertEqual(module.CODE_PATHS, {
-            'backend/app/naver_relay.py', 'backend/naver_page/app.js', 'backend/naver_page/index.html'})
+            'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
+            'naver_engine/inventory.py', 'naver_engine/web.py'})
         self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/inventory_screen_browser.js', 'naver_engine/tests/test_inventory_screen.py',
-            'naver_engine/tests/test_screen.py'})
+            'naver_engine/tests/inventory_screen_browser.js', 'naver_engine/tests/test_inventory_summary.py'})
 
     def scenario(self, failure=None, mode='apply'):
         code = load('naver_preview_code_upgrade')
@@ -479,7 +479,8 @@ class ContractTest(unittest.TestCase):
             for name in approved:
                 (new/name).write_bytes(b'approved page update')
             module.compatible_code_scope(old,new,upgrade)
-            for name in ('naver_runtime/writer.py','naver_engine/store.py','backend/app/naver_auto/scope.py'):
+            for name in ('naver_runtime/writer.py','naver_engine/store.py','naver_engine/inventory_reads.py',
+                         'naver_runtime/__main__.py','backend/app/naver_auto/scope.py'):
                 forbidden=new/name;forbidden.parent.mkdir(parents=True,exist_ok=True);forbidden.write_bytes(b'not approved')
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)

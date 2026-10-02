@@ -13,13 +13,14 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = '317dac8b145669dd9d78f1c35f9bf5ba6ae85418'
-TARGET_COMMIT = 'f8daabe19ee4bdd4d6e79159f431a5dfd49058e6'
+OLD_COMMIT = 'f8daabe19ee4bdd4d6e79159f431a5dfd49058e6'
+TARGET_COMMIT = 'd6542c37d1b247801f3f10259b2098d14e7b6dc8'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = '43ef7126669eccef7db290e0a3dba9ad50fcc31286ec17fcfd36aeaaf8242bfa'
-CODE_PATHS = {'backend/app/naver_relay.py', 'backend/naver_page/app.js', 'backend/naver_page/index.html'}
+OLD_SOURCE_SHA256 = '67ee1cd94f40efb7d701ed7cdba53562a8e344763153240e08c7ffc4eb7b7a5e'
+CODE_PATHS = {'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
+              'naver_engine/inventory.py', 'naver_engine/web.py'}
 TEST_PATHS = {'naver_engine/tests/inventory_screen_browser.js',
-              'naver_engine/tests/test_inventory_screen.py', 'naver_engine/tests/test_screen.py'}
+              'naver_engine/tests/test_inventory_summary.py'}
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'
@@ -158,7 +159,7 @@ def schema_contract(body):
 
 
 def compatible_source(old, new, upgrade):
-    # This page-only release cannot change storage, runtime, infrastructure or credentials.
+    # This read-side summary release cannot change storage, runtime, infrastructure or credentials.
     read = lambda path: upgrade.read_file(path, mode=0o644, maximum=1024*1024, minimum=0)
     for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
                  'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
