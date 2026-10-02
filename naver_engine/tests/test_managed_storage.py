@@ -593,7 +593,8 @@ class ManagedStorageTest(TM.Base):
             self.st.performance_manual_request(TM.A, 100, self.fc.now())
         self.fc.advance(3601)
         self.refresh()
-        self.assertEqual(self.st.performance_manual_request(TM.A, 100, self.fc.now())["status"], "accepted")
+        accepted = self.st.performance_manual_request(TM.A, 100, self.fc.now())
+        self.assertEqual(accepted["status"], "accepted")
         self.fc.advance(1)
         org = TA.org_body(self.fc.now())
         next(person for person in org["employees"] if person["idx"] == 100)["status"] = "RETIRED"
@@ -601,8 +602,22 @@ class ManagedStorageTest(TM.Base):
         with self.assertRaises(SC.ScopeError):
             self.st.performance_manual_request(TM.A, 100, self.fc.now())
         before = len(self.naver.calls)
-        self.assertEqual(self.collect().code, "SOURCE_CHANGED")
+        day = self.fc.now().date()-timedelta(days=1)
+        saved = self.st.daily_performance([TM.A], day, day)
+        self.assertFalse(any(job["kind"] in ("manual", "manual_period")
+                             for job in self.st.performance_work(self.fc.now())))
+        # 퇴직한 요청자의 작업은 후보에서 제외한다. 다른 유효한 회차를 원천 오류로 막지 않는다.
+        result = self.collect()
+        self.assertEqual((result.code, result.counts), ("DONE", {}))
         self.assertEqual(len(self.naver.calls), before)
+        self.assertEqual(self.st.daily_performance([TM.A], day, day), saved)
+        with sqlite3.connect(f"file:{self.path}?mode=ro", uri=True) as reader:
+            self.assertEqual(reader.execute("""SELECT COUNT(*) FROM naver_auto_performance_job
+                WHERE customer_id=? AND kind='manual' AND generation=?""",
+                (TM.A, accepted["requested_at"])).fetchone()[0], 0)
+            self.assertIsNone(reader.execute("""SELECT consumed_at FROM naver_auto_manual_read
+                WHERE customer_id=? AND requested_at=?""",
+                (TM.A, accepted["requested_at"])).fetchone()[0])
 
     def test_real_writer_proxy_runs_collection_and_returns_detached_daily_rows(self):
         from naver_runtime.writer import Writer

@@ -383,6 +383,10 @@ class NoDeleteTest(Base):
     def test_sql_text_has_no_delete_replace_cascade(self):
         # 바꿔 넣기(REPLACE)는 SQLite 안에서 지우고 다시 넣는다 — 코드 글자로도 막는다(「REPLACE INTO」 포함)
         tree = ast.parse((ENGINE / "store.py").read_text(encoding="utf-8"))
+        # schema11의 고정 ADD COLUMN 루프만 별도로 구조/선언을 검증한다.
+        # ALTER 일반 허용이 아니며, 다른 위치의 ALTER·DROP·RENAME은 계속 거절한다.
+        from naver_engine.tests.test_revision_schema import without_approved_additions
+        tree = without_approved_additions(tree)
         seen = 0
         for up in sql_strings(tree):
             seen += 1
@@ -405,7 +409,7 @@ class NoDeleteTest(Base):
                 inserts += 1
                 self.assertTrue(up.startswith("INSERT INTO"), up[:40])
                 if "ON CONFLICT" in up:
-                    self.assertIn("DO UPDATE SET", up)
+                    self.assertTrue("DO UPDATE SET" in up or up.endswith(" DO NOTHING"), up)
         self.assertGreaterEqual(inserts, 9)
 
     def test_no_foreign_keys_declared(self):

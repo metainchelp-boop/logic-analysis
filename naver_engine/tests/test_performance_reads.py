@@ -281,6 +281,15 @@ class PerformanceReadsTests(unittest.TestCase):
         self.assertEqual(result.counts, {"source_wait":1})
         self.assertNotIn("daily_rows", self.store.results["weekly-test"])
 
+    def test_missing_day_never_hides_malformed_basic_metrics_as_aggregation_wait(self):
+        rows = self.rows()
+        rows.pop()
+        rows[0]["salesAmt"] = None
+        self.days[self.campaigns[0]["nccCampaignId"]] = rows
+        result = P.run_performance(self.reader,self.store,self.clock.now)
+        self.assertEqual(result.counts, {"retry":1})
+        self.assertEqual(self.store.results["weekly-test"]["error_code"], "STATS_INCOMPLETE")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,18 @@ def daily_rows(report_period=WEEK, customers=(101,)):
 
 
 class ReportingTests(unittest.TestCase):
+    def test_revision_metadata_distinguishes_absent_previous_from_real_zero_metrics(self):
+        rows = daily_rows()
+        for row in rows:
+            row.update({key: 0 for key in R.OUTPUT_FIELDS})
+        report = R.aggregate(WEEK, (101,), rows, NOW)
+        initial = R.revision_metadata(None, report)
+        same = R.revision_metadata(report, report, 1)
+        self.assertTrue(all(value is None for value in initial["metric_deltas"].values()))
+        self.assertTrue(all(value == 0 for value in same["metric_deltas"].values()))
+        self.assertFalse(initial["completeness_changed"])
+        self.assertFalse(same["completeness_changed"])
+
     def test_revision_summary_retains_same_total_daily_movement(self):
         rows = daily_rows()
         first = R.aggregate(WEEK, (101,), rows, NOW)

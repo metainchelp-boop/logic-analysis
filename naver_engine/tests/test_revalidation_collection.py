@@ -1,6 +1,8 @@
 """출근 수집/정정 대조의 합성 경계. 네트워크·운영 DB를 사용하지 않는다."""
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
+import hashlib
+import json
 import sqlite3
 import unittest
 
@@ -198,6 +200,25 @@ class RevalidationStorageBoundaryTest(unittest.TestCase):
         day = date(2026,10,4)
         self.st.performance_manual_request(A,100,self.st.now,start=day,end=day,possibility_id=11)
         self.assertTrue(all(job["kind"] not in ("manual","manual_period") for job in self.st.structure_work(self.st.now)))
+
+    def test_legacy_checkpoint_is_preserved_and_corruption_reaches_limited_recording(self):
+        job = self.st.job()
+        self.st.success(job)
+        progress = self.st.performance_progress(job)
+        progress.pop("generation")
+        raw = json.dumps(progress)
+        self.st._conn.execute("""UPDATE naver_auto_performance_job SET generation='',status='partial',
+            progress_json=?,progress_hash=?""", (raw,hashlib.sha256(raw.encode()).hexdigest()))
+        self.st.begin_performance_check(job,self.st.now)
+        self.assertEqual(self.st.performance_progress(job)["next_index"], 1)
+        self.assertEqual(self.st.performance_progress(job)["generation"],job["generation"])
+        self.st._conn.execute("""UPDATE naver_auto_performance_job SET generation='',status='partial',
+            progress_json='broken',progress_hash='broken',next_try_at=?""",(self.st.now.isoformat(),))
+        self.st.begin_performance_check(job,self.st.now)
+        with self.assertRaises(P.CheckpointInvalid):
+            self.st.performance_progress(job)
+        self.assertEqual(self.st.record_performance_check(job,self.st.now,
+            {"status":"limited","error_code":"CHECKPOINT_INVALID"}),"limited")
 
 
 if __name__ == "__main__":

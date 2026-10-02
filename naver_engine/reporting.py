@@ -170,19 +170,20 @@ def _day_fingerprints(rows):
 
 def revision_metadata(previous, current, previous_report_id=None):
     """합계가 같은 실적일 이동도 정정으로 설명하며 값 역행/0을 허용한다."""
-    old_days = (previous or {}).get("_day_fingerprints", {})
+    old_days = previous.get("_day_fingerprints", {}) if previous is not None else {}
     new_days = current.get("_day_fingerprints", {})
     changed_days = sorted(day for day in set(old_days) | set(new_days)
                           if old_days.get(day) != new_days.get(day))
-    old_totals, totals = (previous or {}).get("totals", {}), current["totals"]
+    old_totals = previous.get("totals", {}) if previous is not None else {}
+    totals = current["totals"]
     changed_metrics = [key for key in totals if old_totals.get(key) != totals[key] or any(
         old_days.get(day, {}).get(key) != new_days.get(day, {}).get(key) for day in changed_days)]
     return {"previous_report_id": previous_report_id, "changed_metrics": changed_metrics,
-            "metric_deltas": {key: totals[key]-old_totals[key] if previous and
+            "metric_deltas": {key: totals[key]-old_totals[key] if previous is not None and
                               totals[key] is not None and old_totals.get(key) is not None else None for key in totals},
             "changed_days": changed_days,
-            "completeness_changed": bool(previous and (previous.get("missing") != current["missing"] or
-                                                       previous.get("ready") != current["ready"]))}
+            "completeness_changed": previous is not None and (previous.get("missing") != current["missing"] or
+                                                              previous.get("ready") != current["ready"])}
 
 
 def aggregate(report_period, expected_customers, daily_rows, now, *, has_open_issues=False):

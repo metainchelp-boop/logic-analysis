@@ -164,6 +164,14 @@ def _read(reader, handle, job, values, store, clock):
         daily = reader.get_stats_daily(handle, campaign_id, start, end, fields=FIELDS)
         reader.check_budget()
         # HTTP/인증/모양/미래시각 오류는 집계 대기로 숨기지 않는다.
+        try:
+            for row in daily.days.values():
+                if set(row) != set(FIELDS):
+                    raise CheckpointInvalid("일별 통계 지표가 다릅니다")
+                for key in FIELDS:
+                    _number(row[key], key)
+        except CheckpointInvalid:
+            raise PerformanceIncomplete("일별 기본 지표가 완결되지 않았습니다") from None
         raw_cycle = daily.cycle_base_tm
         if isinstance(raw_cycle, datetime) and raw_cycle.tzinfo is not None and raw_cycle <= clock():
             generation_day = datetime.fromisoformat(job["generation"]).astimezone(S.KST).date() if job.get("generation") else None

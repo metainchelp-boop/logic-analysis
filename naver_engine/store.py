@@ -1382,7 +1382,7 @@ def _report_validation(store, pid, period, expected, rows, now, *, source_finger
             else:
                 pending += 1
     return {"status": "complete" if expected and not pending else "failed" if failed else "pending",
-            "last_attempt_at": max(attempts) if attempts else max((r["checked_at"] for r in rows), default=None),
+            "last_attempt_at": max(attempts) if len(attempts) > 0 else max((r["checked_at"] for r in rows), default=None),
             "last_checked_at": min(successes) if expected and not pending else None,
             "pending_account_days": pending,
             "source_snapshot_fingerprint": source_fingerprint or _report_source_fingerprint(rows)}
@@ -1454,7 +1454,7 @@ def _report_generate(store, now):
                 previous = S._rows(connection.execute("""SELECT * FROM naver_auto_report_snapshot
                     WHERE possibility_id=? AND period_key=? ORDER BY report_id DESC LIMIT 1""", (pid, period.key)))
                 report = R.aggregate(period, expected, rows, now, has_open_issues=pid in issues)
-                prepared.append((period, expected, rows, previous[0] if previous else None, report, state))
+                prepared.append((period, expected, rows, previous[0] if len(previous) > 0 else None, report, state))
             source = _report_source_fingerprint(list(batch_rows.values()))
             for period, expected, rows, previous, report, state in prepared:
                 required_after = {}
@@ -1470,13 +1470,13 @@ def _report_generate(store, now):
                 prior_validation = json.loads(state[1]) if state else {}
                 if validation["last_checked_at"] is None:
                     validation["last_checked_at"] = prior_validation.get("last_checked_at")
-                if not previous or previous["revision_fingerprint"] != report["revision_fingerprint"]:
-                    old_payload = json.loads(previous["payload_json"]) if previous else None
+                if previous is None or previous["revision_fingerprint"] != report["revision_fingerprint"]:
+                    old_payload = json.loads(previous["payload_json"]) if previous is not None else None
                     # 기존 판은 수정하지 않는다. 되돌아온 값도 새 판으로 보존한다.
                     revision = connection.execute("""SELECT COUNT(*) FROM naver_auto_report_snapshot
                         WHERE possibility_id=? AND period_key=?""", (pid, period.key)).fetchone()[0]+1
                     report.update(revision_no=revision,
-                                  change_summary=R.revision_metadata(old_payload, report, previous["report_id"] if previous else None),
+                                  change_summary=R.revision_metadata(old_payload, report, previous["report_id"] if previous is not None else None),
                                   validation=_report_public_validation(validation))
                     connection.execute("""INSERT INTO naver_auto_report_snapshot
                         (possibility_id,period_key,revision_fingerprint,generated_at,status,review_status,payload_json)
@@ -1872,6 +1872,9 @@ class ManagedStorage:
                 return False
             if request.get("possibility_id") != row["possibility_id"]:
                 return False
+            requested_kind = request.get("request_kind") or ("manual_period" if request.get("period_start") else "manual")
+            if requested_kind != job["kind"]:
+                return False
             try:
                 MS.require_action(self,now,request["actor"],job["customer_id"],allow_unmatched=True)
             except (S.StoreRefused,SC.ClientNotVisible,SC.ActionNotAllowed):
@@ -1933,17 +1936,20 @@ class ManagedStorage:
                 from . import performance_reads as R
                 saved = c.execute("SELECT progress_json,progress_hash FROM naver_auto_performance_job WHERE job_key=?",
                                   (job["job_key"],)).fetchone()
-                if saved and saved[0]:
-                    if hashlib.sha256(saved[0].encode()).hexdigest() != saved[1]:
-                        raise S.StoreRefused("이전 이어읽기 지문이 다릅니다")
-                    progress = json.loads(saved[0])
-                    R.validate_progress(progress, {key:value for key,value in job.items() if key != "generation"})
-                    for cycle in progress["cycles"]:
-                        _performance_time(cycle, date.fromisoformat(job["period_end"]), now)
-                    progress["generation"] = job["generation"]
-                    raw = _json(progress)
-                    c.execute("UPDATE naver_auto_performance_job SET progress_json=?,progress_hash=? WHERE job_key=?",
-                              (raw,hashlib.sha256(raw.encode()).hexdigest(),job["job_key"]))
+                if saved and saved[0] and hashlib.sha256(saved[0].encode()).hexdigest() == saved[1]:
+                    try:
+                        progress = json.loads(saved[0])
+                        R.validate_progress(progress, {key:value for key,value in job.items() if key != "generation"})
+                        for cycle in progress["cycles"]:
+                            _performance_time(cycle, date.fromisoformat(job["period_end"]), now)
+                        progress["generation"] = job["generation"]
+                        R.validate_progress(progress, job)
+                    except (ValueError, S.StoreRefused):
+                        pass  # 손상 체크포인트는 읽기 시작 뒤 공통 검증에서 limited로 기록한다.
+                    else:
+                        raw = _json(progress)
+                        c.execute("UPDATE naver_auto_performance_job SET progress_json=?,progress_hash=? WHERE job_key=?",
+                                  (raw,hashlib.sha256(raw.encode()).hexdigest(),job["job_key"]))
             if changed or recheck:
                 c.execute("""UPDATE naver_auto_performance_job SET progress_json=NULL,progress_hash=NULL,
                     attempts=0,source_wait_attempts=0,error_code=NULL,bizmoney=NULL,bizmoney_at=NULL,campaigns_json=NULL WHERE job_key=?""",
@@ -2117,18 +2123,18 @@ class ManagedStorage:
                 row_pid = pid if attribution_start is None or row["day"] >= attribution_start else None
                 if row_pid is None and pid is not None and len(previous) > 0:
                     continue
-                if previous and previous[0]["possibility_id"] is not None and previous[0]["possibility_id"] != row_pid:
+                if len(previous) > 0 and previous[0]["possibility_id"] is not None and previous[0]["possibility_id"] != row_pid:
                     continue  # 현재 미매칭/다른 귀속으로 과거 업체의 원천을 소급 지우지 않는다.
-                if previous and ((previous[0].get("source_at") or "") > row["source_at"]
+                if len(previous) > 0 and ((previous[0].get("source_at") or "") > row["source_at"]
                         or (previous[0].get("source_generation") or "") > job["generation"]):
                     # 오래 걸린 과거 체크포인트가 새 성공 원천을 역행시키지 않는다.
                     continue
-                material = not previous or any(previous[0].get(key) != value for key, value in {
+                material = len(previous) == 0 or any(previous[0].get(key) != value for key, value in {
                     "possibility_id": row_pid, "basic_complete": True,
                     "conversion_complete": row["conversion_complete"],
                     **{key: row.get(key) for key in ("imp", "clk", "spend", "conversions", "conversion_value")},
                     "campaign_fingerprint": values["campaign_fingerprint"]}.items())
-                if previous and material:
+                if len(previous) > 0 and material:
                     c.execute("INSERT INTO naver_auto_daily_revision(customer_id,day,recorded_at,payload_json) VALUES(?,?,?,?)",
                               (job["customer_id"],row["day"],at,_json(previous[0])))
                 conversion_attempts = 0 if row["conversion_complete"] else min(4, 1+(
@@ -2150,7 +2156,7 @@ class ManagedStorage:
                      row["spend"],row.get("conversions"),row.get("conversion_value"),row["checked_at"],
                      row["source_at"],row["checked_at"] if row["conversion_complete"] else None,
                      values["campaign_fingerprint"],job["generation"],
-                     (previous[0].get("source_revision", 1)+int(material)) if previous else 1))
+                     (previous[0].get("source_revision", 1)+int(material)) if len(previous) > 0 else 1))
         return status
 
     def _performance_conversion_due(self, job, possibility_id, now):
@@ -2247,7 +2253,7 @@ class ManagedStorage:
             if not owner or owner["decision"].cadence == "blocked" or request.get("possibility_id") != owner["possibility_id"]:
                 continue
             previous = revalidations.get(cid)
-            if previous and (previous.get("checked_at") or "") > request["requested_at"]:
+            if previous is not None and (previous.get("checked_at") or "") > request["requested_at"]:
                 continue
             end = request.get("period_end") or str(datetime.fromisoformat(request["requested_at"]).date()-timedelta(days=1))
             start = request.get("period_start") or str(date.fromisoformat(end)-timedelta(
