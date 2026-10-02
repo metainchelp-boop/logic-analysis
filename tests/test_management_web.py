@@ -221,7 +221,7 @@ class ManagementWebTest(unittest.TestCase):
     def test_catalog_only_company_reports_remain_visible_but_hidden_stage_blocks_staff(self):
         self.st.prospects = lambda: []
         self.st.catalog["items"][0]["stage"] = "환불완료"
-        self.st.reports = [dict(report_id=31, possibility_id=11, status="ready", review_status="needs_staff_review")]
+        self.st.reports = [dict(report_id=31, possibility_id=11, status="ready", review_status="needs_staff_review", payload={})]
         status, body = self.get("/reports")
         self.assertEqual(status, 200)
         self.assertEqual([r["report_id"] for r in body["rows"]], [31])
