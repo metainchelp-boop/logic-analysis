@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import uuid
 
 OLD_COMMIT = '317dac8b145669dd9d78f1c35f9bf5ba6ae85418'
-TARGET_COMMIT = 'e1c3de6cc672be7bccb2c244e4f70e27ad999bb3'
+TARGET_COMMIT = 'f8daabe19ee4bdd4d6e79159f431a5dfd49058e6'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 OLD_SOURCE_SHA256 = '43ef7126669eccef7db290e0a3dba9ad50fcc31286ec17fcfd36aeaaf8242bfa'
 CODE_PATHS = {'backend/app/naver_relay.py', 'backend/naver_page/app.js', 'backend/naver_page/index.html'}
