@@ -66,4 +66,13 @@ git diff --check
 
 [재준비 37118463924](https://github.com/metainchelp-boop/logic-analysis/actions/runs/37118463924), 작업 `111189737998`는 고정 제어 `c1747d36054e34d548b2c5adc9698defd2206d1e`에서 `stage=code_config_relay`, `error_code=COMMAND_FAILED`로 실패했다. 기존 `verify_interrupted_source`가 봉인 소스·override를 검증하는 경로를 유지했고, 단계상 engine·relay **두 이미지 빌드가 모두 통과했음**을 확인했다. 이 시점의 `code_config_relay`는 relay의 `docker compose ... config --quiet`와 그 뒤 격리 엔진의 `check-config` 실행을 모두 포함하므로 어느 명령에서 거절됐는지는 아직 구분하지 못한다. compose 구성 충돌·엔진 설정 거절 등은 가설이며 실제 원인으로 기록하지 않는다.
 
-주 작업자가 다음 제한 진단으로 `check-config` 단계를 추가 분리하고 정확한 구성 검증 명령에 한해 고정 오류 분류를 보완할 예정이다. 이 문서 편집 담당은 코드에 추가 변경하지 않는다. 재준비 성공·실제 원인·관제 적용 성공은 아직 확인되지 않았고 **관제 적용 0회**, 기존 `e132a4b` 운영 유지로 기록한다. 이번 문서 갱신은 파일 편집만이며 커밋·push는 주 작업자의 배포 진행 종료 후 검토까지 보류한다.
+이 시점에는 재준비 성공·실제 원인·관제 적용 성공을 확인하지 못했고 관제 적용 0회, 기존 `e132a4b` 운영을 유지했다. 다음의 추가 진단으로 실제 실패 단계를 분리했다.
+
+### 20:11:30 KST 원인 확인과 임시 검사 네트워크 보완
+
+[준비 37118826582](https://github.com/metainchelp-boop/logic-analysis/actions/runs/37118826582), 작업 `111190766043`, 제어 `3566251509bcf7f4573c8dd412d6c4c4d022012a`에서 두 이미지 빌드와 Compose 구성 검사가 통과했고 `code_check_config / COMPOSE_PROBE_NETWORK_POOL`로 실패했다. Docker의 신규 네트워크 주소 풀 부족이며 권한 거절이나 제품 빌드 오류가 아니다. 기존 코드는 일회성 검사마다 고유 Compose 프로젝트를 만들고 컨테이너만 제거하므로 네트워크가 남는 구조였다.
+
+- 통신·DB 쓰기를 하지 않는 `check-config`에만 검증된 `incoming/<run_id>` 하위의 root:root 0600 고정 override(`network_mode: none`)를 적용한다. 새 bridge/IPAM 할당을 하지 않으며 기존 소켓 mount는 그대로다. UNIX 소켓까지 물리적으로 차단한다고 주장하지 않는다. 운영 소스·manifest·상시 컨테이너 설정에는 이 파일을 추가하지 않는다.
+- 적용 단계 사전 동기화는 네이버 HTTPS가 필요하므로 `none`을 적용하지 않는다. 이미 기존 두 unit 중지와 writer 정지를 검증한 뒤, 기존 `naver-engine` 프로젝트 네트워크를 재사용한다. 일회성 컨테이너 이름은 계속 고유하며 정확한 ID·source label·project·user 확인 후 해당 컨테이너만 제거하고 부재를 증명해야 본 서비스 재생성이 진행된다.
+- 기존 네트워크 삭제·prune·운영 DB 수동 수정은 하지 않는다. cleanup 불확실 시 재생성/시작/DB 복구를 금지하는 기존 보호도 유지한다.
+- 전체 preview 시험 203개 통과, 독립 warm 시험 4개 통과. `incoming/123456` 합성 fixture를 실제 준비 디렉터리 계약에 맞췄고 check 전용 override가 다른 명령에 유입되지 않는 회귀를 추가했다. 이 기록 시점까지 관제 적용 0회다.

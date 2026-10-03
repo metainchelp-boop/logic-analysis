@@ -78,7 +78,11 @@ def compose_failure_code(args, result):
                 matched = True
             elif name == 'engine' and re.fullmatch('naver-check-'+commit+'-[0-9a-f]{32}', args[3]):
                 expected[3] = args[3]
-                matched = list(args) == expected+['run','--rm','--no-deps','--pull','never','naver-engine','python','-m','naver_runtime','check-config']
+                offset = len(expected)
+                if (len(args) > offset+1 and args[offset] == '-f' and re.fullmatch(
+                        re.escape(str(ROOT/'incoming'))+r'/[0-9]{6,20}/check-config\.override\.yml', args[offset+1])):
+                    expected += list(args[offset:offset+2])
+                    matched = list(args) == expected+['run','--rm','--no-deps','--pull','never','naver-engine','python','-m','naver_runtime','check-config']
     if not matched:
         return 'COMMAND_FAILED'
     body = b'\n'.join((value or b'')[-65536:] for value in (result.stdout, result.stderr)).lower()

@@ -373,7 +373,8 @@ def warm_sources(path, release):
     STAGE = 'account_sources_warm'
     check = release.compose(path, 'engine')
     name = 'naver-warm-'+TARGET_COMMIT+'-'+uuid.uuid4().hex
-    check[check.index('--project-name')+1] = name
+    # The stopped engine's existing project network is needed for Naver HTTPS.
+    # Keep the container name/ownership unique without allocating a new bridge.
     identity = None
     failure = None
     try:
@@ -417,7 +418,7 @@ def warm_sources(path, release):
                     raise ValueError('WARM_CONTAINER_ID')
                 fmt = '{"source":{{json (index .Config.Labels "metainc.naver.warm.source")}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"user":{{json .Config.User}}}'
                 meta = json.loads(release.command(['docker', 'inspect', '--format', fmt, found]))
-                if meta != {'source':TARGET_COMMIT, 'project':name, 'user':'10001:10001'}:
+                if meta != {'source':TARGET_COMMIT, 'project':'naver-engine', 'user':'10001:10001'}:
                     raise ValueError('WARM_CONTAINER_ID')
                 OPERATION = 'warm_cleanup_remove'
                 release.command(['docker', 'rm', '--force', found], timeout=45)
@@ -576,6 +577,11 @@ def prepare(package, host, release, lifecycle, upgrade):
     check = release.compose(destination, 'engine')
     check[check.index('--project-name')+1] = 'naver-check-'+TARGET_COMMIT+'-'+uuid.uuid4().hex
     STAGE = 'code_check_config'
+    # The settings-only command performs no network or storage I/O. Do not allocate
+    # a persistent Compose network for each one-off probe or touch operating networks.
+    check_override = release.ROOT/'incoming'/package['run_id']/'check-config.override.yml'
+    release.write_new(check_override, b'services:\n  naver-engine:\n    network_mode: none\n')
+    check += ['-f', str(check_override)]
     release.command(check+['run','--rm','--no-deps','--pull','never','naver-engine','python','-m','naver_runtime','check-config'], timeout=60)
     STAGE = 'code_prepare_postflight'
     if current_state(package, host, release, lifecycle, upgrade) != old:

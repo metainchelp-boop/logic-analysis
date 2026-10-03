@@ -43,6 +43,7 @@ class BuildDiagnosticTest(unittest.TestCase):
         source = M.ROOT/'releases'/('naver-'+'b'*40)
         checks = [M.compose(source, name)+['config', '--quiet'] for name in ('engine','relay')]
         check = M.compose(source, 'engine');check[3] = 'naver-check-'+'b'*40+'-'+'c'*32
+        check += ['-f', str(M.ROOT/'incoming'/'123456'/'check-config.override.yml')]
         checks.append(check+['run','--rm','--no-deps','--pull','never','naver-engine','python','-m','naver_runtime','check-config'])
         for args in checks:
             for marker, code in ((b'permission denied', 'DENIED'),

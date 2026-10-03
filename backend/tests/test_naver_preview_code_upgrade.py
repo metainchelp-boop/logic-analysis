@@ -299,6 +299,13 @@ class ContractTest(unittest.TestCase):
             return code.apply(package, host, release, life, fixture)
         fixture.prepare, fixture.apply = prepare, apply
         def setup(root, release):
+            (root/'incoming'/'123456').mkdir(parents=True, exist_ok=True)
+            previous_write = release.write_new
+            def write(path, body, **kwargs):
+                if Path(path).name == 'check-config.override.yml':
+                    self.assertEqual(body, b'services:\n  naver-engine:\n    network_mode: none\n')
+                return previous_write(path, body, **kwargs)
+            release.write_new = write
             infrastructure = {'Dockerfile.naver-engine': b'FROM fixture', 'Dockerfile.naver-relay': b'FROM fixture',
                 'backend/requirements.txt': b'fixture', 'naver_runtime/bootstrap.py': b'# unchanged bootstrap',
                 'naver_engine/store.py': StoreScopeTest.TARGET_SOURCE}
@@ -505,6 +512,14 @@ class ContractTest(unittest.TestCase):
         self.assertFalse(any(path.name=='bootstrap-request.json' or path.parent.name=='secrets' for path,_ in writes))
         check=next(args for args in commands if 'check-config' in args)
         self.assertRegex(check[check.index('--project-name')+1],r'^naver-check-b{40}-[a-f0-9]{32}$')
+        probe_files = [path for path, _ in writes if path.name == 'check-config.override.yml']
+        self.assertEqual(len(probe_files), 1)
+        probe_path = probe_files[0]
+        self.assertEqual(probe_path.parent.parent.name, 'incoming')
+        self.assertRegex(probe_path.parent.name, r'^[0-9]{6,20}$')
+        self.assertEqual(check[-12:-10], ['-f', str(probe_path)])
+        self.assertEqual(sum(str(probe_path) in args for args in commands), 1)
+        self.assertFalse(any('network' in args and ('rm' in args or 'prune' in args) for args in commands))
 
     def test_schema_infrastructure_or_bootstrap_uncertainty_refuses_before_any_mutation(self):
         for reason in ('image','unit','manifest','schema','infrastructure','override','bootstrap_pending',
@@ -988,6 +1003,10 @@ class WarmSourcesTest(unittest.TestCase):
             commands.append(args)
             if args[:2]==['docker','compose']:
                 self.assertIn('--detach',args)
+                self.assertEqual(args[args.index('--project-name')+1], 'naver-engine')
+                self.assertEqual(args[:6], ['docker','compose','--project-name','naver-engine','-f','/synthetic-release/compose.yml'])
+                self.assertEqual(args.count('-f'), 1)
+                self.assertIn('--no-deps', args)
                 self.assertEqual(args[args.index('--name')+1],name)
                 self.assertIn('metainc.naver.warm.source='+code.TARGET_COMMIT,args)
                 if failure=='create_uncertain':
@@ -1015,7 +1034,7 @@ class WarmSourcesTest(unittest.TestCase):
             if args[:2]==['docker','inspect']:
                 self.assertEqual(args[-1],identity)
                 return json.dumps({'source':'unrelated' if failure=='wrong_source' else code.TARGET_COMMIT,
-                    'project':'unrelated' if failure=='wrong_project' else name,
+                    'project':'unrelated' if failure=='wrong_project' else 'naver-engine',
                     'user':'0:0' if failure=='wrong_user' else '10001:10001'}).encode()
             if args[:3]==['docker','rm','--force']:
                 self.assertEqual(args[-1],identity)
