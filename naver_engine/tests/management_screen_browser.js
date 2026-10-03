@@ -18,10 +18,20 @@ const cfg=JSON.parse(process.argv[2]);
     body:'window.__metaincSso={started:true,legacyPresent:false,consume:()=>Promise.resolve('+JSON.stringify({code,codeVerifier:'V'.repeat(42)+'A'})+')};'}));
   page.on('pageerror',e=>errors.push(e.message));
   page.on('request',r=>{if(r.method()==='POST')writes.push(new URL(r.url()).pathname);});
+  async function showAccounts(){
+    await page.waitForFunction(()=>document.querySelector('#inventorySync').dataset.status==='current');
+    assert.equal(await page.locator('#managedCoverage').isVisible(),true);
+    assert.equal(await page.locator('#inventoryCard').isVisible(),false);
+    await page.click('#inventoryAccountsTab');
+    await page.waitForFunction(()=>document.querySelector('#inventorySync').dataset.status==='current');
+    assert.equal(await page.locator('#managedCoverage').isVisible(),false);
+    assert.equal(await page.locator('#inventoryCard').isVisible(),true);
+  }
   try{
     if(cfg.shots)fs.mkdirSync(cfg.shots,{recursive:true});
     await page.clock.install({time:new Date(cfg.now)});
     await page.goto(cfg.base+'/naver/transfers');
+    await showAccounts();
     const own=page.locator('#inventoryRows tr').filter({hasText:cfg.own});
     await own.getByRole('button',{name:'관제 제외',exact:true}).waitFor();
     await own.locator('summary').filter({hasText:'광고 상태·사유'}).click();
@@ -51,6 +61,7 @@ const cfg=JSON.parse(process.argv[2]);
     assert.equal(writes.length,beforeAuditWrites,'fluid audit must not send writes');
     await page.evaluate(()=>sessionStorage.clear());code=cfg.staff;
     await page.goto(cfg.base+'/naver/transfers');
+    await showAccounts();
     await own.getByRole('button',{name:'관제 제외',exact:true}).waitFor();
     assert.equal(await page.locator('#inventoryRows tr').filter({hasText:cfg.other}).count(),0);
     assert.equal(await page.locator('#collectionControls').isVisible(),false);
