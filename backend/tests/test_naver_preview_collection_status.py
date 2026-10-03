@@ -18,6 +18,76 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
+    def test_catalog_diagnostics_accept_only_two_reviewed_product_commits(self):
+        self.assertEqual(M.CATALOG_LINKS_COMMITS, frozenset({
+            '6e4b035901027fef29266de218bfb0594227a3fe',
+            '01344b145d0b679a6ee730d7fa4b5990278dd654'}))
+        self.assertEqual(M.DAILY_LIMITED_COMMIT, '01344b145d0b679a6ee730d7fa4b5990278dd654')
+
+    def test_daily_limited_uses_schema11_reader_and_separates_current_targets_from_old_jobs(self):
+        fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        for sql in fixture['new_observed_unsealed']['sql']:
+            db.execute(sql)
+        db.execute("INSERT INTO naver_auto_meta VALUES ('schema_version','11')")
+        cases = [('daily','2026-11-02','limited','REQUEST_DEADLINE',4,1,'revision'),
+                 ('daily','2026-11-02','limited','SERVER',4,2,'old-revision'),
+                 ('daily','2026-11-02','limited','PRIVATE_ERROR',8,3,'revision'),
+                 ('daily','2026-11-01','limited','NETWORK',4,1,'revision'),
+                 ('weekly','2026-11-02','limited','NETWORK',4,1,'revision'),
+                 ('daily','2026-11-02','ok',None,0,1,'revision')]
+        for i, (kind, cycle, status, error, attempts, cid, revision) in enumerate(cases):
+            db.execute('''INSERT INTO naver_auto_performance_job
+                (job_key,customer_id,kind,cycle_day,period_start,period_end,snapshot_at,catalog_at,
+                 stage_revision,possibility_id,matching_fingerprint,status,checked_at,next_try_at,attempts,error_code,bizmoney)
+                VALUES(?,?,?,?, '2026-11-01','2026-11-01','private','private',?,987654321,
+                       'private',?,'2026-11-02T10:00:00+09:00','2026-11-02T10:15:00+09:00',?,?,123456.75)''',
+                ('private'+str(i),cid,kind,cycle,revision,status,attempts,error))
+        db.commit()
+        baseline = db.total_changes
+        scope = dict(_A=sqlite3)
+        exec(fixture['new_observed_unsealed']['authorizer'], scope)
+        db.set_authorizer(scope['_authorizer'](scope['PHASE_READ']))
+        decisions = {cid:dict(source_current=True, decision=types.SimpleNamespace(cadence='daily'),
+                              stage_revision='revision',possibility_id=987654321) for cid in (1,2,4)}
+        result = M.collect_daily_limited(db, '2026-11-02', decisions)
+        self.assertEqual((result['jobs'], result['current_daily_targets']), (3,3))
+        groups = {row['error_code']:row for row in result['groups']}
+        self.assertEqual(groups['REQUEST_DEADLINE'], dict(error_code='REQUEST_DEADLINE',attempts='4',
+            current_target=True,prior_error_evidence='UNKNOWN_NOT_RECORDED',jobs=1))
+        self.assertFalse(groups['SERVER']['current_target'])
+        self.assertEqual(groups['UNRECOGNIZED']['attempts'],'FOUR_PLUS')
+        self.assertEqual(db.total_changes, baseline)
+        self.assertEqual(M.daily_limited_projection(result, '2026-11-02'), result)
+        for private in ('private','PRIVATE','987654321','123456.75','customer_id','possibility_id','revision'):
+            self.assertNotIn(private, json.dumps(result))
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute("UPDATE naver_auto_performance_job SET attempts=0")
+        decisions[1]['source_current']=False
+        with self.assertRaisesRegex(ValueError, '^COLLECTION_LIMITED_SOURCE$'):
+            M.collect_daily_limited(db, '2026-11-02', decisions)
+
+    def test_daily_limited_projection_rejects_drift_leaks_ambiguity_and_excess(self):
+        value = dict(cycle_day='2026-11-02', jobs=1, current_daily_targets=1,
+            current_target_rule='DAILY_CADENCE_AND_SAME_ATTRIBUTION_NOT_RETRY_PERMISSION',
+            groups=[dict(error_code='REQUEST_DEADLINE',attempts='4',current_target=True,
+                         prior_error_evidence='UNKNOWN_NOT_RECORDED',jobs=1)])
+        mutations = [lambda v:v.update(customer_id=987654321),lambda v:v.update(jobs=True),
+            lambda v:v.update(cycle_day='2026-11-01'),lambda v:v.update(current_daily_targets=0),
+            lambda v:v.update(current_daily_targets=100001),lambda v:v.update(groups=v['groups']*101),
+            lambda v:v['groups'][0].update(error_code='PRIVATE_ERROR'),
+            lambda v:v['groups'][0].update(attempts=4),lambda v:v['groups'][0].update(current_target=1),
+            lambda v:v['groups'][0].update(prior_error_evidence='NO_NETWORK_ERROR'),
+            lambda v:v['groups'][0].update(jobs=-1),lambda v:v['groups'][0].update(customer_id=987654321),
+            lambda v:v.update(groups=v['groups']*2,jobs=2,current_daily_targets=2)]
+        for mutate in mutations:
+            changed=json.loads(json.dumps(value)); mutate(changed)
+            with self.subTest(value=changed):
+                with self.assertRaises(ValueError) as caught:
+                    M.daily_limited_projection(changed,'2026-11-02')
+                self.assertNotIn('PRIVATE',str(caught.exception))
+
     def catalog_fixture(self):
         now = datetime.fromisoformat('2026-10-03T12:00:00+09:00')
         rows = {pid: [dict(possibility_id=pid, customer_id=987654320+pid,
@@ -52,6 +122,20 @@ class CollectionTest(unittest.TestCase):
         context.source_state='stale'
         with self.assertRaisesRegex(ValueError, '^CATALOG_LINK_SOURCE$'):
             M.catalog_link_counts(context, rules)
+
+    def test_managed_catalog_counts_use_current_four_stages_without_changing_all_counts(self):
+        context, rules = self.catalog_fixture()
+        context.companies[1]['stage']='진행 중'
+        context.companies[2]['stage']='계약 만료'
+        context.companies[3]['stage']='사후 관리'
+        context.companies[4]['stage_hidden']=True
+        all_counts=M.catalog_link_counts(context,rules)
+        managed=M.catalog_link_counts(context,rules,
+            managed_stages=frozenset(('진행중','사후관리','전략관리','재계약진행중')))
+        self.assertEqual(all_counts['auto']+all_counts['name_different'],4)
+        self.assertEqual(managed,dict(auto=1,name_different=1,can_confirm=1,
+                                     rejected={'legacy_end_unreadable':1}))
+        self.assertEqual(M.catalog_link_projection(managed),managed)
 
     def test_catalog_counts_refuse_policy_drift_unknown_reasons_and_output_fields(self):
         context, rules = self.catalog_fixture()
@@ -268,7 +352,17 @@ class CollectionTest(unittest.TestCase):
             self.assertEqual(call.kwargs, {'timeout':3})
 
     def test_run_checks_approved_identity_and_reprojects_engine_output(self):
-        package = dict(baseline='a'*64, source_commit=M.CATALOG_LINKS_COMMIT, source_tar_gz_sha256='c'*64)
+        self.check_run_diagnostics(M.CATALOG_LINKS_COMMIT)
+
+    def test_run_latest_requires_both_new_aggregates_and_unknown_commit_gets_neither(self):
+        self.check_run_diagnostics(M.DAILY_LIMITED_COMMIT, {
+            'daily_limited':dict(cycle_day='2026-10-01',jobs=0,current_daily_targets=1,
+                current_target_rule='DAILY_CADENCE_AND_SAME_ATTRIBUTION_NOT_RETRY_PERMISSION',groups=[]),
+            'managed_catalog_links':dict(auto=0,name_different=0,can_confirm=0,rejected={})})
+        self.check_run_diagnostics('b'*40)
+
+    def check_run_diagnostics(self, commit, extra=None):
+        package = dict(baseline='a'*64, source_commit=commit, source_tar_gz_sha256='c'*64)
         cid, image = 'd'*64, 'sha256:'+'e'*64
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
@@ -285,7 +379,15 @@ class CollectionTest(unittest.TestCase):
                 pairing={'available':False,'statuses':{},'unmatched_prospects':None}, latest_run=None,
                 today_checks={'statuses':{},'reasons':{}}, bootstrap=M.bootstrap_empty('no_request'),
                 catalog_links={'auto':2,'name_different':1,'can_confirm':1,'rejected':{'legacy_end_unreadable':2}})
-            for failure in (None, 'image', 'mount', 'rootfs', 'output', 'restart', 'catalog_missing'):
+            if commit not in M.CATALOG_LINKS_COMMITS:
+                values.pop('catalog_links')
+            values.update(extra or {})
+            failures = [None,'image','mount','rootfs','output','restart','unexpected_daily']
+            if 'catalog_links' in values:
+                failures.append('catalog_missing')
+            if extra:
+                failures += ['daily_limited_missing','managed_catalog_links_missing']
+            for failure in failures:
                 calls, inspections = [], []
                 host, release = Mock(), Mock()
                 host.baseline.return_value = package['baseline']
@@ -311,10 +413,15 @@ class CollectionTest(unittest.TestCase):
                             Source='/legacy' if failure=='mount' else '/var/lib/metainc/naver-engine')])).encode()
                     if args[1] == 'exec':
                         ast.parse(kwargs['data'])
-                        self.assertIn('if True:', kwargs['data'].decode())
+                        self.assertEqual(kwargs['data'].decode().count('if True:'),
+                            int(commit in M.CATALOG_LINKS_COMMITS)+int(commit == M.DAILY_LIMITED_COMMIT))
                         self.assertEqual(args, ['docker','exec','-i','--user','10001:10001',cid,'python','-I','-B','-'])
                         if failure == 'catalog_missing':
                             return json.dumps({key:value for key,value in values.items() if key != 'catalog_links'}).encode()
+                        if failure in ('daily_limited_missing','managed_catalog_links_missing'):
+                            return json.dumps({key:value for key,value in values.items() if key != failure[:-8]}).encode()
+                        if failure == 'unexpected_daily':
+                            return json.dumps(dict(values,daily_limited={'PRIVATE':'PRIVATE'})).encode()
                         return json.dumps(dict(values, secret='SECRET') if failure=='output' else values).encode()
                     self.fail('unexpected command')
                 release.command.side_effect = command

@@ -8,6 +8,9 @@ from datetime import date, datetime, timedelta
 
 STAGE = 'input'
 CATALOG_LINKS_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
+# catalog_links/handles and read-only management policy ASTs are identical at these pins.
+DAILY_LIMITED_COMMIT = '01344b145d0b679a6ee730d7fa4b5990278dd654'
+CATALOG_LINKS_COMMITS = frozenset((CATALOG_LINKS_COMMIT, DAILY_LIMITED_COMMIT))
 PROJECTION_SOURCE = r'''
 STAGES = frozenset(('진행중', '전략관리', '사후관리', '홀딩중', '재계약진행중', '환불중', '계약만료'))
 PAIR_STATES = frozenset('confirmed auto missing broken blocked candidate superseded'.split())
@@ -19,6 +22,15 @@ PAIR_COUNTS = PAIR_STATES | {'prospects', 'ignored'}
 COLLECTION_COUNTS = CHECK_STATES | frozenset('targets store_refused duplicate_skipped unlinked_issues deadline_left abort_left handle_invalid account_error'.split())
 BOOTSTRAP_CODES = frozenset('REQUEST_FILE REQUEST_CHANGED REQUEST_SCHEMA REQUEST_EXPIRED HOLD_CHANGED_OR_EXPIRED HOLD_DIGEST_CHANGED HOLD_ROWS_CHANGED CURRENT_OWNER_REQUIRED SOURCES_NOT_TODAY SOURCES_UNUSABLE RESTRICTED_CONFIG_REQUIRED CONFIRM_REFUSED PAIRING_REFUSED INTERNAL_ERROR'.split())
 JOB_STATES = frozenset('reading partial ok retry limited reauth_required source_wait'.split())
+LIMITED_CODES = frozenset('REQUEST_DEADLINE REQUEST_CALL_CAP REQUEST_BUDGET RETRY_EXHAUSTED '
+    'STATS_INCOMPLETE STATS_PERIOD_OPEN STATS_METRIC_MISSING STATS_METRIC_INVALID '
+    'STATS_DATE_INCOMPLETE STATS_CYCLE_INVALID STATS_CYCLE_FUTURE STATS_CAMPAIGNS_INVALID '
+    'CAMPAIGNS_CHANGED CHECKPOINT_INVALID SOURCE_AGGREGATING UNEXPECTED '
+    'KEY_REJECTED RATE SERVER BAD_REQUEST NOT_FOUND NETWORK BAD_RESPONSE MISMATCH OTHER NO_ERROR_RECORDED'.split())
+LIMITED_ATTEMPTS = frozenset(('0','1','2','3','4','FOUR_PLUS'))
+LIMITED_UNKNOWN_HISTORY = frozenset(('REQUEST_DEADLINE','REQUEST_CALL_CAP','REQUEST_BUDGET',
+                                   'UNRECOGNIZED','NO_ERROR_RECORDED','RETRY_EXHAUSTED'))
+LIMITED_MAX_GROUPS = 100
 LINK_REFUSALS = frozenset('scope_denied selection_denied permission_denied company_or_account_unavailable '
     'other_claim existing_decision legacy_stage_conflict legacy_end_unreadable stage-not-monitored '
     'stage-time-unknown stage-stale stage-time-in-future end-date-invalid ended-end-date-unknown ended-over-14-days'.split())
@@ -263,13 +275,19 @@ def catalog_link_projection(value):
     return out
 
 
-def catalog_link_counts(context, rules):
+def catalog_link_counts(context, rules, *, managed_stages=None):
     """First refusing gate, checked against the pinned product's actual allowed result."""
     if context is None or context.source_state != 'accepted':
         raise ValueError('CATALOG_LINK_SOURCE')
     ctx, scope = context.ctx, context.scope
     out = {'auto':0, 'name_different':0, 'can_confirm':0, 'rejected':{}}
     for pid in sorted(context.visible_ids):
+        if managed_stages is not None:
+            company = context.companies.get(pid)
+            if (not company or company.get('stage_known') is not True or company.get('stage_hidden') is not False
+                    or not isinstance(company.get('stage'), str)
+                    or ''.join(company['stage'].split()) not in managed_stages):
+                continue
         for row in ctx.rows_by_pid.get(pid, ()):
             kind = 'auto' if row['state'] == 'auto' else 'name_different' if (
                 row['state'] == 'blocked' and row['code'] == 'name-different') else None
@@ -308,21 +326,95 @@ def catalog_link_counts(context, rules):
     return catalog_link_projection(out)
 
 
-def collect_catalog_links(store, now):
+def collect_catalog_links(store, now, *, managed_only=False):
     from naver_engine import catalog_links as CL
+    from naver_engine import management as MP
     if store.meta('schema_version') != '11':
         raise ValueError('COLLECTION_SCHEMA')
     org = CL.W.load_org(store)
     scope = CL.SC.scope_of(org, 0)
     if scope.kind != CL.SC.ALL:
         raise ValueError('CATALOG_LINK_SCOPE')
-    return catalog_link_counts(CL.load(store, now, org, scope, 'all', narrowed=False), CL)
+    return catalog_link_counts(CL.load(store, now, org, scope, 'all', narrowed=False), CL,
+                               managed_stages=MP.DAILY_STAGES if managed_only else None)
+
+
+def daily_limited_projection(value, today):
+    fields = {'cycle_day','jobs','current_daily_targets','current_target_rule','groups'}
+    if (not isinstance(value, dict) or set(value) != fields or value['cycle_day'] != today
+            or value['current_target_rule'] != 'DAILY_CADENCE_AND_SAME_ATTRIBUTION_NOT_RETRY_PERMISSION'
+            or not isinstance(value['groups'], list) or len(value['groups']) > LIMITED_MAX_GROUPS):
+        raise ValueError('COLLECTION_LIMITED_FIELDS')
+    if number(value['jobs']) > 100000 or number(value['current_daily_targets']) > 100000:
+        raise ValueError('COLLECTION_LIMITED_SIZE')
+    seen, total, current = set(), 0, 0
+    for row in value['groups']:
+        if (not isinstance(row, dict) or set(row) != {'error_code','attempts','current_target','prior_error_evidence','jobs'}
+                or not isinstance(row['error_code'], str) or row['error_code'] not in LIMITED_CODES | {UNKNOWN}
+                or not isinstance(row['attempts'], str) or row['attempts'] not in LIMITED_ATTEMPTS
+                or type(row['current_target']) is not bool
+                or row['prior_error_evidence'] != ('UNKNOWN_NOT_RECORDED' if row['error_code'] in
+                    LIMITED_UNKNOWN_HISTORY else 'NOT_APPLICABLE')):
+            raise ValueError('COLLECTION_LIMITED_FIELDS')
+        key = (row['error_code'],row['attempts'],row['current_target'])
+        if key in seen or number(row['jobs']) == 0:
+            raise ValueError('COLLECTION_LIMITED_COUNTS')
+        seen.add(key)
+        total += row['jobs']
+        current += row['jobs'] if row['current_target'] else 0
+    if total != value['jobs'] or current > value['current_daily_targets']:
+        raise ValueError('COLLECTION_LIMITED_COUNTS')
+    return value
+
+
+def collect_daily_limited(connection, today, decisions):
+    """Stored last codes only; current membership never grants a retry or reconstructs history."""
+    row = connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone()
+    if row is None or row[0] != '11':
+        raise ValueError('COLLECTION_SCHEMA')
+    if not isinstance(decisions, dict) or not decisions:
+        raise ValueError('COLLECTION_LIMITED_SOURCE')
+    targets = {}
+    for cid, decision in decisions.items():
+        if (not isinstance(decision, dict) or decision.get('source_current') is not True
+                or getattr(decision.get('decision'), 'cadence', None) not in ('daily','weekly','blocked')):
+            raise ValueError('COLLECTION_LIMITED_SOURCE')
+        if decision['decision'].cadence == 'daily':
+            if (type(cid) is not int or cid <= 0 or type(decision.get('possibility_id')) is not int
+                    or decision['possibility_id'] <= 0 or not isinstance(decision.get('stage_revision'), str)
+                    or not decision['stage_revision']):
+                raise ValueError('COLLECTION_LIMITED_SOURCE')
+            targets[cid] = (decision['stage_revision'],decision['possibility_id'])
+    groups, total, current_seen = {}, 0, set()
+    rows = connection.execute("SELECT customer_id,stage_revision,possibility_id,error_code,attempts "
+        "FROM naver_auto_performance_job WHERE kind='daily' AND cycle_day=? AND status='limited' LIMIT 100001", (today,))
+    for cid, revision, pid, code, attempts in rows:
+        total += 1
+        if total > 100000:
+            raise ValueError('COLLECTION_LIMITED_SIZE')
+        code = 'NO_ERROR_RECORDED' if code is None else enum(code, LIMITED_CODES)
+        attempts = number(attempts)
+        bucket = str(attempts) if attempts <= 4 else 'FOUR_PLUS'
+        current = cid in targets and targets[cid] == (revision,pid)
+        if current:
+            if cid in current_seen:
+                raise ValueError('COLLECTION_LIMITED_COUNTS')
+            current_seen.add(cid)
+        key = (code,bucket,current)
+        groups[key] = groups.get(key,0) + 1
+        if len(groups) > LIMITED_MAX_GROUPS:
+            raise ValueError('COLLECTION_LIMITED_SIZE')
+    return daily_limited_projection({'cycle_day':today,'jobs':total,'current_daily_targets':len(targets),
+        'current_target_rule':'DAILY_CADENCE_AND_SAME_ATTRIBUTION_NOT_RETRY_PERMISSION',
+        'groups':[dict(error_code=code,attempts=attempts,current_target=current,jobs=count,
+            prior_error_evidence='UNKNOWN_NOT_RECORDED' if code in LIMITED_UNKNOWN_HISTORY else 'NOT_APPLICABLE')
+            for (code,attempts,current),count in sorted(groups.items())]}, today)
 
 
 def project(value):
     fields = {'today', 'prospects', 'pairing', 'latest_run', 'today_checks', 'bootstrap'}
-    if not isinstance(value, dict) or set(value) not in (fields, fields | {'management'},
-            fields | {'catalog_links'}, fields | {'management', 'catalog_links'}):
+    if (not isinstance(value, dict) or not fields <= set(value)
+            or set(value) - fields - {'management','catalog_links','daily_limited','managed_catalog_links'}):
         raise ValueError('COLLECTION_FIELDS')
     today = value['today']
     if not isinstance(today, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', today):
@@ -357,6 +449,10 @@ def project(value):
         result['management'] = management_projection(value['management'], today)
     if 'catalog_links' in value:
         result['catalog_links'] = catalog_link_projection(value['catalog_links'])
+    if 'daily_limited' in value:
+        result['daily_limited'] = daily_limited_projection(value['daily_limited'], today)
+    if 'managed_catalog_links' in value:
+        result['managed_catalog_links'] = catalog_link_projection(value['managed_catalog_links'])
     return result
 
 
@@ -399,7 +495,7 @@ def validate_package(package):
             raise ValueError('PACKAGE_SHAPE')
 
 
-def script(*, catalog_links=False):
+def script(*, catalog_links=False, daily_limited=False):
     parts = ['import json,os,sys,stat,re,time\nfrom pathlib import Path\nfrom datetime import date,datetime,timedelta,timezone\n', PROJECTION_SOURCE]
     parts.append("""
 try:
@@ -417,6 +513,10 @@ try:
         result=collect(reader,now.date().isoformat())
         if CATALOG_LINK_DIAGNOSTIC:
             result['catalog_links']=collect_catalog_links(reader,now)
+        if DAILY_LIMITED_DIAGNOSTIC:
+            from naver_engine import management_store as MS
+            result['daily_limited']=collect_daily_limited(reader._conn,now.date().isoformat(),MS.snapshot(reader,now))
+            result['managed_catalog_links']=collect_catalog_links(reader,now,managed_only=True)
     finally:
         try:
             reader._conn.execute('ROLLBACK')
@@ -426,7 +526,7 @@ try:
     print(json.dumps(result,sort_keys=True))
 except Exception:
     sys.exit(1)
-""".replace('CATALOG_LINK_DIAGNOSTIC', repr(catalog_links)))
+""".replace('CATALOG_LINK_DIAGNOSTIC', repr(catalog_links)).replace('DAILY_LIMITED_DIAGNOSTIC', repr(daily_limited)))
     return '\n'.join(parts).encode()
 
 
@@ -534,11 +634,16 @@ def run(package, host, release):
         raise ValueError('PREVIEW_DATA_MOUNT')
     STAGE = 'read_only_status'
     raw = release.command(['docker', 'exec', '-i', '--user', '10001:10001', identity,
-                           'python', '-I', '-B', '-'], data=script(catalog_links=commit == CATALOG_LINKS_COMMIT), timeout=30)
+                           'python', '-I', '-B', '-'], data=script(catalog_links=commit in CATALOG_LINKS_COMMITS,
+                            daily_limited=commit == DAILY_LIMITED_COMMIT), timeout=30)
     if len(raw) > 32768:
         raise ValueError('STATUS_SIZE')
     values = project(json.loads(raw, object_pairs_hook=release.unique))
-    if ('catalog_links' in values) != (commit == CATALOG_LINKS_COMMIT):
+    if ('catalog_links' in values) != (commit in CATALOG_LINKS_COMMITS):
+        raise ValueError('CATALOG_LINK_FIELDS')
+    if ('daily_limited' in values) != (commit == DAILY_LIMITED_COMMIT):
+        raise ValueError('COLLECTION_LIMITED_FIELDS')
+    if ('managed_catalog_links' in values) != (commit == DAILY_LIMITED_COMMIT):
         raise ValueError('CATALOG_LINK_FIELDS')
     lifecycle = lifecycle_status(release)
     version = compose_version(release)
