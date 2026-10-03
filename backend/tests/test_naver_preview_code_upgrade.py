@@ -260,30 +260,37 @@ class ContractTest(unittest.TestCase):
             with self.subTest(target=target), patch.object(module, 'TARGET_COMMIT', target):
                 with self.assertRaisesRegex(ValueError, 'CODE_TARGET_NOT_PINNED'):
                     module.validate_package(package, release)
+        for digest in (None, '', 'pending'):
+            with self.subTest(digest=digest), patch.object(module, 'TARGET_SOURCE_SHA256', digest):
+                with self.assertRaisesRegex(ValueError, 'CODE_TARGET_NOT_PINNED'):
+                    module.validate_package(package, release)
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, '847be08ad8c306b7fce3fb427d1cc3168014493f')
-        self.assertEqual(module.TARGET_COMMIT, 'b83e908d04223b9e004122ae2ddfc1fc452a5255')
+        self.assertEqual(module.OLD_COMMIT, 'b83e908d04223b9e004122ae2ddfc1fc452a5255')
+        self.assertEqual(module.TARGET_COMMIT, '6e4b035901027fef29266de218bfb0594227a3fe')
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         '1f79b31dd9a8fd5a366db3d0198bb5c932ca7c127028ab559f4010919a64dcdc')
-        self.assertEqual(module.TARGET_SOURCE_SHA256, '5fb05acbd66954d560871db93d4561efb2e1f734d33ec41206f5ef1c6d1cace2')
+                         '5fb05acbd66954d560871db93d4561efb2e1f734d33ec41206f5ef1c6d1cace2')
+        self.assertEqual(module.TARGET_SOURCE_SHA256, '7bd50f067909cc4a2e0cade70265d0073499b8e8c2e319cd638c38d73ff2c4a2')
         self.assertEqual(module.STORE_SHA256, {
-            'old':'66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89',
-            'target':'9130e8205b5f25d8d0c77abe6d38570f81e617949b238236e96accbba5186ecb'})
+            'old':'9130e8205b5f25d8d0c77abe6d38570f81e617949b238236e96accbba5186ecb',
+            'target':'a36b8586d6e40c593bc004c10256b4b70ee67ee3ecba81d22eea24fd7d55edbd'})
         contract = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
-        self.assertEqual(contract['new_observed_unsealed']['sha256'], module.STORE_SHA256['old'])
+        # This historical migration fixture remains the original schema-11 release.
+        self.assertEqual(contract['new_observed_unsealed']['sha256'],
+                         '66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89')
         # Exact git archive delta: top-level tests, docs and seal tooling are not bundled.
         self.assertEqual(module.CODE_PATHS, {
-            'backend/naver_page/app.js', 'naver_engine/naver_read.py', 'naver_engine/store.py',
-            'naver_engine/performance_reads.py', 'naver_runtime/__main__.py', 'naver_runtime/scheduler.py'})
+            'backend/naver_page/app.js', 'backend/naver_page/index.html', 'naver_engine/catalog_links.py',
+            'naver_engine/naver_read.py', 'naver_engine/performance_reads.py', 'naver_engine/store.py',
+            'naver_engine/structure_reads.py', 'naver_engine/web.py'})
         self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/test_managed_storage.py', 'naver_engine/tests/test_naver_read_codes.py',
-            'naver_engine/tests/test_performance_batch_reads.py',
+            'naver_engine/tests/catalog_links_screen_browser.js', 'naver_engine/tests/test_catalog_links.py',
+            'naver_engine/tests/test_catalog_links_screen.py', 'naver_engine/tests/test_collection_selection_cost.py',
+            'naver_engine/tests/test_naver_read_codes.py', 'naver_engine/tests/test_performance_budget_wait.py',
             'naver_engine/tests/test_performance_error_preservation.py',
-            'naver_engine/tests/test_performance_reads.py', 'naver_runtime/tests/test_integration.py',
-            'naver_runtime/tests/test_main.py', 'naver_runtime/tests/test_scheduler.py',
-            'naver_runtime/tests/test_scheduler_cadence.py'})
+            'naver_engine/tests/test_performance_retry_cause.py',
+            'naver_engine/tests/test_structure_retry_budget.py'})
 
     def scenario(self, failure=None, mode='apply'):
         code = sealed_code()
@@ -512,6 +519,11 @@ class ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                 module.compatible_code_scope(old,new,upgrade)
             forbidden.write_bytes(b'unchanged')
+            original_mode=added.stat().st_mode & 0o777
+            added.chmod(original_mode | 0o100)
+            with self.assertRaisesRegex(ValueError,'CODE_SOURCE_MODE_CHANGED'):
+                module.compatible_code_scope(old,new,upgrade)
+            added.chmod(original_mode)
             added.unlink();added.symlink_to(forbidden)
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
                 module.compatible_code_scope(old,new,upgrade)
@@ -519,7 +531,7 @@ class ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_throughput_release_allows_only_exact_runtime_and_test_paths(self):
+    def test_retry_catalog_release_allows_only_exact_runtime_and_test_paths(self):
         module=sealed_code()
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -529,16 +541,24 @@ class ContractTest(unittest.TestCase):
             for root in (old,new):
                 for name in approved:
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
+            # This release adds catalog confirmation; it is not present in the old archive.
+            (old/'naver_engine/catalog_links.py').unlink()
             for name in approved:
                 (new/name).write_bytes(b'approved reliability update')
             module.compatible_code_scope(old,new,upgrade)
             for name in ('naver_runtime/bootstrap.py','naver_engine/inventory_reads.py',
                          'naver_runtime/writer.py','backend/app/naver_auto/scope.py',
-                         'backend/naver_page/sso-bootstrap.js','backend/app/naver_entry.py'):
+                         'backend/naver_page/sso-bootstrap.js','backend/app/naver_entry.py',
+                         'naver_runtime/scheduler.py','naver_engine/unreviewed_catalog_links.py',
+                         'tests/naver_management_ui.test.js','tools/naver-preview-seal.py'):
                 forbidden=new/name;forbidden.parent.mkdir(parents=True,exist_ok=True);forbidden.write_bytes(b'not approved')
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)
                 forbidden.unlink()
+            added=new/'naver_engine/catalog_links.py'
+            added.unlink();added.symlink_to(new/'naver_engine/web.py')
+            with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
+                module.compatible_code_scope(old,new,upgrade)
 
     def test_every_partial_failure_restores_exact_old_images_and_units(self):
         for reason in ('stop','warm','recreate','start','probe'):
