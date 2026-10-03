@@ -8,9 +8,11 @@ from datetime import date, datetime, timedelta
 
 STAGE = 'input'
 CATALOG_LINKS_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
-# catalog_links/handles and read-only management policy ASTs are identical at these pins.
+# Store/handles/management are unchanged; the new blocker delegation has the same boolean policy.
 DAILY_LIMITED_COMMIT = '01344b145d0b679a6ee730d7fa4b5990278dd654'
-CATALOG_LINKS_COMMITS = frozenset((CATALOG_LINKS_COMMIT, DAILY_LIMITED_COMMIT))
+RUNTIME_STATUS_COMMIT = '1b790b864ce27766251a205259fa6a332f60f72b'
+DAILY_LIMITED_COMMITS = frozenset((DAILY_LIMITED_COMMIT, RUNTIME_STATUS_COMMIT))
+CATALOG_LINKS_COMMITS = DAILY_LIMITED_COMMITS | frozenset((CATALOG_LINKS_COMMIT,))
 PROJECTION_SOURCE = r'''
 STAGES = frozenset(('진행중', '전략관리', '사후관리', '홀딩중', '재계약진행중', '환불중', '계약만료'))
 PAIR_STATES = frozenset('confirmed auto missing broken blocked candidate superseded'.split())
@@ -635,15 +637,15 @@ def run(package, host, release):
     STAGE = 'read_only_status'
     raw = release.command(['docker', 'exec', '-i', '--user', '10001:10001', identity,
                            'python', '-I', '-B', '-'], data=script(catalog_links=commit in CATALOG_LINKS_COMMITS,
-                            daily_limited=commit == DAILY_LIMITED_COMMIT), timeout=30)
+                            daily_limited=commit in DAILY_LIMITED_COMMITS), timeout=30)
     if len(raw) > 32768:
         raise ValueError('STATUS_SIZE')
     values = project(json.loads(raw, object_pairs_hook=release.unique))
     if ('catalog_links' in values) != (commit in CATALOG_LINKS_COMMITS):
         raise ValueError('CATALOG_LINK_FIELDS')
-    if ('daily_limited' in values) != (commit == DAILY_LIMITED_COMMIT):
+    if ('daily_limited' in values) != (commit in DAILY_LIMITED_COMMITS):
         raise ValueError('COLLECTION_LIMITED_FIELDS')
-    if ('managed_catalog_links' in values) != (commit == DAILY_LIMITED_COMMIT):
+    if ('managed_catalog_links' in values) != (commit in DAILY_LIMITED_COMMITS):
         raise ValueError('CATALOG_LINK_FIELDS')
     lifecycle = lifecycle_status(release)
     version = compose_version(release)

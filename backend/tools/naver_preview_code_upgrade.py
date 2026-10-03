@@ -1,4 +1,4 @@
-"""Exact pinned schema11→11 transfer-balance UI release; paired snapshot rollback."""
+"""Exact pinned schema11→11 runtime-status/link-blocker release; paired snapshot rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -13,16 +13,21 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = 'e132a4b6ebba40ca58fb4de3cd3a66a3c910b218'
+OLD_COMMIT = '01344b145d0b679a6ee730d7fa4b5990278dd654'
 # Reviewed final application commit, archive and complete store bytes; CI/deployment are separate gates.
-TARGET_COMMIT = '01344b145d0b679a6ee730d7fa4b5990278dd654'
+TARGET_COMMIT = '1b790b864ce27766251a205259fa6a332f60f72b'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = '94c0e58e700b73c4459edadeb97b34c3268a8c8483fe4107c178b9423444ae29'
-TARGET_SOURCE_SHA256 = '0faf3865ec14802d96bf51fa376961064196105e52578f24c93e56430120693d'
+OLD_SOURCE_SHA256 = '0faf3865ec14802d96bf51fa376961064196105e52578f24c93e56430120693d'
+TARGET_SOURCE_SHA256 = 'ea7d119e539745cf5b9e183a669a64592d179ca5d205ece75b6af8b3368f0533'
 STORE_SHA256 = {'old':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e',
                 'target':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e'}
-CODE_PATHS = {'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html'}
-TEST_PATHS = {'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_transfer_balance_screen.py'}
+CODE_PATHS = {'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
+              'naver_engine/catalog_links.py', 'naver_engine/runtime_view.py', 'naver_engine/web.py',
+              'naver_runtime/__main__.py', 'naver_runtime/runtime_status.py', 'naver_runtime/scheduler.py'}
+TEST_PATHS = {'naver_engine/tests/catalog_links_screen_browser.js', 'naver_engine/tests/runtime_indicator_unit.js',
+              'naver_engine/tests/runtime_status_screen_browser.js', 'naver_engine/tests/test_catalog_links.py',
+              'naver_engine/tests/test_manual_limited_recovery.py', 'naver_engine/tests/test_runtime_status_screen.py',
+              'naver_engine/tests/test_runtime_status_web.py', 'naver_runtime/tests/test_runtime_status.py'}
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'

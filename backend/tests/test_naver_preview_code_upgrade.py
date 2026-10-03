@@ -290,11 +290,11 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, 'e132a4b6ebba40ca58fb4de3cd3a66a3c910b218')
-        self.assertEqual(module.TARGET_COMMIT, '01344b145d0b679a6ee730d7fa4b5990278dd654')
+        self.assertEqual(module.OLD_COMMIT, '01344b145d0b679a6ee730d7fa4b5990278dd654')
+        self.assertEqual(module.TARGET_COMMIT, '1b790b864ce27766251a205259fa6a332f60f72b')
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         '94c0e58e700b73c4459edadeb97b34c3268a8c8483fe4107c178b9423444ae29')
-        self.assertEqual(module.TARGET_SOURCE_SHA256, '0faf3865ec14802d96bf51fa376961064196105e52578f24c93e56430120693d')
+                         '0faf3865ec14802d96bf51fa376961064196105e52578f24c93e56430120693d')
+        self.assertEqual(module.TARGET_SOURCE_SHA256, 'ea7d119e539745cf5b9e183a669a64592d179ca5d205ece75b6af8b3368f0533')
         self.assertEqual(module.STORE_SHA256, {
             'old':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e',
             'target':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e'})
@@ -304,9 +304,14 @@ class ContractTest(unittest.TestCase):
                          '66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89')
         # Exact git archive delta: top-level tests, docs and seal tooling are not bundled.
         self.assertEqual(module.CODE_PATHS, {
-            'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html'})
+            'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
+            'naver_engine/catalog_links.py', 'naver_engine/runtime_view.py', 'naver_engine/web.py',
+            'naver_runtime/__main__.py', 'naver_runtime/runtime_status.py', 'naver_runtime/scheduler.py'})
         self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_transfer_balance_screen.py'})
+            'naver_engine/tests/catalog_links_screen_browser.js', 'naver_engine/tests/runtime_indicator_unit.js',
+            'naver_engine/tests/runtime_status_screen_browser.js', 'naver_engine/tests/test_catalog_links.py',
+            'naver_engine/tests/test_manual_limited_recovery.py', 'naver_engine/tests/test_runtime_status_screen.py',
+            'naver_engine/tests/test_runtime_status_web.py', 'naver_runtime/tests/test_runtime_status.py'})
 
     def scenario(self, failure=None, mode='apply'):
         code = sealed_code()
@@ -582,7 +587,7 @@ class ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_transfer_balance_release_allows_only_exact_ui_and_test_paths(self):
+    def test_runtime_status_release_allows_only_exact_code_and_test_paths(self):
         module=sealed_code()
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -592,26 +597,35 @@ class ContractTest(unittest.TestCase):
             for root in (old,new):
                 for name in approved:
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
-            # Only this bundled browser-discovery wrapper is newly added in the archive.
-            (old/'naver_engine/tests/test_transfer_balance_screen.py').unlink()
+            # Exact new runtime modules and bundled tests in this reviewed archive.
+            for name in ('naver_engine/runtime_view.py', 'naver_runtime/runtime_status.py',
+                         'naver_engine/tests/runtime_indicator_unit.js',
+                         'naver_engine/tests/runtime_status_screen_browser.js',
+                         'naver_engine/tests/test_manual_limited_recovery.py',
+                         'naver_engine/tests/test_runtime_status_screen.py',
+                         'naver_engine/tests/test_runtime_status_web.py',
+                         'naver_runtime/tests/test_runtime_status.py'):
+                (old/name).unlink()
             for name in approved:
-                (new/name).write_bytes(b'approved transfer balance UI update')
+                (new/name).write_bytes(b'approved runtime status and exact link blockers')
             module.compatible_code_scope(old,new,upgrade)
             for name in ('naver_runtime/bootstrap.py','naver_engine/inventory_reads.py',
                          'naver_runtime/writer.py','backend/app/naver_auto/org_snapshot.py',
                          'backend/naver_page/sso-bootstrap.js','backend/app/naver_entry.py',
-                         'naver_runtime/scheduler.py','naver_engine/unreviewed_view_sync.py',
-                         'naver_engine/view_sync.py','naver_engine/store.py','naver_engine/web.py',
+                         'naver_runtime/scheduler_extra.py','naver_engine/unreviewed_view_sync.py',
+                         'naver_engine/view_sync.py','naver_engine/store.py','naver_engine/web_extra.py',
                          'backend/app/naver_auto/scope.py',
-                         'naver_engine/catalog_links.py','naver_engine/naver_read.py',
+                         'naver_engine/catalog_links_extra.py','naver_engine/naver_read.py',
                          'naver_engine/performance_reads.py','naver_engine/structure_reads.py',
                          'naver_engine/credentials.py','naver_engine/session.py',
+                         'naver_engine/tests/test_transfer_balance_screen.py',
+                         'naver_engine/tests/test_screen.py',
                          'tests/naver_management_ui.test.js','tools/naver-preview-seal.py'):
                 forbidden=new/name;forbidden.parent.mkdir(parents=True,exist_ok=True);forbidden.write_bytes(b'not approved')
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)
                 forbidden.unlink()
-            added=new/'naver_engine/tests/test_transfer_balance_screen.py'
+            added=new/'naver_engine/tests/runtime_status_screen_browser.js'
             added.unlink();added.symlink_to(new/'backend/naver_page/app.js')
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
                 module.compatible_code_scope(old,new,upgrade)
@@ -627,7 +641,7 @@ class ContractTest(unittest.TestCase):
                 (root/'naver_engine/web.py').write_bytes(b'unchanged web')
                 (root/'naver_engine/credentials.py').write_bytes(b'unchanged credentials')
             (new/'naver_engine/tests').mkdir()
-            (new/'naver_engine/tests/test_transfer_balance_screen.py').write_bytes(b'approved browser wrapper')
+            (new/'naver_engine/tests/test_runtime_status_screen.py').write_bytes(b'approved browser wrapper')
             module.compatible_code_scope(old,new,upgrade)
             adjacent=new/'naver_engine/view_sync_extra.py'
             adjacent.write_bytes(b'not approved')

@@ -18,11 +18,15 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
-    def test_catalog_diagnostics_accept_only_two_reviewed_product_commits(self):
+    def test_catalog_diagnostics_accept_only_three_reviewed_product_commits(self):
         self.assertEqual(M.CATALOG_LINKS_COMMITS, frozenset({
             '6e4b035901027fef29266de218bfb0594227a3fe',
-            '01344b145d0b679a6ee730d7fa4b5990278dd654'}))
+            '01344b145d0b679a6ee730d7fa4b5990278dd654',
+            '1b790b864ce27766251a205259fa6a332f60f72b'}))
         self.assertEqual(M.DAILY_LIMITED_COMMIT, '01344b145d0b679a6ee730d7fa4b5990278dd654')
+        self.assertEqual(M.DAILY_LIMITED_COMMITS, frozenset({
+            '01344b145d0b679a6ee730d7fa4b5990278dd654',
+            '1b790b864ce27766251a205259fa6a332f60f72b'}))
 
     def test_daily_limited_uses_schema11_reader_and_separates_current_targets_from_old_jobs(self):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
@@ -354,11 +358,14 @@ class CollectionTest(unittest.TestCase):
     def test_run_checks_approved_identity_and_reprojects_engine_output(self):
         self.check_run_diagnostics(M.CATALOG_LINKS_COMMIT)
 
-    def test_run_latest_requires_both_new_aggregates_and_unknown_commit_gets_neither(self):
-        self.check_run_diagnostics(M.DAILY_LIMITED_COMMIT, {
-            'daily_limited':dict(cycle_day='2026-10-01',jobs=0,current_daily_targets=1,
-                current_target_rule='DAILY_CADENCE_AND_SAME_ATTRIBUTION_NOT_RETRY_PERMISSION',groups=[]),
-            'managed_catalog_links':dict(auto=0,name_different=0,can_confirm=0,rejected={})})
+    def test_run_both_reviewed_releases_require_new_aggregates_and_unknown_commit_gets_neither(self):
+        for commit in ('01344b145d0b679a6ee730d7fa4b5990278dd654',
+                       '1b790b864ce27766251a205259fa6a332f60f72b'):
+            with self.subTest(commit=commit):
+                self.check_run_diagnostics(commit, {
+                    'daily_limited':dict(cycle_day='2026-10-01',jobs=0,current_daily_targets=1,
+                        current_target_rule='DAILY_CADENCE_AND_SAME_ATTRIBUTION_NOT_RETRY_PERMISSION',groups=[]),
+                    'managed_catalog_links':dict(auto=0,name_different=0,can_confirm=0,rejected={})})
         self.check_run_diagnostics('b'*40)
 
     def check_run_diagnostics(self, commit, extra=None):
@@ -414,7 +421,7 @@ class CollectionTest(unittest.TestCase):
                     if args[1] == 'exec':
                         ast.parse(kwargs['data'])
                         self.assertEqual(kwargs['data'].decode().count('if True:'),
-                            int(commit in M.CATALOG_LINKS_COMMITS)+int(commit == M.DAILY_LIMITED_COMMIT))
+                            int(commit in M.CATALOG_LINKS_COMMITS)+int(commit in M.DAILY_LIMITED_COMMITS))
                         self.assertEqual(args, ['docker','exec','-i','--user','10001:10001',cid,'python','-I','-B','-'])
                         if failure == 'catalog_missing':
                             return json.dumps({key:value for key,value in values.items() if key != 'catalog_links'}).encode()
