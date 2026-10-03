@@ -75,7 +75,7 @@ jobs:
           import base64,gzip,json,os,pathlib
           def encode_ops(bundle):
               raw=json.dumps(bundle).encode()
-              if bundle['operation'] not in ('preview-code-upgrade','preview-code-diagnose'):
+              if bundle['operation'] not in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status'):
                   return base64.b64encode(raw).decode()
               if len(raw)>196608:
                   raise ValueError('CODE_OPS_JSON_SIZE')
@@ -131,7 +131,7 @@ jobs:
             def decode_ops(encoded):
                 if not encoded.startswith('code-gzip-v1:'):
                     bundle=json.loads(base64.b64decode(encoded,validate=True))
-                    if bundle.get('operation') in ('preview-code-upgrade','preview-code-diagnose'):
+                    if bundle.get('operation') in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status'):
                         raise ValueError('CODE_OPS_ENCODING')
                     return bundle
                 if len(encoded)>65536:
@@ -142,7 +142,7 @@ jobs:
                 if len(raw)>196608 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
                     raise ValueError('CODE_OPS_GZIP')
                 bundle=json.loads(raw)
-                if (bundle.get('operation'),bundle.get('function')) not in (('preview-code-upgrade','apply'),('preview-code-diagnose','run')):
+                if (bundle.get('operation'),bundle.get('function')) not in (('preview-code-upgrade','apply'),('preview-code-diagnose','run'),('preview-collection-status','run')):
                     raise ValueError('CODE_OPS_OPERATION')
                 return bundle
             module=None

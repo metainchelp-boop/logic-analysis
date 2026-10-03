@@ -102,9 +102,32 @@ class ContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'CODE_OPS_OPERATION'):
             decode(encode(dict(bundle,function='apply')))
 
+    def test_collection_status_transport_preserves_three_sources_with_existing_wire_bounds(self):
+        encode,decode,script=self.workflow_transport()
+        tools=Path(__file__).parents[1]/'tools'
+        names={'source':'naver_preview_collection_status','release_source':'naver_preview_release',
+               'host_source':'naver_erp_tunnel_service_install'}
+        bundle={key:(tools/(name+'.py')).read_text() for key,name in names.items()}
+        bundle.update(operation='preview-collection-status',function='run',package={
+            'baseline':'a'*64,'source_commit':'01344b145d0b679a6ee730d7fa4b5990278dd654',
+            'source_tar_gz_sha256':'b'*64})
+        self.assertLessEqual(len(json.dumps(bundle).encode()),196608)
+        encoded=encode(bundle)
+        self.assertTrue(encoded.startswith('code-gzip-v1:'))
+        self.assertEqual(decode(encoded),bundle)
+        self.assertLessEqual(len(encoded),65536)
+        shell="export PREVIEW_OPS_B64="+shlex.quote(encoded)+";\nset -eu\n/usr/bin/python3 -I -B - <<'PY'\n"+script+'\nPY\n'
+        self.assertLess(len(('/bin/bash -c '+shlex.quote(shell)).encode()),120000)
+        with self.assertRaisesRegex(ValueError,'CODE_OPS_ENCODING'):
+            decode(base64.b64encode(json.dumps(bundle).encode()).decode())
+        with self.assertRaisesRegex(ValueError,'CODE_OPS_OPERATION'):
+            decode(encode(dict(bundle,function='apply')))
+
     def test_transport_keeps_other_operations_byte_identical_and_code_mode_exact(self):
         encode,decode,_=self.workflow_transport()
-        for operation in ('preview-upgrade','preview-status','preview-backup','preview-publish'):
+        for operation in ('preview-upgrade','preview-status','preview-backup','preview-publish',
+                          'preview-data-audit','preview-link-audit','preview-legacy-audit',
+                          'preview-inspect','preview-plan','preview-rollback','preview-lifecycle'):
             bundle=dict(operation=operation,function='apply',package={'fixture':'unchanged'})
             encoded=base64.b64encode(json.dumps(bundle).encode()).decode()
             self.assertEqual(encode(bundle),encoded)
