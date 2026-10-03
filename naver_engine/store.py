@@ -1640,12 +1640,13 @@ class ManagedStorage:
                  reason.strip(), S._kst_text(now, "변경 시각")))
         return self.management_states()[customer_id]
 
-    def _performance_job(self, cid, kind, cycle, start, end, row, snapshot, catalog):
+    def _performance_job(self, cid, kind, cycle, start, end, row, snapshot, catalog, *, matching_fingerprint=None):
         key = f"{cid}:{kind}:{cycle}:{start}:{end}"
         return {"job_key": key, "customer_id": cid, "kind": kind, "cycle_day": str(cycle),
                 "period_start": str(start), "period_end": str(end), "snapshot_at": snapshot,
                 "catalog_at": catalog, "stage_revision": row["stage_revision"],
-                "matching_fingerprint": self.decision_fingerprint(), "generation": P.generation_for(cycle)}
+                "matching_fingerprint": (self.decision_fingerprint() if matching_fingerprint is None
+                                         else matching_fingerprint), "generation": P.generation_for(cycle)}
 
     def performance_work(self, now, limit=24):
         from . import store as S
@@ -1660,6 +1661,9 @@ class ManagedStorage:
         catalog = self.account_catalog()
         if catalog is None:
             return []
+        # 단일 writer의 후보 생성 안에서는 연결 판단을 바꾸거나 외부 요청을 하지 않는다.
+        # 이 묶음에서만 재사용하고 매 요청 직전 performance_account_valid는 새로 검증한다.
+        matching_fingerprint = self.decision_fingerprint()
         day, at = now.astimezone(S.KST).date(), S._kst_text(now, "현재")
         prior = {r["job_key"]: r for r in _rows(self._conn.execute(
             """SELECT * FROM naver_auto_performance_job WHERE cycle_day>=?
@@ -1693,7 +1697,8 @@ class ManagedStorage:
                 continue
             period = P.period_for(decision.cadence, day)
             job = self._performance_job(cid, decision.cadence, period.cycle_day, period.since,
-                                        period.until, row, snapshot, catalog["generated_at"])
+                                        period.until, row, snapshot, catalog["generated_at"],
+                                        matching_fingerprint=matching_fingerprint)
             old = prior.get(job["job_key"])
             if old and old["stage_revision"] != job["stage_revision"]:
                 old = None
@@ -1706,7 +1711,7 @@ class ManagedStorage:
                     continue
                 carry = self._performance_job(cid, saved["kind"], date.fromisoformat(saved["cycle_day"]),
                     date.fromisoformat(saved["period_start"]), date.fromisoformat(saved["period_end"]),
-                    row, snapshot, catalog["generated_at"])
+                    row, snapshot, catalog["generated_at"], matching_fingerprint=matching_fingerprint)
                 carry["generation"] = saved.get("generation") or carry["generation"]
                 _, due = available(carry)
                 if due and not covered(carry) and self.performance_account_valid(carry, now):
@@ -1727,7 +1732,8 @@ class ManagedStorage:
                 if missing:
                     planned.append(("backfill", day, min(missing), month_end))
             for kind, cycle, since, until in planned:
-                fill = self._performance_job(cid, kind, cycle, since, until, row, snapshot, catalog["generated_at"])
+                fill = self._performance_job(cid, kind, cycle, since, until, row, snapshot, catalog["generated_at"],
+                                            matching_fingerprint=matching_fingerprint)
                 saved, due = available(fill)
                 if due and not covered(fill) and not any(f["period_start"] <= fill["period_start"]
                         and fill["period_end"] <= f["period_end"] and f["generation"] >= fill["generation"] for f in fills):
@@ -1763,7 +1769,8 @@ class ManagedStorage:
             start = date.fromisoformat(request["period_start"]) if request.get("period_start") else (
                 end if row["decision"].cadence == "daily" else end-timedelta(days=6))
             kind = request.get("request_kind") or ("manual_period" if request.get("period_start") else "manual")
-            manual = self._performance_job(cid,kind,request_day,start,end,row,snapshot,catalog["generated_at"])
+            manual = self._performance_job(cid,kind,request_day,start,end,row,snapshot,catalog["generated_at"],
+                                           matching_fingerprint=matching_fingerprint)
             manual["job_key"] += ":"+request["requested_at"]
             manual.update(requested_at=request["requested_at"],actor=request["actor"],generation=request["requested_at"])
             if not self.performance_account_valid(manual, now):
@@ -2434,6 +2441,8 @@ class ManagedStorage:
         snapshot, catalog = self.inventory_snapshot(now), self.account_catalog()
         if snapshot is None or catalog is None:
             return []
+        # 성과 후보와 동일하게 이 동기 호출 안에서만 재사용한다. 요청 시 검증은 유지한다.
+        matching_fingerprint = self.decision_fingerprint()
         day, at = now.astimezone(KST).date(), _kst_text(now,"현재")
         prior = {r["job_key"]:r for r in _rows(self._conn.execute(
             "SELECT * FROM naver_auto_structure_job WHERE cycle_day>=?", ((day-timedelta(days=8)).isoformat(),)))}
@@ -2456,7 +2465,8 @@ class ManagedStorage:
                 continue
             period = P.period_for(cadence,day)
             add(self._performance_job(cid,cadence,period.cycle_day,period.since,period.until,row,snapshot,
-                                      catalog["generated_at"]), 0 if cadence == "daily" else 1)
+                                      catalog["generated_at"], matching_fingerprint=matching_fingerprint),
+                0 if cadence == "daily" else 1)
         for request in _rows(self._conn.execute("SELECT * FROM naver_auto_manual_read")):
             cid, row = request["customer_id"], decisions.get(request["customer_id"])
             if row is None or row["decision"].cadence == "blocked" or request.get("request_kind") == "manual_period":
@@ -2467,7 +2477,8 @@ class ManagedStorage:
             end = date.fromisoformat(request["period_end"]) if request.get("period_end") else cycle-timedelta(days=1)
             start = date.fromisoformat(request["period_start"]) if request.get("period_start") else (
                 end if row["decision"].cadence == "daily" else end-timedelta(days=6))
-            job = self._performance_job(cid,"manual",cycle,start,end,row,snapshot,catalog["generated_at"])
+            job = self._performance_job(cid,"manual",cycle,start,end,row,snapshot,catalog["generated_at"],
+                                        matching_fingerprint=matching_fingerprint)
             job["job_key"] += ":"+request["requested_at"]
             job.update(requested_at=request["requested_at"],actor=request["actor"],generation=request["requested_at"])
             if not self.performance_account_valid(job, now):

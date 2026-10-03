@@ -103,9 +103,11 @@ class PathForbidden(RuntimeError):
 class RunAbort(RuntimeError):
     """이 회차를 멈춘다(속도 제한에 두 번 멈춤 · 호출 수 상한)."""
 
-    def __init__(self, *args, code="REQUEST_BUDGET") -> None:
+    def __init__(self, *args, code="REQUEST_BUDGET", cause_code=None) -> None:
         allowed = {"REQUEST_BUDGET", "REQUEST_DEADLINE", "REQUEST_CALL_CAP", "RATE"}
         self.code = code if type(code) is str and code in allowed else "REQUEST_BUDGET"
+        causes = {KIND_SERVER, KIND_NETWORK, KIND_RATE}
+        self.cause_code = cause_code if type(cause_code) is str and cause_code in causes else None
         super().__init__(*args)
 
 
@@ -514,9 +516,11 @@ class NaverReader:
             raise RunAbort("call-cap", code="REQUEST_CALL_CAP")
         self._remaining(request=True)
         self._pace()
-        timeout = self._remaining(request=True)
         if type(ah) is H.InventoryHandle:
             H.require_inventory(ah, self._clock.now())
+        # 원천/권한 재검증도 회차 시간을 쓴다. 검증 전의 남은 시간으로
+        # HTTP를 보내면 이미 마감된 회차에서 요청하거나 타임아웃을 넘긴다.
+        timeout = self._remaining(request=True)
         self.calls += 1
         self._called_customers.add(customer_id)
         ts = str(self._clock.epoch_ms())
@@ -566,36 +570,44 @@ class NaverReader:
     def _request(self, customer_id: int, path: str, params: Optional[Mapping[str, Any]] = None, *, ah=None):
         shape = path_shape(path)
         tries = {KIND_RATE: 0, KIND_SERVER: 0, KIND_NETWORK: 0}
-        while True:
-            status: Optional[int] = None
-            code: Optional[int] = None
-            try:
-                status, body = self._gate("GET", path, params, customer_id, ah)
-            except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
-                kind, detail = KIND_NETWORK, type(e).__name__
-            else:
-                if status == 200:
-                    return self._decode(body, shape, customer_id, status)
-                if 200 < status < 300:  # 206 · 203 등 — 온전한 응답이라 믿지 않는다
-                    raise NaverApiError(KIND_BAD_RESPONSE, shape, status, None, customer_id, "200 이 아닌 성공")
-                code = _error_code(body)
-                kind, detail = classify(status, code), ""
-            if kind == KIND_RATE:
-                self._note_rate()
-                if tries[KIND_RATE] >= len(RATE_BACKOFF):
-                    raise NaverApiError(kind, shape, status, code, customer_id)
-                wait = RATE_BACKOFF[tries[KIND_RATE]]
-                tries[KIND_RATE] += 1
-                self._sleep(wait + self._rng.uniform(0, wait / 4))
-                continue
-            if kind in (KIND_SERVER, KIND_NETWORK):
-                if tries[kind] >= len(RETRY_BACKOFF):
-                    raise NaverApiError(kind, shape, status, code, customer_id, detail)
-                self._sleep(RETRY_BACKOFF[tries[kind]])
-                tries[kind] += 1
-                continue
-            log.warning("[네이버 읽기] %s %s HTTP %s 코드 %s 계정 %s", kind, shape, status, code, customer_tail(customer_id))
-            raise NaverApiError(kind, shape, status, code, customer_id, detail)
+        last_cause = None
+        try:
+            while True:
+                status: Optional[int] = None
+                code: Optional[int] = None
+                try:
+                    status, body = self._gate("GET", path, params, customer_id, ah)
+                except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+                    kind, detail = KIND_NETWORK, type(e).__name__
+                else:
+                    if status == 200:
+                        return self._decode(body, shape, customer_id, status)
+                    if 200 < status < 300:  # 206 · 203 등 — 온전한 응답이라 믿지 않는다
+                        raise NaverApiError(KIND_BAD_RESPONSE, shape, status, None, customer_id, "200 이 아닌 성공")
+                    code = _error_code(body)
+                    kind, detail = classify(status, code), ""
+                last_cause = kind if kind in tries else None
+                if kind == KIND_RATE:
+                    self._note_rate()
+                    if tries[KIND_RATE] >= len(RATE_BACKOFF):
+                        raise NaverApiError(kind, shape, status, code, customer_id)
+                    wait = RATE_BACKOFF[tries[KIND_RATE]]
+                    tries[KIND_RATE] += 1
+                    self._sleep(wait + self._rng.uniform(0, wait / 4))
+                    continue
+                if kind in (KIND_SERVER, KIND_NETWORK):
+                    if tries[kind] >= len(RETRY_BACKOFF):
+                        raise NaverApiError(kind, shape, status, code, customer_id, detail)
+                    self._sleep(RETRY_BACKOFF[tries[kind]])
+                    tries[kind] += 1
+                    continue
+                log.warning("[네이버 읽기] %s %s HTTP %s 코드 %s 계정 %s", kind, shape, status, code, customer_tail(customer_id))
+                raise NaverApiError(kind, shape, status, code, customer_id, detail)
+        except RunAbort as exc:
+            # 중단 코드·예산은 유지하고 이 요청 안의 마지막 재시도 원인만 덧붙인다.
+            # 요청이 성공하면 지역 변수도 끝나므로 다음 요청의 예산 종료로 번지지 않는다.
+            exc.cause_code = last_cause
+            raise
 
     @staticmethod
     def _decode(body: bytes, shape: str, customer_id: int, status: int):

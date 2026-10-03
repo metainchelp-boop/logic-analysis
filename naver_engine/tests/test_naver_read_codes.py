@@ -2,7 +2,7 @@
 import unittest
 from datetime import date
 
-from naver_engine import naver_read as R
+from naver_engine import handles as H, naver_read as R
 from naver_engine.tests.fake_naver import FakeClock, FakeNaver
 from naver_engine.tests.test_naver_read import NOW, check_handle, creds
 
@@ -109,6 +109,53 @@ class DiagnosticCodeTest(unittest.TestCase):
 
 
 class RequestAbortCodeTest(unittest.TestCase):
+    def test_inventory_revalidation_cannot_send_after_deadline(self):
+        transport, clock = FakeNaver(), FakeClock(NOW)
+        transport.route(r"/ncc/campaigns", lambda call: (200, []))
+        validating = False
+
+        def validate(customer, snapshot, now):
+            if validating:
+                clock.advance(0.6)
+            return True
+
+        handle = H.issue_inventory_handle(customer_id=123, snapshot_at=NOW, now=NOW,
+                                          validate=validate)
+        reader = R.NaverReader(creds(), transport=transport, clock=clock)
+        validating = True
+        with reader.bounded_requests(max_calls=8, max_seconds=1):
+            with self.assertRaises(R.RunAbort) as caught:
+                reader.get_campaigns(handle)
+        self.assertEqual(caught.exception.code, "REQUEST_DEADLINE")
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(reader.calls, 0)
+
+    def test_http_timeout_excludes_inventory_revalidation_time(self):
+        clock = FakeClock(NOW)
+
+        class TimedTransport(FakeNaver):
+            def send(self, req, timeout):
+                self.timeout = timeout
+                return super().send(req, timeout)
+
+        transport = TimedTransport()
+        transport.route(r"/ncc/campaigns", lambda call: (200, []))
+        validating = False
+
+        def validate(customer, snapshot, now):
+            if validating:
+                clock.advance(0.2)
+            return True
+
+        handle = H.issue_inventory_handle(customer_id=123, snapshot_at=NOW, now=NOW,
+                                          validate=validate)
+        reader = R.NaverReader(creds(), transport=transport, clock=clock)
+        validating = True
+        with reader.bounded_requests(max_calls=8, max_seconds=1):
+            self.assertEqual(reader.get_campaigns(handle), [])
+        self.assertAlmostEqual(transport.timeout, 0.6)
+        self.assertEqual(reader.calls, 1)
+
     def test_repeated_rate_pause_has_fixed_code_and_preserves_pause_policy(self):
         class NoJitter:
             def uniform(self, low, high):

@@ -309,7 +309,7 @@ def run_performance(reader, store, clock, *, limit=24, max_calls=24, max_seconds
                 values.update(status="limited", error_code="CHECKPOINT_INVALID")
             except N.RunAbort as exc:
                 values.update(status="partial" if values.get("progressed") else "retry",
-                              error_code=N.KIND_RATE if reader.rate_limited else exc.code)
+                              error_code=N.KIND_RATE if reader.rate_limited else exc.cause_code or exc.code)
             except (H.NotEligible, H.HandleInvalid, S.StoreRefused):
                 return PerformanceOutcome("SOURCE_CHANGED", dict(counts))
             except S.StoreError:
