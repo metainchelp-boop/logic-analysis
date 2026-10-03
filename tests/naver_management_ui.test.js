@@ -22,7 +22,8 @@ class Element {
   setAttribute(k, v) { this.attrs[k] = String(v); if (k === 'value') this.value = String(v); if (k === 'disabled') this.disabled = true; }
   getAttribute(k) { return this.attrs[k]; }
   addEventListener(k, fn) { (this.events[k] ||= []).push(fn); }
-  dispatch(k) { if (k === 'click' && this.disabled) return; (this.events[k] || []).forEach(fn => fn.call(this, { currentTarget: this, target: this })); }
+  dispatch(k) { if (k === 'click' && this.disabled) return; const event = {currentTarget:this,target:this,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;}};
+    (this.events[k] || []).forEach(fn => fn.call(this, event)); return event; }
   appendChild(el) { return this.insertBefore(el, null); }
   insertBefore(el, before) {
     if (el === before) return el;
@@ -55,9 +56,9 @@ function inventory(rows = [], coverage) {
 }
 function launch(options = {}) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(m => [m[1], new Element()]));
-  const requests = [], events = {};
+  const requests = [], events = {}, opened = [];
   const location = new URL('https://watch.invalid/naver/' + (options.screen || 'transfers'));
-  const window = { addEventListener: (k, fn) => { events[k] = fn; } };
+  const window = { addEventListener: (k, fn) => { events[k] = fn; }, open: (...args) => {opened.push(args); return null;} };
   const document = { getElementById: id => elements.get(id), createElement: tag => new Element(tag),
     createTextNode: text => ({ textContent: String(text) }), addEventListener() {}, body: { contains: () => true },
     querySelectorAll: selector => selector === '.modal' ? [...elements].filter(([id]) => id.startsWith('m-')).map(([, el]) => el) : [],
@@ -73,10 +74,14 @@ function launch(options = {}) {
       else if (options.respond) body = await options.respond(req);
       else body = options.data || inventory();
       // HTTP JSON 응답은 호출마다 새 객체다. fixture 참조 공유로 옛 범위의 행을 되살리지 않는다.
-      return { status: 200, ok: true, json: async () => JSON.parse(JSON.stringify(body)) };
+      return { status: 200, ok: true, json: async () => {
+        const response = JSON.parse(JSON.stringify(body));
+        if (options.freezeRows && response.rows) Object.freeze(response.rows);
+        return response;
+      } };
     } });
   vm.runInContext(app, context);
-  return { elements, requests, location, text: id => elements.get(id).textContent,
+  return { elements, requests, opened, location, text: id => elements.get(id).textContent,
     buttons: id => tree(elements.get(id)).filter(el => el.tagName === 'BUTTON'),
     scope(value) { const el = elements.get('scope'); el.value = value; el.dispatch('change'); },
     navigate(screen) { location.href = new URL('/naver/' + screen, location).href; events.popstate(); } };
@@ -89,6 +94,130 @@ async function showAccounts(run) {
   assert.equal(run.elements.get('managedCoverage').hidden, true);
   assert.equal(run.elements.get('s-transfers').classList.contains('view-unverified'), false);
 }
+
+test('이관 목록은 비즈머니 높은 순으로 정렬하고 동률·0·음수·미확인을 보존한다', async () => {
+  const values = [null, 0, -3, 10.5, 10.5, '900', true, 20, Number.MAX_SAFE_INTEGER + 1];
+  const run = launch({freezeRows:true,data:inventory(values.map((value, index) => fixture({
+    ad_account_no:String(700 + index), collection:{bizmoney:value}
+  })))});
+  await flush(); await showAccounts(run);
+  assert.deepEqual(run.elements.get('inventoryRows').children.map(row => row.getAttribute('data-account')),
+    ['707','703','704','701','702','700','705','706','708']);
+  assert.match(html, /id="inventorySort">비즈머니 높은 순/);
+  assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
+test('현재 목록 합계는 검색과 서버 필터 이후의 잔액을 십진 합산한 뒤 한 번 절사한다', async () => {
+  const rows = [fixture({account_name:'대상 하나', collection:{bizmoney:0.29}}),
+    fixture({ad_account_no:'701',account_name:'대상 둘',collection:{bizmoney:0.71,stale:true}}),
+    fixture({ad_account_no:'702',account_name:'다른 계정',collection:{bizmoney:5}}),
+    fixture({ad_account_no:'703',account_name:'대상 미확인',collection:{bizmoney:null}})];
+  const run = launch({respond:request => inventory(request.url.includes('mapping=matched') ? rows.slice(0,1) : rows)});
+  await flush(); await showAccounts(run);
+  assert.match(run.text('inventoryBalance'), /확인된 잔액 합계 : 6원.*확인 3 \/ 4계정 · 미확인 1.*계정별 확인 시각 기준.*이전 확인값 포함/);
+  const search = run.elements.get('inventorySearch'); search.value = '대상'; search.dispatch('input');
+  assert.match(run.text('inventoryBalance'), /확인된 잔액 합계 : 1원.*확인 2 \/ 3계정 · 미확인 1/);
+  const mapping = run.elements.get('inventoryMapping'); mapping.value = 'matched'; mapping.dispatch('change'); await flush();
+  assert.match(run.text('inventoryBalance'), /확인된 잔액 합계 : 0원.*확인 1 \/ 1계정/);
+  assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
+test('담당 범위 교체는 이전 목록 합계를 즉시 지우고 늦은 응답을 되살리지 않는다', async () => {
+  const waiting = [];
+  const run = launch({respond:request => request.url.includes('selection=all') ? inventory([fixture({collection:{bizmoney:1234}})]) :
+    new Promise(resolve => waiting.push(resolve))});
+  await flush(); assert.match(run.text('inventoryBalance'), /1,234원/);
+  run.scope('person:2');
+  assert.equal(run.text('inventoryBalance'), '');
+  run.scope('person:3');
+  waiting[1](inventory([fixture({collection:{bizmoney:5}})])); await flush();
+  waiting[0](inventory([fixture({collection:{bizmoney:900}})])); await flush();
+  assert.match(run.text('inventoryBalance'), /합계 : 5원/);
+});
+
+test('목록 합계는 대상 없음·확인 없음·원천 보류·비정상값·표시 범위 초과를 구분한다', async () => {
+  for (const [values, changes, expected] of [
+    [[], {}, /합계 : 0원.*대상 계정 없음/],
+    [[null,'4',true,Number.MAX_SAFE_INTEGER+1], {}, /합계 : —.*확인 잔액 없음.*확인 0 \/ 4계정/],
+    [[3], {matching_ready:false}, /합계 : —.*집계 보류/],
+    [[3], {summary:{ready:false}}, /합계 : —.*집계 보류/],
+    [[Number.MAX_SAFE_INTEGER,1], {}, /합계 : —.*안전한 표시 범위 초과/],
+    [[-0.29,-0.71], {}, /합계 : -1원/],
+    [[1e-7,0.9999999], {}, /합계 : 1원/],
+    [[null], {view:'lost'}, /합계 : —.*확인 잔액 없음/]
+  ]) {
+    const data = Object.assign(inventory(values.map((value,index) => fixture({ad_account_no:String(700+index),collection:{bizmoney:value}}))),changes);
+    const run = launch({data}); await flush();
+    assert.match(run.text('inventoryBalance'), expected);
+  }
+});
+
+test('누락 대조 검색은 업체·단계·담당자 공백과 대소문자를 정리하며 계정 검색과 독립 유지된다', async () => {
+  const coverage = {ready:true,total:3,matched:1,missing:2,items:[
+    {possibility_id:1,company_name:'Alpha   업체',workflow:'전략관리',owner:{name:'Kim   담당'}},
+    {possibility_id:2,company_name:'Beta 업체',workflow:'진행중',owner:{name:'Lee 담당'}},
+    {possibility_id:3,company_name:'Gamma 업체',workflow:'사후관리',owner:{name:'Park 담당'}}]};
+  const run = launch({data:inventory([fixture()],coverage)}); await flush();
+  const search = run.elements.get('coverageSearch');
+  for (const query of ['  ALPHA 업체 ', '전략관리', 'kim 담당']) {
+    search.value = query; search.dispatch('input');
+    assert.match(run.text('coverageRows'), /Alpha/); assert.doesNotMatch(run.text('coverageRows'), /Beta|Gamma/);
+    assert.equal(run.text('coverageSearchStatus'), '검색 결과 1 / 3업체');
+    assert.match(run.text('coverageStatus'), /실관리 3.*연결 확인 1.*확인 필요 2/);
+  }
+  await showAccounts(run);
+  const accountSearch = run.elements.get('inventorySearch'); accountSearch.value = '계정없음'; accountSearch.dispatch('input');
+  run.elements.get('inventoryCoverageTab').dispatch('click'); await flush();
+  assert.equal(search.value, 'kim 담당'); assert.match(run.text('coverageRows'), /Alpha/);
+  run.elements.get('inventoryReload').dispatch('click'); await flush();
+  assert.equal(run.text('coverageSearchStatus'), '검색 결과 1 / 3업체');
+  search.value = '없는업체'; search.dispatch('input');
+  assert.match(run.text('coverageRows'), /검색 조건에 맞는 실관리 업체가 없습니다/);
+  run.scope('me'); await flush();
+  assert.equal(search.value, ''); assert.equal(run.text('coverageSearchStatus'), '검색 결과 3 / 3업체');
+});
+
+test('ID 미입력 후보는 정확한 전산 업체 URL을 분리해 열며 안전한 대체 링크와 재진입 안내를 제공한다', async () => {
+  const run = launch({data:inventory([], {ready:true,total:2,matched:0,missing:2,items:[
+    {possibility_id:51,company_name:'합성 업체 A',state:'candidate_pending',codes:['ID_MISSING']},
+    {possibility_id:52,company_name:'합성 업체 B',state:'id_missing',codes:[]}]})});
+  await flush();
+  const buttons = run.buttons('coverageRows').filter(button => button.textContent === '광고 계정 ID 입력');
+  assert.equal(buttons.length, 1); buttons[0].dispatch('click');
+  const url = 'http://metainc.co.kr/metapos/advertiser-setup?company=51&panel=credentials&vendor=naver';
+  assert.deepEqual(run.opened, [[url, '_blank', 'noopener,noreferrer']]);
+  const link = tree(run.elements.get('coverageRows')).find(el => el.tagName === 'A');
+  assert.equal(link.getAttribute('href'), url); assert.equal(link.getAttribute('target'), '_blank');
+  assert.equal(link.getAttribute('rel'), 'noopener noreferrer');
+  assert.match(run.text('coverageRows'), /전산 로그인 뒤 관제로 돌아와.*광고 계정 ID 입력.*다시/);
+  assert.doesNotMatch(run.text('toast'), /저장 완료|연결 완료/);
+  assert.equal(run.requests.filter(request => !request.url.includes('/me') && !request.url.includes('/accounts?')).length, 0);
+});
+
+test('전산 입력은 원천 보류·잘못된 업체 번호·현재 검색 제외·교체된 자료·권한 확인 전에서 열리지 않는다', async () => {
+  function data(pid=51) { return inventory([], {ready:true,total:1,matched:0,missing:1,items:[
+    {possibility_id:pid,company_name:'대상',codes:['ID_MISSING'],state:'candidate_pending'}]}); }
+  for (const pid of ['51','51&vendor=other',0,-1,1.5,Number.MAX_SAFE_INTEGER+1]) {
+    const run = launch({data:data(pid)}); await flush();
+    assert.equal(run.buttons('coverageRows').filter(button => button.textContent === '광고 계정 ID 입력').length,0);
+  }
+  for (const mode of ['source','scope','search','snapshot','unverified','navigate']) {
+    const value = data(); if (mode === 'source') value.managed_coverage.ready=false;
+    const run = launch({data:value}); await flush();
+    const button = run.buttons('coverageRows').find(button => button.textContent === '광고 계정 ID 입력');
+    if (mode === 'source') { assert.equal(button,undefined); continue; }
+    const link = tree(run.elements.get('coverageRows')).find(el => el.tagName === 'A');
+    if (mode === 'scope') { run.scope('me'); await flush(); }
+    if (mode === 'search') { const input=run.elements.get('coverageSearch');input.value='다른업체';input.dispatch('input'); }
+    if (mode === 'snapshot') { run.elements.get('inventoryReload').dispatch('click');await flush(); }
+    if (mode === 'unverified') run.elements.get('s-transfers').classList.add('view-unverified');
+    if (mode === 'navigate') run.navigate('dashboard');
+    button.dispatch('click');
+    assert.equal(link.dispatch('click').defaultPrevented,true,mode);
+    assert.equal(link.dispatch('auxclick').defaultPrevented,true,mode);
+    assert.equal(run.opened.length,0,mode);
+  }
+});
 
 function linkFixture(overrides = {}) {
   return Object.assign({ ref: 'synthetic-ref-1', pair_key: 'synthetic-pair-1', possibility_id: 1,

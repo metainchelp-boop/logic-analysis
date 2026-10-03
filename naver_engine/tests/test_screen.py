@@ -63,14 +63,21 @@ class TextRulesTest(unittest.TestCase):
         self.assertNotRegex(HTML, r"\sstyle\s*=", "인라인 스타일 속성")
         self.assertNotIn("javascript:", HTML.lower())
 
-    def test_absolute_same_origin_paths_only(self):
+    def test_same_origin_paths_and_one_official_erp_credential_entry(self):
         refs = re.findall(r'\b(?:src|href)="([^"]*)"', HTML)
         self.assertTrue(refs)
         for ref in refs:
             self.assertRegex(ref, r"^/naver/[a-z0-9_.-]+$", ref)
             p = R.page_file(PAGE, ref[len("/naver/"):])
             self.assertIsNotNone(p, ref)   # 입구가 실제로 내주는 파일(확장자·폴더 규칙)
-        for text, name in ((HTML, "html"), (CODE, "js"), (CSS_CODE, "css"), (CSS, "css 설명 포함")):
+        approved = "http://metainc.co.kr/metapos/advertiser-setup?company="
+        self.assertEqual(CODE.count(approved), 1)
+        self.assertIn("var url = '" + approved + "' + row.possibility_id + '&panel=credentials&vendor=naver';", CODE)
+        self.assertIn("!Number.isSafeInteger(row.possibility_id) || row.possibility_id <= 0", CODE)
+        self.assertEqual(CODE.count("window.open("), 1)
+        self.assertIn("window.open(url, '_blank', 'noopener,noreferrer')", CODE)
+        self.assertIn("href: url, target: '_blank', rel: 'noopener noreferrer'", CODE)
+        for text, name in ((HTML, "html"), (CODE.replace(approved, "APPROVED_ERP_ENTRY"), "js"), (CSS_CODE, "css"), (CSS, "css 설명 포함")):
             self.assertNotRegex(text, r"(?i)\b(?:https?|wss?|ftp):", name)
             self.assertNotRegex(text, r"(?<![A-Za-z0-9_])//[A-Za-z0-9.-]+\.[a-z]{2,}", name)   # //host 모양
         self.assertNotIn("@import", CSS_CODE)

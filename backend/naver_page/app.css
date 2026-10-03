@@ -64,6 +64,9 @@ h1.pt{font-size:20px;font-weight:800;margin-bottom:4px;text-wrap:balance}
 @media(max-width:480px){.dashboard-heading{flex-wrap:wrap;gap:0;margin-bottom:12px}.dashboard-metric{padding:13px}.dashboard-metric .value{font-size:23px}}
 #inventoryCard>.ps{margin:0 14px 12px;max-width:none}
 #inventoryCard .chips label{display:inline-flex;align-items:center;gap:6px}
+.inventory-balance{display:flex;flex-direction:column;gap:3px;min-width:0;max-width:100%;padding:9px 12px;border:1px solid var(--line2);border-radius:8px;background:var(--panel2);overflow-wrap:anywhere;white-space:normal}
+.inventory-balance strong{font-size:14px;font-variant-numeric:tabular-nums}
+.inventory-balance .note{font-size:12px;color:var(--sub)}
 #inventoryRows .w{display:block;font-size:12px;color:var(--sub);margin-top:3px}
 .account-values{min-width:0}
 .ad-reasons{margin-top:8px;white-space:normal;min-width:0;max-width:380px}
@@ -78,6 +81,7 @@ h1.pt{font-size:20px;font-weight:800;margin-bottom:4px;text-wrap:balance}
 #coverageRows .w{display:block;font-size:12px;color:var(--sub);margin-top:3px;overflow-wrap:anywhere}
 #coverageRows td:last-child{min-width:0}
 #coverageRows .btn{display:block;margin-top:6px}
+.credential-entry a{display:inline-block;margin-top:8px;overflow-wrap:anywhere}
 .report-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
 .report-heading>.btn{flex-shrink:0}
 .report-source{border-left:3px solid var(--blue);font-size:13px;color:var(--sub);display:grid;gap:5px}

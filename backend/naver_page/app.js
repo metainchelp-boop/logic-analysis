@@ -7,7 +7,7 @@
  *   다른 이름·다른 곳.
  *   ③ 토큰은 읽지도 보내지도 않는다. 토큰(1시간)이 끝나기 10분 전에 /session/refresh(1분마다 살핌 · 토큰 끝 시각에서 센다 ·
  *   새로 고침해도 어긋나지 않게). 1시간 넘게 손대지 않으면 이 창의 로그인을 끝낸다(여럿이 쓰는 PC).
- * - 화면에 쓰는 글자는 모두 textContent 로(HTML 로 끼워 넣지 않는다) · 바깥 주소 0 · 이동은 /naver/ 안의 정해진 주소만.
+ * - 화면 글자는 textContent 로만 넣는다. 관제 안 이동과 ID 누락 업체의 공식 전산 입력 창만 허용한다.
  */
 (function () {
   'use strict';
@@ -27,7 +27,7 @@
     lastInput: Date.now(), refreshing: false, retryAt: 0, retryN: 0, warned: false, bellGen: 0,
     filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
     inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current', inventoryPanel: 'coverage',
-    dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null, screen: null
+    coverageQ: '', dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null, screen: null
   };
 
   // ── 작은 도구 ─────────────────────────────────────────────────────
@@ -167,7 +167,7 @@
     Object.keys(VIEW_STATUS).forEach(function (name) { gateView(name); put($(VIEW_STATUS[name])); });
     $('upbox').hidden = true;
     ['tbody', 'issues', 'kpis', 'iwan', 'upTitle', 'upList', 'doneList', 'runbar', 'linksBody', 'endedBody', 'inventoryRows',
-      'inventorySummary', 'coverageRows', 'reportsRows', 'reportsPages', 'dashboardMetrics', 'dashboardDelivery',
+      'inventorySummary', 'inventoryBalance', 'coverageRows', 'coverageSearchStatus', 'reportsRows', 'reportsPages', 'dashboardMetrics', 'dashboardDelivery',
       'dashboardConfiguration', 'dashboardPeriod', 'dashboardStatus', 'dashboardCoverage', 'dashboardAccounts',
       'dashboardCollected', 'dashboardRatioNote', 'inventoryCount', 'inventorySource', 'inventoryCadence', 'coverageStatus',
       'reportsSchedule', 'reportsStatus', 'iss-n', 'tbl-n', 'links-n', 'ended-n', 'c-name', 'c-crumb', 'c-sub', 'c-badges',
@@ -178,7 +178,7 @@
     var identity = [state.me && state.me.idx, state.me && state.me.scope, state.me && state.me.narrowed,
       state.session && state.session.narrowed, state.selection];
     var scopeKey = JSON.stringify(identity), key = JSON.stringify(identity.concat(kstDay()));
-    if (upContext !== scopeKey) { state.upOpen = false; upContext = scopeKey; }
+    if (upContext !== scopeKey) { state.upOpen = false; state.coverageQ = ''; $('coverageSearch').value = ''; upContext = scopeKey; }
     if (viewContext !== key) { purgeViews(); viewContext = key; }
     return key;
   }
@@ -504,6 +504,8 @@
   function lost(kind) {
     dropSession();
     state.me = null;              // 뒤로 가기가 옛 화면을 다시 그리지 않게
+    state.coverageQ = ''; $('coverageSearch').value = '';
+    purgeViews();
     state.inventory = null;
     state.inventoryGen++;
     state.gen++;
@@ -833,6 +835,36 @@
       if (!unchanged) renderInventory();
     });
   }
+  function knownBalance(row) {
+    var value = row.collection && row.collection.bizmoney;
+    return typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER ? value : null;
+  }
+  // JSON 숫자의 십진 표현을 정수로 맞춰 더한다. 행별 절사나 이진 부동소수 합산을 하지 않는다.
+  function balanceSum(values) {
+    var total = 0n, scale = 0;
+    values.forEach(function (value) {
+      var parts = String(value).toLowerCase().split('e'), digits = parts[0].split('.');
+      var places = (digits[1] || '').length - Number(parts[1] || 0);
+      var amount = BigInt(digits.join(''));
+      if (places < 0) { amount *= 10n ** BigInt(-places); places = 0; }
+      if (places > scale) { total *= 10n ** BigInt(places - scale); scale = places; }
+      total += amount * 10n ** BigInt(scale - places);
+    });
+    var unit = 10n ** BigInt(scale), limit = BigInt(Number.MAX_SAFE_INTEGER) * unit;
+    return total > limit || total < -limit ? null : Number(total / unit);
+  }
+  function renderInventoryBalance(data, rows) {
+    var ready = data.accounts_current === true && data.catalog_status === 'accepted' && data.matching_ready === true &&
+      (!data.summary || data.summary.ready === true);
+    var values = rows.map(knownBalance).filter(function (value) { return value !== null; });
+    var amount = ready ? balanceSum(values) : null;
+    var label = !ready ? '집계 보류' : !rows.length ? '대상 계정 없음' : !values.length ? '확인 잔액 없음' :
+      amount === null ? '안전한 표시 범위 초과 · 집계 보류' : '';
+    var previous = rows.some(function (row) { return knownBalance(row) !== null && row.collection.stale === true; });
+    put($('inventoryBalance'), h('strong', null, '확인된 잔액 합계 : ' + (ready && (!rows.length || values.length) ? won(amount) : '—')),
+      h('span', { class: 'note' }, (label ? label + ' · ' : '') + '확인 ' + num(values.length) + ' / ' + num(rows.length) + '계정 · 미확인 ' + num(rows.length - values.length)),
+      h('span', { class: 'note' }, '계정별 확인 시각 기준' + (previous ? ' · 이전 확인값 포함' : '')));
+  }
   function renderInventory() {
     var data = state.inventory;
     if (!data) return;
@@ -841,7 +873,11 @@
     var query = state.inventoryQ.toLocaleLowerCase();
     var rows = data.rows.filter(function (r) {
       return [r.account_name, r.company_name, r.ad_account_no].join(' ').toLocaleLowerCase().indexOf(query) !== -1;
+    }).sort(function (a, b) {
+      var left = knownBalance(a), right = knownBalance(b);
+      return left === null ? (right === null ? 0 : 1) : right === null ? -1 : right - left;
     });
+    renderInventoryBalance(data, rows);
     $('inventoryCount').textContent = (data.view === 'lost' ? '이관 빠짐 ' + num(rows.length) + '계정 · 현재 이관 ' + num(data.total) :
       num(rows.length) + ' / ' + num(data.total)) + '계정 · 매칭 ' +
       num(data.counts.matched) + ' · 업체 미확인 ' + num(data.counts.no_erp_record) + ' · 미분류 ' + num(data.counts.unclassified);
@@ -916,7 +952,7 @@
           h('span', { class: 'w' }, '노출 ' + num(c.imp === undefined ? c.yday_imp : c.imp) + ' · 클릭 ' + num(c.clk === undefined ? c.yday_clk : c.clk)),
           c.last_success_at ? h('span', { class: 'w' }, '네이버 자료 수집 시각 · 마지막 성공 ' + datedTime(c.last_success_at)) : null,
           c.source_rechecked_at ? h('span', { class: 'w' }, '표시 실적 원천 확인 ' + datedTime(c.source_rechecked_at)) : null),
-        h('td', { class: 'account-values' }, h('b', { class: 'num' }, won(c.bizmoney)),
+        h('td', { class: 'account-values' }, h('b', { class: 'num' }, won(knownBalance(r))),
           h('span', { class: 'w' }, '잔액 확인 ' + datedTime(c.bizmoney_at)), c.stale === true && typeof c.bizmoney === 'number' ? h('span', { class: 'w' }, '이전 잔액 · 최신 확인 필요') : null,
           typeof c.bizmoney_change === 'number' && isFinite(c.bizmoney_change) && c.previous_bizmoney_at ?
             h('span', { class: 'w' }, '이전 조회 대비 잔액 ' + (c.bizmoney_change > 0 ? '증가 ' : c.bizmoney_change < 0 ? '감소 ' : '변화 없음 ') + won(Math.abs(c.bizmoney_change)),
@@ -1092,12 +1128,40 @@
     'rejected-by-human': '이 조합은 아님으로 확인됨', 'name-different': '번호와 업체 이름 불일치',
     'name-points-elsewhere': '계정 이름이 다른 업체와 일치', 'ad-account-id-format': '광고 계정 ID 형식 오류',
     'ad-account-not-linked': '광고 계정 ID가 이관 목록에 없음', 'account-identifiers-conflict': '두 ID가 서로 다른 계정 지칭' };
+  function coverageMatches(row) {
+    function normalized(value) { return String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase(); }
+    return normalized([row.company_name, row.workflow, row.owner && row.owner.name].join(' ')).indexOf(normalized(state.coverageQ)) !== -1;
+  }
+  function credentialEntry(row, coverage) {
+    var snapshot = state.inventory, selection = state.selection;
+    if (!snapshot || !coverage || coverage.ready !== true || snapshot.matching_ready !== true ||
+        snapshot.accounts_current !== true || snapshot.catalog_status !== 'accepted' || snapshot.summary && snapshot.summary.ready !== true ||
+        !Array.isArray(row.codes) || row.codes.indexOf('ID_MISSING') === -1 ||
+        !Number.isSafeInteger(row.possibility_id) || row.possibility_id <= 0) return null;
+    // 외부 주소는 이 고정 경로 한 곳뿐이다. 업체명·토큰·자격정보·서버 제공 URL은 보내지 않는다.
+    var url = 'http://metainc.co.kr/metapos/advertiser-setup?company=' + row.possibility_id + '&panel=credentials&vendor=naver';
+    function fresh() {
+      return !!state.me && !!state.session && state.screen === 'transfers' && state.inventory === snapshot &&
+        snapshot.managed_coverage === coverage && selection === state.selection &&
+        !$('s-transfers').classList.contains('view-unverified') && coverage.items.indexOf(row) !== -1 && coverageMatches(row);
+    }
+    function guard(event) { if (!fresh()) { event.preventDefault(); return false; } return true; }
+    return h('div', { class: 'credential-entry' }, h('button', { type: 'button', class: 'btn sm', onclick: function () {
+      if (!fresh()) return;
+      try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (error) { /* 아래 동일 주소 링크로 재시도 */ }
+      toast('전산 창이 보이지 않으면 「전산 입력 창 직접 열기」를 눌러 주세요.');
+    } }, '광고 계정 ID 입력'), h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', onclick: guard, onauxclick: guard }, '전산 입력 창 직접 열기'),
+    h('span', { class: 'w' }, '전산 로그인 뒤 관제로 돌아와 「광고 계정 ID 입력」을 다시 누르세요.'),
+    h('span', { class: 'w' }, '창 열기는 저장·연결 완료가 아닙니다. 저장 후 동기화를 기다려 「목록 새로고침」으로 확인하세요.'));
+  }
   function renderManagedCoverage(data, message) {
     var selection = state.selection;
     var ready = data && data.ready === true;
+    var items = data && data.items || [], rows = items.filter(coverageMatches);
     $('coverageStatus').textContent = ready ? '실관리 ' + num(data.total) + ' · 연결 확인 ' + num(data.matched) + ' · 확인 필요 ' + num(data.missing) :
       message || (data ? '원천 자료 확인 필요 · 확정 집계 보류' : '불러오는 중…');
-    put($('coverageRows'), data && (data.items || []).length ? data.items.map(function (r) {
+    $('coverageSearchStatus').textContent = data ? '검색 결과 ' + num(rows.length) + ' / ' + num(items.length) + '업체' : '';
+    put($('coverageRows'), rows.length ? rows.map(function (r) {
       var status = ready ? r.state : 'source_unavailable';
       var action = status === 'matched' ? '「이관 광고 계정 전체」에서 관리·수집 상태 확인' :
         status === 'source_unavailable' ? '자료 동기화 확인 후 목록 새로고침' :
@@ -1108,13 +1172,13 @@
         h('td', null, COVERAGE_STATE[status] || status, (ready ? r.codes || [] : ['SOURCE_UNAVAILABLE']).map(function (code) {
           return h('span', { class: 'w' }, (MATCHING_REASON[code] || '알 수 없는 매칭 사유') + ' (' + code + ')');
         })), h('td', { class: 'num' }, ready ? num(r.matched_account_count) + ' / ' + num(r.candidate_count) : '— / —'),
-        h('td', { class: 'wrap' }, action, ready && (status === 'candidate_pending' || status === 'multiple_candidates') ?
+        h('td', { class: 'wrap' }, action, credentialEntry(r, data), ready && (status === 'candidate_pending' || status === 'multiple_candidates') ?
           h('button', { type: 'button', class: 'btn sm', onclick: function () {
             if (state.screen === 'transfers' && state.inventory && state.inventory.managed_coverage === data &&
                 !$('s-transfers').classList.contains('view-unverified') && selection === state.selection && Number.isSafeInteger(r.possibility_id) && r.possibility_id > 0)
               go('/naver/links?possibility_id=' + r.possibility_id);
           } }, '짝 확인 열기') : null));
-    }) : h('tr', null, h('td', { colspan: 4, class: 'empty' }, ready ? '현재 담당 범위에 실관리 업체가 없습니다.' : message || '최신 자료를 확인하기 전에는 연결 완료로 판단하지 않습니다.')));
+    }) : h('tr', null, h('td', { colspan: 4, class: 'empty' }, ready ? (items.length ? '검색 조건에 맞는 실관리 업체가 없습니다.' : '현재 담당 범위에 실관리 업체가 없습니다.') : message || '최신 자료를 확인하기 전에는 연결 완료로 판단하지 않습니다.')));
   }
   // 보고서는 서버 집계·완결 여부를 그대로 표시한다. 검토는 게시·전송이 아니다.
   function loadReports(page) {
@@ -2228,6 +2292,7 @@
     });
     $('q').addEventListener('input', function () { state.q = this.value.trim(); renderWatchSelection(); });
     $('inventorySearch').addEventListener('input', function () { state.inventoryQ = this.value.trim(); renderInventory(); });
+    $('coverageSearch').addEventListener('input', function () { state.coverageQ = this.value; if (state.inventory) renderManagedCoverage(state.inventory.managed_coverage); });
     $('inventoryView').addEventListener('change', function () { state.inventoryView = this.value; loadInventory(); });
     $('inventoryMapping').addEventListener('change', function () { state.inventoryMapping = this.value; loadInventory(); });
     $('inventoryWorkflow').addEventListener('change', function () { state.inventoryWorkflow = this.value; loadInventory(); });
