@@ -68,7 +68,7 @@ const cfg = JSON.parse(process.argv[2]);
     await page.locator('#linksBody').getByText('사람 확인 「맞음」',{exact:false}).waitFor();
     assert.equal(await page.locator('#linksBody').getByRole('button',{name:cfg.company,exact:true}).count(),0);
     await page.click('#linksShowAll');
-    await page.locator('#linksBody').getByText(cfg.other_company,{exact:false}).waitFor();
+    await page.locator('#linksBody').getByRole('button',{name:cfg.other_company,exact:true}).waitFor();
     assert.equal(writes.filter(value => value.endsWith('/links/confirm')).length,2);
     assert.ok(writes.every(value => ['/api/naver-auto/session','/api/naver-auto/links/confirm'].includes(value)));
     assert.deepEqual(errors,[]); assert.deepEqual(external,[]);

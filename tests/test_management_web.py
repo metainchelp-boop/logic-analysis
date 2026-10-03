@@ -1,5 +1,4 @@
 """실제 WSGI·토큰·범위·매칭을 통과하는 관리 API. DB 경계만 fixture로 대체한다."""
-from types import SimpleNamespace
 import unittest
 
 from naver_engine.tests import test_web as TW
@@ -69,13 +68,24 @@ class WebStore(FixtureStore):
     def accounts_read_at(self):
         return self.account_at
 
+    def last_sync(self, kind, outcome=None):
+        return {"kind": kind, "outcome": TW.S.SYNC_ACCEPTED, "at": self.account_at.isoformat()}
+
+    def account_times(self):
+        return {row["customer_id"]: {"present": row["present"], "absent_days": 0,
+            "last_seen_at": self.account_at, "absent_since": None, "absent_last_at": None}
+            for row in self.account_rows}
+
     def stage_as_of(self):
         return self.account_at
 
-    def record_decisions(self, pairs, decision, actor, now, audit_action):
-        self.decisions.extend(SimpleNamespace(possibility_id=pid, customer_id=cid, decision=decision)
-                              for pid, cid in pairs)
-        return list(range(1, len(pairs) + 1))
+    def record_decisions(self, pairs, decision, actor, now, audit_action, guard=None):
+        if guard is not None:
+            guard()
+        start = len(self.decisions) + 1
+        self.decisions.extend(TW.S.LinkDecision(start + n, pid, cid, decision, actor, now)
+                              for n, (pid, cid) in enumerate(pairs))
+        return list(range(start, start + len(pairs)))
 
 
 class ManagementWebTest(unittest.TestCase):
@@ -198,25 +208,26 @@ class ManagementWebTest(unittest.TestCase):
         self.assertEqual(len(self.st.reviews), 2)
 
     def test_staff_can_confirm_own_uncontested_current_number_match(self):
-        now = self.fc.now()
-        self.st.pairing = dict(pairing_id=1, at=now, accounts_read_at=now, stages_as_of=now)
-        self.st.pair_rows = [dict(possibility_id=11, customer_id=TW.A, state="auto", code="same",
-                                  same_name=1, claimed_elsewhere=False)]
-        ref = TW.W.make_ref(1, 11, TW.A, "auto")
+        status, pending = self.get("/links/pending")
+        self.assertEqual(status, 200)
+        self.assertEqual([r["possibility_id"] for r in pending["rows"]], [11])
+        ref = pending["rows"][0]["ref"]
         self.assertEqual(self.post("/links/confirm", body={"refs": [ref]}),
                          (200, {"decided": 1, "decision": "confirmed"}))
         self.assertEqual(self.st.decisions[0].possibility_id, 11)
 
     def test_staff_cannot_confirm_another_owner_or_claimed_account(self):
-        now = self.fc.now()
-        self.st.pairing = dict(pairing_id=1, at=now, accounts_read_at=now, stages_as_of=now)
-        self.st.pair_rows = [dict(possibility_id=12, customer_id=TW.B, state="auto", code="same",
-                                  same_name=1, claimed_elsewhere=False)]
-        ref = TW.W.make_ref(1, 12, TW.B, "auto")
+        status, pending = self.get("/links/pending", actor=101)
+        self.assertEqual(status, 200)
+        ref = next(r["ref"] for r in pending["rows"] if r["possibility_id"] == 12)
         self.assertEqual(self.post("/links/confirm", body={"refs": [ref]})[0], 404)
-        self.st.pair_rows = [dict(possibility_id=11, customer_id=TW.A, state="auto", code="same",
-                                  same_name=1, claimed_elsewhere=True)]
-        ref = TW.W.make_ref(1, 11, TW.A, "auto")
+        self.st.catalog["ids"].append(dict(possibility_id=12, vendor=TW.M.VENDOR_NAVER,
+            customer_id_raw=str(TW.A), ad_account_no_raw=None))
+        status, pending = self.get("/links/pending")
+        self.assertEqual(status, 200)
+        row = next(r for r in pending["rows"] if r["possibility_id"] == 11)
+        self.assertFalse(row["can_confirm"])
+        ref = row["ref"]
         self.assertEqual(self.post("/links/confirm", body={"refs": [ref]})[0], 409)
         self.assertEqual(self.st.decisions, [])
 
