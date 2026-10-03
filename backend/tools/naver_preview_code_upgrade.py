@@ -1,4 +1,4 @@
-"""Exact pinned schema11→11 delta/compact-view release; paired snapshot rollback."""
+"""Exact pinned schema11→11 transfer-balance UI release; paired snapshot rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -13,23 +13,16 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
+OLD_COMMIT = 'e132a4b6ebba40ca58fb4de3cd3a66a3c910b218'
 # Reviewed final application commit, archive and complete store bytes; CI/deployment are separate gates.
-TARGET_COMMIT = 'e132a4b6ebba40ca58fb4de3cd3a66a3c910b218'
+TARGET_COMMIT = '01344b145d0b679a6ee730d7fa4b5990278dd654'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = '7bd50f067909cc4a2e0cade70265d0073499b8e8c2e319cd638c38d73ff2c4a2'
-TARGET_SOURCE_SHA256 = '94c0e58e700b73c4459edadeb97b34c3268a8c8483fe4107c178b9423444ae29'
-STORE_SHA256 = {'old':'a36b8586d6e40c593bc004c10256b4b70ee67ee3ecba81d22eea24fd7d55edbd',
+OLD_SOURCE_SHA256 = '94c0e58e700b73c4459edadeb97b34c3268a8c8483fe4107c178b9423444ae29'
+TARGET_SOURCE_SHA256 = '0faf3865ec14802d96bf51fa376961064196105e52578f24c93e56430120693d'
+STORE_SHA256 = {'old':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e',
                 'target':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e'}
-CODE_PATHS = {'backend/app/naver_auto/scope.py', 'backend/naver_page/app.css',
-              'backend/naver_page/app.js', 'backend/naver_page/index.html',
-              'naver_engine/store.py', 'naver_engine/view_sync.py', 'naver_engine/web.py'}
-TEST_PATHS = {'naver_engine/tests/dashboard_screen_browser.js', 'naver_engine/tests/inventory_screen_browser.js',
-              'naver_engine/tests/management_screen_browser.js', 'naver_engine/tests/screen_browser.js',
-              'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_view_delta_screen.py',
-              'naver_engine/tests/test_view_sections_screen.py', 'naver_engine/tests/test_view_sync.py',
-              'naver_engine/tests/test_view_sync_storage.py', 'naver_engine/tests/test_view_sync_web.py',
-              'naver_engine/tests/view_delta_screen_browser.js', 'naver_engine/tests/view_sections_screen_browser.js'}
+CODE_PATHS = {'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html'}
+TEST_PATHS = {'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_transfer_balance_screen.py'}
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'

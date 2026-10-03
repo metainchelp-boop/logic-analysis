@@ -20,7 +20,7 @@ class SameSchemaContractTest(unittest.TestCase):
         for role in ('old', 'target'):
             sources[role] = ('SCHEMA_VERSION=11\n_SCHEMA='+repr(old_sql)+'\n'+
                 '_SCHEMA += '+repr(sql[len(old_sql):])+'\n_REVISION_COLUMNS='+repr(contract['revision_columns'])+'\n'+
-                contract['migrate']+'\n# '+role+' pinned store\n').encode()
+                contract['migrate']+'\n# unchanged pinned store\n').encode()
         with tempfile.TemporaryDirectory() as directory:
             old, new = (Path(directory).resolve()/part for part in ('old', 'new'))
             for path, role in ((old, 'old'), (new, 'target')):

@@ -267,13 +267,13 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, '6e4b035901027fef29266de218bfb0594227a3fe')
-        self.assertEqual(module.TARGET_COMMIT, 'e132a4b6ebba40ca58fb4de3cd3a66a3c910b218')
+        self.assertEqual(module.OLD_COMMIT, 'e132a4b6ebba40ca58fb4de3cd3a66a3c910b218')
+        self.assertEqual(module.TARGET_COMMIT, '01344b145d0b679a6ee730d7fa4b5990278dd654')
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         '7bd50f067909cc4a2e0cade70265d0073499b8e8c2e319cd638c38d73ff2c4a2')
-        self.assertEqual(module.TARGET_SOURCE_SHA256, '94c0e58e700b73c4459edadeb97b34c3268a8c8483fe4107c178b9423444ae29')
+                         '94c0e58e700b73c4459edadeb97b34c3268a8c8483fe4107c178b9423444ae29')
+        self.assertEqual(module.TARGET_SOURCE_SHA256, '0faf3865ec14802d96bf51fa376961064196105e52578f24c93e56430120693d')
         self.assertEqual(module.STORE_SHA256, {
-            'old':'a36b8586d6e40c593bc004c10256b4b70ee67ee3ecba81d22eea24fd7d55edbd',
+            'old':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e',
             'target':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e'})
         contract = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         # This historical migration fixture remains the original schema-11 release.
@@ -281,16 +281,9 @@ class ContractTest(unittest.TestCase):
                          '66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89')
         # Exact git archive delta: top-level tests, docs and seal tooling are not bundled.
         self.assertEqual(module.CODE_PATHS, {
-            'backend/app/naver_auto/scope.py', 'backend/naver_page/app.css',
-            'backend/naver_page/app.js', 'backend/naver_page/index.html',
-            'naver_engine/store.py', 'naver_engine/view_sync.py', 'naver_engine/web.py'})
+            'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html'})
         self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/dashboard_screen_browser.js', 'naver_engine/tests/inventory_screen_browser.js',
-            'naver_engine/tests/management_screen_browser.js', 'naver_engine/tests/screen_browser.js',
-            'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_view_delta_screen.py',
-            'naver_engine/tests/test_view_sections_screen.py', 'naver_engine/tests/test_view_sync.py',
-            'naver_engine/tests/test_view_sync_storage.py', 'naver_engine/tests/test_view_sync_web.py',
-            'naver_engine/tests/view_delta_screen_browser.js', 'naver_engine/tests/view_sections_screen_browser.js'})
+            'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_transfer_balance_screen.py'})
 
     def scenario(self, failure=None, mode='apply'):
         code = sealed_code()
@@ -531,7 +524,7 @@ class ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_delta_compact_release_allows_only_exact_runtime_and_test_paths(self):
+    def test_transfer_balance_release_allows_only_exact_ui_and_test_paths(self):
         module=sealed_code()
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -541,15 +534,17 @@ class ContractTest(unittest.TestCase):
             for root in (old,new):
                 for name in approved:
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
-            # This release adds the pure view module; it is not present in the old archive.
-            (old/'naver_engine/view_sync.py').unlink()
+            # Only this bundled browser-discovery wrapper is newly added in the archive.
+            (old/'naver_engine/tests/test_transfer_balance_screen.py').unlink()
             for name in approved:
-                (new/name).write_bytes(b'approved delta and compact view update')
+                (new/name).write_bytes(b'approved transfer balance UI update')
             module.compatible_code_scope(old,new,upgrade)
             for name in ('naver_runtime/bootstrap.py','naver_engine/inventory_reads.py',
                          'naver_runtime/writer.py','backend/app/naver_auto/org_snapshot.py',
                          'backend/naver_page/sso-bootstrap.js','backend/app/naver_entry.py',
                          'naver_runtime/scheduler.py','naver_engine/unreviewed_view_sync.py',
+                         'naver_engine/view_sync.py','naver_engine/store.py','naver_engine/web.py',
+                         'backend/app/naver_auto/scope.py',
                          'naver_engine/catalog_links.py','naver_engine/naver_read.py',
                          'naver_engine/performance_reads.py','naver_engine/structure_reads.py',
                          'naver_engine/credentials.py','naver_engine/session.py',
@@ -558,12 +553,12 @@ class ContractTest(unittest.TestCase):
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)
                 forbidden.unlink()
-            added=new/'naver_engine/view_sync.py'
-            added.unlink();added.symlink_to(new/'naver_engine/web.py')
+            added=new/'naver_engine/tests/test_transfer_balance_screen.py'
+            added.unlink();added.symlink_to(new/'backend/naver_page/app.js')
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_new_view_module_does_not_allow_adjacent_modules_or_existing_source_deletion(self):
+    def test_new_screen_test_does_not_allow_adjacent_modules_or_existing_source_deletion(self):
         module=sealed_code()
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -573,7 +568,8 @@ class ContractTest(unittest.TestCase):
                 (root/'naver_engine').mkdir(parents=True)
                 (root/'naver_engine/web.py').write_bytes(b'unchanged web')
                 (root/'naver_engine/credentials.py').write_bytes(b'unchanged credentials')
-            (new/'naver_engine/view_sync.py').write_bytes(b'approved new view module')
+            (new/'naver_engine/tests').mkdir()
+            (new/'naver_engine/tests/test_transfer_balance_screen.py').write_bytes(b'approved browser wrapper')
             module.compatible_code_scope(old,new,upgrade)
             adjacent=new/'naver_engine/view_sync_extra.py'
             adjacent.write_bytes(b'not approved')
@@ -787,7 +783,7 @@ class StoreScopeTest(unittest.TestCase):
         '_REVISION_COLUMNS='+repr({key: tuple(tuple(item) for item in value) for key,value in
                                    _ACTUAL['new_observed_unsealed']['revision_columns'].items()})+'\n'+
         _ACTUAL['new_observed_unsealed']['migrate']+'\n').encode()+METHODS
-    TARGET_SOURCE = SOURCE.replace(b'return None', b'return 1')
+    TARGET_SOURCE = SOURCE  # This UI-only release does not change any Store method or byte.
 
     def setUp(self):
         self.code = sealed_code()
