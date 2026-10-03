@@ -1,4 +1,4 @@
-"""Exact pinned schema11→11 retry/catalog-link release; paired snapshot rollback."""
+"""Exact pinned schema11→11 delta/compact-view release; paired snapshot rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -13,24 +13,23 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = 'b83e908d04223b9e004122ae2ddfc1fc452a5255'
+OLD_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
 # Reviewed final application commit, archive and complete store bytes; CI/deployment are separate gates.
-TARGET_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
+TARGET_COMMIT = 'e132a4b6ebba40ca58fb4de3cd3a66a3c910b218'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = '5fb05acbd66954d560871db93d4561efb2e1f734d33ec41206f5ef1c6d1cace2'
-TARGET_SOURCE_SHA256 = '7bd50f067909cc4a2e0cade70265d0073499b8e8c2e319cd638c38d73ff2c4a2'
-STORE_SHA256 = {'old':'9130e8205b5f25d8d0c77abe6d38570f81e617949b238236e96accbba5186ecb',
-                'target':'a36b8586d6e40c593bc004c10256b4b70ee67ee3ecba81d22eea24fd7d55edbd'}
-CODE_PATHS = {'backend/naver_page/app.js', 'backend/naver_page/index.html',
-              'naver_engine/catalog_links.py', 'naver_engine/naver_read.py',
-              'naver_engine/performance_reads.py', 'naver_engine/store.py',
-              'naver_engine/structure_reads.py', 'naver_engine/web.py'}
-TEST_PATHS = {'naver_engine/tests/catalog_links_screen_browser.js', 'naver_engine/tests/test_catalog_links.py',
-              'naver_engine/tests/test_catalog_links_screen.py', 'naver_engine/tests/test_collection_selection_cost.py',
-              'naver_engine/tests/test_naver_read_codes.py', 'naver_engine/tests/test_performance_budget_wait.py',
-              'naver_engine/tests/test_performance_error_preservation.py',
-              'naver_engine/tests/test_performance_retry_cause.py',
-              'naver_engine/tests/test_structure_retry_budget.py'}
+OLD_SOURCE_SHA256 = '7bd50f067909cc4a2e0cade70265d0073499b8e8c2e319cd638c38d73ff2c4a2'
+TARGET_SOURCE_SHA256 = '94c0e58e700b73c4459edadeb97b34c3268a8c8483fe4107c178b9423444ae29'
+STORE_SHA256 = {'old':'a36b8586d6e40c593bc004c10256b4b70ee67ee3ecba81d22eea24fd7d55edbd',
+                'target':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e'}
+CODE_PATHS = {'backend/app/naver_auto/scope.py', 'backend/naver_page/app.css',
+              'backend/naver_page/app.js', 'backend/naver_page/index.html',
+              'naver_engine/store.py', 'naver_engine/view_sync.py', 'naver_engine/web.py'}
+TEST_PATHS = {'naver_engine/tests/dashboard_screen_browser.js', 'naver_engine/tests/inventory_screen_browser.js',
+              'naver_engine/tests/management_screen_browser.js', 'naver_engine/tests/screen_browser.js',
+              'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_view_delta_screen.py',
+              'naver_engine/tests/test_view_sections_screen.py', 'naver_engine/tests/test_view_sync.py',
+              'naver_engine/tests/test_view_sync_storage.py', 'naver_engine/tests/test_view_sync_web.py',
+              'naver_engine/tests/view_delta_screen_browser.js', 'naver_engine/tests/view_sections_screen_browser.js'}
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'
@@ -207,7 +206,7 @@ def store_contract(body, role):
 
 
 def compatible_source(old, new, upgrade):
-    # Exact reviewed retry/catalog delta only; schema11 SQL, initializer and infrastructure stay fixed.
+    # Exact reviewed delta/compact views only; schema11 SQL, initializer and infrastructure stay fixed.
     read = lambda path: upgrade.read_file(path, mode=0o644, maximum=1024*1024, minimum=0)
     for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
                  'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',

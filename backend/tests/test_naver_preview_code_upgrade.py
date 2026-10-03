@@ -267,30 +267,30 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, 'b83e908d04223b9e004122ae2ddfc1fc452a5255')
-        self.assertEqual(module.TARGET_COMMIT, '6e4b035901027fef29266de218bfb0594227a3fe')
+        self.assertEqual(module.OLD_COMMIT, '6e4b035901027fef29266de218bfb0594227a3fe')
+        self.assertEqual(module.TARGET_COMMIT, 'e132a4b6ebba40ca58fb4de3cd3a66a3c910b218')
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         '5fb05acbd66954d560871db93d4561efb2e1f734d33ec41206f5ef1c6d1cace2')
-        self.assertEqual(module.TARGET_SOURCE_SHA256, '7bd50f067909cc4a2e0cade70265d0073499b8e8c2e319cd638c38d73ff2c4a2')
+                         '7bd50f067909cc4a2e0cade70265d0073499b8e8c2e319cd638c38d73ff2c4a2')
+        self.assertEqual(module.TARGET_SOURCE_SHA256, '94c0e58e700b73c4459edadeb97b34c3268a8c8483fe4107c178b9423444ae29')
         self.assertEqual(module.STORE_SHA256, {
-            'old':'9130e8205b5f25d8d0c77abe6d38570f81e617949b238236e96accbba5186ecb',
-            'target':'a36b8586d6e40c593bc004c10256b4b70ee67ee3ecba81d22eea24fd7d55edbd'})
+            'old':'a36b8586d6e40c593bc004c10256b4b70ee67ee3ecba81d22eea24fd7d55edbd',
+            'target':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e'})
         contract = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         # This historical migration fixture remains the original schema-11 release.
         self.assertEqual(contract['new_observed_unsealed']['sha256'],
                          '66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89')
         # Exact git archive delta: top-level tests, docs and seal tooling are not bundled.
         self.assertEqual(module.CODE_PATHS, {
-            'backend/naver_page/app.js', 'backend/naver_page/index.html', 'naver_engine/catalog_links.py',
-            'naver_engine/naver_read.py', 'naver_engine/performance_reads.py', 'naver_engine/store.py',
-            'naver_engine/structure_reads.py', 'naver_engine/web.py'})
+            'backend/app/naver_auto/scope.py', 'backend/naver_page/app.css',
+            'backend/naver_page/app.js', 'backend/naver_page/index.html',
+            'naver_engine/store.py', 'naver_engine/view_sync.py', 'naver_engine/web.py'})
         self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/catalog_links_screen_browser.js', 'naver_engine/tests/test_catalog_links.py',
-            'naver_engine/tests/test_catalog_links_screen.py', 'naver_engine/tests/test_collection_selection_cost.py',
-            'naver_engine/tests/test_naver_read_codes.py', 'naver_engine/tests/test_performance_budget_wait.py',
-            'naver_engine/tests/test_performance_error_preservation.py',
-            'naver_engine/tests/test_performance_retry_cause.py',
-            'naver_engine/tests/test_structure_retry_budget.py'})
+            'naver_engine/tests/dashboard_screen_browser.js', 'naver_engine/tests/inventory_screen_browser.js',
+            'naver_engine/tests/management_screen_browser.js', 'naver_engine/tests/screen_browser.js',
+            'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_view_delta_screen.py',
+            'naver_engine/tests/test_view_sections_screen.py', 'naver_engine/tests/test_view_sync.py',
+            'naver_engine/tests/test_view_sync_storage.py', 'naver_engine/tests/test_view_sync_web.py',
+            'naver_engine/tests/view_delta_screen_browser.js', 'naver_engine/tests/view_sections_screen_browser.js'})
 
     def scenario(self, failure=None, mode='apply'):
         code = sealed_code()
@@ -531,7 +531,7 @@ class ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_retry_catalog_release_allows_only_exact_runtime_and_test_paths(self):
+    def test_delta_compact_release_allows_only_exact_runtime_and_test_paths(self):
         module=sealed_code()
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -541,24 +541,67 @@ class ContractTest(unittest.TestCase):
             for root in (old,new):
                 for name in approved:
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
-            # This release adds catalog confirmation; it is not present in the old archive.
-            (old/'naver_engine/catalog_links.py').unlink()
+            # This release adds the pure view module; it is not present in the old archive.
+            (old/'naver_engine/view_sync.py').unlink()
             for name in approved:
-                (new/name).write_bytes(b'approved reliability update')
+                (new/name).write_bytes(b'approved delta and compact view update')
             module.compatible_code_scope(old,new,upgrade)
             for name in ('naver_runtime/bootstrap.py','naver_engine/inventory_reads.py',
-                         'naver_runtime/writer.py','backend/app/naver_auto/scope.py',
+                         'naver_runtime/writer.py','backend/app/naver_auto/org_snapshot.py',
                          'backend/naver_page/sso-bootstrap.js','backend/app/naver_entry.py',
-                         'naver_runtime/scheduler.py','naver_engine/unreviewed_catalog_links.py',
+                         'naver_runtime/scheduler.py','naver_engine/unreviewed_view_sync.py',
+                         'naver_engine/catalog_links.py','naver_engine/naver_read.py',
+                         'naver_engine/performance_reads.py','naver_engine/structure_reads.py',
+                         'naver_engine/credentials.py','naver_engine/session.py',
                          'tests/naver_management_ui.test.js','tools/naver-preview-seal.py'):
                 forbidden=new/name;forbidden.parent.mkdir(parents=True,exist_ok=True);forbidden.write_bytes(b'not approved')
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)
                 forbidden.unlink()
-            added=new/'naver_engine/catalog_links.py'
+            added=new/'naver_engine/view_sync.py'
             added.unlink();added.symlink_to(new/'naver_engine/web.py')
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
                 module.compatible_code_scope(old,new,upgrade)
+
+    def test_new_view_module_does_not_allow_adjacent_modules_or_existing_source_deletion(self):
+        module=sealed_code()
+        upgrade=Mock()
+        upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
+        with tempfile.TemporaryDirectory() as folder:
+            old=Path(folder).resolve()/'old';new=Path(folder).resolve()/'new'
+            for root in (old,new):
+                (root/'naver_engine').mkdir(parents=True)
+                (root/'naver_engine/web.py').write_bytes(b'unchanged web')
+                (root/'naver_engine/credentials.py').write_bytes(b'unchanged credentials')
+            (new/'naver_engine/view_sync.py').write_bytes(b'approved new view module')
+            module.compatible_code_scope(old,new,upgrade)
+            adjacent=new/'naver_engine/view_sync_extra.py'
+            adjacent.write_bytes(b'not approved')
+            with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
+                module.compatible_code_scope(old,new,upgrade)
+            adjacent.unlink()
+            credentials=new/'naver_engine/credentials.py'
+            credentials.write_bytes(b'changed credentials')
+            with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
+                module.compatible_code_scope(old,new,upgrade)
+            credentials.write_bytes(b'unchanged credentials')
+            (new/'naver_engine/web.py').unlink()
+            with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
+                module.compatible_code_scope(old,new,upgrade)
+
+    def test_target_view_release_rejects_previous_archive_before_prepare_actions(self):
+        module=load('naver_preview_code_upgrade')
+        release=load('naver_preview_release')
+        package=dict(baseline=module.EXPECTED_BASELINE, source_commit=module.TARGET_COMMIT,
+                     ciphertext_sha256='c'*64, source_tar_gz_sha256=module.OLD_SOURCE_SHA256,
+                     run_id='123456', operation='code-prepare')
+        host=Mock();lifecycle=Mock();upgrade=Mock()
+        with self.assertRaisesRegex(ValueError,'CODE_TARGET_SOURCE_CHANGED'):
+            module.prepare(package,host,release,lifecycle,upgrade)
+        host.assert_not_called()
+        self.assertEqual(host.mock_calls,[])
+        self.assertEqual(lifecycle.mock_calls,[])
+        self.assertEqual(upgrade.mock_calls,[])
 
     def test_every_partial_failure_restores_exact_old_images_and_units(self):
         for reason in ('stop','warm','recreate','start','probe'):
