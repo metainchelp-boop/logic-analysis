@@ -30,7 +30,8 @@ import logging
 import re
 import threading
 import time as _time
-from dataclasses import dataclass, field
+from contextlib import ExitStack
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -49,6 +50,7 @@ from . import catalog_links as CL
 from . import dashboard as DASH
 from . import management_store as MS
 from . import reporting as R
+from . import view_sync as VS
 
 log = logging.getLogger("naver_engine.web")
 
@@ -256,6 +258,7 @@ class App:
         self._owner_verification = owner_verification
         self._verified_linking = verified_linking
         self._request_collection, self._collection_status = request_collection, collection_status
+        self._view_sync = VS.ViewSync()
         self._clock = clock or (lambda: datetime.now(KST))
         self._previewer = previewer
         self._login_max, self._login_window, self._login_source_max = login_max, login_window, login_source_max
@@ -331,11 +334,33 @@ class App:
             raise HttpError(405, "method-not-allowed")
         route, m = hit[0]
         query = _parse_query(environ.get("QUERY_STRING") or "")
+        view_sync = "view_sync" in query or "view_cursor" in query
+        view_cursor = None
+        if view_sync:
+            if method != GET or sub not in VS.PATHS or query.pop("view_sync", None) != "1":
+                raise HttpError(400, "bad-query")
+            view_cursor = query.pop("view_cursor", None)
+            if view_cursor is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", view_cursor):
+                raise HttpError(400, "bad-query")
         body = _read_body(environ) if method == POST else None
         req = Request(method, sub, query, body)
         now = self._now()
         if not route.auth:
             return route.handler(self, req, None, now, environ=environ, **m.groupdict())
+        if view_sync:
+            with ExitStack() as snapshot:
+                v = self._viewer(environ, now, snapshot=snapshot)
+                status, payload = route.handler(self, req, v, now, **m.groupdict())
+                context = VS.context_key({"version": 1, "viewer": v.idx, "login_at": v.claims.login_at,
+                    "narrowed": v.claims.narrowed, "org": {"generated_at": v.org.generated_at,
+                        "people": [asdict(person) for _, person in sorted(v.org.people.items())],
+                        "teams": [asdict(team) for _, team in sorted(v.org.teams.items())],
+                        "owners": [asdict(owner) for owner in v.org.owners]}, "scope": asdict(v.scope),
+                    "path": sub, "query": query, "date": now.astimezone(KST).date()})
+            # 읽기 거래를 닫은 뒤 메모리 캐시만 비교한다. 전송까지 WAL 읽기를 붙잡지 않는다.
+            if status == 200:
+                payload = self._view_sync.respond(sub, payload, context=context, view_cursor=view_cursor, now=now)
+            return status, payload
         v = self._viewer(environ, now)
         try:
             return route.handler(self, req, v, now, **m.groupdict())
@@ -349,7 +374,7 @@ class App:
         return now
 
     # ── 보는 사람 — 모든 경로(로그인 빼고)가 이것을 지난다 ──
-    def _viewer(self, environ, now: datetime) -> Viewer:
+    def _viewer(self, environ, now: datetime, *, snapshot=None) -> Viewer:
         tok = _bearer(environ)
         try:
             claims = self._signer.verify(tok, now)
@@ -357,6 +382,9 @@ class App:
             raise HttpError(401, "token-" + e.code) from None
         store = self._open_read()
         try:
+            if snapshot is not None:
+                snapshot.callback(store.close)
+                snapshot.enter_context(store.read_snapshot())
             org = W.load_org(store)
             who = claims.emp_idx
             scope = SC.narrowed_scope_of(org, who) if claims.narrowed else SC.scope_of(org, who)
@@ -366,7 +394,8 @@ class App:
                 raise HttpError(503, "org-stale")
             return Viewer(who, scope, claims, store, org)
         except BaseException:
-            store.close()
+            if snapshot is None:
+                store.close()
             raise
 
     # ── 쓰기 · 감사 ──

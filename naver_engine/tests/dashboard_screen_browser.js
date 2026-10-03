@@ -54,7 +54,9 @@ const cfg = JSON.parse(process.argv[2]);
   let board;
   await page.route('**/api/naver-auto/board?**', async route => {
     const response = await route.fetch();
-    const data = await response.json();
+    const envelope = await response.json();
+    // 이 시험은 관제 필터용 fixture를 꾸민다. 제품 변경분 응답의 full 본문을 먼저 푼다.
+    const data = envelope.mode === 'full' ? envelope.data : envelope;
     const colors = ['red', 'yellow', 'green', 'white'];
     data.rows.forEach((row, i) => {
       row.verdict = {...row.verdict, color: colors[i], needs_attention: i < 2};

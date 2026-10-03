@@ -167,8 +167,13 @@ class TextRulesTest(unittest.TestCase):
     def test_races_and_double_submit(self):
         """늦게 온 옛 응답이 새 것을 덮지 않고 · 같은 일을 두 번 보내지 않는다(검토 scope-race · double-submit)."""
         self.assertIn("state.selection = this.value; route();", CODE)
-        watch = CODE[CODE.index("function openWatch() {"):CODE.index("function fail(e)")]
-        self.assertIn("if (gen !== state.gen || sel !== state.selection) return;", watch)
+        # 네 목록 화면의 요청 경계가 공통 변경분 조회로 이동했다. 옛 응답을 버리는 보호는 유지한다.
+        watch = CODE[CODE.index("function openWatch() {"):CODE.index("var INVENTORY_MAPPING")]
+        self.assertIn("return fetchView('watch'", watch)
+        sync = CODE[CODE.index("function fetchView("):CODE.index("function reconcileNodes(")]
+        for guard in ("epoch === viewEpoch", "gen === state.gen", "state.screen === name",
+                      "viewRequests[name] === request", "if (!entry || !fresh()) return;"):
+            self.assertIn(guard, sync)
         reload = CODE[CODE.index("function reload() {"):CODE.index("var except = null;")]
         self.assertIn("if (r.screen === 'client') { state.gen++; openClient(r.id); }", reload)
         self.assertIn("else if (r.screen === 'watch') { state.gen++; openWatch(); }", reload)

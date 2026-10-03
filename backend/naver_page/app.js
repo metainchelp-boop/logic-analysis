@@ -27,7 +27,7 @@
     lastInput: Date.now(), refreshing: false, retryAt: 0, retryN: 0, warned: false, bellGen: 0,
     filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
     inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current',
-    dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null
+    dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null, screen: null
   };
 
   // ── 작은 도구 ─────────────────────────────────────────────────────
@@ -116,6 +116,205 @@
     toast._t = setTimeout(function () { el.classList.remove('on'); }, 3200);
   }
 
+  // 업체 자료는 이 창의 제한된 메모리에만 둔다. 커서는 권한이 아니며 재진입은 매번 서버 확인 뒤 연다.
+  var VIEW_FIELDS = { watch: ['possibility_id'], transfers: ['ad_account_no'], reports: ['possibility_id', 'period_key'], dashboard: null };
+  var VIEW_STATUS = { watch: 'watchSync', transfers: 'inventorySync', reports: 'reportsSync', dashboard: 'dashboardSync' };
+  var viewCache = new Map(), viewRequests = {}, viewShown = {}, viewChecked = {}, viewLegacy = {}, viewContext = null, viewEpoch = 0;
+  var VIEW_CACHE_COUNT = 8, VIEW_CACHE_BYTES = 4 * 1024 * 1024, VIEW_CACHE_AGE = 10 * 60 * 1000;
+  function plain(value) { return !!value && typeof value === 'object' && !Array.isArray(value); }
+  function rowKey(row, fields) {
+    if (!plain(row)) return null;
+    var values = fields.map(function (key) { return row[key]; });
+    if (values.some(function (v) { return typeof v === 'string' ? !v.length : typeof v !== 'number' || !Number.isSafeInteger(v) || v <= 0; })) return null;
+    return JSON.stringify(values);
+  }
+  function rowMap(rows, fields) {
+    if (!Array.isArray(rows)) return null;
+    var mapped = new Map();
+    for (var i = 0; i < rows.length; i++) {
+      var key = rowKey(rows[i], fields);
+      if (key === null || mapped.has(key)) return null;
+      mapped.set(key, rows[i]);
+    }
+    return mapped;
+  }
+  function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+  function retainRows(data, previous, fields) {
+    if (!fields || !previous) return data;
+    var old = rowMap(previous.rows, fields), current = rowMap(data.rows, fields);
+    if (!old || !current) return data;
+    data.rows = data.rows.map(function (r) { var prior = old.get(rowKey(r, fields)); return prior && same(prior, r) ? prior : r; });
+    return data;
+  }
+  function cacheView(key, entry) {
+    entry.bytes = JSON.stringify(entry.data).length * 2;
+    entry.saved = Date.now();
+    viewCache.delete(key);
+    if (entry.bytes <= VIEW_CACHE_BYTES) viewCache.set(key, entry);
+    var size = 0;
+    viewCache.forEach(function (v, k) { if (Date.now() - v.saved > VIEW_CACHE_AGE) viewCache.delete(k); else size += v.bytes; });
+    while (viewCache.size > VIEW_CACHE_COUNT || size > VIEW_CACHE_BYTES) {
+      var first = viewCache.keys().next().value;
+      size -= viewCache.get(first).bytes; viewCache.delete(first);
+    }
+  }
+  function gateView(name) { var el = $('s-' + name); if (el && VIEW_STATUS[name]) el.classList.add('view-unverified'); }
+  function purgeViews() {
+    viewEpoch++; viewCache.clear(); viewRequests = {}; viewShown = {}; viewChecked = {}; viewLegacy = {};
+    state.gen++; state.inventoryGen++; state.reportsGen++; state.linksGen++; state.bellGen++;
+    state.board = null; state.dashboard = null; state.inventory = null; state.reports = null; state.loadedDay = null;
+    state.links = null; state.ended = null; state.client = null;
+    Object.keys(VIEW_STATUS).forEach(function (name) { gateView(name); put($(VIEW_STATUS[name])); });
+    ['tbody', 'issues', 'kpis', 'iwan', 'upbox', 'doneList', 'runbar', 'linksBody', 'endedBody', 'inventoryRows',
+      'inventorySummary', 'coverageRows', 'reportsRows', 'reportsPages', 'dashboardMetrics', 'dashboardDelivery',
+      'dashboardConfiguration', 'dashboardPeriod', 'dashboardStatus', 'dashboardCoverage', 'dashboardAccounts',
+      'dashboardCollected', 'dashboardRatioNote', 'inventoryCount', 'inventorySource', 'inventoryCadence', 'coverageStatus',
+      'reportsSchedule', 'reportsStatus', 'iss-n', 'tbl-n', 'links-n', 'ended-n', 'c-name', 'c-crumb', 'c-sub', 'c-badges',
+      'p-now', 'p-hist', 'p-rep', 'p-conn', 'drawerBody'].forEach(function (id) { put($(id)); });
+    closeModals(); closeBell();
+  }
+  function syncContext() {
+    var key = JSON.stringify([state.me && state.me.idx, state.me && state.me.scope, state.me && state.me.narrowed,
+      state.session && state.session.narrowed, state.selection, kstDay()]);
+    if (viewContext !== key) { purgeViews(); viewContext = key; }
+    return key;
+  }
+  function viewDenied(error) {
+    var code = error && error.body && error.body.error;
+    return !!error && (error.status === 401 || error.status === 403 ||
+      ['org-stale', 'org-unavailable', 'selection-rejected', 'not-visible'].indexOf(code) !== -1);
+  }
+  function viewStatus(name, status, checked, error) {
+    var el = $(VIEW_STATUS[name]), label = checked ? '서버 변경 확인 시각 ' + datedTime(checked) : '서버 변경 확인 시각 미확인';
+    el.setAttribute('data-status', status);
+    put(el, h('span', null, (status === 'checking' ? '변경 확인 중 · ' : status === 'stale' ? '최신화 실패 · 이전 확인 자료 · ' :
+      status === 'error' ? '자료를 표시하지 않았습니다 · ' : '') + label +
+      (error ? ' · ' + (viewDenied(error) ? '현재 권한·조직 자료를 확인할 수 없습니다.' : errText(error)) : '') +
+      ' · 네이버 자료를 새로 수집하지 않습니다.'),
+      status === 'error' ? h('button', { type: 'button', class: 'btn sm', onclick: route }, '다시 확인') : null);
+  }
+  function decodeView(name, response, previous) {
+    var fields = VIEW_FIELDS[name], invalid = function () { throw new ApiError(0, { error: 'view-invalid' }); };
+    function validate(data) {
+      if (!plain(data) || fields && (!Array.isArray(data.rows) || data.rows.some(function (row) { return !plain(row); })) ||
+          name === 'watch' && (!plain(data.band) || !plain(data.counts) || data.rows.some(function (row) { return !plain(row.verdict) || !plain(row.owner); })) ||
+          name === 'transfers' && !plain(data.counts) ||
+          name === 'dashboard' && (!plain(data.period) || !plain(data.accounts) || !plain(data.coverage))) invalid();
+    }
+    if (!plain(response)) return invalid();
+    if (!Object.prototype.hasOwnProperty.call(response, 'mode')) {
+      validate(response);
+      return { data: retainRows(response, previous && previous.data, fields), cursor: null, checked: null };
+    }
+    if (response.version !== 1 || ['full', 'delta', 'unchanged'].indexOf(response.mode) < 0 ||
+        typeof response.checked_at !== 'string' || !isFinite(Date.parse(response.checked_at)) ||
+        !(response.cursor === null || typeof response.cursor === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(response.cursor))) return invalid();
+    var data;
+    if (response.mode === 'full') {
+      if (!plain(response.data) || response.rows !== null || response.base_cursor !== null || fields && !Array.isArray(response.data.rows)) return invalid();
+      data = retainRows(response.data, previous && previous.data, fields);
+    } else {
+      if (!previous || !previous.cursor || response.base_cursor !== previous.cursor || !response.cursor) return invalid();
+      if (response.mode === 'unchanged') {
+        if (response.data !== null || response.rows !== null) return invalid();
+        data = previous.data;
+      } else {
+        if (!plain(response.data) || Object.prototype.hasOwnProperty.call(response.data, 'rows')) return invalid();
+        if (!fields) { if (response.rows !== null) return invalid(); data = response.data; }
+        else {
+          var patch = response.rows, mapped = rowMap(previous.data.rows, fields);
+          if (!plain(patch) || !same(patch.key_fields, fields) || !Array.isArray(patch.upsert) ||
+              !Array.isArray(patch.removed) || !Array.isArray(patch.order) || !mapped) return invalid();
+          var updates = rowMap(patch.upsert, fields), removed = new Set(patch.removed), order = new Set(patch.order);
+          if (!updates || removed.size !== patch.removed.length || order.size !== patch.order.length) return invalid();
+          patch.removed.forEach(function (key) { if (typeof key !== 'string' || !mapped.has(key) || updates.has(key)) invalid(); mapped.delete(key); });
+          updates.forEach(function (row, key) { var old = mapped.get(key); mapped.set(key, old && same(old, row) ? old : row); });
+          if (mapped.size !== patch.order.length || patch.order.some(function (key) { return typeof key !== 'string' || !mapped.has(key); })) return invalid();
+          data = Object.assign({}, response.data, { rows: patch.order.map(function (key) { return mapped.get(key); }) });
+        }
+      }
+    }
+    validate(data);
+    return { data: data, cursor: response.cursor, checked: response.checked_at };
+  }
+  function fetchView(name, path, apply) {
+    var context = syncContext(), key = context + '|' + path, gen = state.gen, epoch = viewEpoch, day = kstDay();
+    var pending = viewRequests[name];
+    if (pending && pending.key === key && pending.gen === gen) return pending.promise;
+    var prior = viewCache.get(key);
+    if (prior && Date.now() - prior.saved > VIEW_CACHE_AGE) { viewCache.delete(key); prior = null; }
+    var visible = viewShown[name] === key && !$('s-' + name).classList.contains('view-unverified');
+    var checked = prior ? prior.checked : visible ? viewChecked[name] : null;
+    if (!visible) gateView(name);
+    var request = { key: key, gen: gen }, base = prior;
+    viewRequests[name] = request;
+    function fresh() { return epoch === viewEpoch && gen === state.gen && state.screen === name &&
+      viewRequests[name] === request && !!state.me && !!state.session && document.visibilityState !== 'hidden'; }
+    viewStatus(name, 'checking', checked);
+    function read(cursor, legacy, recovered) {
+      return api('GET', path + (legacy ? '' : '&view_sync=1' + (cursor ? '&view_cursor=' + encodeURIComponent(cursor) : ''))).then(function (response) {
+        if (!fresh()) return null;
+        if (day !== kstDay()) { syncContext(); route(); return null; }
+        try {
+          var decoded = decodeView(name, response, base);
+          if (decoded.data.selection !== undefined && decoded.data.selection !== state.selection) throw new ApiError(0, { error: 'view-invalid' });
+          viewLegacy[name] = !Object.prototype.hasOwnProperty.call(response, 'mode');
+          return decoded;
+        }
+        catch (error) {
+          if (recovered) throw error;
+          viewCache.delete(key); base = null;
+          return read(null, false, true);
+        }
+      }, function (error) {
+        if (!fresh()) return null;
+        if (!legacy && !recovered && error.status === 400 && error.body && error.body.error === 'bad-query') {
+          if (name === 'reports' && /[?&]page=[1-9][0-9]*(?:&|$)/.test(path)) throw error;
+          return read(null, true, true);
+        }
+        throw error;
+      });
+    }
+    request.promise = read(prior && prior.cursor, viewLegacy[name] === true, false).then(function (entry) {
+      if (!entry || !fresh()) return;
+      cacheView(key, entry);
+      apply(entry.data);
+      viewShown[name] = key;
+      viewChecked[name] = entry.checked;
+      $('s-' + name).classList.remove('view-unverified');
+      viewStatus(name, 'current', entry.checked);
+    }, function (error) {
+      if (!fresh()) return;
+      if (viewDenied(error)) { purgeViews(); viewStatus(name, 'error', null, error); return; }
+      if (name === 'reports' && /[?&]page=[1-9][0-9]*(?:&|$)/.test(path) && error.status === 400 && error.body && error.body.error === 'bad-query') {
+        viewCache.delete(key); state.reports = null; return loadReports(0);
+      }
+      viewStatus(name, visible ? 'stale' : 'error', checked, error);
+    }).then(function () { if (viewRequests[name] === request) delete viewRequests[name]; });
+    return request.promise;
+  }
+  // 변하지 않은 행은 생성·이동하지 않는다. 순서 변경 때에도 행의 버튼과 펼친 내용을 보존한다.
+  function reconcileNodes(parent, nodes) {
+    var wanted = new Set(nodes);
+    Array.prototype.slice.call(parent.childNodes).forEach(function (node) { if (!wanted.has(node)) parent.removeChild(node); });
+    nodes.forEach(function (node, index) { if (parent.childNodes[index] !== node) parent.insertBefore(node, parent.childNodes[index] || null); });
+  }
+  function retainedNodes(parent) {
+    var nodes = new Map();
+    Array.prototype.forEach.call(parent.children, function (node) { if (node._viewKey !== null && node._viewKey !== undefined) nodes.set(node._viewKey, node); });
+    return nodes;
+  }
+  function retainedNode(nodes, key, value, build) {
+    var old = key === null ? null : nodes.get(key);
+    if (old && old._viewValue === value) return old;
+    var node = build(); node._viewKey = key; node._viewValue = value; return node;
+  }
+  function rowCurrent(name, row) {
+    var data = state[name === 'transfers' ? 'inventory' : name === 'watch' ? 'board' : name];
+    return !!state.me && state.screen === name && !$('s-' + name).classList.contains('view-unverified') &&
+      !!data && Array.isArray(data.rows) && data.rows.indexOf(row) !== -1;
+  }
+
   // ── 서버 글자 → 화면 글자(뜻을 바꾸지 않고 옮긴다) ─────────────────────
   var STAGE = { '진행중': '진행중', '전략관리': '전략 관리', '사후관리': '사후 관리', '홀딩중': '홀딩중',
                 '재계약진행중': '재계약 진행중', '환불중': '환불중', '계약만료': '계약 만료' };
@@ -165,6 +364,7 @@
     }
   }
   var ERR = {
+    'view-invalid': '변경분 자료 형식을 확인하지 못했습니다. 다시 확인해 주세요',
     'source-stale': '현재 원천·업무 단계에 맞는 사유를 아직 확인하지 못했습니다. 목록과 수집 시각을 다시 확인해 주세요',
     'bad-query': '조회 조건이나 페이지가 변경되었습니다. 목록을 새로고침한 뒤 다시 확인해 주세요',
     'stage-changed': '전산 단계가 변경되었습니다. 목록을 새로고침한 뒤 다시 확인해 주세요',
@@ -205,6 +405,7 @@
     } catch (e) { return null; }
   }
   function saveSession(j) {
+    if (state.session && state.session.narrowed !== !!j.narrowed) purgeViews();
     var s = { token: String(j.token), exp: Date.now() + Math.max(0, +j.expires_in || 0) * 1000,
               ends: j.session_ends_at || null, narrowed: !!j.narrowed };
     state.session = s;
@@ -212,6 +413,7 @@
   }
   function dropSession() {
     state.session = null;
+    purgeViews();
     try { sessionStorage.removeItem(KEY); } catch (e) { /* 없음 */ }
   }
   function ApiError(status, body) { this.status = status; this.body = body || {}; }
@@ -314,7 +516,18 @@
       state.refreshing = false;
       state.retryN = 0;
       state.retryAt = 0;
+      var scopeChanged = state.session && state.session.narrowed !== !!j.narrowed;
       saveSession(j);
+      if (scopeChanged) {
+        var session = state.session;
+        return api('GET', '/me').then(function (me) {
+          if (state.session !== session) return;
+          state.me = me; renderTop(); route();
+        }, function (error) {
+          if (state.session !== session || error.status === 401) return;
+          purgeViews(); blocked('down', entryServerDiagnostic(error));
+        });
+      }
     }, function (e) {
       state.refreshing = false;
       if (e && e.status === 401) return;   // lost() 가 처리
@@ -331,8 +544,8 @@
     if (now >= s.exp) { lost(); return; }
     if (s.exp - now <= REFRESH_AHEAD_MS && now >= state.retryAt) refresh();
     if (verifiedLinking() && parse(location.pathname).screen === 'watch') loadCollection();
-    if (parse(location.pathname).screen === 'dashboard' && state.loadedDay && kstDay() !== state.loadedDay) {
-      state.gen++; openDashboard();
+    if (document.visibilityState !== 'hidden' && state.loadedDay && kstDay() !== state.loadedDay) {
+      syncContext(); route();
     }
     var end = s.ends ? Date.parse(s.ends) : NaN;
     if (!state.warned && isFinite(end) && end > now && end - now <= END_WARN_MS) {
@@ -345,11 +558,19 @@
     state.timer = setInterval(tick, TICK_MS);
     tick();   // 새로 고침 · 잠자기 뒤 바로 한 번(토큰이 곧 끝나면 지금 갱신)
   }
-  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') tick(); });
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') { gateView(state.screen); return; }
+    gateView(state.screen);
+    tick();
+    if (state.me && state.session && VIEW_STATUS[state.screen]) route();
+  });
+  window.addEventListener('pageshow', function (event) { if (event.persisted && state.me && state.session) { gateView(state.screen); route(); } });
 
   // ── 화면 고르기 ────────────────────────────────────────────────────
   var SCREENS = ['loading', 'blocked', 'dashboard', 'watch', 'client', 'automation', 'reports', 'transfers', 'settings'];
   function show(name) {
+    if (name !== state.screen) gateView(name);
+    state.screen = name;
     SCREENS.forEach(function (s) { var el = $('s-' + s); if (el) el.classList.toggle('on', s === name); });
     var menuKey = { dashboard: '/naver/dashboard', watch: '/naver/', client: '/naver/', automation: '/naver/automation', reports: '/naver/reports',
                     transfers: '/naver/transfers', settings: '/naver/settings' }[name];
@@ -373,6 +594,7 @@
   window.addEventListener('popstate', function () { if (state.me) route(); });
   function route() {
     var r = parse(location.pathname);
+    syncContext();
     state.gen++;
     state.links = null;
     state.linksPid = null;
@@ -484,7 +706,7 @@
     $('dashboardAccounts').textContent = data ? '전산 매칭 ' + num(accounts.matched) + '계정 · 미매칭 ' + num(accounts.unmatched) +
       '계정 · 미분류 ' + num(accounts.unclassified) + '계정 / 전산 광고주 ' + num(advertisers.total) +
       '곳 중 월간 완결 ' + num(advertisers.complete) + '곳 · 미완결 ' + num(advertisers.unknown) + '곳' : '';
-    $('dashboardCollected').textContent = data ? '월간 확인 시각 ' + (mdhm(coverage.oldest_collected_at) || '미수집') + ' ~ ' +
+    $('dashboardCollected').textContent = data ? '네이버 자료 수집 시각 ' + (mdhm(coverage.oldest_collected_at) || '미수집') + ' ~ ' +
       (mdhm(coverage.newest_collected_at) || '미수집') + ' · 계정 목록 ' + (mdhm(data.accounts_at) || '수신 전') +
       ' · 전산 목록 ' + (mdhm(data.catalog_at) || '수신 전') : '';
     var totalNote = '월간 확인 ' + num(coverage.complete_accounts) + ' / ' + num(accounts.total) + '계정';
@@ -510,48 +732,24 @@
     $('dashboardReload').disabled = !data && !error;
   }
   function openDashboard() {
-    var gen = state.gen, sel = state.selection, requestedDay = kstDay();
     show('dashboard');
-    state.dashboard = null;
-    state.loadedDay = null;
-    renderDashboard(null);
-    return api('GET', '/dashboard?selection=' + encodeURIComponent(sel)).then(function (data) {
-      if (gen !== state.gen || sel !== state.selection) return;
-      // 자정 전 요청의 옛 기간을 새 날짜의 자료로 남기지 않는다.
-      if (requestedDay !== kstDay()) { state.gen++; return openDashboard(); }
+    return fetchView('dashboard', '/dashboard?selection=' + encodeURIComponent(state.selection), function (data) {
+      var unchanged = state.dashboard === data;
       state.dashboard = data;
-      state.loadedDay = requestedDay;
-      renderDashboard(data);
-    }, function (error) {
-      if (gen !== state.gen || sel !== state.selection || (error && error.status === 401)) return;
-      state.dashboard = null;
-      renderDashboard(null, error);
+      state.loadedDay = kstDay();
+      if (!unchanged) renderDashboard(data);
     });
   }
 
   // ── 🛰 관제 ───────────────────────────────────────────────────────
-  function clearWatch(message) {
-    state.board = null;
-    put($('issues'), message);
-    put($('kpis')); put($('iwan')); put($('upbox')); put($('doneList'));
-    $('upbox').hidden = true;
-    $('doneList').hidden = true;
-    $('doneToggle').textContent = '오늘 풀린 것 · 예외 처리한 것 —';
-    $('doneToggle').setAttribute('aria-expanded', 'false');
-    put($('tbody'), h('tr', null, h('td', { colspan: 9, class: 'empty' }, '현재 범위의 자료를 확인 중입니다.')));
-    $('iss-n').textContent = '';
-    $('tbl-n').textContent = '';
-  }
   function openWatch() {
-    var gen = state.gen;
     show('watch');
     var sel = state.selection;
-    if (!state.board || state.board.selection !== sel) clearWatch(h('div', { class: 'loading' }, '불러오는 중…'));
-    return api('GET', '/board?selection=' + encodeURIComponent(sel) + '&attention=0').then(function (b) {
-      if (gen !== state.gen || sel !== state.selection) return;   // 늦게 온 옛 응답(범위를 빨리 바꿈)은 버린다
+    return fetchView('watch', '/board?selection=' + encodeURIComponent(sel) + '&attention=0', function (b) {
+      var unchanged = state.board === b;
       state.board = b;
       state.loadedDay = kstDay();
-      renderWatch();
+      if (!unchanged) renderWatch();
       loadLinks();   // 「확인할 짝 N건」 — 접혀 있어도 수는 보인다(범위는 서버가 최대 범위로)
       if (fullCollectionAllowed()) loadCollection();
       if (state.endedOpen) loadEnded();
@@ -559,13 +757,6 @@
       if (state.focus === 'links') $('linksCard').scrollIntoView();
       if (state.focus === 'ended') $('endedCard').scrollIntoView();
       state.focus = null;
-    }, function (e) {
-      if (gen !== state.gen || (e && e.status === 401)) return;
-      if (state.board && state.board.selection === sel) { toast(errText(e)); return; }
-      // 첫 불러오기 실패 · 다른 범위로 바꾸다 실패 — 옛 숫자를 그대로 두지 않는다
-      clearWatch(h('div', { class: 'empty' }, '관제 판을 불러오지 못했습니다 — ' + errText(e) + ' ',
-        h('button', { type: 'button', class: 'btn sm', onclick: function () { state.gen++; openWatch(); } }, '다시 불러오기')));
-      put($('tbody'), h('tr', null, h('td', { colspan: 9, class: 'empty' }, '불러오지 못했습니다.')));
     });
   }
   var INVENTORY_MAPPING = { matched: '전산 업체 매칭', no_erp_record: '전산 내에 등록된 업체 정보 없음', unclassified: '미분류 · 확인 필요' };
@@ -605,26 +796,15 @@
     }));
   }
   function loadInventory() {
-    var gen = ++state.inventoryGen, sel = state.selection, pageGen = state.gen;
+    var sel = state.selection;
     closeModals();
-    state.inventory = null;
-    renderManagedCoverage(null);
-    renderInventorySummary(null, '불러오는 중…');
-    $('inventoryCount').textContent = '';
-    $('inventorySource').textContent = '현재 권한으로 목록을 불러오는 중입니다.';
-    put($('inventoryRows'), h('tr', null, h('td', { colspan: 9, class: 'empty' }, '불러오는 중…')));
-    return api('GET', '/accounts?selection=' + encodeURIComponent(sel) + '&workflow=' +
+    return fetchView('transfers', '/accounts?selection=' + encodeURIComponent(sel) + '&workflow=' +
       encodeURIComponent(state.inventoryWorkflow) + '&mapping=' + encodeURIComponent(state.inventoryMapping) +
-      '&view=' + encodeURIComponent(state.inventoryView)).then(function (data) {
-      if (gen !== state.inventoryGen || pageGen !== state.gen || sel !== state.selection || !state.me) return;
+      '&view=' + encodeURIComponent(state.inventoryView), function (data) {
+      var unchanged = state.inventory === data;
       state.inventory = data;
-      renderInventory();
-    }, function (e) {
-      if (gen !== state.inventoryGen || pageGen !== state.gen || sel !== state.selection || (e && e.status === 401)) return;
-      $('inventorySource').textContent = '목록을 불러오지 못했습니다. 목록 새로고침으로 다시 확인해 주세요.';
-      renderManagedCoverage(null, '불러오지 못했습니다 · 목록 새로고침으로 다시 확인해 주세요.');
-      renderInventorySummary(null, '불러오지 못했습니다 · 목록 새로고침으로 확인해 주세요.');
-      put($('inventoryRows'), h('tr', null, h('td', { colspan: 9, class: 'empty' }, errText(e))));
+      state.loadedDay = kstDay();
+      if (!unchanged) renderInventory();
     });
   }
   function renderInventory() {
@@ -679,7 +859,9 @@
       return '원인: ' + (Object.prototype.hasOwnProperty.call(collectionReason, code) ? collectionReason[code] :
         '상세 원인 미확인 · 관리자 확인 필요');
     }
-    put($('inventoryRows'), rows.length ? rows.map(function (r) {
+    var validKeys = rowMap(data.rows, VIEW_FIELDS.transfers), nodes = retainedNodes($('inventoryRows'));
+    reconcileNodes($('inventoryRows'), rows.length ? rows.map(function (r, index) {
+      return retainedNode(nodes, validKeys ? rowKey(r, VIEW_FIELDS.transfers) : null, validKeys ? r : index, function () {
       var c = r.collection || {}, m = r.management || {}, status = collection[c.status] || c.status || '수집 대기';
       var recheck = c.revalidation, recheckNames = {manual_period:'수동 기간 재확인',recent:'최근 3일 재확인',
         reconcile:'최근 31일 재확인',report_weekly:'주간 보고기간 재확인',report_monthly:'월간 보고기간 재확인',backfill:'누락 기간 보충'};
@@ -706,7 +888,7 @@
         h('td', { class: 'account-values' }, h('span', { class: 'w' }, previous ? '이전 성공값 · 최신 확인 필요' : hasValues ? '확인된 실적' : '성공 실적 없음'),
           h('span', { class: 'w' }, period), h('b', { class: 'num' }, won(spend)),
           h('span', { class: 'w' }, '노출 ' + num(c.imp === undefined ? c.yday_imp : c.imp) + ' · 클릭 ' + num(c.clk === undefined ? c.yday_clk : c.clk)),
-          c.last_success_at ? h('span', { class: 'w' }, '마지막 성공 ' + datedTime(c.last_success_at)) : null,
+          c.last_success_at ? h('span', { class: 'w' }, '네이버 자료 수집 시각 · 마지막 성공 ' + datedTime(c.last_success_at)) : null,
           c.source_rechecked_at ? h('span', { class: 'w' }, '표시 실적 원천 확인 ' + datedTime(c.source_rechecked_at)) : null),
         h('td', { class: 'account-values' }, h('b', { class: 'num' }, won(c.bizmoney)),
           h('span', { class: 'w' }, '잔액 확인 ' + datedTime(c.bizmoney_at)), c.stale === true && typeof c.bizmoney === 'number' ? h('span', { class: 'w' }, '이전 잔액 · 최신 확인 필요') : null,
@@ -718,7 +900,8 @@
           m.excluded === true ? h('span', { class: 'w' }, '수동 제외됨') : null,
           m.reason ? h('span', { class: 'w' }, managementReason(m.reason)) : null,
           managementActions(r)));
-    }) : h('tr', null, h('td', { colspan: 9, class: 'empty' }, '이 조건에 해당하는 계정이 없습니다. 매칭 상태·업무 단계·검색어를 확인해 주세요.')));
+      });
+    }) : [h('tr', null, h('td', { colspan: 9, class: 'empty' }, '이 조건에 해당하는 계정이 없습니다. 매칭 상태·업무 단계·검색어를 확인해 주세요.'))]);
   }
   function adCode(label, value) {
     value = value || {};
@@ -737,15 +920,15 @@
     var status = { pending: '구조 미조회', reading: '구조 조회 중', retry: '구조 재시도 대기',
       limited: '구조 조회 제한 · 확인 필요', reauth_required: '구조 조회 권한 확인 필요',
       partial: '구조 일부 조회', ok: '구조 조회 완료' }[row.structure_status] || '구조 조회 상태 미확인';
-    var inventory = state.inventory, gen = state.gen, selection = state.selection, busy = false;
+    var selection = state.selection, busy = false;
     var content = h('div'), detail;
-    function fresh() { return state.inventory === inventory && state.gen === gen && state.selection === selection; }
+    function fresh() { return rowCurrent('transfers', row) && state.selection === selection; }
     function load(page) {
       if (busy || !fresh()) return;
       busy = true; put(content, h('p', { class: 'w' }, '저장된 사유를 불러오는 중…'));
       api('GET', '/accounts/reasons?ad_account_no=' + encodeURIComponent(row.ad_account_no) + '&page=' + page + '&selection=' + encodeURIComponent(selection)).then(function (data) {
-        if (!fresh()) return;
         busy = false;
+        if (!fresh()) return;
         put(content, h('p', { class: 'w' }, '저장된 사유 ' + num(data.total) + '건 · ' + num(data.page + 1) + '페이지 · 실제 확인 ' + datedTime(data.checked_at)),
           (data.items || []).map(function (item) { return adReasonItem(item, false); }),
           data.total === 0 ? h('p', { class: 'w' }, '저장된 광고 상태 응답이 없습니다. 사유 없음·정상을 뜻하지 않습니다.') : null,
@@ -753,8 +936,8 @@
             data.page > 0 ? h('button', { type: 'button', class: 'btn sm', onclick: function () { load(data.page - 1); } }, '이전 사유') : null,
             data.next_page !== null && data.next_page !== undefined ? h('button', { type: 'button', class: 'btn sm', onclick: function () { load(data.next_page); } }, '다음 사유') : null));
       }, function (e) {
-        if (!fresh()) return;
         busy = false;
+        if (!fresh()) return;
         put(content, h('p', { class: 'w' }, '사유를 확인하지 못했습니다. ' + errText(e)),
           h('button', { type: 'button', class: 'btn sm', onclick: function () { load(page); } }, '사유 다시 보기'));
       });
@@ -803,12 +986,12 @@
       !!m.stage_revision && m.stage_revision === body.stage_revision;
   }
   function managementActions(row) {
-    var m = row.management || {}, actions = [], inventory = state.inventory, gen = state.gen;
-    var fresh = function () { return state.inventory === inventory && state.gen === gen; };
+    var m = row.management || {}, actions = [];
+    var fresh = function () { return rowCurrent('transfers', row); };
     if (managementCapability('/management/update', { ad_account_no: row.ad_account_no, stage_revision: m.stage_revision })) {
       actions.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) {
         if (!fresh()) return;
-        managementEdit = { row: row, inventory: inventory, gen: gen, included: m.cadence !== 'daily' };
+        managementEdit = { row: row, inventory: state.inventory, gen: state.gen, included: m.cadence !== 'daily' };
         $('managementTitle').textContent = managementEdit.included ? '관제 포함' : '관제 제외';
         $('managementDescription').textContent = (row.company_name || row.account_name || '이 계정') + ' · 광고 계정 ID ' + row.ad_account_no;
         $('managementReason').value = '';
@@ -829,7 +1012,7 @@
       if (typeof row.possibility_id === 'number' && row.possibility_id > 0) {
         actions.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) {
           if (!fresh() || !managementCapability('/management/collect', { ad_account_no: row.ad_account_no })) return;
-          periodEdit = { row: row, inventory: inventory, gen: gen };
+          periodEdit = { row: row, inventory: state.inventory, gen: state.gen };
           $('periodDescription').textContent = (row.company_name || row.account_name || '이 계정') + ' · 광고 계정 ID ' + row.ad_account_no;
           var today = kstDay(), previous = today ? new Date(Date.parse(today + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10) : '';
           ['periodStart', 'periodEnd'].forEach(function (id) {
@@ -884,7 +1067,7 @@
     'name-points-elsewhere': '계정 이름이 다른 업체와 일치', 'ad-account-id-format': '광고 계정 ID 형식 오류',
     'ad-account-not-linked': '광고 계정 ID가 이관 목록에 없음', 'account-identifiers-conflict': '두 ID가 서로 다른 계정 지칭' };
   function renderManagedCoverage(data, message) {
-    var gen = state.gen, selection = state.selection;
+    var selection = state.selection;
     var ready = data && data.ready === true;
     $('coverageStatus').textContent = ready ? '실관리 ' + num(data.total) + ' · 연결 확인 ' + num(data.matched) + ' · 확인 필요 ' + num(data.missing) :
       message || (data ? '원천 자료 확인 필요 · 확정 집계 보류' : '불러오는 중…');
@@ -901,38 +1084,36 @@
         })), h('td', { class: 'num' }, ready ? num(r.matched_account_count) + ' / ' + num(r.candidate_count) : '— / —'),
         h('td', { class: 'wrap' }, action, ready && (status === 'candidate_pending' || status === 'multiple_candidates') ?
           h('button', { type: 'button', class: 'btn sm', onclick: function () {
-            if (gen === state.gen && selection === state.selection && Number.isSafeInteger(r.possibility_id) && r.possibility_id > 0)
+            if (state.screen === 'transfers' && state.inventory && state.inventory.managed_coverage === data &&
+                !$('s-transfers').classList.contains('view-unverified') && selection === state.selection && Number.isSafeInteger(r.possibility_id) && r.possibility_id > 0)
               go('/naver/links?possibility_id=' + r.possibility_id);
           } }, '짝 확인 열기') : null));
     }) : h('tr', null, h('td', { colspan: 4, class: 'empty' }, ready ? '현재 담당 범위에 실관리 업체가 없습니다.' : message || '최신 자료를 확인하기 전에는 연결 완료로 판단하지 않습니다.')));
   }
   // 보고서는 서버 집계·완결 여부를 그대로 표시한다. 검토는 게시·전송이 아니다.
   function loadReports(page) {
-    page = typeof page === 'number' && page >= 0 ? page : 0;
-    var gen = ++state.reportsGen, pageGen = state.gen, sel = state.selection;
-    closeModals(); state.reports = null;
-    $('reportsSchedule').textContent = '예약 시각 확인 중…';
-    $('reportsStatus').textContent = '현재 담당 범위의 보고서를 불러오는 중…';
-    put($('reportsRows')); put($('reportsPages'));
-    return api('GET', '/reports?selection=' + encodeURIComponent(sel) + (page ? '&page=' + page : '')).then(function (data) {
-      if (gen !== state.reportsGen || pageGen !== state.gen || sel !== state.selection || !state.me) return;
+    page = typeof page === 'number' && page >= 0 ? page : state.reports && state.reports.page || 0;
+    var sel = state.selection;
+    closeModals();
+    return fetchView('reports', '/reports?selection=' + encodeURIComponent(sel) + (page ? '&page=' + page : ''), function (data) {
+      var unchanged = state.reports === data;
       state.reports = data;
+      state.loadedDay = kstDay();
+      if (unchanged) return;
       var schedule = data.schedule || {};
       $('reportsSchedule').textContent = '주간 ' + (schedule.weekly || '예약 미확인') + ' · 월간 ' + (schedule.monthly || '예약 미확인') +
         ' · ' + (schedule.timezone || '시간대 미확인');
       var rows = data.rows || [];
       $('reportsStatus').textContent = '보고서 ' + num(typeof data.total === 'number' ? data.total : rows.length) + '건 · ' + num(page + 1) + '페이지 · 누락 자료는 0으로 채우지 않습니다 · 게시·전송 기능 없음';
-      put($('reportsRows'), rows.length ? rows.map(reportCard) : h('div', { class: 'card empty' }, '현재 담당 범위에 생성된 보고서가 없습니다. 확정 계정·수집 기간과 예약 시각을 확인해 주세요.'));
+      var validKeys = rowMap(rows, VIEW_FIELDS.reports), nodes = retainedNodes($('reportsRows'));
+      reconcileNodes($('reportsRows'), rows.length ? rows.map(function (row) {
+        return retainedNode(nodes, validKeys ? rowKey(row, VIEW_FIELDS.reports) : null, row, function () { return reportCard(row); });
+      }) : [h('div', { class: 'card empty' }, '현재 담당 범위에 생성된 보고서가 없습니다. 확정 계정·수집 기간과 예약 시각을 확인해 주세요.')]);
       function turnPage(target) {
-        if (gen === state.reportsGen && pageGen === state.gen && sel === state.selection && state.reports === data) loadReports(target);
+        if (state.screen === 'reports' && sel === state.selection && state.reports === data) loadReports(target);
       }
       put($('reportsPages'), page > 0 ? h('button', { type: 'button', class: 'btn', onclick: function () { turnPage(page - 1); } }, '이전 보고서') : null,
         typeof data.next_page === 'number' ? h('button', { type: 'button', class: 'btn', onclick: function () { turnPage(data.next_page); } }, '다음 보고서') : null);
-    }, function (e) {
-      if (gen !== state.reportsGen || pageGen !== state.gen || sel !== state.selection || (e && e.status === 401)) return;
-      $('reportsSchedule').textContent = '예약 시각을 확인하지 못했습니다.';
-      $('reportsStatus').textContent = '보고서를 불러오지 못했습니다 · ' + errText(e);
-      put($('reportsRows'), h('div', { class: 'card empty' }, '보고서 새로고침으로 다시 확인해 주세요. 이전 담당 범위의 보고서는 표시하지 않습니다.'));
     });
   }
   function reportMetric(label, value) { return h('div', null, h('dt', null, label), h('dd', { class: 'num' }, value)); }
@@ -962,9 +1143,9 @@
   function reportHistory(row) {
     if (typeof row.possibility_id !== 'number' || row.possibility_id <= 0 ||
         !/^(weekly|monthly):\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}$/.test(row.period_key || '')) return null;
-    var reports = state.reports, gen = state.gen, sel = state.selection, request = 0, loaded = false, busy = false;
+    var sel = state.selection, request = 0, loaded = false, busy = false;
     var content = h('div', { class: 'report-history-content', 'aria-live': 'polite' }), detail;
-    var fresh = function () { return state.reports === reports && state.gen === gen && state.selection === sel && !!state.me; };
+    var fresh = function () { return rowCurrent('reports', row) && state.selection === sel; };
     function load(before) {
       if (!fresh() || busy) return;
       busy = true;
@@ -972,8 +1153,9 @@
       put(content, h('p', { class: 'report-meta' }, '이전 판을 확인 중입니다…'));
       return api('GET', '/reports/history?possibility_id=' + row.possibility_id + '&period_key=' + encodeURIComponent(row.period_key) +
         (before ? '&before_report_id=' + before : '') + '&limit=20').then(function (data) {
+        busy = false;
         if (!fresh() || current !== request) return;
-        busy = false; loaded = true;
+        loaded = true;
         var items = data.items || [];
         put(content, h('p', { class: 'report-meta' }, '한 번에 최대 20판 · 이전 판은 당시 수치와 검토 기록이며 읽기 전용입니다.'),
           items.length ? items.map(function (item) { return reportCard(item, true); }) : h('p', { class: 'empty' }, '조회할 이전 판이 없습니다.'),
@@ -982,8 +1164,8 @@
             typeof data.next_before_report_id === 'number' && data.next_before_report_id > 0 ?
               h('button', { type: 'button', class: 'btn sm', onclick: function () { load(data.next_before_report_id); } }, '더 이전 판') : null));
       }, function (error) {
-        if (!fresh() || current !== request) return;
         busy = false;
+        if (!fresh() || current !== request) return;
         put(content, h('p', { class: 'report-meta' }, '이전 판을 확인하지 못했습니다. ' + errText(error)),
           h('button', { type: 'button', class: 'btn sm', onclick: function () { load(before); } }, '이력 다시 확인'));
       });
@@ -1037,13 +1219,12 @@
       (!row.validation || row.validation.status === 'complete'));
   }
   function reportActions(row) {
-    var reports = state.reports, gen = state.gen;
     var buttons = [['approved', '검토 승인'], ['held', '검토 보류']].filter(function (action) {
       return reportCapability('/reports/review', { report_id: row.report_id, decision: action[0] });
     }).map(function (action) {
       return h('button', { type: 'button', class: 'btn sm', onclick: function (ev) {
-        if (reports !== state.reports || gen !== state.gen) return;
-        reportEdit = { row: row, reports: reports, gen: gen, decision: action[0], label: action[1] };
+        if (!rowCurrent('reports', row)) return;
+        reportEdit = { row: row, reports: state.reports, gen: state.gen, decision: action[0], label: action[1] };
         $('reviewTitle').textContent = action[1];
         var p = row.payload && row.payload.period || {};
         $('reviewDescription').textContent = (row.company_name || '업체 이름 미확인') + ' · ' + periodText(p.start, p.end);
@@ -1261,7 +1442,8 @@
   function renderTable() {
     if (!state.board) return;   // 아직 못 불러옴 — 거르기·찾기를 눌러도 아무 일 없음
     var all = state.board.rows || [], rows = watchRows(), out = [];
-    var grouped = state.me.scope === 'ALL' || state.me.scope === 'TEAM';
+    var grouped = state.me.scope === 'ALL' || state.me.scope === 'TEAM', validKeys = rowMap(all, VIEW_FIELDS.watch), nodes = retainedNodes($('tbody'));
+    function savedRow(r) { return retainedNode(nodes, validKeys ? rowKey(r, VIEW_FIELDS.watch) : null, r, function () { return row(r); }); }
     if (grouped) {
       var teams = [], tAt = {};
       rows.forEach(function (r) {
@@ -1279,18 +1461,18 @@
           mine.forEach(function (r) { if (cn[r.verdict.color] !== undefined) cn[r.verdict.color]++; if (r.verdict.needs_attention) cn.need++; });
           out.push(h('tr', { class: 'grp' }, h('td', { colspan: 9 }, h('b', null, P.name), ' · ' + mine.length + '곳 · 확인 필요 ' + cn.need +
                                                                         ' · 🔴 ' + cn.red + ' · 🟡 ' + cn.yellow + ' · ⚪ ' + cn.white)));
-          P.rows.forEach(function (r) { out.push(row(r)); });
+          P.rows.forEach(function (r) { out.push(savedRow(r)); });
         });
       });
     } else {
-      rows.forEach(function (r) { out.push(row(r)); });
+      rows.forEach(function (r) { out.push(savedRow(r)); });
     }
     if (!out.length) {
       var msg = !all.length ? (stageInputMessage() || '현재 조회 범위에 표시할 광고주가 없습니다.')
         : state.filter === 'need' ? (resultsIncomplete() ? '현재 표시할 확인 필요 항목이 없습니다. 「전체」 또는 「점검 불가」에서 미점검 상태도 확인해 주세요.' : '현재 조회 범위에서 확인이 필요한 광고주가 없습니다.') : '조건에 맞는 광고주가 없습니다.';
       out.push(h('tr', null, h('td', { colspan: 9, class: 'empty' }, msg)));
     }
-    put($('tbody'), out);
+    reconcileNodes($('tbody'), out);
     var kind = { ALL: '전체', TEAM: '우리 팀', MINE: '내 담당' }[state.me.scope] || '';
     $('tbl-n').textContent = kind + (state.selection !== 'all' ? ' · 고른 범위' : '') + ' · ' + rows.length + ' / ' + all.length + '곳';
     Array.prototype.forEach.call(document.querySelectorAll('#tblChips .chip'), function (b) {
@@ -2024,7 +2206,8 @@
     $('periodSave').addEventListener('click', savePeriodRecheck);
     $('reportsReload').addEventListener('click', loadReports);
     $('reviewSave').addEventListener('click', saveReportReview);
-    $('dashboardReload').addEventListener('click', function () { state.gen++; openDashboard(); });
+    $('dashboardReload').addEventListener('click', openDashboard);
+    $('watchReload').addEventListener('click', openWatch);
     $('collectNow').addEventListener('click', requestCollection);
     $('confirmAuto').addEventListener('click', confirmAutomatic);
     $('linksShowAll').addEventListener('click', function () { if (parse(location.pathname).focus === 'links') go('/naver/links'); });

@@ -2708,6 +2708,10 @@ class Store(ManagedStorage):
     def __repr__(self) -> str:   # 경로·값을 보이지 않는다
         return f"Store(writer={self.writer})"
 
+    def read_snapshot(self):
+        """한 화면의 현재 권한과 자료를 같은 읽기 거래에서 대조한다. 업무 쓰기는 하지 않는다."""
+        return _report_read_snapshot(self)
+
     def close(self) -> None:
         try:
             self._conn.close()

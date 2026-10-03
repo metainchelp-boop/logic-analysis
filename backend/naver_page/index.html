@@ -40,6 +40,7 @@
   </section>
 
   <section class="screen" id="s-dashboard" aria-labelledby="t-dashboard">
+    <p class="view-sync" id="dashboardSync" role="status" aria-live="polite"></p>
     <div class="dashboard-heading">
       <div><h1 class="pt" id="t-dashboard">📊 월간 대시보드</h1>
         <p class="ps">월초부터 어제까지, 현재 권한 범위의 광고 성과입니다. 확인하지 못한 자료는 0으로 표시하지 않습니다.</p></div>
@@ -71,7 +72,9 @@
 
   <!-- 🛰 관제 -->
   <section class="screen" id="s-watch" aria-labelledby="t-watch">
+    <p class="view-sync" id="watchSync" role="status" aria-live="polite"></p>
     <h1 class="pt" id="t-watch">🛰 관제</h1>
+    <button type="button" class="btn sm" id="watchReload">목록 새로고침</button>
     <p class="ps">내 권한 범위의 네이버 광고 점검 결과입니다. <b>「확인 필요」와 「점검 불가」를 함께 확인해 주세요.</b> 자료 반영 전이나 미점검 상태는 정상 판정이 아닙니다.</p>
     <div class="runbar" id="runbar"></div>
     <div class="runbar" id="collectionControls" hidden>
@@ -149,6 +152,7 @@
 
   <!-- 📄 보고서 -->
   <section class="screen" id="s-reports" aria-labelledby="t-reports">
+    <p class="view-sync" id="reportsSync" role="status" aria-live="polite"></p>
     <div class="report-heading"><div><h1 class="pt" id="t-reports">📄 보고서 · 담당 검토</h1>
       <p class="ps">확정된 계정의 주간·월간 실적입니다. 초판 뒤에도 원천 변경을 확인하면 정정됩니다. 생성·재확인·담당 검토는 별개이며, 승인해도 광고주에게 게시하거나 전송하지 않습니다.</p></div>
       <button type="button" class="btn sm" id="reportsReload">보고서 새로고침</button></div>
@@ -159,6 +163,7 @@
 
   <!-- 📋 이관 현황 -->
   <section class="screen" id="s-transfers" aria-labelledby="t-transfers">
+    <p class="view-sync" id="inventorySync" role="status" aria-live="polite"></p>
     <h1 class="pt" id="t-transfers">📋 이관 현황</h1>
     <p class="ps">선택한 담당 범위의 현황입니다. 카드를 누르면 아래 목록을 해당 조건으로 볼 수 있습니다.</p>
     <div id="inventorySummary" class="inventory-summary" role="group" aria-label="이관 현황 요약 카드"></div>
