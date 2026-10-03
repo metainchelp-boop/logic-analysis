@@ -18,6 +18,79 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
+    def catalog_fixture(self):
+        now = datetime.fromisoformat('2026-10-03T12:00:00+09:00')
+        rows = {pid: [dict(possibility_id=pid, customer_id=987654320+pid,
+                          state='auto' if pid == 1 else 'blocked', code='same' if pid == 1 else 'name-different',
+                          claimed_elsewhere=False, allowed=pid == 1)] for pid in range(1, 5)}
+        ctx = types.SimpleNamespace(now=now, org=object(), owns={pid: object() for pid in rows},
+            accounts={987654320+pid: {'present':1,'account_name':'PRIVATE_NAME'} for pid in rows},
+            prospects={2:dict(stage_conflict=1,end_unreadable=1,latest_end_date=None),
+                       3:dict(stage_conflict=0,end_unreadable=1,latest_end_date=None),
+                       4:dict(stage_conflict=0,end_unreadable=0,latest_end_date='2026-09-01')},
+            live_decisions=(), rows_by_pid=rows)
+        context = types.SimpleNamespace(ctx=ctx, scope=types.SimpleNamespace(kind='ALL'),
+            source_state='accepted', visible_ids=frozenset(rows), catalog_at=now,
+            companies={pid:dict(stage='전략관리',stage_hidden=False,stage_known=True,company_name='PRIVATE_NAME') for pid in rows})
+        rules = types.SimpleNamespace(
+            SC=types.SimpleNamespace(ALL='ALL',MINE='MINE',ACT_CONFIRM_LINK='confirm_link',
+                allowed_actions=lambda *args: {'confirm_link'}),
+            W=types.SimpleNamespace(link_holders=lambda *args: frozenset()),
+            H=types.SimpleNamespace(eligibility_reason=lambda stage,at,end,current:
+                'ended-over-14-days' if end is not None and (current.date()-end).days > 14 else None),
+            allowed=lambda context,row: row['allowed'])
+        return context, rules
+
+    def test_catalog_confirmation_counts_first_refusal_without_identities(self):
+        context, rules = self.catalog_fixture()
+        out = M.catalog_link_counts(context, rules)
+        self.assertEqual((out['auto'],out['name_different'],out['can_confirm']), (1,3,1))
+        self.assertEqual(out['rejected'], {'legacy_stage_conflict':1,'legacy_end_unreadable':1,'ended-over-14-days':1})
+        self.assertEqual(M.catalog_link_projection(out), out)
+        for private in ('PRIVATE','987654321','possibility_id','customer_id','"name"','"token"','"ref"'):
+            self.assertNotIn(private, json.dumps(out))
+        context.source_state='stale'
+        with self.assertRaisesRegex(ValueError, '^CATALOG_LINK_SOURCE$'):
+            M.catalog_link_counts(context, rules)
+
+    def test_catalog_counts_refuse_policy_drift_unknown_reasons_and_output_fields(self):
+        context, rules = self.catalog_fixture()
+        value = M.catalog_link_counts(context, rules)
+        for change in ({'customer_id':987654321}, {'can_confirm':True}, {'auto':-1}, {'name_different':2**63},
+                       {'rejected':{'PRIVATE_REASON':1}}, {'rejected':{}}, {'can_confirm':2}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                M.catalog_link_projection(dict(value, **change))
+        rules.allowed=lambda context,row: False
+        with self.assertRaisesRegex(ValueError, '^CATALOG_LINK_RULE_MISMATCH$'):
+            M.catalog_link_counts(context, rules)
+        rules.H.eligibility_reason=lambda *args: 'PRIVATE_REASON'
+        with self.assertRaisesRegex(ValueError, '^CATALOG_LINK_RULE_MISMATCH$') as error:
+            M.catalog_link_counts(context, rules)
+        self.assertNotIn('PRIVATE', str(error.exception))
+
+    def test_catalog_counts_cover_ownership_collisions_decisions_and_stage_guards(self):
+        for reason in ('scope_denied','permission_denied','company_or_account_unavailable','other_claim',
+                       'existing_decision','stage-not-monitored','ended-end-date-unknown'):
+            context, rules = self.catalog_fixture()
+            context.visible_ids=frozenset({1})
+            row=context.ctx.rows_by_pid[1][0]; row['allowed']=False
+            if reason == 'scope_denied':
+                context.scope.kind='TEAM'
+            elif reason == 'permission_denied':
+                rules.SC.allowed_actions=lambda *args: frozenset()
+            elif reason == 'company_or_account_unavailable':
+                context.ctx.accounts[row['customer_id']]['present']=0
+            elif reason == 'other_claim':
+                rules.W.link_holders=lambda *args: {987654399}
+            elif reason == 'existing_decision':
+                context.ctx.live_decisions=(types.SimpleNamespace(possibility_id=1,customer_id=row['customer_id']),)
+            else:
+                rules.H.eligibility_reason=lambda *args: reason
+            with self.subTest(reason=reason):
+                self.assertEqual(M.catalog_link_counts(context,rules),
+                                 {'auto':1,'name_different':0,'can_confirm':0,'rejected':{reason:1}})
+
+
     def test_management_missing_schema10_tables_is_not_reported_as_empty_success(self):
         db = sqlite3.connect(':memory:')
         self.addCleanup(db.close)
@@ -93,6 +166,16 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("reader._conn.execute('BEGIN')", script)
         self.assertIn("reader._conn.execute('ROLLBACK')", script)
         self.assertNotIn('open_writer', script)
+        self.assertEqual(M.CATALOG_LINKS_COMMIT, '6e4b035901027fef29266de218bfb0594227a3fe')
+        self.assertIn('if False:', script)
+        diagnostic = M.script(catalog_links=True).decode()
+        ast.parse(diagnostic)
+        self.assertIn('if True:', diagnostic)
+        self.assertIn("if store.meta('schema_version') != '11':", diagnostic)
+        self.assertIn('scope = CL.SC.scope_of(org, 0)', diagnostic)
+        self.assertNotIn('open_writer', diagnostic)
+        for forbidden in ('urllib', 'requests.', 'read_naver_customer_ids', 'socket.'):
+            self.assertNotIn(forbidden, diagnostic)
 
     def test_schema10_monday_includes_sunday_weekly_and_unfinished_backfill_40_days_without_identities(self):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema9_10_contract.json').read_text())
@@ -185,7 +268,7 @@ class CollectionTest(unittest.TestCase):
             self.assertEqual(call.kwargs, {'timeout':3})
 
     def test_run_checks_approved_identity_and_reprojects_engine_output(self):
-        package = dict(baseline='a'*64, source_commit='b'*40, source_tar_gz_sha256='c'*64)
+        package = dict(baseline='a'*64, source_commit=M.CATALOG_LINKS_COMMIT, source_tar_gz_sha256='c'*64)
         cid, image = 'd'*64, 'sha256:'+'e'*64
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
@@ -200,8 +283,9 @@ class CollectionTest(unittest.TestCase):
                 dict(ok=True, stage='internal_ready', source_commit=package['source_commit'])))
             values = dict(today='2026-10-01', prospects={'total':0,'stages':{}},
                 pairing={'available':False,'statuses':{},'unmatched_prospects':None}, latest_run=None,
-                today_checks={'statuses':{},'reasons':{}}, bootstrap=M.bootstrap_empty('no_request'))
-            for failure in (None, 'image', 'mount', 'rootfs', 'output', 'restart'):
+                today_checks={'statuses':{},'reasons':{}}, bootstrap=M.bootstrap_empty('no_request'),
+                catalog_links={'auto':2,'name_different':1,'can_confirm':1,'rejected':{'legacy_end_unreadable':2}})
+            for failure in (None, 'image', 'mount', 'rootfs', 'output', 'restart', 'catalog_missing'):
                 calls, inspections = [], []
                 host, release = Mock(), Mock()
                 host.baseline.return_value = package['baseline']
@@ -227,7 +311,10 @@ class CollectionTest(unittest.TestCase):
                             Source='/legacy' if failure=='mount' else '/var/lib/metainc/naver-engine')])).encode()
                     if args[1] == 'exec':
                         ast.parse(kwargs['data'])
+                        self.assertIn('if True:', kwargs['data'].decode())
                         self.assertEqual(args, ['docker','exec','-i','--user','10001:10001',cid,'python','-I','-B','-'])
+                        if failure == 'catalog_missing':
+                            return json.dumps({key:value for key,value in values.items() if key != 'catalog_links'}).encode()
                         return json.dumps(dict(values, secret='SECRET') if failure=='output' else values).encode()
                     self.fail('unexpected command')
                 release.command.side_effect = command

@@ -7,6 +7,7 @@ import stat
 from datetime import date, datetime, timedelta
 
 STAGE = 'input'
+CATALOG_LINKS_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
 PROJECTION_SOURCE = r'''
 STAGES = frozenset(('진행중', '전략관리', '사후관리', '홀딩중', '재계약진행중', '환불중', '계약만료'))
 PAIR_STATES = frozenset('confirmed auto missing broken blocked candidate superseded'.split())
@@ -18,6 +19,9 @@ PAIR_COUNTS = PAIR_STATES | {'prospects', 'ignored'}
 COLLECTION_COUNTS = CHECK_STATES | frozenset('targets store_refused duplicate_skipped unlinked_issues deadline_left abort_left handle_invalid account_error'.split())
 BOOTSTRAP_CODES = frozenset('REQUEST_FILE REQUEST_CHANGED REQUEST_SCHEMA REQUEST_EXPIRED HOLD_CHANGED_OR_EXPIRED HOLD_DIGEST_CHANGED HOLD_ROWS_CHANGED CURRENT_OWNER_REQUIRED SOURCES_NOT_TODAY SOURCES_UNUSABLE RESTRICTED_CONFIG_REQUIRED CONFIRM_REFUSED PAIRING_REFUSED INTERNAL_ERROR'.split())
 JOB_STATES = frozenset('reading partial ok retry limited reauth_required source_wait'.split())
+LINK_REFUSALS = frozenset('scope_denied selection_denied permission_denied company_or_account_unavailable '
+    'other_claim existing_decision legacy_stage_conflict legacy_end_unreadable stage-not-monitored '
+    'stage-time-unknown stage-stale stage-time-in-future end-date-invalid ended-end-date-unknown ended-over-14-days'.split())
 
 
 def bootstrap_empty(state):
@@ -248,9 +252,77 @@ def collect_management(connection, today):
         'target_count_reason':'CURRENT_ELIGIBILITY_NOT_EVALUATED', 'counts_are_jobs_not_targets':True}, today)
 
 
+def catalog_link_projection(value):
+    if (not isinstance(value, dict) or set(value) != {'auto', 'name_different', 'can_confirm', 'rejected'}
+            or not isinstance(value['rejected'], dict) or set(value['rejected']) - LINK_REFUSALS):
+        raise ValueError('CATALOG_LINK_FIELDS')
+    out = {key:number(value[key]) for key in ('auto', 'name_different', 'can_confirm')}
+    out['rejected'] = {key:number(n) for key,n in value['rejected'].items()}
+    if out['auto'] + out['name_different'] != out['can_confirm'] + sum(out['rejected'].values()):
+        raise ValueError('CATALOG_LINK_COUNTS')
+    return out
+
+
+def catalog_link_counts(context, rules):
+    """First refusing gate, checked against the pinned product's actual allowed result."""
+    if context is None or context.source_state != 'accepted':
+        raise ValueError('CATALOG_LINK_SOURCE')
+    ctx, scope = context.ctx, context.scope
+    out = {'auto':0, 'name_different':0, 'can_confirm':0, 'rejected':{}}
+    for pid in sorted(context.visible_ids):
+        for row in ctx.rows_by_pid.get(pid, ()):
+            kind = 'auto' if row['state'] == 'auto' else 'name_different' if (
+                row['state'] == 'blocked' and row['code'] == 'name-different') else None
+            if kind is None:
+                continue
+            out[kind] += 1
+            pid, cid = row['possibility_id'], row['customer_id']
+            own, company, account = ctx.owns.get(pid), context.companies.get(pid), ctx.accounts.get(cid)
+            legacy = ctx.prospects.get(pid)
+            reason = None
+            if scope.kind not in (rules.SC.ALL, rules.SC.MINE):
+                reason = 'scope_denied'
+            elif pid not in context.visible_ids:
+                reason = 'selection_denied'
+            elif own is None or rules.SC.ACT_CONFIRM_LINK not in rules.SC.allowed_actions(ctx.org, scope, own):
+                reason = 'permission_denied'
+            elif not company or company['stage_hidden'] or not company['stage_known'] or not account or account['present'] != 1:
+                reason = 'company_or_account_unavailable'
+            elif rules.W.link_holders(ctx, pid, cid) or row.get('claimed_elsewhere'):
+                reason = 'other_claim'
+            elif any(d.possibility_id == pid and d.customer_id == cid for d in ctx.live_decisions):
+                reason = 'existing_decision'
+            elif legacy is not None and legacy['stage_conflict']:
+                reason = 'legacy_stage_conflict'
+            elif legacy is not None and legacy['end_unreadable']:
+                reason = 'legacy_end_unreadable'
+            else:
+                end = None if legacy is None or legacy['latest_end_date'] is None else date.fromisoformat(legacy['latest_end_date'])
+                reason = rules.H.eligibility_reason(company['stage'], context.catalog_at, end, ctx.now)
+            if (reason is not None and reason not in LINK_REFUSALS) or rules.allowed(context, row) != (reason is None):
+                raise ValueError('CATALOG_LINK_RULE_MISMATCH')
+            if reason is None:
+                out['can_confirm'] += 1
+            else:
+                out['rejected'][reason] = out['rejected'].get(reason, 0) + 1
+    return catalog_link_projection(out)
+
+
+def collect_catalog_links(store, now):
+    from naver_engine import catalog_links as CL
+    if store.meta('schema_version') != '11':
+        raise ValueError('COLLECTION_SCHEMA')
+    org = CL.W.load_org(store)
+    scope = CL.SC.scope_of(org, 0)
+    if scope.kind != CL.SC.ALL:
+        raise ValueError('CATALOG_LINK_SCOPE')
+    return catalog_link_counts(CL.load(store, now, org, scope, 'all', narrowed=False), CL)
+
+
 def project(value):
     fields = {'today', 'prospects', 'pairing', 'latest_run', 'today_checks', 'bootstrap'}
-    if not isinstance(value, dict) or set(value) not in (fields, fields | {'management'}):
+    if not isinstance(value, dict) or set(value) not in (fields, fields | {'management'},
+            fields | {'catalog_links'}, fields | {'management', 'catalog_links'}):
         raise ValueError('COLLECTION_FIELDS')
     today = value['today']
     if not isinstance(today, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', today):
@@ -283,6 +355,8 @@ def project(value):
             'bootstrap': bootstrap}
     if 'management' in value:
         result['management'] = management_projection(value['management'], today)
+    if 'catalog_links' in value:
+        result['catalog_links'] = catalog_link_projection(value['catalog_links'])
     return result
 
 
@@ -325,7 +399,7 @@ def validate_package(package):
             raise ValueError('PACKAGE_SHAPE')
 
 
-def script():
+def script(*, catalog_links=False):
     parts = ['import json,os,sys,stat,re,time\nfrom pathlib import Path\nfrom datetime import date,datetime,timedelta,timezone\n', PROJECTION_SOURCE]
     parts.append("""
 try:
@@ -339,7 +413,10 @@ try:
         deadline=time.monotonic()+20
         reader._conn.set_progress_handler(lambda: time.monotonic()>=deadline,10000)
         reader._conn.execute('BEGIN')
-        result=collect(reader,datetime.now(timezone(timedelta(hours=9))).date().isoformat())
+        now=datetime.now(timezone(timedelta(hours=9)))
+        result=collect(reader,now.date().isoformat())
+        if CATALOG_LINK_DIAGNOSTIC:
+            result['catalog_links']=collect_catalog_links(reader,now)
     finally:
         try:
             reader._conn.execute('ROLLBACK')
@@ -349,7 +426,7 @@ try:
     print(json.dumps(result,sort_keys=True))
 except Exception:
     sys.exit(1)
-""")
+""".replace('CATALOG_LINK_DIAGNOSTIC', repr(catalog_links)))
     return '\n'.join(parts).encode()
 
 
@@ -457,10 +534,12 @@ def run(package, host, release):
         raise ValueError('PREVIEW_DATA_MOUNT')
     STAGE = 'read_only_status'
     raw = release.command(['docker', 'exec', '-i', '--user', '10001:10001', identity,
-                           'python', '-I', '-B', '-'], data=script(), timeout=30)
+                           'python', '-I', '-B', '-'], data=script(catalog_links=commit == CATALOG_LINKS_COMMIT), timeout=30)
     if len(raw) > 32768:
         raise ValueError('STATUS_SIZE')
     values = project(json.loads(raw, object_pairs_hook=release.unique))
+    if ('catalog_links' in values) != (commit == CATALOG_LINKS_COMMIT):
+        raise ValueError('CATALOG_LINK_FIELDS')
     lifecycle = lifecycle_status(release)
     version = compose_version(release)
     engine_state = {'started_at': docker_stamp(before.get('started')),
