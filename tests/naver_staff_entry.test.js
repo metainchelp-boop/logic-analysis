@@ -32,8 +32,19 @@ class Element {
   addEventListener() {}
   setAttribute(key, value) { this.attrs[key] = value; }
   getAttribute(key) { return this.attrs[key]; }
-  appendChild(child) { this.children.push(child); }
-  removeChild(child) { this.children.splice(this.children.indexOf(child), 1); }
+  appendChild(child) { return this.insertBefore(child, null); }
+  insertBefore(child, before) {
+    if (child === before) return child;
+    if (child.parentNode) child.parentNode.removeChild(child);
+    const index = before === null ? this.children.length : this.children.indexOf(before);
+    assert.ok(index >= 0);
+    this.children.splice(index, 0, child); child.parentNode = this; return child;
+  }
+  removeChild(child) {
+    const index = this.children.indexOf(child); assert.ok(index >= 0);
+    this.children.splice(index, 1); child.parentNode = null; return child;
+  }
+  get childNodes() { return this.children; }
   get firstChild() { return this.children[0]; }
 }
 
@@ -98,7 +109,8 @@ function launch(options = {}) {
       if (options.networkFailure) throw new Error(secretMarker);
       const response = url.endsWith('/session') ? (options.session || {
         status: 200, body: { token: 'synthetic-session-token', expires_in: 3600 }
-      }) : (options.me || { status: 200, body: { scope: 'MINE', name: '합성 직원' } });
+      }) : url.includes('/reports?') ? { status: 200, body: { selection: 'all', rows: [], page: 0, total: 0, next_page: null } } :
+        (options.me || { status: 200, body: { scope: 'MINE', name: '합성 직원' } });
       return { status: response.status, ok: response.status >= 200 && response.status < 300,
         json: async () => response.body };
     }
@@ -150,7 +162,7 @@ test('암호화 작업이 늦게 완료되어도 실제 준비 메시지와 화�
   assert.equal(run.messages[0].data.type, 'METAINC_SSO_READY');
   run.message();
   await until(() => run.elements.get('s-reports').classList.contains('on'));
-  assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me', '/api/naver-auto/reports?selection=all']);
+  assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me', '/api/naver-auto/reports?selection=all&view_sync=1']);
 });
 
 test('암호화가 끝나지 않으면 대기 제한 시간에 실패하며 무한히 기다리지 않는다', { timeout: 1000 }, async () => {
@@ -265,7 +277,7 @@ test('허용 출처의 정상 로그인은 실제 PKCE와 한 번의 교환을 �
       assert.equal(Buffer.from(digest).toString('base64url'), run.messages[0].data.codeChallenge);
       assert.deepEqual(run.trace, ['clean-url', 'ready', 'fetch', 'fetch', 'fetch']);
       assert.equal(run.location.search, '');
-      assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me', '/api/naver-auto/reports?selection=all']);
+      assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me', '/api/naver-auto/reports?selection=all&view_sync=1']);
       assert.equal(run.requests[1].init.headers.Authorization, 'Bearer synthetic-session-token');
       for (const request of run.requests) {
         assert.equal(request.init.credentials, 'omit');

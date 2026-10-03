@@ -31,7 +31,9 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+import json
+from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping, Optional, Union
 
 from .org_snapshot import OWNER_SOURCE_PREV, SYSTEM_EMPLOYEE_IDX, Org, OrgPerson, OwnerRow, is_person_idx
@@ -224,6 +226,20 @@ def _live(org: Org, scope: Any) -> Scope:
 
 
 # ── 1. 보는 범위 ──────────────────────────────────────────────────
+
+def view_cache_fingerprint(org: Org, scope: Scope) -> str:
+    """현재 조직·범위의 불투명 조회 캐시 지문. 접근 허가는 기존 판정 함수가 매번 따로 한다.
+
+    담당 칸을 화면에서 펼치지 않게 한다. 같은 시각의 담당/재직/좁힘 변경도 옛 응답과 구별한다.
+    """
+    value = {"version": 1, "org": {"generated_at": org.generated_at,
+        "people": [asdict(person) for _, person in sorted(org.people.items())],
+        "teams": [asdict(team) for _, team in sorted(org.teams.items())],
+        "owners": [asdict(owner) for owner in org.owners]},
+        "scope": {**asdict(scope), "teams": sorted(scope.teams), "people": sorted(scope.people)}}
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 
 def management_people(org: Org) -> frozenset[int]:
     """① 권한 유형으로 확인된 재직 관리팀 명단. 팀 이름·팀장 표시로 추측하지 않는다."""

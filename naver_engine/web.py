@@ -31,7 +31,7 @@ import re
 import threading
 import time as _time
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -352,10 +352,7 @@ class App:
                 v = self._viewer(environ, now, snapshot=snapshot)
                 status, payload = route.handler(self, req, v, now, **m.groupdict())
                 context = VS.context_key({"version": 1, "viewer": v.idx, "login_at": v.claims.login_at,
-                    "narrowed": v.claims.narrowed, "org": {"generated_at": v.org.generated_at,
-                        "people": [asdict(person) for _, person in sorted(v.org.people.items())],
-                        "teams": [asdict(team) for _, team in sorted(v.org.teams.items())],
-                        "owners": [asdict(owner) for owner in v.org.owners]}, "scope": asdict(v.scope),
+                    "narrowed": v.claims.narrowed, "scope": SC.view_cache_fingerprint(v.org, v.scope),
                     "path": sub, "query": query, "date": now.astimezone(KST).date()})
             # 읽기 거래를 닫은 뒤 메모리 캐시만 비교한다. 전송까지 WAL 읽기를 붙잡지 않는다.
             if status == 200:

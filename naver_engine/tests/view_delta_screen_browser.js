@@ -223,6 +223,30 @@ const cfg = JSON.parse(process.argv[2]);
     assert.match(await page.locator('#inventoryRows').innerText(), /54,321/);
     checks.push('actual-accounts-unchanged-and-correction');
 
+    // 같은 카드가 로컬 검색을 지우면 서버가 unchanged여도 목록과 개수는 다시 맞춰야 한다.
+    const unknownFirst = page.waitForResponse(response => response.url().includes('/accounts?'));
+    await page.click('#inventory-stat-unknown'); await settled('current', page, 'inventory');
+    const unknownRows = (await (await unknownFirst).json()).data.rows.map(row => String(row.ad_account_no)).sort();
+    assert.ok(unknownRows.length > 0, '합성 미확인 계정이 있어야 검색 복구를 검증할 수 있습니다');
+    await page.fill('#inventorySearch', '일치하지않는합성검색어');
+    assert.match(await page.locator('#inventoryCount').innerText(), /^0 \/ /);
+    assert.equal(await page.locator('#inventoryRows tr[data-account]').count(), 0);
+    const unknownAgain = page.waitForResponse(response => response.url().includes('/accounts?'));
+    await page.click('#inventory-stat-unknown'); await settled('current', page, 'inventory');
+    assert.equal((await (await unknownAgain).json()).mode, 'unchanged');
+    assert.equal(await page.locator('#inventorySearch').inputValue(), '');
+    assert.ok((await page.locator('#inventoryCount').innerText()).startsWith(unknownRows.length + ' / '),
+      '같은 필터 카드가 검색을 지운 뒤 unchanged 응답이어도 표시 개수를 복구해야 합니다');
+    assert.deepEqual(await page.locator('#inventoryRows tr[data-account]').evaluateAll(
+      rows => rows.map(row => row.dataset.account).sort()), unknownRows);
+    await page.evaluate(() => { window.__sameCardRow = document.querySelector('#inventoryRows tr[data-account]'); });
+    const unknownRepeat = page.waitForResponse(response => response.url().includes('/accounts?'));
+    await page.click('#inventory-stat-unknown'); await settled('current', page, 'inventory');
+    assert.equal((await (await unknownRepeat).json()).mode, 'unchanged');
+    assert.equal(await page.evaluate(() => window.__sameCardRow === document.querySelector('#inventoryRows tr[data-account]')), true,
+      '검색도 변하지 않은 같은 필터 재확인은 기존 행 노드를 보존해야 합니다');
+    checks.push('same-inventory-card-clears-search-and-restores-rows', 'same-inventory-card-preserves-unchanged-row');
+
     const reportsFirst = page.waitForResponse(response => response.url().includes('/reports?'));
     await page.click('[data-go="/naver/reports"]'); await settled('current', page, 'reports');
     const reportFull = await reportsFirst;

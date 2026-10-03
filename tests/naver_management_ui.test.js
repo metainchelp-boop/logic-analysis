@@ -23,8 +23,19 @@ class Element {
   getAttribute(k) { return this.attrs[k]; }
   addEventListener(k, fn) { (this.events[k] ||= []).push(fn); }
   dispatch(k) { if (k === 'click' && this.disabled) return; (this.events[k] || []).forEach(fn => fn.call(this, { currentTarget: this, target: this })); }
-  appendChild(el) { this.children.push(el); }
-  removeChild(el) { this.children.splice(this.children.indexOf(el), 1); }
+  appendChild(el) { return this.insertBefore(el, null); }
+  insertBefore(el, before) {
+    if (el === before) return el;
+    if (el.parentNode) el.parentNode.removeChild(el);
+    const index = before === null ? this.children.length : this.children.indexOf(before);
+    assert.ok(index >= 0, 'insertBefore 기준 노드는 부모에 있어야 한다');
+    this.children.splice(index, 0, el); el.parentNode = this; return el;
+  }
+  removeChild(el) {
+    const index = this.children.indexOf(el); assert.ok(index >= 0);
+    this.children.splice(index, 1); el.parentNode = null; return el;
+  }
+  get childNodes() { return this.children; }
   get firstChild() { return this.children[0]; }
   focus() {}
   scrollIntoView() {}
@@ -61,7 +72,8 @@ function launch(options = {}) {
       if (url.endsWith('/me')) body = options.me || { scope: 'ALL', owner_verification: true };
       else if (options.respond) body = await options.respond(req);
       else body = options.data || inventory();
-      return { status: 200, ok: true, json: async () => body };
+      // HTTP JSON 응답은 호출마다 새 객체다. fixture 참조 공유로 옛 범위의 행을 되살리지 않는다.
+      return { status: 200, ok: true, json: async () => JSON.parse(JSON.stringify(body)) };
     } });
   vm.runInContext(app, context);
   return { elements, requests, location, text: id => elements.get(id).textContent,
@@ -80,7 +92,7 @@ function pending(rows = [], decisions = [], overrides = {}) {
     pairing_today: true, rows, decisions }, overrides);
 }
 function linkResponse(data, request) {
-  if (request.url.includes('/board?')) return { selection: 'all', band: { runs: [] }, counts: {}, rows: [], done_rows: [] };
+  if (request.url.includes('/board?')) return { selection: new URL(request.url, 'https://watch.invalid').searchParams.get('selection'), band: { runs: [] }, counts: {}, rows: [], done_rows: [] };
   if (request.url.startsWith('/api/naver-auto/links/pending')) return data;
   return {};
 }
@@ -446,7 +458,7 @@ test('보고서는 기간·부분합·누락·담당 검토를 표시하며 게�
     }
   }] } });
   await flush();
-  assert.ok(run.requests.some(r => r.url === '/api/naver-auto/reports?selection=all'));
+  assert.ok(run.requests.some(r => r.url === '/api/naver-auto/reports?selection=all&view_sync=1'));
   assert.match(run.text('reportsSchedule'), /월요일 10:00.*매월 3일 10:00.*Asia\/Seoul/);
   assert.match(run.text('reportsRows'), /합성 보고 업체.*2026-09-01 ~ 2026-09-30.*부분 집계/);
   assert.match(run.text('reportsRows'), /확인된 광고비.*123,000원/);
@@ -544,6 +556,7 @@ test('보고서 페이지는 담당 범위 안에서 이동하고 누락 전체 
   run.scope('person:2'); await flush();
   const count = run.requests.length; next.dispatch('click'); await flush();
   assert.equal(run.requests.length, count);
+  // 이 fixture는 구버전 전체 응답이므로 다음 페이지부터는 기존 GET 계약으로 호환한다.
   assert.ok(run.requests.some(req => req.url === '/api/naver-auto/reports?selection=all&page=1'));
   assert.equal(run.requests.filter(req => req.method !== 'GET').length, 0);
 });

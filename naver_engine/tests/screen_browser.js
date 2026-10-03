@@ -270,16 +270,32 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await p.clock.install({ time: new Date('2026-09-29T23:57:00+09:00') });   // 자정 넘김 시험용(맨 끝)
       const url = base + '/naver/';
       await enter(p, url, cfg.sso.ceo4);
-      await p.waitForSelector('#issues .empty button');
-      const msg = await p.textContent('#issues');
-      ok('경합: 첫 불러오기 실패 = 까닭 + 「다시 불러오기」(불러오는 중에 멈추지 않음)', msg.includes('불러오지 못했습니다') && msg.includes('조직 자료를 아직 받지 못했습니다') && !msg.includes('불러오는 중'), msg);
+      await p.waitForSelector('#watchSync[data-status="error"] button');
+      const msg = await p.textContent('#watchSync');
+      ok('경합: 첫 불러오기 실패 = 권한·조직 확인 불가 + 「다시 확인」', msg.includes('자료를 표시하지 않았습니다') && msg.includes('현재 권한·조직 자료를 확인할 수 없습니다') && msg.includes('다시 확인'), msg);
+      ok('경합: 첫 실패는 검증 게이트를 닫고 업체·이슈·숫자 DOM을 남기지 않는다',
+        await p.locator('#s-watch.view-unverified').count() === 1 &&
+        await p.locator('#tbody tr[data-pid], #issues .iss, #kpis .kpi').count() === 0 && await p.isHidden('#q'));
+      failBoard = false;
+      await p.click('#watchSync button');
+      await p.waitForSelector('#watchSync[data-status="current"]');
+      await p.waitForSelector('#s-watch.on #kpis .kpi');
+      ok('경합: 다시 확인 성공 뒤에만 게이트를 열고 숫자 칸이 나온다',
+        await p.locator('#s-watch.view-unverified').count() === 0 && (await p.$$eval('#kpis .kpi', (els) => els.length)) === 6);
       await p.click('#tblChips .chip[data-f="all"]');
       await p.fill('#q', '가');
       await p.fill('#q', '');
+      failBoard = true;
+      await p.click('#watchReload');
+      await p.waitForSelector('#watchSync[data-status="error"] button');
+      ok('경합: 성공 뒤 조직 확인 실패도 옛 업체·이슈·숫자 DOM을 지우고 검색을 숨긴다',
+        await p.locator('#s-watch.view-unverified').count() === 1 &&
+        await p.locator('#tbody tr[data-pid], #issues .iss, #kpis .kpi').count() === 0 && await p.isHidden('#q'));
       failBoard = false;
-      await p.click('#issues .empty button');
-      await p.waitForSelector('#s-watch.on #kpis .kpi');
-      ok('경합: 다시 불러오면 숫자 칸이 나온다', (await p.$$eval('#kpis .kpi', (els) => els.length)) === 6);
+      await p.click('#watchSync button');
+      await p.waitForSelector('#watchSync[data-status="current"]');
+      ok('경합: 권한 실패 뒤 다시 확인으로 현재 업체가 복구된다',
+        await p.locator('#s-watch.view-unverified').count() === 0 && await p.locator('#tbody tr[data-pid]').count() > 0);
       log.statuses = log.statuses.filter((x) => !(x[0] === 503 && x[1].startsWith('/api/naver-auto/board')));   // 일부러 낸 실패
       // 빠른 범위 바꾸기 — 늦게 오는 「내 담당만」 답이 「전체」를 덮지 않는다
       const all = (await api(p, '/board?selection=all&attention=0')).body.counts;
@@ -328,18 +344,20 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await p.keyboard.press('Escape');
       // 자정이 지나면 🙈 창을 열기 전에 서버의 오늘로 다시 받는다(끝날이 어제가 되지 않게)
       const yrow = '#issues .iss[data-issue="' + cfg.yellow + '"]';
-      const staleRow = await p.$(yrow + ' button:has-text("예외")');   // 앞서 그린(숨은) 관제 줄 — 새 판이 오면 바뀐다
+      const reentered = p.waitForResponse((r) => r.url().includes('/api/naver-auto/board') && r.status() === 200);
       await p.click('[data-go="/naver/"]');
-      if (staleRow) await p.waitForFunction((el) => !el.isConnected, staleRow);   // 자정 전에 받은 새 판을 그린 뒤에 시계를 넘긴다
+      await reentered;
+      await p.waitForSelector('#watchSync[data-status="current"]');   // unchanged면 기존 DOM을 보존할 수 있다.
       await p.waitForSelector(yrow + ' button:has-text("예외")');
-      await p.clock.fastForward(5 * 60 * 1000);
       const oldExcept = await p.$(yrow + ' button:has-text("예외")');
       const reloaded = p.waitForResponse((r) => r.url().includes('/api/naver-auto/board') && r.status() === 200, { timeout: 10000 }).then(() => true, () => false);
       await p.click(yrow + ' button:has-text("예외")');
-      await p.waitForFunction(() => document.getElementById('toast').textContent.includes('날짜가 바뀌어'));
-      ok('경합: 자정을 넘기면 🙈 창 대신 새로 불러온다', !(await p.isVisible('#m-except.on')));
+      await p.waitForSelector('#m-except.on');
+      await p.clock.fastForward(5 * 60 * 1000);
+      ok('경합: 자정을 넘기면 열려 있던 옛 🙈 창을 닫는다', !(await p.isVisible('#m-except.on')));
       ok('경합: 자정 뒤 관제 판을 서버에서 다시 받는다', await reloaded);
-      await p.waitForFunction((el) => !el.isConnected, oldExcept);   // 새로 그린 뒤의 단추를 누른다(옛 단추를 누르는 시험 경합 막음)
+      await p.waitForFunction((el) => !el.isConnected, oldExcept);   // 날짜 경계에서는 옛 권한의 DOM을 버린다.
+      await p.waitForSelector('#watchSync[data-status="current"]');
       await p.waitForSelector(yrow + ' button:has-text("예외")');
       await p.click(yrow + ' button:has-text("예외")');
       await p.waitForSelector('#m-except.on');

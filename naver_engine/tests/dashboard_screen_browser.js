@@ -32,6 +32,7 @@ const cfg = JSON.parse(process.argv[2]);
     accounts_at: cfg.now, catalog_at: cfg.now, catalog_status: 'accepted'
   };
   let dashboard = snapshot, failDashboard = false, holdMine = false, releaseMine, mineStarted = false;
+  let dashboardFailure = 'engine-unavailable';
   let holdNextDashboard = false, dashboardStarted, releaseDashboard, dashboardRequests = 0;
   await page.route('**/api/naver-auto/dashboard?**', async route => {
     dashboardRequests++;
@@ -48,7 +49,7 @@ const cfg = JSON.parse(process.argv[2]);
       response.totals.spend = 777777;
       await new Promise(resolve => { releaseMine = resolve; });
     }
-    if (fail) return route.fulfill({status: 503, json: {error: 'engine-unavailable'}});
+    if (fail) return route.fulfill({status: 503, json: {error: dashboardFailure}});
     await route.fulfill({json: response});
   });
   let board;
@@ -129,10 +130,14 @@ const cfg = JSON.parse(process.argv[2]);
     assert.equal(await page.evaluate(() => window.scrollY), 0, '전체 화면 캡처는 문서 맨 위에서 시작한다');
     if (cfg.shots) await page.screenshot({path: path.join(cfg.shots, 'dashboard-desktop.png'), fullPage: true});
     failDashboard = true;
+    await page.evaluate(() => { window.__dashboardBeforeFailure = document.querySelector('#dashboard-spend'); });
     await page.click('#dashboardReload');
-    await page.waitForSelector('#dashboardStatus[data-status="error"]');
-    assert.equal(await page.textContent('#dashboard-spend .value'), '—');
-    assert.doesNotMatch(await page.textContent('#s-dashboard'), /12,345원|250%/);
+    await page.waitForSelector('#dashboardSync[data-status="stale"]');
+    assert.equal(await page.textContent('#dashboard-spend .value'), '12,345원', '같은 범위의 일시적 실패에는 이전 확인값을 유지한다');
+    assert.equal(await page.textContent('#dashboard-roas .value'), '250%');
+    assert.equal(await page.evaluate(() => window.__dashboardBeforeFailure === document.querySelector('#dashboard-spend')), true);
+    assert.equal(await page.locator('#dashboardMetrics').isVisible(), true);
+    assert.match(await page.textContent('#dashboardSync'), /최신화 실패.*이전 확인 자료.*서버 변경 확인 시각/);
     failDashboard = false;
     dashboard = {...snapshot, accounts: {...snapshot.accounts, total: 0}, coverage: {...snapshot.coverage, complete_accounts: 0}};
     await page.click('#dashboardReload');
@@ -163,14 +168,19 @@ const cfg = JSON.parse(process.argv[2]);
     await page.waitForSelector('#dashboardStatus[data-status="partial"]');
     holdMine = true;
     await page.selectOption('#scope', 'me');
-    assert.equal(await page.textContent('#dashboard-spend .value'), '—', '범위를 바꾸면 옛 숫자를 즉시 비운다');
-    await page.waitForSelector('#dashboardStatus[data-status="loading"]');
+    await page.waitForSelector('#dashboardSync[data-status="checking"]');
+    assert.equal(await page.locator('#dashboard-spend').count(), 0, '범위를 바꾸면 옛 숫자 노드를 즉시 삭제한다');
+    assert.equal(await page.locator('#s-dashboard.view-unverified').count(), 1);
+    assert.equal(await page.locator('#dashboardMetrics').isVisible(), false, '새 범위 권한 확인 전에는 지표를 숨긴다');
     const deadline = Date.now() + 5000;
     while (!mineStarted && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     assert.ok(mineStarted, '느린 담당 범위 요청이 시작됨');
     await page.selectOption('#scope', 'all');
     await page.waitForSelector('#dashboardStatus[data-status="partial"]');
-    const late = page.waitForResponse(response => response.url().endsWith('/dashboard?selection=me'));
+    const late = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/api/naver-auto/dashboard' && url.searchParams.get('selection') === 'me';
+    });
     releaseMine();
     await late;
     await page.waitForTimeout(100);
@@ -179,6 +189,20 @@ const cfg = JSON.parse(process.argv[2]);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.evaluate(() => window.scrollTo(0, 0));
     if (cfg.shots) await page.screenshot({path: path.join(cfg.shots, 'dashboard-mobile.png'), fullPage: true});
+    // 조직 권한 오류는 일반 통신 실패와 달리 현재·숨겨진 업체 자료를 모두 삭제한다.
+    dashboardFailure = 'org-stale'; failDashboard = true;
+    await page.click('#dashboardReload');
+    await page.waitForSelector('#dashboardSync[data-status="error"]');
+    assert.equal(await page.locator('#s-dashboard.view-unverified').count(), 1);
+    assert.equal(await page.locator('#dashboardMetrics').isVisible(), false);
+    assert.equal(await page.locator('#dashboardMetrics .dashboard-metric').count(), 0);
+    assert.equal(await page.locator('#tbody tr[data-pid]').count(), 0, '숨겨진 관제 업체 행도 권한 오류에 삭제한다');
+    assert.doesNotMatch(await page.textContent('#s-dashboard'), /12,345원|250%/);
+    assert.match(await page.textContent('#dashboardSync'), /현재 권한·조직 자료를 확인할 수 없습니다/);
+    dashboardFailure = 'engine-unavailable'; failDashboard = false;
+    await page.locator('#dashboardSync button').click();
+    await page.waitForSelector('#dashboardSync[data-status="current"]');
+    assert.equal(await page.textContent('#dashboard-spend .value'), '12,345원');
     // 자정 전 요청을 일부러 보류한다. 이전 달 응답은 그리지 않고 새 날짜 자료를 다시 요청해야 한다.
     const firstOfMonth = {...snapshot, period: {start: '2026-10-01', end: '2026-09-30', days: 0, timezone: 'Asia/Seoul'}};
     async function crossMidnight(failAfter) {
@@ -191,14 +215,23 @@ const cfg = JSON.parse(process.argv[2]);
       const started = new Promise(resolve => { dashboardStarted = resolve; });
       await page.click('#dashboardReload');
       await started;
-      assert.equal(await page.textContent('#dashboard-spend .value'), '—');
+      assert.equal(await page.locator('#dashboard-spend').count(), 0, '날짜 변경 시 전 날짜 자료 노드를 삭제한다');
+      assert.equal(await page.locator('#s-dashboard.view-unverified').count(), 1);
+      assert.equal(await page.locator('#dashboardMetrics').isVisible(), false);
       await page.clock.setSystemTime(new Date('2026-10-01T00:00:01+09:00'));
       dashboard = firstOfMonth;
       failDashboard = failAfter;
       releaseDashboard();
-      await page.waitForSelector('#dashboardStatus[data-status="' + (failAfter ? 'error' : 'no-period') + '"]');
+      await page.waitForSelector(failAfter ? '#dashboardSync[data-status="error"]' : '#dashboardStatus[data-status="no-period"]');
       assert.equal(dashboardRequests, before + 2, '날짜가 바뀐 응답을 버리고 새 날짜로 한 번 재조회한다');
-      assert.equal(await page.textContent('#dashboard-spend .value'), '—');
+      if (failAfter) {
+        assert.equal(await page.locator('#dashboard-spend').count(), 0);
+        assert.equal(await page.locator('#s-dashboard.view-unverified').count(), 1);
+        assert.equal(await page.locator('#dashboardMetrics').isVisible(), false, '새 날짜 조회 실패에 이전 달 실적을 다시 표시하지 않는다');
+      } else {
+        assert.equal(await page.textContent('#dashboard-spend .value'), '—');
+        assert.equal(await page.locator('#s-dashboard.view-unverified').count(), 0);
+      }
       assert.doesNotMatch(await page.textContent('#s-dashboard'), /111,111원|12,345원|2026-09-29/);
       if (!failAfter) assert.match(await page.textContent('#dashboardPeriod'), /이번 달 집계 기간 없음/);
     }

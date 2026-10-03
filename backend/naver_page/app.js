@@ -761,10 +761,14 @@
   }
   var INVENTORY_MAPPING = { matched: '전산 업체 매칭', no_erp_record: '전산 내에 등록된 업체 정보 없음', unclassified: '미분류 · 확인 필요' };
   function inventoryCardFilter(mapping, view) {
+    var resetLocalSearch = !!state.inventoryQ && state.inventoryMapping === mapping &&
+      state.inventoryView === view && state.inventoryWorkflow === 'all';
     state.inventoryMapping = mapping; state.inventoryView = view;
     state.inventoryWorkflow = 'all'; state.inventoryQ = '';
     $('inventoryMapping').value = mapping; $('inventoryView').value = view;
     $('inventoryWorkflow').value = 'all'; $('inventorySearch').value = '';
+    // 검색은 서버 조회 조건이 아니다. 같은 카드의 unchanged 응답 전에도 지운 검색을 반영한다.
+    if (resetLocalSearch) renderInventory();
     loadInventory();
   }
   function renderInventorySummary(data, message) {

@@ -1680,5 +1680,36 @@ class ScreenAdditionsTest(unittest.TestCase):
         self.assertFalse(sc.profile_narrows(self.org, CEO, False, None))   # 대표는 my-profile 로 좁히지 않는다
         self.assertFalse(sc.profile_narrows(self.org, KIM, False, None))   # 담당은 좁힐 것이 없다
 
+class ViewCacheFingerprintTest(unittest.TestCase):
+    def test_same_time_owner_change_invalidates_fingerprint_without_mutating_permissions(self):
+        payload = mockup_payload()
+        org, rows = build(payload=payload)
+        scope = sc.scope_of(org, KIM)
+        visible = sc.clients_in(org, scope, rows)
+        original = sc.view_cache_fingerprint(org, scope)
+        self.assertRegex(original, r"^[0-9a-f]{64}$")
+        self.assertEqual(original, sc.view_cache_fingerprint(org, scope))
+        changed = copy.deepcopy(payload)
+        changed["owners"][0]["manage_emp_idx"] = BAK
+        next_org, _ = build(payload=changed)
+        self.assertNotEqual(original, sc.view_cache_fingerprint(next_org, sc.scope_of(next_org, KIM)))
+        self.assertEqual(visible, sc.clients_in(org, scope, rows))
+        self.assertEqual(payload["owners"][0]["manage_emp_idx"], KIM)
+
+    def test_viewer_narrowing_and_employment_changes_have_separate_fingerprints(self):
+        payload = mockup_payload()
+        org, _ = build(payload=payload)
+        original = sc.view_cache_fingerprint(org, sc.scope_of(org, KIM))
+        self.assertNotEqual(original, sc.view_cache_fingerprint(org, sc.scope_of(org, BAK)))
+        self.assertNotEqual(original, sc.view_cache_fingerprint(org, sc.narrowed_scope_of(org, KIM)))
+        changed = copy.deepcopy(payload)
+        for employee in changed["employees"]:
+            if employee["idx"] == KIM:
+                employee["status"] = "RESIGNED"
+        next_org, _ = build(payload=changed)
+        self.assertEqual(sc.scope_of(next_org, KIM).kind, sc.NONE)
+        self.assertNotEqual(original, sc.view_cache_fingerprint(next_org, sc.scope_of(next_org, KIM)))
+
+
 if __name__ == "__main__":
     unittest.main()
