@@ -17,6 +17,7 @@ from naver_runtime.backup_transport import OpenSslEncryptor, SshSender
 from naver_runtime.config import Config, ConfigError
 from naver_runtime.erp_tunnel_transport import ErpTunnelTransport
 from naver_runtime.scheduler import Scheduler
+from naver_runtime.runtime_status import RuntimeStatus
 from naver_runtime.collection_requests import CollectionClock
 from naver_runtime.server import UnixServer, health_app
 from naver_runtime.writer import Writer
@@ -43,6 +44,9 @@ class InterruptibleClock(N.SystemClock):
         return super().now()
 
     def sleep(self, seconds):
+        observer = getattr(self, "runtime_state", None)
+        if observer is not None:
+            observer.sleeping(seconds)
         self.stop.wait(seconds)
         self._check()
 
@@ -56,15 +60,27 @@ class InterruptibleClock(N.SystemClock):
 
 class StopAwareTransport:
     """기존 core HTTP 관문에 위임하며 중지 뒤 새 송신만 차단한다."""
-    def __init__(self, clock, transport=None):
+    def __init__(self, clock, transport=None, *, runtime_state=None, service=None):
         self._clock = clock
         self._transport = transport if transport is not None else N.UrllibTransport()
+        self._runtime, self._service = runtime_state, service
 
     def send(self, request, timeout):
         self._clock.before_network()
         if isinstance(self._clock, (MetricsClock, B.BootstrapClock, CollectionClock)):
             timeout = min(timeout, self._clock.remaining())
-        return self._transport.send(request, timeout)
+        if self._runtime is not None:
+            self._runtime.network_started(timeout)
+        try:
+            result = self._transport.send(request, timeout)
+        except BaseException:
+            if self._runtime is not None:
+                self._runtime.network_finished(self._service, None)
+            raise
+        if self._runtime is not None:
+            status = result[0] if isinstance(result, (tuple, list)) and result else None
+            self._runtime.network_finished(self._service, status)
+        return result
 
 
 class MetricsClock:
@@ -102,17 +118,18 @@ class MetricsClock:
         self.remaining()
 
 
-def dependencies(config, env, clock):
+def dependencies(config, env, clock, *, runtime_state=None):
     """켜진 기능에 필요한 키만 읽는다. 이 함수는 업무 API를 호출하지 않는다."""
     config.validate_runtime(env)
     erp_factory = naver_factory = alert_factory = metrics_factory = backup_job = None
     if config.sync_enabled or config.links_enabled or config.inventory_enabled:
         key = E.load_erp_key(env)
         erp_factory = lambda: E.ErpReader(key, clock=clock, transport=StopAwareTransport(
-            clock, ErpTunnelTransport(config.erp_tunnel_socket)))
+            clock, ErpTunnelTransport(config.erp_tunnel_socket), runtime_state=runtime_state, service="erp"))
     if config.links_enabled or config.morning_enabled or config.inventory_enabled:
         credentials = load_manager_credentials(env)
-        naver_factory = lambda: N.NaverReader(credentials, clock=clock, transport=StopAwareTransport(clock))
+        naver_factory = lambda: N.NaverReader(credentials, clock=clock,
+            transport=StopAwareTransport(clock, runtime_state=runtime_state, service="naver"))
     if config.backup_enabled:
         names = ("NAVER_BACKUP_CERT", "NAVER_BACKUP_SSH_KEY", "NAVER_BACKUP_KNOWN_HOSTS")
         if any(not env.get(name) for name in names):
@@ -148,7 +165,10 @@ def combine_web(status, web):
 def run(config, env, *, stop=None):
     stop = stop if stop is not None else threading.Event()
     clock = InterruptibleClock(stop)
-    options = dependencies(config, env, clock)
+    runtime = RuntimeStatus(enabled=config.inventory_enabled, clock=N.SystemClock().now,
+                            monotonic=clock.monotonic, stopped=stop.is_set)
+    clock.runtime_state = runtime
+    options = dependencies(config, env, clock, runtime_state=runtime)
     profiles = signer = None
     if config.web_enabled:
         profiles = EP.ErpProfileReader(env=env, transport=StopAwareTransport(
@@ -167,22 +187,24 @@ def run(config, env, *, stop=None):
         writer.call(lambda st: note_orphaned(st, N.SystemClock().now()))
         def collection_factory():
             bounded = CollectionClock(clock, seconds=600)
-            deps = dependencies(config, env, bounded)
+            deps = dependencies(config, env, bounded, runtime_state=runtime)
             return dict(clock=bounded, erp_factory=deps["erp_factory"], naver_factory=deps["naver_factory"])
         scheduler = Scheduler(config, writer.proxy, clock=clock.now,
-                              monotonic_clock=clock.monotonic, collection_factory=collection_factory, **options)
+                              monotonic_clock=clock.monotonic, collection_factory=collection_factory,
+                              runtime_state=runtime, **options)
         # 읽기 연결은 요청 스레드에서 열고 닫으며, 쓰기는 기존 단일 소유자 큐만 지난다.
         web = WEB.App(open_read=lambda: S.open_reader(config.db), write=writer.call,
                       signer=signer, profiles=profiles, owner_verification=True, verified_linking=True,
                       request_collection=scheduler.request_collection,
-                      collection_status=scheduler.collection_status) if config.web_enabled else None
+                      collection_status=scheduler.collection_status,
+                      runtime_status=scheduler.runtime_status) if config.web_enabled else None
         with UnixServer(config.socket, combine_web(status, web)):
             # WEB는 이미 별도 스레드에서 열린 상태. 관리 단발 작업을 예약 회차보다 먼저 실행한다.
             # 환경값이 없으면 bootstrap 파일/영수증/스냅샷 경로를 전혀 조회하지 않는다.
             if env.get("NAVER_ENGINE_BOOTSTRAP_REQUEST"):
                 try:
                     bootstrap = B.execute(config, env, writer, clock,
-                                          lambda bounded: dependencies(config, env, bounded))
+                                          lambda bounded: dependencies(config, env, bounded, runtime_state=runtime))
                     with state_lock:
                         state["bootstrap"] = bootstrap
                 except StopRequested:
@@ -195,6 +217,7 @@ def run(config, env, *, stop=None):
                 except StopRequested:
                     break
                 except Exception as exc:
+                    runtime.fail_cycle()
                     log.error("예약 회차 실패: %s", type(exc).__name__)
                     result = {"state": "failed", "errors": ["scheduler"]}
                 with state_lock:

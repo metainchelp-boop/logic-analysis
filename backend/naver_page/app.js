@@ -416,6 +416,7 @@
   }
   function dropSession() {
     state.session = null;
+    stopRuntime();
     state.upOpen = false; upContext = null;
     $('upToggle').textContent = '펼치기'; $('upToggle').setAttribute('aria-expanded', 'false');
     $('upList').hidden = true;
@@ -424,7 +425,7 @@
     try { sessionStorage.removeItem(KEY); } catch (e) { /* 없음 */ }
   }
   function ApiError(status, body) { this.status = status; this.body = body || {}; }
-  function api(method, path, body) {
+  function api(method, path, body, signal) {
     if (readOnly() && method !== 'GET' && path !== '/session' && path !== '/session/refresh' &&
         !(method === 'POST' && (verifiedLinking() && path === '/links/confirm' || fullCollectionAllowed() && path === '/collection/request')) &&
         !(method === 'POST' && (managementCapability(path, body) || reportCapability(path, body)))) {
@@ -434,6 +435,7 @@
     if (state.session) headers.Authorization = 'Bearer ' + state.session.token;
     var init = { method: method, headers: headers, credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
                  redirect: 'error' };
+    if (signal) init.signal = signal;
     if (body !== undefined) { headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
     return fetch(API + path, init).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
@@ -570,7 +572,9 @@
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState !== 'visible') { gateView(state.screen); return; }
     gateView(state.screen);
+    renderRuntime();
     tick();
+    loadRuntime();
     if (state.me && state.session && VIEW_STATUS[state.screen]) route();
   });
   window.addEventListener('pageshow', function (event) { if (event.persisted && state.me && state.session) { gateView(state.screen); route(); } });
@@ -665,6 +669,84 @@
       sel.hidden = true;
     }
     setBell(me.bell_unread);
+    startRuntime();
+  }
+
+  // 실제 수집기 메모리 상태만 조회한다. 화면 조회가 네이버 수집을 요청하지 않는다.
+  var RUNTIME_LABELS = {
+    STARTING: ['starting', 'red', '수집기 시작 준비 중', '아직 정상 가동이 확인되지 않았습니다.'],
+    DISABLED: ['disabled', 'red', '자동 수집 비활성', '수집 설정을 확인해야 합니다.'],
+    STOPPED: ['stopped', 'red', '수집 중지', '수집기가 중지되어 있습니다.'],
+    STALE: ['stale', 'red', '수집기 가동 확인 필요', '최근 진행 신호가 끊겼습니다. 관리자 확인이 필요합니다.'],
+    SOURCE_SYNC: ['source_sync', 'green', '정상 가동 · 원천 동기화 중', '전산·이관 계정 자료를 확인하고 있습니다.'],
+    COLLECTING: ['collecting', 'green', '정상 가동 · 수집 중', '예약된 수집 작업을 처리하고 있습니다.'],
+    WAITING: ['waiting', 'green', '정상 가동 · 다음 조회 대기', '정상 호출 간격에 따라 다음 조회를 기다립니다.'],
+    IDLE: ['idle', 'green', '정상 가동 · 이번 회차 처리 완료', '다음 조회 대기 중입니다. 전체 계정의 수집 완료를 뜻하지 않습니다.'],
+    BACKUP_RUNNING: ['waiting', 'green', '정상 가동 · 내부 정리 중', '백업 처리 후 다음 수집 작업을 이어갑니다.'],
+    RATE_LIMITED: ['rate_paused', 'red', '수집 일시정지 · 호출 제한', '네이버 호출 제한으로 대기 중입니다. 제한 해제 후 다시 확인합니다.'],
+    SOURCE_NOT_READY: ['blocked', 'red', '수집 대기 · 원천 확인 필요', '계정·전산 자료가 준비되지 않아 수집을 진행하지 못하고 있습니다.'],
+    SOURCE_CHANGED: ['blocked', 'red', '수집 대기 · 원천 변경 확인', '원천 자료가 바뀌어 새 기준을 확인해야 합니다.'],
+    SOURCE_SYNC_FAILED: ['blocked', 'red', '수집 중단 · 동기화 실패', '전산·이관 계정 자료를 동기화하지 못했습니다.'],
+    SOURCE_CONFIRMATION_REQUIRED: ['blocked', 'red', '수집 보류 · 원천 승인 필요', '원천 자료 변경에 대한 관리자 확인이 필요합니다.'],
+    AUTH_REQUIRED: ['blocked', 'red', '수집 중단 · 인증 확인 필요', '수집 계정의 인증 상태를 확인해야 합니다.'],
+    RUNTIME_ERROR: ['error', 'red', '수집기 오류', '수집기 실행 오류가 발생했습니다. 관리자 확인이 필요합니다.'],
+    UNAVAILABLE: ['unavailable', 'red', '수집기 상태 확인 불가', '현재 가동 상태를 확인할 수 없습니다. 저장된 자료와 별개입니다.']
+  };
+  function runtimeModel(value, elapsed) {
+    var fallback = RUNTIME_LABELS.UNAVAILABLE, item = plain(value) &&
+      Object.prototype.hasOwnProperty.call(RUNTIME_LABELS, value.reason_code) && RUNTIME_LABELS[value.reason_code];
+    var valid = item && item[0] === value.state && item[1] === value.indicator &&
+      typeof value.valid_for_seconds === 'number' && isFinite(value.valid_for_seconds) &&
+      value.valid_for_seconds >= 0 && value.valid_for_seconds <= 3600 &&
+      (value.verified_at === null || typeof value.verified_at === 'string' && isFinite(Date.parse(value.verified_at))) &&
+      (value.retry_at === null || typeof value.retry_at === 'string' && isFinite(Date.parse(value.retry_at)));
+    if (!valid) item = fallback;
+    else if (item[1] === 'green' && (!value.verified_at || elapsed >= value.valid_for_seconds * 1000)) item = RUNTIME_LABELS.STALE;
+    return {indicator:item[1], label:item[2], detail:item[3], verified:valid ? value.verified_at : null,
+      retry:valid && value.reason_code === 'RATE_LIMITED' ? value.retry_at : null};
+  }
+  function renderRuntime() {
+    var data = state.runtime, elapsed = data ? Math.max(performance.now() - data.mono, Date.now() - data.wall, 0) : 0;
+    var model = runtimeModel(data && data.value, elapsed);
+    $('runtimeStatus').setAttribute('data-indicator', model.indicator);
+    $('runtimeLabel').textContent = model.label;
+    $('runtimeDetail').textContent = model.detail + (model.retry ? ' 재확인 예정 ' + hm(model.retry) + '.' : '') +
+      (model.verified ? ' 마지막 진행 확인 ' + hm(model.verified) + '.' : '');
+    clearTimeout(state.runtimeExpiry); clearTimeout(state.runtimeRefreshSoon);
+    if (model.indicator === 'green') {
+      var remaining = data.value.valid_for_seconds * 1000 - elapsed;
+      state.runtimeExpiry = setTimeout(renderRuntime, Math.max(1, remaining + 1));
+      // 짧은 HTTP 진행 신호도 정상 작업 중 거짓 중지로 표시되지 않도록 만료 전 다시 확인한다.
+      if (remaining < 30000) state.runtimeRefreshSoon = setTimeout(loadRuntime, Math.max(1000, remaining / 2));
+    }
+  }
+  function stopRuntime() {
+    clearInterval(state.runtimeTimer); clearTimeout(state.runtimeExpiry); clearTimeout(state.runtimeRefreshSoon);
+    state.runtimeTimer = null; state.runtime = null;
+    if (state.runtimeRequest) state.runtimeRequest.abort();
+    state.runtimeRequest = null;
+    renderRuntime();
+  }
+  function loadRuntime() {
+    if (!state.session || !state.me || document.visibilityState === 'hidden' || state.runtimeRequest) return;
+    if (Date.now() >= state.session.exp || Date.now() - state.lastInput >= IDLE_MS) { tick(); return; }
+    var request = new AbortController(), mono = performance.now(), wall = Date.now();
+    state.runtimeRequest = request;
+    var timeout = setTimeout(function () { request.abort(); }, 10000);
+    api('GET', '/health?runtime=1', undefined, request.signal).then(function (body) {
+      if (state.runtimeRequest !== request || !state.session) return;
+      state.runtime = {value: body && body.runtime, mono:mono, wall:wall}; renderRuntime();
+    }, function () {
+      if (state.runtimeRequest !== request || !state.session) return;
+      state.runtime = null; renderRuntime();
+    }).then(function () {
+      clearTimeout(timeout);
+      if (state.runtimeRequest === request) state.runtimeRequest = null;
+    });
+  }
+  function startRuntime() {
+    if (!state.runtimeTimer) state.runtimeTimer = setInterval(function () { renderRuntime(); loadRuntime(); }, 15000);
+    renderRuntime(); loadRuntime();
   }
   function setBell(n) {
     var c = $('bellN');
@@ -1651,6 +1733,33 @@
                 'customer-id-format': '고객 번호 모양이 아님', 'customer-id-length': '고객 번호 자릿수가 아님',
                 'ambiguous-space': '번호를 가를 수 없음', 'claimed-by-several': '여러 광고주에 같은 번호',
                 'confirmed-elsewhere': '다른 광고주에 확인된 계정', 'name-points-elsewhere': '계정 이름이 다른 광고주를 가리킴' };
+  var CONFIRM_BLOCK = {
+    'ended-over-14-days': '계약 종료 후 14일이 지나 연결을 확정할 수 없습니다. 전산 계약 종료일·진행 상태를 확인하고, 실제 계약 내용이 잘못된 경우 정정 후 동기화해 주세요.',
+    'ended-end-date-unknown': '계약만료 업체의 종료일을 확인할 수 없습니다. 전산 계약 종료일을 확인한 뒤 동기화해 주세요.',
+    'contract-end-unreadable': '계약 종료일 자료를 읽지 못해 확정을 보류합니다. 전산 계약 자료와 동기화 상태를 확인해 주세요.',
+    'contract-stage-conflict': '계약 진행 단계 자료가 서로 달라 확정을 보류합니다. 전산 계약 상태를 확인한 뒤 동기화해 주세요.',
+    'confirmation-not-permitted': '현재 담당 권한으로 연결을 확정할 수 없습니다. 현재 담당자 또는 대표에게 확인을 요청해 주세요.',
+    'company-stage-unavailable': '업체의 현재 진행 단계를 확인할 수 없습니다. 전산 업체·진행 상태와 동기화 상태를 확인해 주세요.',
+    'account-unavailable': '현재 이관 목록에서 계정을 확인할 수 없습니다. 이관 상태와 계정 목록 동기화를 확인해 주세요.',
+    'account-claimed-elsewhere': '다른 업체의 계정 연결 근거와 충돌합니다. 대표가 전산 등록 번호와 기존 연결을 확인해야 합니다.',
+    'pair-already-decided': '이 짝에는 이미 사람의 판단이 있습니다. 목록을 새로고침해 기존 판단을 확인해 주세요.',
+    'explicit-account-required': '이름만 비슷한 후보로는 연결을 확정할 수 없습니다. 전산에 등록된 원본 계정 번호를 확인해 주세요.',
+    'pair-unavailable': '현재 확정할 수 있는 짝을 확인하지 못했습니다. 계정·전산 목록 동기화 후 새로고침해 주세요.',
+    'pairing-not-today': '오늘 짝 맞추기 자료가 없어 확정을 보류합니다. 동기화 상태를 확인한 뒤 새로고침해 주세요.',
+    'accounts-stale': '이관 계정 목록이 오래되어 확정을 보류합니다. 계정 목록 동기화 후 새로고침해 주세요.',
+    'pair-source-changed': '짝 맞추기 이후 원천 자료가 바뀌었습니다. 최신 원천으로 짝 맞추기가 완료된 뒤 새로고침해 주세요.',
+    'org-stale': '조직 자료가 오래되어 확정을 보류합니다. 담당자·조직 동기화 후 새로고침해 주세요.',
+    'stage-not-monitored': '현재 진행 단계는 연결 확정 대상이 아닙니다. 전산의 실제 계약·진행 상태를 확인해 주세요.',
+    'stage-time-unknown': '진행 단계 자료의 기준 시각을 확인할 수 없습니다. 전산 동기화 상태를 확인해 주세요.',
+    'stage-stale': '진행 단계 자료가 오래되어 확정을 보류합니다. 전산 동기화 후 새로고침해 주세요.',
+    'stage-time-in-future': '진행 단계 자료의 기준 시각이 맞지 않습니다. 관리자가 원천 시각·동기화 상태를 확인해야 합니다.',
+    'end-date-invalid': '계약 종료일 형식을 확인할 수 없습니다. 전산 계약 종료일을 확인한 뒤 동기화해 주세요.'
+  };
+  function confirmBlockText(code) {
+    if (Object.prototype.hasOwnProperty.call(CONFIRM_BLOCK, code)) return CONFIRM_BLOCK[code];
+    if (Object.prototype.hasOwnProperty.call(BLOCK, code)) return BLOCK[code] + '. 전산 등록 번호·원본 계정·기존 연결을 확인해 주세요.';
+    return '확정 차단 사유를 확인하지 못했습니다. 목록을 새로고침하고 현재 담당 권한·원천 자료를 확인해 주세요.';
+  }
   function loadLinks() {
     var gen = state.gen, selection = state.selection, linkGen = ++state.linksGen;
     return api('GET', linksPath()).then(function (j) {
@@ -1677,10 +1786,11 @@
       if (gen !== state.gen || links !== state.links) return;
       decide(r, 'confirm', ev.currentTarget, accountProof ? accountProof.value.trim() : null);
     } }, '이 계정 맞음'));
+    else if (r.confirm_block_reason) act.push(h('span', { class: 'blocked-note' }, confirmBlockText(r.confirm_block_reason)));
     else if (r.confirm_blocked) act.push(h('span', { class: 'blocked-note' }, '조직 자료가 낡아 「이 계정 맞음」은 잠시 막힘'));
     else if (readOnly()) act.push(h('span', { class: 'blocked-note' }, !linksReady(links) ?
       '원천 자료 확인 전에는 연결을 확정할 수 없습니다.' : !verifiedLinking() ? '현재 권한으로는 연결을 확정할 수 없습니다.' :
-        '확정 불가 · ' + (BLOCK[r.code] || '번호·후보·현재 담당 권한을 다시 확인해 주세요.')));
+        confirmBlockText(null)));
     if (!readOnly() && (r.can_confirm || r.confirm_blocked)) act.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { preview(r, ev.currentTarget); } }, '캠페인 이름 보기'));
     if (r.can_reject) act.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { decide(r, 'reject', ev.currentTarget); } }, '아님'));
     var name = where === 'client' ? null : [linkName(r, r.name || ''), ' — '];
@@ -1735,7 +1845,10 @@
       out.push(h('div', { class: linksReady(L) ? 'sub' : 'note warn' }, linksReady(L) ?
         '최신 수락된 전산 업체 목록과 이관 계정 기준입니다.' :
         ({missing:'수락된 원천 자료가 없습니다.', stale:'원천 자료가 오래되어 연결 확정을 보류합니다.',
-          failed:'원천 자료 수신 실패로 연결 확정을 보류합니다.'}[L.source_state] || '원천 자료 상태를 확인하지 못했습니다.') +
+          failed:'원천 자료 수신 실패로 연결 확정을 보류합니다.',
+          'accounts-unavailable':'이관 계정 목록을 확인할 수 없어 연결 확정을 보류합니다.',
+          'org-stale':'조직 자료가 오래되어 연결 확정을 보류합니다.',
+          'matching-unavailable':'현재 원천 자료로 짝 맞추기를 완료하지 못해 연결 확정을 보류합니다.'}[L.source_state] || '원천 자료 상태를 확인하지 못했습니다.') +
           ' 전산 업체 목록·이관 목록·조직 자료 동기화를 확인한 뒤 새로고침해 주세요.'));
     } else if (!L.pairing_at) out.push(h('div', { class: 'empty' }, '아직 짝 맞추기를 받지 못했습니다.'));
     else if (!L.pairing_today) out.push(h('div', { class: 'note warn' }, '오늘 짝 맞추기 전입니다 — 어제 받은 목록입니다.'));

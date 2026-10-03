@@ -14,7 +14,7 @@
 <body>
 <header class="top" id="top" hidden>
   <div class="row1">
-    <div class="brand"><span class="dot" aria-hidden="true"></span>네이버 관제</div>
+    <div class="brand">네이버 관제</div>
     <nav class="menu" aria-label="메뉴">
       <button type="button" data-go="/naver/dashboard">📊 대시보드</button>
       <button type="button" data-go="/naver/">🛰 관제</button>
@@ -28,6 +28,11 @@
       <button type="button" class="bell" id="bell" aria-label="나에게 온 알림">🔔<span class="c" id="bellN" hidden></span></button>
       <span class="me" id="me"></span>
     </div>
+  </div>
+  <div class="runtime-status" id="runtimeStatus" data-indicator="red" role="status" aria-live="polite" aria-atomic="true">
+    <span class="runtime-dot" aria-hidden="true"></span>
+    <strong id="runtimeLabel">수집기 상태 확인 중</strong>
+    <span id="runtimeDetail">가동 여부를 확인하고 있습니다.</span>
   </div>
 </header>
 

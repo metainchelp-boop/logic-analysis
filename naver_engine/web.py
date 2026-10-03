@@ -51,6 +51,7 @@ from . import dashboard as DASH
 from . import management_store as MS
 from . import reporting as R
 from . import view_sync as VS
+from . import runtime_view as RV
 
 log = logging.getLogger("naver_engine.web")
 
@@ -246,7 +247,7 @@ class App:
                  login_window: float = LOGIN_WINDOW, monotonic: Optional[Callable[[], float]] = None,
                  login_source_max: int = LOGIN_SOURCE_MAX, login_token_max: int = LOGIN_TOKEN_MAX,
                  owner_verification: bool = False, verified_linking: bool = False,
-                 request_collection=None, collection_status=None) -> None:
+                 request_collection=None, collection_status=None, runtime_status=None) -> None:
         if not isinstance(signer, SE.TokenSigner):
             raise TypeError("signer 는 TokenSigner 여야 합니다(비밀값 없이 시작하지 않는다)")
         if type(owner_verification) is not bool:
@@ -258,6 +259,7 @@ class App:
         self._owner_verification = owner_verification
         self._verified_linking = verified_linking
         self._request_collection, self._collection_status = request_collection, collection_status
+        self._runtime_status = runtime_status
         self._view_sync = VS.ViewSync()
         self._clock = clock or (lambda: datetime.now(KST))
         self._previewer = previewer
@@ -772,35 +774,52 @@ class App:
             out["decisions"] = [d for d in out["decisions"] if d["possibility_id"] in ids]
             for row in out["rows"]:
                 raw = W.find_ref(v.ctx(now), row["ref"])
-                row["can_confirm"] = row["can_confirm"] and self._verified_row_allowed(v, raw, now)
+                reason = row["confirm_blocked"] or self._verified_row_block_reason(v, raw, now)
+                row["can_confirm"] = row["can_confirm"] and reason is None
+                row["confirm_block_reason"] = None if row["can_confirm"] else reason or "not-linkable"
                 row["can_reject"] = False
         return 200, out
 
     def _verified_row_allowed(self, v: Viewer, row, now: datetime) -> bool:
+        return self._verified_row_block_reason(v, row, now) is None
+
+    def _verified_row_block_reason(self, v: Viewer, row, now: datetime) -> Optional[str]:
+        """legacy 확정의 첫 거부 사유. 확정·거래 안 재검사도 같은 판정을 사용한다."""
         ctx = v.ctx(now)
-        if v.scope.kind not in (SC.ALL, SC.MINE) or row is None or not ctx.pairing_today:
-            return False
+        if v.scope.kind not in (SC.ALL, SC.MINE):
+            return "confirmation-not-permitted"
+        if row is None:
+            return "pair-unavailable"
+        if not ctx.pairing_today:
+            return "pairing-not-today"
         if row["state"] != S.PAIR_AUTO and not (row["state"] == S.PAIR_BLOCKED and row["code"] == "name-different"):
-            return False
+            return (row["code"] if row["state"] == S.PAIR_BLOCKED and row["code"] else
+                    "explicit-account-required" if row["state"] == S.PAIR_CANDIDATE else "pair-unavailable")
         pid, cid = row["possibility_id"], row["customer_id"]
         own = ctx.owns.get(pid)
         if own is None or SC.ACT_CONFIRM_LINK not in SC.allowed_actions(ctx.org, v.scope, own):
-            return False
+            return "confirmation-not-permitted"
         a, p = ctx.accounts.get(cid), ctx.prospects.get(pid)
-        if not a or a["present"] != 1 or not p or p["present"] != 1 or p["stage_conflict"] or p["end_unreadable"]:
-            return False
+        if not a or a["present"] != 1:
+            return "account-unavailable"
+        if not p or p["present"] != 1:
+            return "company-stage-unavailable"
+        if p["stage_conflict"]:
+            return "contract-stage-conflict"
+        if p["end_unreadable"]:
+            return "contract-end-unreadable"
         if W.link_holders(ctx, pid, cid) or row.get("claimed_elsewhere"):
-            return False
+            return "account-claimed-elsewhere"
         if any(d.possibility_id == pid and d.customer_id == cid for d in ctx.live_decisions):
-            return False
+            return "pair-already-decided"
         read_at = v.store.accounts_read_at()
         if read_at is None or not timedelta(0) <= now - read_at <= L.ACCOUNTS_MAX_AGE:
-            return False
+            return "accounts-stale"
         stage_at = v.store.stage_as_of()
         if ctx.pairing["accounts_read_at"] != read_at or ctx.pairing["stages_as_of"] != stage_at:
-            return False
+            return "pair-source-changed"
         end = None if p["latest_end_date"] is None else date.fromisoformat(p["latest_end_date"])
-        return H.eligibility_reason(p["stage_key"], stage_at, end, now) is None
+        return H.eligibility_reason(p["stage_key"], stage_at, end, now)
 
     def _h_collection_request(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         self._ceo_only(v, "collection-request", "board", now)
@@ -837,7 +856,13 @@ class App:
         return 200, W.settings(v.ctx(now), v.store, v.scope)
 
     def _h_health(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
-        return 200, W.health(v.ctx(now), v.store, v.scope)
+        if "runtime" in req.query:
+            if req.query != {"runtime": "1"}:
+                raise HttpError(400, "bad-query")
+            # Current authenticated management scope was already checked by _viewer.
+            # This path reads only the scheduler's memory, not the board or external APIs.
+            return 200, {"runtime": RV.project(self._runtime_status)}
+        return 200, {**W.health(v.ctx(now), v.store, v.scope), "runtime": RV.project(self._runtime_status)}
 
     # ── 이슈 손길 ──
     def _issue(self, v: Viewer, now: datetime, iid: str) -> Tuple[int, dict]:

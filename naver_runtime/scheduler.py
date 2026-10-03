@@ -8,6 +8,7 @@ from time import monotonic
 from naver_engine import alerts as A, links as L, morning as M, store as S, sync as Y, metrics as G, naver_read as N
 from naver_engine import inventory as IC, performance_reads as PR, management_store as MS, structure_reads as SR
 from naver_runtime import collection_requests as CR
+from naver_runtime.runtime_status import RuntimeStatus, SOURCE_STEPS
 
 log = logging.getLogger("naver_runtime.scheduler")
 
@@ -42,7 +43,7 @@ class _ManagedMorningStore:
 class Scheduler:
     def __init__(self, config, store, *, erp_factory=None, naver_factory=None,
                  alert_factory=None, metrics_factory=None, clock=None, backup_job=None,
-                 collection_factory=None, monotonic_clock=None):
+                 collection_factory=None, monotonic_clock=None, runtime_state=None):
         self.config, self.store = config, store
         self.erp_factory, self.naver_factory = erp_factory, naver_factory
         self.alert_factory, self.backup_job = alert_factory, backup_job
@@ -50,6 +51,8 @@ class Scheduler:
         self.collection_factory = collection_factory
         self.clock = clock or (lambda: datetime.now(S.KST))
         self._monotonic = monotonic_clock or monotonic
+        self._runtime = runtime_state or RuntimeStatus(enabled=config.inventory_enabled,
+                                                       clock=self.clock, monotonic=self._monotonic)
         self.policy = A.AlertPolicy(config.issue_alerts_from, config.issue_alerts_enabled)
         self._lock = threading.Lock()
         self._last = {}
@@ -61,6 +64,33 @@ class Scheduler:
         self._collection_lock = threading.Lock()
         self._collection_pending = None
         self._collection_latest = None
+
+    def runtime_status(self):
+        return self._runtime.snapshot()
+
+    @staticmethod
+    def _runtime_problem(name, result):
+        if name in SOURCE_STEPS:
+            outcome = result.get("state") if isinstance(result, dict) else getattr(result, "outcome", None)
+            if outcome in ("failed", "refused", "braked"):
+                if any(isinstance(code, str) and (code == N.KIND_KEY_REJECTED
+                       or code.startswith(N.KIND_KEY_REJECTED + "-") or code in ("status-401", "status-403"))
+                       for code in getattr(result, "codes", ())):
+                    return "blocked", "AUTH_REQUIRED"
+                if getattr(result, "needs_confirmation", False) or outcome == "braked":
+                    return "blocked", "SOURCE_CONFIRMATION_REQUIRED"
+                return "blocked", "SOURCE_SYNC_FAILED"
+        if name in ("inventory", "structure") and getattr(result, "code", None) in ("NOT_READY", "SOURCE_CHANGED"):
+            return "blocked", "SOURCE_NOT_READY" if result.code == "NOT_READY" else "SOURCE_CHANGED"
+        if name == "morning":
+            codes = getattr(result, "codes", ())
+            if any(code in codes for code in (M.CODE_KEY_REJECTED_ALL, M.CODE_KEY_REJECTED_MANY)):
+                return "blocked", "AUTH_REQUIRED"
+            if any(code in M.BLOCKING for code in codes):
+                return "blocked", "SOURCE_NOT_READY"
+            if getattr(result, "outcome", None) == M.OUT_FAILED:
+                return "error", "RUNTIME_ERROR"
+        return None
 
     def request_collection(self, actor):
         """대표 화면에서 검증한 요청을 접수만 한다. 네트워크는 tick에서만 실행한다."""
@@ -101,6 +131,7 @@ class Scheduler:
             self._collection_pending = None
             self._collection_latest = {"id": request_id, "status": "running", "codes": []}
         result = {"status": "failed", "codes": ["AUDIT_UNAVAILABLE"]}
+        self._runtime.begin_step("collection")
         try:
             self.store.record_access(actor, "collection_run", "board", request_id, "started", self.clock())
             if not CR.restricted(self.config):
@@ -128,6 +159,12 @@ class Scheduler:
                 result = {"status": "failed", "codes": ["AUDIT_UNAVAILABLE"]}
             with self._collection_lock:
                 self._collection_latest = dict(result, id=request_id)
+            problem = ("error", "RUNTIME_ERROR") if result["status"] == "failed" else None
+            if any(code in result.get("codes", ()) for code in
+                   ("HOLD_PENDING", "ORG_NOT_ACCEPTED", "STAGES_NOT_ACCEPTED", "ACCOUNTS_NOT_ACCEPTED", "PAIRING_NOT_ACCEPTED")):
+                problem = ("blocked", "SOURCE_NOT_READY")
+            self._runtime.finish_step("collection", problem)
+            self._cycle_verified = result["status"] in ("done", "partial") and problem is None
         if result["status"] in ("failed", "partial"):
             self._errors.append("collection")
         return True
@@ -146,11 +183,17 @@ class Scheduler:
             return
         self._last[name] = now
         self._next_steps[name] = now + interval
+        self._runtime.begin_step(name)
         try:
             result = action()
             if note and result is not None:
                 A.note(self.store, self.clock(), result)
+            problem = self._runtime_problem(name, result)
+            if problem is None and name in self._errors:
+                problem = ("error", "RUNTIME_ERROR")
+            self._runtime.finish_step(name, problem)
         except Exception as exc:
+            self._runtime.finish_step(name, ("error", "RUNTIME_ERROR"))
             # 비밀값/업체명/금액이 섞일 수 있는 예외 문자열은 기록하지 않는다.
             log.error("예약 작업 실패: %s %s", name, type(exc).__name__)
             self._errors.append(name)
@@ -170,6 +213,7 @@ class Scheduler:
         """자동 네이버 단계만 429 휴식을 공유한다. 일반 수집 간격과는 별개다."""
         if isinstance(reader, N.NaverReader) and reader.rate_limited:
             self._naver_rate_ready_at = max(self._naver_rate_ready_at, self._monotonic() + N.RATE_PAUSE)
+            self._runtime.rate_pause(self._naver_rate_ready_at)
             for name in ("accounts", "inventory", "morning"):
                 if name in self._next_steps:
                     self._next_steps[name] = max(self._next_steps[name], self._naver_rate_ready_at)
@@ -178,12 +222,16 @@ class Scheduler:
         if not self._lock.acquire(blocking=False):
             return {"state": "busy"}
         try:
+            self._runtime.begin_cycle()
+            self._cycle_idle = False
+            self._cycle_verified = False
             self._errors = []
             self._next_steps = {}
             if self._run_collection():
                 # 준비 조회를 다시 반복하지 않는다. 다음 일반 예약 회차는 원래 주기로 판정한다.
                 self.last_tick = self.clock()
                 self.last_errors = tuple(self._errors)
+                self._runtime.finish_cycle(self.next_delay(), verified=self._cycle_verified)
                 return {"state": "failed" if self.last_errors else "ok", "errors": list(self.last_errors)}
             c, st = self.config, self.store
             if c.sync_enabled:
@@ -220,7 +268,11 @@ class Scheduler:
                 self._step("metrics", lambda: self._metrics(), note=False)
             self.last_tick = self.clock()
             self.last_errors = tuple(self._errors)
+            self._runtime.finish_cycle(self.next_delay(), idle=self._cycle_idle, verified=self._cycle_verified)
             return {"state": "failed" if self.last_errors else "ok", "errors": list(self.last_errors)}
+        except BaseException:
+            self._runtime.fail_cycle()
+            raise
         finally:
             self._lock.release()
 
@@ -280,6 +332,7 @@ class Scheduler:
         # 전일·일요일·수동·보고기간 보충이 한 대기열과 같은 호출 예산을 공유한다.
         started = reader._clock.monotonic()
         before = reader.calls
+        structure = None
         try:
             with reader.bounded_requests(max_calls=24, max_seconds=30):
                 result = PR.run_performance(reader, self.store, self.clock, max_calls=18, max_seconds=20)
@@ -288,8 +341,10 @@ class Scheduler:
                 if calls_left>0 and seconds_left>0 and not reader.rate_limited \
                         and result.code not in ("NOT_READY","SOURCE_CHANGED"):
                     # 실적 단계에서 읽은 계정은 다음 회차에 구조를 읽는다. 계정당 8건·10초도 합산 제한이다.
-                    SR.run_structure(reader,self.store,self.clock,max_calls=min(6,calls_left),max_seconds=seconds_left,
-                                     exclude_customers=reader.called_customers)
+                    structure = SR.run_structure(reader,self.store,self.clock,max_calls=min(6,calls_left),max_seconds=seconds_left,
+                                                 exclude_customers=reader.called_customers)
+                    # 기존 health/성과 반환은 유지하고 구조 원천 차단만 가동 표시에 관찰한다.
+                    self._runtime.finish_step("structure", self._runtime_problem("structure", structure))
         finally:
             if reader.calls > before:
                 # 새 reader의 호출이 이전 회차 후반과 같은 연속 30초 창에 겹치지 않는다.
@@ -299,6 +354,8 @@ class Scheduler:
         # 개별 계정의 실패·재시도는 원장 경고로 남고, 원천 무효만 서비스 실패이다.
         if result.code in ("NOT_READY", "SOURCE_CHANGED"):
             self._errors.append("inventory")
+        self._cycle_idle = result.code == "DONE" and not result.counts
+        self._cycle_verified = result.code in ("DONE", "BUDGET") and self._runtime_problem("structure", structure) is None
         return result
 
     def _metrics(self):

@@ -114,29 +114,43 @@ def find_ref(context, ref):
 
 def allowed(context, row):
     """기존 verified 범위만: 현재 명시 번호의 자동 짝/이름 불일치, 충돌과 이름 후보는 확인 불가."""
+    return block_reason(context, row) is None
+
+
+def block_reason(context, row):
+    """확정과 화면이 같은 첫 거부 사유를 쓴다. 범위 밖 업체의 신원은 반환하지 않는다."""
     ctx, scope = context.ctx, context.scope
-    if context.source_state != "accepted" or scope.kind not in (SC.ALL, SC.MINE) or row is None:
-        return False
+    if context.source_state != "accepted":
+        return "source-" + context.source_state
+    if scope.kind not in (SC.ALL, SC.MINE):
+        return "confirmation-not-permitted"
+    if row is None:
+        return "pair-unavailable"
     if row["state"] != S.PAIR_AUTO and not (row["state"] == S.PAIR_BLOCKED and row["code"] == M.B_NAME_DIFFERENT):
-        return False
+        return (row["code"] if row["state"] == S.PAIR_BLOCKED and row["code"] else
+                "explicit-account-required" if row["state"] == S.PAIR_CANDIDATE else "pair-unavailable")
     pid, cid = row["possibility_id"], row["customer_id"]
     if pid not in context.visible_ids:
-        return False
+        return "confirmation-not-permitted"
     own, company, account = ctx.owns.get(pid), context.companies.get(pid), ctx.accounts.get(cid)
     if own is None or SC.ACT_CONFIRM_LINK not in SC.allowed_actions(ctx.org, scope, own):
-        return False
-    if not company or company["stage_hidden"] or not company["stage_known"] or not account or account["present"] != 1:
-        return False
+        return "confirmation-not-permitted"
+    if not company or company["stage_hidden"] or not company["stage_known"]:
+        return "company-stage-unavailable"
+    if not account or account["present"] != 1:
+        return "account-unavailable"
     if W.link_holders(ctx, pid, cid) or row.get("claimed_elsewhere"):
-        return False
+        return "account-claimed-elsewhere"
     if any(d.possibility_id == pid and d.customer_id == cid for d in ctx.live_decisions):
-        return False
+        return "pair-already-decided"
     legacy, end = ctx.prospects.get(pid), None
     if legacy is not None:
-        if legacy["stage_conflict"] or legacy["end_unreadable"]:
-            return False
+        if legacy["stage_conflict"]:
+            return "contract-stage-conflict"
+        if legacy["end_unreadable"]:
+            return "contract-end-unreadable"
         end = None if legacy["latest_end_date"] is None else date.fromisoformat(legacy["latest_end_date"])
-    return H.eligibility_reason(company["stage"], context.catalog_at, end, ctx.now) is None
+    return H.eligibility_reason(company["stage"], context.catalog_at, end, ctx.now)
 
 
 def pending(context):
@@ -152,13 +166,14 @@ def pending(context):
             holders = W.link_holders(ctx, pid, cid) if customer else frozenset()
             clear = customer and W.clear_for(ctx, scope, pid, row, holders)
             account = ctx.accounts.get(cid) if clear else None
+            reason = block_reason(context, row)
             rows.append({"ref": make_ref(context, row), "pair_key": pair_key(row), "possibility_id": pid,
                          "name": context.companies[pid]["company_name"], "state": row["state"], "code": row["code"],
                          "tail": W.tail4(cid), "account_name": None if account is None else account["account_name"],
                          "same_name": row["same_name"],
                          "other_candidate": customer and (bool(row["claimed_elsewhere"]) or
                                                            row["code"] in W.CLAIM_CODES or bool(holders)),
-                         "can_confirm": allowed(context, row), "can_reject": False,
+                         "can_confirm": reason is None, "confirm_block_reason": reason, "can_reject": False,
                          "confirm_blocked": None, "detail_available": pid in context.detail_ids})
     decisions = [{"decision_id": d.decision_id, "possibility_id": d.possibility_id,
                   "name": context.companies[d.possibility_id]["company_name"],

@@ -94,6 +94,7 @@ class CatalogLinksTest(unittest.TestCase):
         row = pending["rows"][0]
         self.assertEqual((row["code"], row["can_confirm"], row["can_reject"]),
                          ("name-different", True, False))
+        self.assertIsNone(row["confirm_block_reason"])
         self.assertFalse(row["detail_available"])
 
     def test_owner_confirms_catalog_only_pair_without_inserting_legacy_prospect(self):
@@ -241,6 +242,9 @@ class CatalogLinksTest(unittest.TestCase):
                 self.assertTrue(all(r["possibility_id"] == 11 for r in rows))
                 self.assertFalse(any(r["can_confirm"] for r in rows))
                 self.assertFalse(any(r["account_name"] for r in rows))
+                self.assertTrue(all(r["confirm_block_reason"] == "claimed-by-several" for r in rows))
+                self.assertNotIn("범위밖상호", json.dumps(rows, ensure_ascii=False))
+                self.assertNotIn("숨김상호", json.dumps(rows, ensure_ascii=False))
                 before = self.store.link_decisions()
                 self.assertEqual(self.confirm(rows[:1], 100)[0], 409)
                 self.assertEqual(before, self.store.link_decisions())
@@ -250,6 +254,7 @@ class CatalogLinksTest(unittest.TestCase):
         self.save_catalog([TC.company(11, "진행중", company_name=account_name)], [])
         row = self.pending(100)["rows"][0]
         self.assertEqual((row["state"], row["can_confirm"]), ("candidate", False))
+        self.assertEqual(row["confirm_block_reason"], "explicit-account-required")
         before = self.store.link_decisions()
         self.assertEqual(self.confirm([row], 100)[0], 409)
         self.assertEqual(before, self.store.link_decisions())
@@ -267,6 +272,62 @@ class CatalogLinksTest(unittest.TestCase):
                 before = self.store.link_decisions()
                 self.assertEqual(self.confirm(rows)[0], 409)
                 self.assertEqual(before, self.store.link_decisions())
+
+    def test_end_date_block_reason_describes_the_confirmation_gate(self):
+        self.clock.advance(1)
+        now = self.clock.now()
+        self.store.record_prospects(E.StageSnapshot({
+            11: TM.srow(11, name=self.company_name, end=now.date() - timedelta(days=15)),
+            12: TM.srow(12, name="별도합성업체")}, now, {}, ()))
+        for actor in (0, 100):
+            with self.subTest(actor=actor):
+                row = self.pending(actor)["rows"][0]
+                self.assertEqual(row["code"], "name-different")
+                self.assertFalse(row["can_confirm"])
+                self.assertEqual(row.get("confirm_block_reason"), "ended-over-14-days")
+                self.assertEqual(self.confirm([row], actor)[0], 409)
+        self.assertEqual(self.pending(101)["rows"], [])
+
+    def test_legacy_changed_snapshot_has_the_actual_block_reason(self):
+        self.clock.advance(1)
+        now = self.clock.now()
+        self.store.record_prospects(E.StageSnapshot({
+            11: TM.srow(11, name=self.company_name), 12: TM.srow(12)}, now, {}, ()))
+        self.pair()
+        with self.store._tx() as connection:
+            connection.execute("DELETE FROM naver_auto_meta WHERE key IN ('account_catalog', 'account_catalog_status')")
+        row = next(r for r in self.pending(100)["rows"] if r["possibility_id"] == 11)
+        self.assertTrue(row["can_confirm"])
+        self.assertIsNone(row.get("confirm_block_reason"))
+        self.clock.advance(1)
+        self.store.record_accounts(N.ChildAccounts({TM.A: {"customerId": TM.A,
+            "adAccountNo": 8000000, "adAccountName": "합성변경계정"}}, {1: 1}, ()), self.clock.now())
+        blocked = next(r for r in self.pending(100)["rows"] if r["possibility_id"] == 11)
+        self.assertFalse(blocked["can_confirm"])
+        self.assertEqual(blocked.get("confirm_block_reason"), "pair-source-changed")
+        self.assertEqual(self.confirm([row], 100)[0], 409)
+
+    def test_contract_reason_codes_preserve_the_fourteen_day_boundary(self):
+        for stage, days, unreadable, conflict, expected in (
+                ("진행중", 14, False, False, None),
+                ("진행중", 15, False, False, "ended-over-14-days"),
+                ("계약 만료", None, False, False, "ended-end-date-unknown"),
+                ("진행중", None, True, False, "contract-end-unreadable"),
+                ("진행중", None, False, True, "contract-stage-conflict")):
+            with self.subTest(stage=stage, days=days, unreadable=unreadable, conflict=conflict):
+                self.clock.advance(1)
+                now = self.clock.now()
+                self.save_catalog([TC.company(11, stage, company_name=self.company_name)])
+                rows = {12: TM.srow(12)}
+                if not conflict:
+                    rows[11] = TM.srow(11, name=self.company_name, stage=stage.replace(" ", ""),
+                        end=None if days is None else now.date() - timedelta(days=days), unreadable=unreadable)
+                self.store.record_prospects(E.StageSnapshot(rows, now, {}, (11,) if conflict else ()))
+                row = self.pending()["rows"][0]
+                self.assertEqual(row["can_confirm"], expected is None)
+                self.assertEqual(row["confirm_block_reason"], expected)
+                if expected:
+                    self.assertEqual(self.confirm([row])[0], 409)
 
     def test_new_decision_invalidates_ref_and_confirmed_history_is_preserved(self):
         rows = self.pending(100)["rows"]

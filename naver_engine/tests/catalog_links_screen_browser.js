@@ -10,6 +10,7 @@ const cfg = JSON.parse(process.argv[2]);
   const context = await browser.newContext({locale:'ko-KR',timezoneId:'Asia/Seoul'});
   const page = await context.newPage(), errors = [], external = [], writes = [];
   let code = cfg.staff;
+  let injectedReason = null, injectedSource = null;
   await context.route('**/*', route => {
     if (route.request().url().startsWith(cfg.base + '/')) return route.continue();
     external.push(new URL(route.request().url()).origin); return route.abort();
@@ -17,10 +18,35 @@ const cfg = JSON.parse(process.argv[2]);
   await page.route('**/naver/sso-bootstrap.js', route => route.fulfill({contentType:'application/javascript',
     body:'window.__metaincSso={started:true,legacyPresent:false,consume:()=>Promise.resolve(' +
       JSON.stringify({code,codeVerifier:'V'.repeat(42)+'A'}) + ')};'}));
+  await page.route('**/links/pending**', async route => {
+    const response = await route.fetch(), body = await response.json();
+    if (injectedReason) body.rows = body.rows.map(row => Object.assign({}, row, {
+      can_confirm:false, confirm_block_reason:injectedReason, name:row.name + '<img src=x onerror=alert(1)>'
+    }));
+    if (injectedSource) Object.assign(body, {source_state:injectedSource, rows:[]});
+    await route.fulfill({response, json:body});
+  });
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.method() === 'POST') writes.push(new URL(request.url()).pathname); });
   try {
     await page.clock.install({time:new Date(cfg.now)});
+    injectedReason = 'ended-over-14-days';
+    await page.goto(cfg.base + '/naver/links?possibility_id=' + cfg.pid);
+    await page.locator('#linksBody').getByText(/계약 종료 후 14일이 지나 연결을 확정할 수 없습니다/).waitFor();
+    assert.match(await page.textContent('#linksBody'),/전산 계약 종료일·진행 상태/);
+    assert.equal(await page.locator('#linksBody').getByRole('button',{name:'이 계정 맞음',exact:true}).count(),0);
+    assert.equal(await page.locator('#linksBody img').count(),0);
+    assert.ok((await page.textContent('#linksBody')).includes('<img src=x onerror=alert(1)>'));
+    injectedReason = '<img src=x onerror=alert(2)>';
+    await page.reload();
+    await page.locator('#linksBody').getByText(/확정 차단 사유를 확인하지 못했습니다/).waitFor();
+    assert.equal((await page.textContent('#linksBody')).includes(injectedReason),false);
+    assert.equal(await page.locator('#linksBody img').count(),0);
+    injectedReason = null; injectedSource = 'accounts-unavailable';
+    await page.reload();
+    await page.locator('#linksBody').getByText(/이관 계정 목록을 확인할 수 없어/).waitFor();
+    assert.equal(await page.locator('#confirmAuto').isVisible(),false);
+    injectedSource = null;
     await page.goto(cfg.base + '/naver/transfers');
     const coverage = page.locator('#coverageRows tr').filter({hasText:cfg.company});
     await coverage.getByRole('button',{name:'짝 확인 열기',exact:true}).waitFor();
