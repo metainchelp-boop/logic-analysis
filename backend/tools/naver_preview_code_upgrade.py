@@ -571,6 +571,7 @@ def prepare(package, host, release, lifecycle, upgrade):
         STAGE = 'code_build_'+name
         release.command(['docker','build','--label','metainc.naver.preview.source='+TARGET_COMMIT,
                          '-t','metainc/naver-'+name+':'+TARGET_COMMIT,'-f',str(destination/('Dockerfile.naver-'+name)),str(destination)], timeout=600)
+        STAGE = 'code_config_'+name
         release.command(release.compose(destination, name)+['config','--quiet'])
     check = release.compose(destination, 'engine')
     check[check.index('--project-name')+1] = 'naver-check-'+TARGET_COMMIT+'-'+uuid.uuid4().hex

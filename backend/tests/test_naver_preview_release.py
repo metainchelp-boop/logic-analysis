@@ -1,4 +1,5 @@
 import base64
+from contextlib import redirect_stderr, redirect_stdout
 import gzip
 import importlib.util
 import io
@@ -35,6 +36,78 @@ def image_inspect_output(args, package):
     if '{{json .Id}}' in args:
         return json.dumps('sha256:'+'e'*64).encode()
     return (package['source_commit']+'\n').encode()
+
+
+class BuildDiagnosticTest(unittest.TestCase):
+    def build_args(self, name='relay'):
+        commit = 'b'*40
+        source = M.ROOT/'releases'/('naver-'+commit)
+        return ['docker', 'build', '--label', 'metainc.naver.preview.source='+commit,
+                '-t', 'metainc/naver-'+name+':'+commit, '-f', str(source/('Dockerfile.naver-'+name)), str(source)]
+
+    def test_build_failure_reports_only_fixed_category_without_sensitive_output(self):
+        cases = (
+            (b'permission denied: no space left on device', 'DENIED'),
+            (b'pull access denied: repository requires authorization', 'DENIED'),
+            (b'x509: certificate signed by unknown authority', 'TLS'),
+            (b'ERROR: SSL: CERTIFICATE_VERIFY_FAILED', 'TLS'),
+            (b'toomanyrequests: You have reached your pull rate limit', 'RATE'),
+            (b'429 Too Many Requests', 'RATE'),
+            (b'dial tcp: lookup registry: no such host', 'NETWORK'),
+            (b'connection reset by peer', 'NETWORK'),
+            (b'no space left on device', 'DISK'),
+            (b'disk quota exceeded', 'DISK'),
+            (b'process did not complete successfully: exit code: 1', 'STEP'),
+            (b'The command returned a non-zero code: 1', 'STEP'),
+            (b'unrecognized diagnostic', 'UNKNOWN'),
+        )
+        sensitive = b' PRIVATE_TOKEN=synthetic https://private.invalid/?signed=PRIVATE_SIGNED_URL -----BEGIN PRIVATE KEY-----'
+        for marker, category in cases:
+            for channel in ('stdout', 'stderr'):
+                with self.subTest(category=category, channel=channel):
+                    args = self.build_args()
+                    streams = {'stdout': sensitive, 'stderr': sensitive}
+                    streams[channel] += b'\n'+marker
+                    result = subprocess.CompletedProcess(args, 1, **streams)
+                    output, errors = io.StringIO(), io.StringIO()
+                    with patch.object(M.subprocess, 'run', return_value=result), redirect_stdout(output), redirect_stderr(errors):
+                        with self.assertRaises(RuntimeError) as raised:
+                            M.command(args, timeout=600)
+                    self.assertEqual(str(raised.exception), 'DOCKER_BUILD_'+category)
+                    self.assertEqual(raised.exception.args, ('DOCKER_BUILD_'+category,))
+                    self.assertEqual(output.getvalue()+errors.getvalue(), '')
+
+    def test_other_commands_and_nonexact_builds_keep_generic_failure(self):
+        original = self.build_args()
+        cases = [['docker', 'compose', 'config', '--quiet'], ['openssl', 'cms', '-decrypt'],
+                 original+['--no-cache'], ['docker', 'build', '.']]
+        for index in (0, 2, 3, 4, 5, 6, 7, 8):
+            changed = original.copy();changed[index] = 'unreviewed'
+            cases.append(changed)
+        for args in cases:
+            with self.subTest(args=args), patch.object(M.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess(args, 1, b'PRIVATE_STDOUT', b'permission denied PRIVATE_STDERR')):
+                with self.assertRaisesRegex(RuntimeError, '^COMMAND_FAILED$'):
+                    M.command(args)
+
+    def test_success_timeout_and_process_environment_are_unchanged(self):
+        for name in ('engine', 'relay'):
+            args = self.build_args(name)
+            with patch.object(M.subprocess, 'run', return_value=subprocess.CompletedProcess(args, 0, b'original output', b'permission denied')) as run:
+                self.assertEqual(M.command(args, timeout=600), b'original output')
+                run.assert_called_once_with(args, input=None, capture_output=True, timeout=600,
+                    env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'})
+            with patch.object(M.subprocess, 'run', side_effect=subprocess.TimeoutExpired(args, 600)):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    M.command(args, timeout=600)
+
+    def test_bounded_diagnostic_tail_and_empty_output_remain_unknown(self):
+        args = self.build_args()
+        for output in (None, b'', b'permission denied'+b'x'*65536):
+            with self.subTest(size=None if output is None else len(output)), patch.object(M.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess(args, 1, output, output)):
+                with self.assertRaisesRegex(RuntimeError, '^DOCKER_BUILD_UNKNOWN$'):
+                    M.command(args)
 
 
 class ReleaseTest(unittest.TestCase):

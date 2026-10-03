@@ -35,11 +35,39 @@ def sha(body):
     return hashlib.sha256(body).hexdigest()
 
 
+def build_failure_code(args, result):
+    """Classify only our exact image build; diagnostics stay in memory, never in errors."""
+    if (not isinstance(args, (list, tuple)) or len(args) != 9
+            or not all(isinstance(arg, str) for arg in args)
+            or list(args[:3]) != ['docker', 'build', '--label']):
+        return 'COMMAND_FAILED'
+    match = re.fullmatch(r'metainc\.naver\.preview\.source=([0-9a-f]{40})', args[3])
+    if match is None:
+        return 'COMMAND_FAILED'
+    commit = match.group(1)
+    source = ROOT/'releases'/('naver-'+commit)
+    if not any(list(args[4:]) == ['-t', 'metainc/naver-'+name+':'+commit, '-f',
+            str(source/('Dockerfile.naver-'+name)), str(source)] for name in ('engine', 'relay')):
+        return 'COMMAND_FAILED'
+    body = b'\n'.join((value or b'')[-65536:] for value in (result.stdout, result.stderr)).lower()
+    for code, markers in (
+            ('DENIED', (b'permission denied', b'access denied', b'unauthorized', b'authentication required', b'403 forbidden')),
+            ('TLS', (b'x509:', b'certificate_verify_failed', b'certificate verify failed', b'tls handshake', b'sslerror')),
+            ('RATE', (b'toomanyrequests', b'too many requests', b'pull rate limit')),
+            ('DISK', (b'no space left on device', b'disk quota exceeded')),
+            ('NETWORK', (b'no such host', b'temporary failure in name resolution', b'network is unreachable',
+                         b'connection refused', b'connection reset by peer', b'connection timed out', b'i/o timeout')),
+            ('STEP', (b'did not complete successfully: exit code:', b'returned a non-zero code:', b'executor failed running'))):
+        if any(marker in body for marker in markers):
+            return 'DOCKER_BUILD_'+code
+    return 'DOCKER_BUILD_UNKNOWN'
+
+
 def command(args, *, timeout=45, data=None):
     result = subprocess.run(args, input=data, capture_output=True, timeout=timeout,
                             env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'})
     if result.returncode:
-        raise RuntimeError('COMMAND_FAILED')
+        raise RuntimeError(build_failure_code(args, result))
     return result.stdout
 
 

@@ -350,6 +350,13 @@ class ContractTest(unittest.TestCase):
             execute, request_api=release.command,release.unix_request
             def track(args,**kwargs):
                 result=execute(args,**kwargs)
+                for name in ('engine', 'relay'):
+                    build = args[:2] == ['docker', 'build'] and 'metainc/naver-'+name+':'+code.TARGET_COMMIT in args
+                    config = args[:2] == ['docker', 'compose'] and args[-2:] == ['config', '--quiet'] and 'naver-'+name in args
+                    if (failure == 'prepare_build_'+name and build) or (failure == 'prepare_config_'+name and config):
+                        error = RuntimeError('DOCKER_BUILD_UNKNOWN' if build else 'COMMAND_FAILED')
+                        error.observed_stage = code.STAGE
+                        raise error
                 if '--force-recreate' in args:
                     current['source']=Path(args[5]).parent.name.removeprefix('naver-')
                     sources[args[3].removeprefix('naver-')]=current['source']
@@ -439,6 +446,19 @@ class ContractTest(unittest.TestCase):
                 snapshot.assert_called_once()
                 restore.assert_not_called()
             return result
+
+    def test_prepare_build_and_compose_failures_have_distinct_stages_without_starting_services(self):
+        for kind in ('build', 'config'):
+            for name in ('engine', 'relay'):
+                with self.subTest(kind=kind, service=name):
+                    result, commands, writes, restored, state = self.scenario('prepare_'+kind+'_'+name, mode='prepare')
+                    self.assertIsInstance(result, RuntimeError)
+                    self.assertEqual(result.observed_stage, 'code_'+kind+'_'+name)
+                    self.assertEqual(str(result), 'DOCKER_BUILD_UNKNOWN' if kind == 'build' else 'COMMAND_FAILED')
+                    self.assertTrue(restored)
+                    self.assertEqual(state, {'engine': sealed_code().OLD_COMMIT, 'relay': sealed_code().OLD_COMMIT})
+                    self.assertFalse(any(args[:2] in (['/usr/bin/systemctl', 'stop'], ['/usr/bin/systemctl', 'start']) for args in commands))
+                    self.assertFalse(any(path.name == 'preview-'+'b'*40+'.json' for path, _ in writes))
 
     def test_code_apply_preserves_existing_request_and_never_writes_a_new_one(self):
         result, commands, writes, _, state = self.scenario('replay')
