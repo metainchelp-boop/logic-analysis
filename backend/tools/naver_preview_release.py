@@ -51,7 +51,8 @@ def build_failure_code(args, result):
         return 'COMMAND_FAILED'
     body = b'\n'.join((value or b'')[-65536:] for value in (result.stdout, result.stderr)).lower()
     for code, markers in (
-            ('DENIED', (b'permission denied', b'access denied', b'unauthorized', b'authentication required', b'403 forbidden')),
+            ('DENIED', (b'permission denied', b'access denied', b'denied:', b'unauthorized',
+                        b'authentication required', b'authorization failed', b'403 forbidden')),
             ('TLS', (b'x509:', b'certificate_verify_failed', b'certificate verify failed', b'tls handshake', b'sslerror')),
             ('RATE', (b'toomanyrequests', b'too many requests', b'pull rate limit')),
             ('DISK', (b'no space left on device', b'disk quota exceeded')),

@@ -49,10 +49,13 @@ class BuildDiagnosticTest(unittest.TestCase):
         cases = (
             (b'permission denied: no space left on device', 'DENIED'),
             (b'pull access denied: repository requires authorization', 'DENIED'),
+            (b'denied: requested access to the resource is denied', 'DENIED'),
+            (b'failed to authorize: unexpected status: 403 Forbidden', 'DENIED'),
             (b'x509: certificate signed by unknown authority', 'TLS'),
             (b'ERROR: SSL: CERTIFICATE_VERIFY_FAILED', 'TLS'),
             (b'toomanyrequests: You have reached your pull rate limit', 'RATE'),
             (b'429 Too Many Requests', 'RATE'),
+            (b'failed to authorize: failed to fetch anonymous token: 429 Too Many Requests', 'RATE'),
             (b'dial tcp: lookup registry: no such host', 'NETWORK'),
             (b'connection reset by peer', 'NETWORK'),
             (b'no space left on device', 'DISK'),
