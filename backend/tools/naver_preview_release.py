@@ -64,11 +64,42 @@ def build_failure_code(args, result):
     return 'DOCKER_BUILD_UNKNOWN'
 
 
+def compose_failure_code(args, result):
+    """Recognize only pinned preparation probes; never expose Compose output."""
+    if not isinstance(args, (list, tuple)) or not all(isinstance(arg, str) for arg in args):
+        return 'COMMAND_FAILED'
+    matched = False
+    if len(args) > 5 and list(args[:3]) == ['docker', 'compose', '--project-name']:
+        source_match = re.fullmatch(re.escape(str(ROOT/'releases'/'naver-'))+r'([0-9a-f]{40})/compose\.naver-(engine|relay)\.yml', args[5])
+        if source_match:
+            commit, name = source_match.groups()
+            expected = compose(ROOT/'releases'/('naver-'+commit), name)
+            if list(args) == expected+['config', '--quiet']:
+                matched = True
+            elif name == 'engine' and re.fullmatch('naver-check-'+commit+'-[0-9a-f]{32}', args[3]):
+                expected[3] = args[3]
+                matched = list(args) == expected+['run','--rm','--no-deps','--pull','never','naver-engine','python','-m','naver_runtime','check-config']
+    if not matched:
+        return 'COMMAND_FAILED'
+    body = b'\n'.join((value or b'')[-65536:] for value in (result.stdout, result.stderr)).lower()
+    for code, markers in (
+            ('DENIED', (b'permission denied', b'access denied', b'denied:', b'403 forbidden')),
+            ('NETWORK_POOL', (b'all predefined address pools have been fully subnetted', b'could not find an available, non-overlapping ipv4 address pool')),
+            ('DISK', (b'no space left on device', b'disk quota exceeded')),
+            ('MISSING_FILE', (b'no such file or directory', b'not a directory')),
+            ('YAML', (b'yaml:', b'failed to parse', b'failed to interpolate', b'validating ')),
+            ('CONFIG_REFUSED', (b'"error": "startup-refused"', b'"error":"startup-refused"'))):
+        if any(marker in body for marker in markers):
+            return 'COMPOSE_PROBE_'+code
+    return 'COMPOSE_PROBE_UNKNOWN'
+
+
 def command(args, *, timeout=45, data=None):
     result = subprocess.run(args, input=data, capture_output=True, timeout=timeout,
                             env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'})
     if result.returncode:
-        raise RuntimeError(build_failure_code(args, result))
+        code = build_failure_code(args, result)
+        raise RuntimeError(compose_failure_code(args, result) if code == 'COMMAND_FAILED' else code)
     return result.stdout
 
 

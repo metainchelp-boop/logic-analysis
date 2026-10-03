@@ -39,6 +39,29 @@ def image_inspect_output(args, package):
 
 
 class BuildDiagnosticTest(unittest.TestCase):
+    def test_pinned_compose_probes_report_fixed_categories_without_original_output(self):
+        source = M.ROOT/'releases'/('naver-'+'b'*40)
+        checks = [M.compose(source, name)+['config', '--quiet'] for name in ('engine','relay')]
+        check = M.compose(source, 'engine');check[3] = 'naver-check-'+'b'*40+'-'+'c'*32
+        checks.append(check+['run','--rm','--no-deps','--pull','never','naver-engine','python','-m','naver_runtime','check-config'])
+        for args in checks:
+            for marker, code in ((b'permission denied', 'DENIED'),
+                    (b'all predefined address pools have been fully subnetted', 'NETWORK_POOL'),
+                    (b'no space left on device', 'DISK'), (b'no such file or directory', 'MISSING_FILE'),
+                    (b'yaml: line 1', 'YAML'), (b'{"error": "startup-refused", "kind": "ConfigError"}', 'CONFIG_REFUSED'),
+                    (b'unrecognized', 'UNKNOWN')):
+                with self.subTest(code=code, args=args), patch.object(M.subprocess, 'run', return_value=
+                        subprocess.CompletedProcess(args, 1, b'PRIVATE_TOKEN', marker+b' https://private.invalid/?signed=SECRET')):
+                    output, errors = io.StringIO(), io.StringIO()
+                    with redirect_stdout(output), redirect_stderr(errors), self.assertRaises(RuntimeError) as raised:
+                        M.command(args)
+                    self.assertEqual(str(raised.exception), 'COMPOSE_PROBE_'+code)
+                    self.assertEqual(output.getvalue()+errors.getvalue(), '')
+            for index in (3, 5, len(args)-1):
+                changed = args.copy();changed[index] = 'unreviewed'
+                result = subprocess.CompletedProcess(changed, 1, b'', b'permission denied')
+                self.assertEqual(M.compose_failure_code(changed, result), 'COMMAND_FAILED')
+
     def build_args(self, name='relay'):
         commit = 'b'*40
         source = M.ROOT/'releases'/('naver-'+commit)

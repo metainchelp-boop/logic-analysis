@@ -575,7 +575,9 @@ def prepare(package, host, release, lifecycle, upgrade):
         release.command(release.compose(destination, name)+['config','--quiet'])
     check = release.compose(destination, 'engine')
     check[check.index('--project-name')+1] = 'naver-check-'+TARGET_COMMIT+'-'+uuid.uuid4().hex
+    STAGE = 'code_check_config'
     release.command(check+['run','--rm','--no-deps','--pull','never','naver-engine','python','-m','naver_runtime','check-config'], timeout=60)
+    STAGE = 'code_prepare_postflight'
     if current_state(package, host, release, lifecycle, upgrade) != old:
         raise ValueError('OLD_STATE_CHANGED')
     images = {name: json.loads(release.command(['docker','image','inspect','--format','{{json .Id}}','metainc/naver-'+name+':'+TARGET_COMMIT])) for name in ('engine','relay')}
