@@ -82,6 +82,13 @@ function launch(options = {}) {
     navigate(screen) { location.href = new URL('/naver/' + screen, location).href; events.popstate(); } };
 }
 async function flush() { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); }
+async function showAccounts(run) {
+  run.elements.get('inventoryAccountsTab').dispatch('click');
+  await flush();
+  assert.equal(run.elements.get('inventoryCard').hidden, false);
+  assert.equal(run.elements.get('managedCoverage').hidden, true);
+  assert.equal(run.elements.get('s-transfers').classList.contains('view-unverified'), false);
+}
 
 function linkFixture(overrides = {}) {
   return Object.assign({ ref: 'synthetic-ref-1', pair_key: 'synthetic-pair-1', possibility_id: 1,
@@ -258,6 +265,7 @@ test('잘못된 업체 제한 주소는 전체 업체 자동확정으로 확대�
 test('좁은 화면의 이관 계정 카드도 원래 아홉 항목명을 보존한다', async () => {
   const run = launch({ data: inventory([fixture()]) });
   await flush();
+  await showAccounts(run);
   const cells = tree(run.elements.get('inventoryRows')).filter(el => el.tagName === 'TD');
   assert.deepEqual(cells.map(el => el.getAttribute('data-label')), [
     '광고 계정 · ID', '전산 업체', '매칭 상태', '업무 단계', '담당', '수집 결과',
@@ -293,6 +301,7 @@ test('주간 조회는 재시도와 이전 성공 기간·잔액 확인 시각�
     bizmoney: 12000, bizmoney_at: '2026-09-27T06:50:00+09:00', activity_observed: true
   } }), fixture({ ad_account_no: 701, management: { cadence: 'weekly' }, collection: { status: 'pending' } })]) });
   await flush();
+  await showAccounts(run);
   const text = run.text('inventoryRows');
   assert.match(text, /재시도 대기/);
   assert.match(text, /비관리 · 일요일 7일 점검 대기/);
@@ -309,6 +318,7 @@ test('비관리 잔액 변화는 이전 확인 시각과 비교하되 충전을 
     previous_bizmoney:10000,previous_bizmoney_at:'2026-09-27T09:00:00+09:00',bizmoney_change:5000
   }})])});
   await flush();
+  await showAccounts(run);
   assert.match(run.text('inventoryRows'),/이전 조회 대비 잔액 증가 5,000원/);
   assert.match(run.text('inventoryRows'),/비교 기준 2026.*09.*27.*09:00/);
   assert.match(run.text('inventoryRows'),/잔액 변화만으로 충전을 확정하지 않습니다/);
@@ -322,6 +332,7 @@ test('기간 재확인 상태와 정정된 원천 확인 시각은 기존 일일
       period_start:'2026-09-01',period_end:'2026-09-30',checked_at:'2026-10-02T11:05:00+09:00',
       error_code:'SOURCE_AGGREGATING'}}})])});
   await flush();
+  await showAccounts(run);
   assert.match(run.text('inventoryRows'),/수동 기간 재확인 · 네이버 집계 대기/);
   assert.match(run.text('inventoryRows'),/2026-09-01 ~ 2026-09-30/);
   assert.match(run.text('inventoryRows'),/표시 실적 원천 확인 2026.*10.*02.*11:00/);
@@ -331,6 +342,7 @@ test('수집 중단 상태와 마지막 실제 실패 원인은 일일 조회와
   const run = launch({data:inventory([fixture({collection:{status:'limited',error_code:'STATS_METRIC_MISSING',
     revalidation:{kind:'manual_period',status:'limited',error_code:'STATS_CYCLE_INVALID'}}})])});
   await flush();
+  await showAccounts(run);
   const text = run.text('inventoryRows');
   assert.match(text,/수집 중단 · 관리자 확인 필요.*원인: 필수 통계 지표 확인 불가/);
   assert.match(text,/수동 기간 재확인 · 수집 중단 · 관리자 확인 필요.*원인: 통계 기준 시각 확인 불가/);
@@ -342,6 +354,7 @@ test('알 수 없는 수집 코드는 본문과 툴팁에 노출하지 않는다
     const run = launch({data:inventory([fixture({collection:{status:'limited',error_code:code,
       revalidation:{kind:'recent',status:'retry',error_code:code}}})])});
     await flush();
+    await showAccounts(run);
     assert.match(run.text('inventoryRows'),/상세 원인 미확인 · 관리자 확인 필요/);
     const rendered = tree(run.elements.get('inventoryRows')).map(el => el.textContent + JSON.stringify(el.attrs || {})).join('');
     assert.equal(rendered.includes(code), false);
@@ -380,6 +393,7 @@ test('수집 실패 코드는 원인별 한국어 설명이며 옛 기록을 네
   const run = launch({data:inventory(cases.map(([code], index) => fixture({ad_account_no:String(700 + index),
     collection:{status:'limited',error_code:code}})))});
   await flush();
+  await showAccounts(run);
   const rows = tree(run.elements.get('inventoryRows')).filter(el => el.tagName === 'TR');
   cases.forEach(([code, expected], index) => {
     assert.match(rows[index].textContent, expected);
@@ -396,6 +410,7 @@ test('허용된 관리 변경만 필수 사유와 단계 개정값을 보내며 
     fixture({ ad_account_no: 702, management: { cadence: 'daily', can_manage: 'true', can_collect: 1 } })]);
   const run = launch({ respond: req => req.method === 'GET' ? data : new Promise(resolve => { resolveWrite = resolve; }) });
   await flush();
+  await showAccounts(run);
   const actions = run.buttons('inventoryRows');
   assert.deepEqual(actions.map(x => x.textContent), ['관제 제외', '지금 조회', '기간 재확인']);
   actions[0].dispatch('click');
@@ -418,6 +433,7 @@ test('기간 재확인은 닫힌 날짜 최대 31일과 현재 계정 권한을 
     fixture({ ad_account_no: '702', possibility_id: null, management: { cadence: 'daily', can_collect: true } })]);
   const run = launch({ respond: request => request.method === 'GET' ? data : new Promise(resolve => { release = resolve; }) });
   await flush();
+  await showAccounts(run);
   const buttons = run.buttons('inventoryRows').filter(button => button.textContent === '기간 재확인');
   assert.equal(buttons.length, 1);
   buttons[0].dispatch('click');
@@ -439,6 +455,7 @@ test('기간 재확인은 닫힌 날짜 최대 31일과 현재 계정 권한을 
 test('범위가 바뀌면 기간 재확인 창과 이전 계정 버튼은 요청할 수 없다', async () => {
   const run = launch({ data: inventory([fixture({ management: { cadence: 'weekly', can_collect: true } })]) });
   await flush();
+  await showAccounts(run);
   const button = run.buttons('inventoryRows').find(item => item.textContent === '기간 재확인');
   assert.ok(button); button.dispatch('click');
   run.elements.get('periodStart').value = '2026-01-01'; run.elements.get('periodEnd').value = '2026-01-03';
@@ -566,6 +583,7 @@ test('관리 모달·버튼과 조회 응답은 담당 범위를 바꾸면 이�
   const row = fixture({ management: { cadence: 'weekly', stage_revision: 'r1', can_manage: true, can_collect: true } });
   const run = launch({ respond: req => req.url.includes('selection=all') ? inventory([row]) : new Promise(resolve => pending.push(resolve)) });
   await flush();
+  await showAccounts(run);
   const oldButtons = run.buttons('inventoryRows');
   oldButtons[0].dispatch('click');
   run.elements.get('managementReason').value = '담당 확인';
@@ -646,6 +664,7 @@ test('광고 사유는 계층별 원문·뜻·시각을 보존하며 미조회�
   const run = launch({ respond: req => req.url.includes('/accounts/reasons?') ?
     { items, total: 1, page: 0, page_size: 50, next_page: null, checked_at: '2026-10-02T08:00:00+09:00', status: 'partial' } : data });
   await flush();
+  await showAccounts(run);
   assert.ok(!run.requests.some(r => r.url.includes('/accounts/reasons?')));
   const details = tree(run.elements.get('inventoryRows')).filter(el => el.tagName === 'DETAILS');
   details[0].open = true; details[0].dispatch('toggle'); await flush();
@@ -668,6 +687,7 @@ test('광고 사유는 50건씩 탐색하며 범위를 바꾼 뒤 늦은 응답�
     return { items: [], total: 51, page: 0, page_size: 50, next_page: 1 };
   } });
   await flush();
+  await showAccounts(run);
   const detail = tree(run.elements.get('inventoryRows')).find(el => el.tagName === 'DETAILS');
   detail.open = true; detail.dispatch('toggle'); detail.dispatch('toggle'); await flush();
   assert.equal(run.requests.filter(r => r.url.includes('/accounts/reasons?')).length, 1);
@@ -684,6 +704,7 @@ test('성공 기록 없는 대기를 이전 성공값이라 하지 않고 잔액
   const data = inventory([fixture({ collection: { status: 'pending', stale: true, last_success_at: null, spend: null, bizmoney: null } })]);
   data.summary = { ready: true, current_total: 1, lost_count: 0, balance: { complete: true, known_sum: 12000, known_count: 1, total_count: 1 } };
   const run = launch({ data }); await flush();
+  await showAccounts(run);
   assert.doesNotMatch(run.text('inventoryRows'), /이전 성공값|이전 잔액/);
   assert.match(run.text('inventoryRows'), /성공 실적 없음/);
   assert.doesNotMatch(run.text('inventorySummary'), /오늘 확인한 잔액/);

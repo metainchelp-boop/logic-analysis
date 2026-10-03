@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""변경분 갱신 화면의 loopback 합성 시연. 제품 엔진·중계·화면을 그대로 사용한다.
+"""변경분 갱신·이관 분류·상향 접기 화면의 loopback 합성 시연.
+
+제품 엔진·중계·화면을 그대로 사용하며, 상향 대기 항목 두 건도 시험 자료다.
 
 실행: PYTHONDONTWRITEBYTECODE=1 NODE_PATH=<기존 Playwright 경로> python3 tools/naver-view-delta-demo.py
 표준 출력에 나온 /naver/ 주소만 연다. 실제 계정·네이버·운영 DB·자격을 읽지 않는다.
@@ -17,7 +19,7 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from naver_engine.tests.test_view_delta_screen import ViewDeltaScreenTest  # noqa: E402
+from naver_engine.tests.test_view_sections_screen import ViewSectionsScreenTest  # noqa: E402
 from naver_engine.tests import test_web as TW  # noqa: E402
 
 
@@ -54,7 +56,7 @@ CONTROLS = r"""'use strict';
 """
 
 
-class Demo(ViewDeltaScreenTest):
+class Demo(ViewSectionsScreenTest):
     def _handler(self):
         parent = super()._handler()
         class Handler(parent):

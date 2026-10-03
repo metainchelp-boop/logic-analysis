@@ -23,10 +23,10 @@
   var state = {
     session: null, me: null, selection: 'all', filter: 'need', q: '', board: null, links: null, ended: null,
     client: null, clientId: null, ctab: 'now', spane: 'th', settings: null, health: null, bell: null,
-    linksOpen: false, endedOpen: false, doneOpen: false, gen: 0, timer: null, focus: null,
+    linksOpen: false, endedOpen: false, doneOpen: false, upOpen: false, gen: 0, timer: null, focus: null,
     lastInput: Date.now(), refreshing: false, retryAt: 0, retryN: 0, warned: false, bellGen: 0,
     filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
-    inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current',
+    inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current', inventoryPanel: 'coverage',
     dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null, screen: null
   };
 
@@ -119,7 +119,7 @@
   // 업체 자료는 이 창의 제한된 메모리에만 둔다. 커서는 권한이 아니며 재진입은 매번 서버 확인 뒤 연다.
   var VIEW_FIELDS = { watch: ['possibility_id'], transfers: ['ad_account_no'], reports: ['possibility_id', 'period_key'], dashboard: null };
   var VIEW_STATUS = { watch: 'watchSync', transfers: 'inventorySync', reports: 'reportsSync', dashboard: 'dashboardSync' };
-  var viewCache = new Map(), viewRequests = {}, viewShown = {}, viewChecked = {}, viewLegacy = {}, viewContext = null, viewEpoch = 0;
+  var viewCache = new Map(), viewRequests = {}, viewShown = {}, viewChecked = {}, viewLegacy = {}, viewContext = null, viewEpoch = 0, upContext = null;
   var VIEW_CACHE_COUNT = 8, VIEW_CACHE_BYTES = 4 * 1024 * 1024, VIEW_CACHE_AGE = 10 * 60 * 1000;
   function plain(value) { return !!value && typeof value === 'object' && !Array.isArray(value); }
   function rowKey(row, fields) {
@@ -165,7 +165,8 @@
     state.board = null; state.dashboard = null; state.inventory = null; state.reports = null; state.loadedDay = null;
     state.links = null; state.ended = null; state.client = null;
     Object.keys(VIEW_STATUS).forEach(function (name) { gateView(name); put($(VIEW_STATUS[name])); });
-    ['tbody', 'issues', 'kpis', 'iwan', 'upbox', 'doneList', 'runbar', 'linksBody', 'endedBody', 'inventoryRows',
+    $('upbox').hidden = true;
+    ['tbody', 'issues', 'kpis', 'iwan', 'upTitle', 'upList', 'doneList', 'runbar', 'linksBody', 'endedBody', 'inventoryRows',
       'inventorySummary', 'coverageRows', 'reportsRows', 'reportsPages', 'dashboardMetrics', 'dashboardDelivery',
       'dashboardConfiguration', 'dashboardPeriod', 'dashboardStatus', 'dashboardCoverage', 'dashboardAccounts',
       'dashboardCollected', 'dashboardRatioNote', 'inventoryCount', 'inventorySource', 'inventoryCadence', 'coverageStatus',
@@ -174,8 +175,10 @@
     closeModals(); closeBell();
   }
   function syncContext() {
-    var key = JSON.stringify([state.me && state.me.idx, state.me && state.me.scope, state.me && state.me.narrowed,
-      state.session && state.session.narrowed, state.selection, kstDay()]);
+    var identity = [state.me && state.me.idx, state.me && state.me.scope, state.me && state.me.narrowed,
+      state.session && state.session.narrowed, state.selection];
+    var scopeKey = JSON.stringify(identity), key = JSON.stringify(identity.concat(kstDay()));
+    if (upContext !== scopeKey) { state.upOpen = false; upContext = scopeKey; }
     if (viewContext !== key) { purgeViews(); viewContext = key; }
     return key;
   }
@@ -413,6 +416,10 @@
   }
   function dropSession() {
     state.session = null;
+    state.upOpen = false; upContext = null;
+    $('upToggle').textContent = '펼치기'; $('upToggle').setAttribute('aria-expanded', 'false');
+    $('upList').hidden = true;
+    setInventoryPanel('coverage');
     purgeViews();
     try { sessionStorage.removeItem(KEY); } catch (e) { /* 없음 */ }
   }
@@ -760,7 +767,22 @@
     });
   }
   var INVENTORY_MAPPING = { matched: '전산 업체 매칭', no_erp_record: '전산 내에 등록된 업체 정보 없음', unclassified: '미분류 · 확인 필요' };
+  function setInventoryPanel(panel) {
+    if (state.inventoryPanel !== panel) {
+      state.inventoryPanel = panel;
+      state.gen++; // 전환 전에 시작한 응답으로 새 영역을 열지 않는다.
+      gateView('transfers');
+    }
+    var coverage = panel === 'coverage';
+    $('managedCoverage').hidden = !coverage;
+    $('inventoryCard').hidden = coverage;
+    $('inventoryCoverageTab').classList.toggle('on', coverage);
+    $('inventoryAccountsTab').classList.toggle('on', !coverage);
+    $('inventoryCoverageTab').setAttribute('aria-pressed', String(coverage));
+    $('inventoryAccountsTab').setAttribute('aria-pressed', String(!coverage));
+  }
   function inventoryCardFilter(mapping, view) {
+    setInventoryPanel('accounts');
     var resetLocalSearch = !!state.inventoryQ && state.inventoryMapping === mapping &&
       state.inventoryView === view && state.inventoryWorkflow === 'all';
     state.inventoryMapping = mapping; state.inventoryView = view;
@@ -789,7 +811,7 @@
       ['lost', '이관 빠짐', s && s.lost_count !== null ? num(s.lost_count) : '—', '2일·20시간 이상 부재 · 현재 총수와 별도', 'all', 'lost'],
       ['balance', '확인된 잔액 합계', won(money.known_sum), s ?
         (money.total_count === 0 && ready ? '대상 계정 없음' : '확인 ' + num(money.known_count) + ' / ' + num(money.total_count) + '계정 · 미확인 ' +
-          num(Math.max(0, money.total_count - money.known_count)) + (partial ? ' · 전체 합계 아님' : '') + ' · 계정별 확인 시각은 아래 목록 참조') : '잔액 확인 중', 'all', 'balance_known']
+          num(Math.max(0, money.total_count - money.known_count)) + (partial ? ' · 전체 합계 아님' : '') + ' · 계정별 확인 시각은 「이관 광고 계정 전체」 참조') : '잔액 확인 중', 'all', 'balance_known']
     ];
     put($('inventorySummary'), cards.map(function (c) {
       var active = !!s && state.inventoryMapping === c[4] && state.inventoryView === c[5];
@@ -1077,7 +1099,7 @@
       message || (data ? '원천 자료 확인 필요 · 확정 집계 보류' : '불러오는 중…');
     put($('coverageRows'), data && (data.items || []).length ? data.items.map(function (r) {
       var status = ready ? r.state : 'source_unavailable';
-      var action = status === 'matched' ? '아래 계정 목록에서 관리·수집 상태 확인' :
+      var action = status === 'matched' ? '「이관 광고 계정 전체」에서 관리·수집 상태 확인' :
         status === 'source_unavailable' ? '자료 동기화 확인 후 목록 새로고침' :
         status === 'identifier_conflict' ? '대표에게 번호 중복·기존 연결 확인 요청' :
         status === 'transfer_unconfirmed' ? '네이버 대행 이관 상태와 전산 번호 확인' :
@@ -1334,8 +1356,12 @@
   function renderUp() {
     var up = watchItems(state.board.escalated_to_me), box = $('upbox');
     box.hidden = !up.length;
-    if (!up.length) { put(box); return; }
-    put(box, h('b', null, '⬆ 나에게 올라온 🟡 ' + up.length + '건'), ' — 12시간 넘게 👀 확인이 없어 한 단계 위로 올라왔습니다',
+    $('upTitle').textContent = '⬆ 나에게 올라온 🟡 ' + up.length + '건';
+    $('upToggle').textContent = state.upOpen ? '접기' : '펼치기';
+    $('upToggle').setAttribute('aria-expanded', String(state.upOpen));
+    $('upList').hidden = !state.upOpen;
+    if (!up.length) { put($('upList')); return; }
+    put($('upList'), h('p', null, '12시간 넘게 👀 확인이 없어 한 단계 위로 올라왔습니다'),
         h('ul', null, up.map(function (e) {
           return h('li', null, h('button', { type: 'button', class: 'link', onclick: function () { go('/naver/clients/' + e.possibility_id); } }, e.name || ''),
                    ' — ' + cause(e.code) + ' · ' + num(e.waited_hours) + '시간째');
@@ -2206,6 +2232,8 @@
     $('inventoryMapping').addEventListener('change', function () { state.inventoryMapping = this.value; loadInventory(); });
     $('inventoryWorkflow').addEventListener('change', function () { state.inventoryWorkflow = this.value; loadInventory(); });
     $('inventoryReload').addEventListener('click', loadInventory);
+    $('inventoryCoverageTab').addEventListener('click', function () { setInventoryPanel('coverage'); loadInventory(); });
+    $('inventoryAccountsTab').addEventListener('click', function () { setInventoryPanel('accounts'); loadInventory(); });
     $('managementSave').addEventListener('click', saveManagement);
     $('periodSave').addEventListener('click', savePeriodRecheck);
     $('reportsReload').addEventListener('click', loadReports);
@@ -2217,6 +2245,9 @@
     $('linksShowAll').addEventListener('click', function () { if (parse(location.pathname).focus === 'links') go('/naver/links'); });
     $('scope').addEventListener('change', function () { state.selection = this.value; route(); });
     $('doneToggle').addEventListener('click', function () { if (state.board) { state.doneOpen = !state.doneOpen; renderIssues(); } });
+    $('upToggle').addEventListener('click', function () {
+      if (state.board && !$('s-watch').classList.contains('view-unverified')) { state.upOpen = !state.upOpen; renderUp(); }
+    });
     $('linksToggle').addEventListener('click', function () {
       state.linksOpen = !state.linksOpen;
       if (state.linksOpen && !state.links) loadLinks(); else renderLinks();
