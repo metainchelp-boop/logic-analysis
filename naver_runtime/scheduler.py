@@ -71,24 +71,27 @@ class Scheduler:
     @staticmethod
     def _runtime_problem(name, result):
         if name in SOURCE_STEPS:
-            outcome = result.get("state") if isinstance(result, dict) else getattr(result, "outcome", None)
+            outcome = result.get("state") if isinstance(result, dict) else (
+                result.outcome if isinstance(result, (Y.SyncResult, L.PairingOutcome)) else None)
             if outcome in ("failed", "refused", "braked"):
+                codes = result.codes if isinstance(result, (Y.SyncResult, L.PairingOutcome)) else ()
                 if any(isinstance(code, str) and (code == N.KIND_KEY_REJECTED
                        or code.startswith(N.KIND_KEY_REJECTED + "-") or code in ("status-401", "status-403"))
-                       for code in getattr(result, "codes", ())):
+                       for code in codes):
                     return "blocked", "AUTH_REQUIRED"
-                if getattr(result, "needs_confirmation", False) or outcome == "braked":
+                if (isinstance(result, Y.SyncResult) and result.needs_confirmation) or outcome == "braked":
                     return "blocked", "SOURCE_CONFIRMATION_REQUIRED"
                 return "blocked", "SOURCE_SYNC_FAILED"
-        if name in ("inventory", "structure") and getattr(result, "code", None) in ("NOT_READY", "SOURCE_CHANGED"):
+        if name in ("inventory", "structure") and isinstance(result, (PR.PerformanceOutcome, SR.StructureOutcome)) \
+                and result.code in ("NOT_READY", "SOURCE_CHANGED"):
             return "blocked", "SOURCE_NOT_READY" if result.code == "NOT_READY" else "SOURCE_CHANGED"
-        if name == "morning":
-            codes = getattr(result, "codes", ())
+        if name == "morning" and isinstance(result, M.MorningOutcome):
+            codes = result.codes
             if any(code in codes for code in (M.CODE_KEY_REJECTED_ALL, M.CODE_KEY_REJECTED_MANY)):
                 return "blocked", "AUTH_REQUIRED"
             if any(code in M.BLOCKING for code in codes):
                 return "blocked", "SOURCE_NOT_READY"
-            if getattr(result, "outcome", None) == M.OUT_FAILED:
+            if result.outcome == M.OUT_FAILED:
                 return "error", "RUNTIME_ERROR"
         return None
 

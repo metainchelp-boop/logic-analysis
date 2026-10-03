@@ -33,6 +33,7 @@ class StopRequested(BaseException):
 class InterruptibleClock(N.SystemClock):
     def __init__(self, stop):
         self.stop, self.interrupted = stop, False
+        self.runtime_state = None
 
     def _check(self):
         if self.stop.is_set() and not self.interrupted:
@@ -44,9 +45,8 @@ class InterruptibleClock(N.SystemClock):
         return super().now()
 
     def sleep(self, seconds):
-        observer = getattr(self, "runtime_state", None)
-        if observer is not None:
-            observer.sleeping(seconds)
+        if self.runtime_state is not None:
+            self.runtime_state.sleeping(seconds)
         self.stop.wait(seconds)
         self._check()
 

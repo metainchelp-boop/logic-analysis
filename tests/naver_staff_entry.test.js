@@ -82,6 +82,7 @@ function launch(options = {}) {
   };
   window.history = history;
   const document = {
+    visibilityState: 'visible',
     title: '네이버 관제',
     referrer: options.referrer === undefined ? 'https://metainc.co.kr/ad-studio' : options.referrer,
     getElementById: id => elements.get(id) || null,
@@ -92,7 +93,7 @@ function launch(options = {}) {
     addEventListener() {}
   };
   const context = vm.createContext({
-    window, document, location, history, URL, URLSearchParams, TextEncoder, Uint8Array,
+    window, document, location, history, URL, URLSearchParams, TextEncoder, Uint8Array, AbortController, performance,
     btoa: text => Buffer.from(text, 'binary').toString('base64'),
     sessionStorage: {
       getItem: key => storage.get(key) || null,
@@ -107,7 +108,13 @@ function launch(options = {}) {
       trace.push('fetch');
       requests.push({ url, init });
       if (options.networkFailure) throw new Error(secretMarker);
-      const response = url.endsWith('/session') ? (options.session || {
+      const runtime = url === '/api/naver-auto/health?runtime=1';
+      if (runtime) {
+        assert.equal(init.method, 'GET');
+        assert.ok(init.signal instanceof AbortSignal);
+      }
+      const response = runtime ? { status:200, body:{runtime:{state:'unavailable', indicator:'red',
+        reason_code:'UNAVAILABLE', verified_at:null, valid_for_seconds:0, retry_at:null}} } : url.endsWith('/session') ? (options.session || {
         status: 200, body: { token: 'synthetic-session-token', expires_in: 3600 }
       }) : url.includes('/reports?') ? { status: 200, body: { selection: 'all', rows: [], page: 0, total: 0, next_page: null } } :
         (options.me || { status: 200, body: { scope: 'MINE', name: '합성 직원' } });
@@ -162,7 +169,8 @@ test('암호화 작업이 늦게 완료되어도 실제 준비 메시지와 화�
   assert.equal(run.messages[0].data.type, 'METAINC_SSO_READY');
   run.message();
   await until(() => run.elements.get('s-reports').classList.contains('on'));
-  assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me', '/api/naver-auto/reports?selection=all&view_sync=1']);
+  assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me',
+    '/api/naver-auto/health?runtime=1', '/api/naver-auto/reports?selection=all&view_sync=1']);
 });
 
 test('암호화가 끝나지 않으면 대기 제한 시간에 실패하며 무한히 기다리지 않는다', { timeout: 1000 }, async () => {
@@ -275,9 +283,11 @@ test('허용 출처의 정상 로그인은 실제 PKCE와 한 번의 교환을 �
       assert.match(payload.codeVerifier, /^[A-Za-z0-9_-]{43}$/);
       const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(payload.codeVerifier));
       assert.equal(Buffer.from(digest).toString('base64url'), run.messages[0].data.codeChallenge);
-      assert.deepEqual(run.trace, ['clean-url', 'ready', 'fetch', 'fetch', 'fetch']);
+      assert.deepEqual(run.trace, ['clean-url', 'ready', 'fetch', 'fetch', 'fetch', 'fetch']);
       assert.equal(run.location.search, '');
-      assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me', '/api/naver-auto/reports?selection=all&view_sync=1']);
+      assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me',
+        '/api/naver-auto/health?runtime=1', '/api/naver-auto/reports?selection=all&view_sync=1']);
+      assert.deepEqual(run.requests.map(request => request.init.method), ['POST', 'GET', 'GET', 'GET']);
       assert.equal(run.requests[1].init.headers.Authorization, 'Bearer synthetic-session-token');
       for (const request of run.requests) {
         assert.equal(request.init.credentials, 'omit');
@@ -293,7 +303,7 @@ test('허용 출처의 정상 로그인은 실제 PKCE와 한 번의 교환을 �
       assert.ok(!saved.includes(payload.codeVerifier));
       await assert.rejects(run.window.__metaincSso.consume(), /이미 사용한/);
       run.message({ origin });
-      assert.equal(run.requests.length, 3);
+      assert.equal(run.requests.length, 4);
       assert.equal(run.requests.filter(request => request.url === '/api/naver-auto/session').length, 1);
     });
   }

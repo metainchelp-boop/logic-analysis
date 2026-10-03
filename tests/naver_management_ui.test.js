@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { performance } = require('node:perf_hooks');
 const test = require('node:test');
 const vm = require('node:vm');
 const page = path.join(__dirname, '../backend/naver_page');
@@ -59,18 +60,25 @@ function launch(options = {}) {
   const requests = [], events = {}, opened = [];
   const location = new URL('https://watch.invalid/naver/' + (options.screen || 'transfers'));
   const window = { addEventListener: (k, fn) => { events[k] = fn; }, open: (...args) => {opened.push(args); return null;} };
-  const document = { getElementById: id => elements.get(id), createElement: tag => new Element(tag),
+  const document = { visibilityState: 'visible', getElementById: id => elements.get(id), createElement: tag => new Element(tag),
     createTextNode: text => ({ textContent: String(text) }), addEventListener() {}, body: { contains: () => true },
     querySelectorAll: selector => selector === '.modal' ? [...elements].filter(([id]) => id.startsWith('m-')).map(([, el]) => el) : [],
     querySelector: () => null };
   const history = { pushState: (_, __, url) => { location.href = new URL(url, location).href; } };
-  const context = vm.createContext({ window, document, location, history, URL, URLSearchParams,
+  const context = vm.createContext({ window, document, location, history, URL, URLSearchParams, AbortController, performance,
     sessionStorage: { getItem: () => JSON.stringify({ token: 'synthetic', exp: Date.now() + 3600000 }) },
     setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
     fetch: async (url, init) => {
       const req = { url, method: init.method, body: init.body ? JSON.parse(init.body) : null }; requests.push(req);
       let body;
       if (url.endsWith('/me')) body = options.me || { scope: 'ALL', owner_verification: true };
+      // 상태 조회는 업무 응답/보류 큐와 분리하되 실제 요청 기록과 AbortSignal 검사는 유지한다.
+      else if (url === '/api/naver-auto/health?runtime=1') {
+        assert.equal(init.method, 'GET');
+        assert.ok(init.signal instanceof AbortSignal);
+        body = {runtime:{state:'unavailable', indicator:'red', reason_code:'UNAVAILABLE',
+          verified_at:null, valid_for_seconds:0, retry_at:null}};
+      }
       else if (options.respond) body = await options.respond(req);
       else body = options.data || inventory();
       // HTTP JSON 응답은 호출마다 새 객체다. fixture 참조 공유로 옛 범위의 행을 되살리지 않는다.
@@ -191,7 +199,9 @@ test('ID 미입력 후보는 정확한 전산 업체 URL을 분리해 열며 안
   assert.equal(link.getAttribute('rel'), 'noopener noreferrer');
   assert.match(run.text('coverageRows'), /전산 로그인 뒤 관제로 돌아와.*광고 계정 ID 입력.*다시/);
   assert.doesNotMatch(run.text('toast'), /저장 완료|연결 완료/);
-  assert.equal(run.requests.filter(request => !request.url.includes('/me') && !request.url.includes('/accounts?')).length, 0);
+  assert.equal(run.requests.filter(request => !request.url.includes('/me') && !request.url.includes('/accounts?') &&
+    request.url !== '/api/naver-auto/health?runtime=1').length, 0);
+  assert.equal(run.requests.filter(request => request.url === '/api/naver-auto/health?runtime=1').length, 1);
 });
 
 test('전산 입력은 원천 보류·잘못된 업체 번호·현재 검색 제외·교체된 자료·권한 확인 전에서 열리지 않는다', async () => {

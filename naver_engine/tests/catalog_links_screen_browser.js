@@ -8,16 +8,21 @@ const cfg = JSON.parse(process.argv[2]);
 (async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext({locale:'ko-KR',timezoneId:'Asia/Seoul'});
-  const page = await context.newPage(), errors = [], external = [], writes = [];
-  let code = cfg.staff;
+  const page = await context.newPage(), errors = [], external = [], writes = [], sessionStatuses = [];
+  let code = cfg.staff, entryPending = true;
   let injectedReason = null, injectedSource = null;
   await context.route('**/*', route => {
     if (route.request().url().startsWith(cfg.base + '/')) return route.continue();
     external.push(new URL(route.request().url()).origin); return route.abort();
   });
-  await page.route('**/naver/sso-bootstrap.js', route => route.fulfill({contentType:'application/javascript',
-    body:'window.__metaincSso={started:true,legacyPresent:false,consume:()=>Promise.resolve(' +
-      JSON.stringify({code,codeVerifier:'V'.repeat(42)+'A'}) + ')};'}));
+  await page.route('**/naver/sso-bootstrap.js', route => {
+    // 새 전산 입장만 교환한다. 새로고침·화면 이동은 저장된 관제 세션을 재사용한다.
+    const body = entryPending ? 'window.__metaincSso={started:true,legacyPresent:false,consume:()=>Promise.resolve(' +
+      JSON.stringify({code,codeVerifier:'V'.repeat(42)+'A'}) + ')};' :
+      'window.__metaincSso={started:false,legacyPresent:false};';
+    entryPending = false;
+    return route.fulfill({contentType:'application/javascript',body});
+  });
   await page.route('**/links/pending**', async route => {
     const response = await route.fetch(), body = await response.json();
     if (injectedReason) body.rows = body.rows.map(row => Object.assign({}, row, {
@@ -28,6 +33,9 @@ const cfg = JSON.parse(process.argv[2]);
   });
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.method() === 'POST') writes.push(new URL(request.url()).pathname); });
+  page.on('response', response => {
+    if (new URL(response.url()).pathname === '/api/naver-auto/session') sessionStatuses.push(response.status());
+  });
   try {
     await page.clock.install({time:new Date(cfg.now)});
     injectedReason = 'ended-over-14-days';
@@ -50,6 +58,7 @@ const cfg = JSON.parse(process.argv[2]);
     await page.goto(cfg.base + '/naver/transfers');
     const coverage = page.locator('#coverageRows tr').filter({hasText:cfg.company});
     await coverage.getByRole('button',{name:'짝 확인 열기',exact:true}).waitFor();
+    assert.deepEqual(sessionStatuses,[200],'직원 새로고침·이동은 최초 로그인 세션을 재사용해야 합니다');
     assert.equal(await page.locator('#coverageRows tr').filter({hasText:cfg.other_company}).count(),0);
     await coverage.getByRole('button',{name:'짝 확인 열기',exact:true}).click();
     await page.waitForURL('**/naver/links?possibility_id=' + cfg.pid);
@@ -68,7 +77,7 @@ const cfg = JSON.parse(process.argv[2]);
     assert.equal((await page.textContent('#linksBody')).includes(cfg.other_company),false);
     assert.equal(writes.filter(value => value.endsWith('/links/confirm')).length,0);
 
-    await page.evaluate(() => sessionStorage.clear()); code = cfg.ceo;
+    await page.evaluate(() => sessionStorage.clear()); code = cfg.ceo; entryPending = true;
     await page.goto(cfg.base + '/naver/links?possibility_id=' + cfg.pid);
     await page.locator('#linksBody input').waitFor();
     assert.equal((await page.textContent('#linksBody')).includes(cfg.other_company),false);
@@ -96,6 +105,8 @@ const cfg = JSON.parse(process.argv[2]);
     await page.click('#linksShowAll');
     await page.locator('#linksBody').getByRole('button',{name:cfg.other_company,exact:true}).waitFor();
     assert.equal(writes.filter(value => value.endsWith('/links/confirm')).length,2);
+    assert.equal(writes.filter(value => value.endsWith('/session')).length,2);
+    assert.deepEqual(sessionStatuses,[200,200],'직원·대표 입장에 각각 한 번만 로그인해야 합니다');
     assert.ok(writes.every(value => ['/api/naver-auto/session','/api/naver-auto/links/confirm'].includes(value)));
     assert.deepEqual(errors,[]); assert.deepEqual(external,[]);
     console.log('catalog-links-screen-ok');
