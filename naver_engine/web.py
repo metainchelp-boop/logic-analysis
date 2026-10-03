@@ -45,6 +45,7 @@ from . import store as S
 from . import sync as Y
 from . import views as W
 from . import inventory as INV
+from . import catalog_links as CL
 from . import dashboard as DASH
 from . import management_store as MS
 from . import reporting as R
@@ -733,8 +734,16 @@ class App:
         return 200, out
 
     def _h_links_pending(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if self._owner_verification and self._verified_linking:
+            catalog = CL.load(v.store, now, v.org, v.scope, req.query.get("selection", "all"),
+                              narrowed=v.claims.narrowed)
+            if catalog is not None:
+                return 200, CL.pending(catalog)
         out = W.links_pending(v.ctx(now), v.store, v.scope)
         if self._owner_verification and self._verified_linking:
+            ids = W.visible(v.ctx(now), v.scope, req.query.get("selection", "all"))
+            out["rows"] = [row for row in out["rows"] if row["possibility_id"] in ids]
+            out["decisions"] = [d for d in out["decisions"] if d["possibility_id"] in ids]
             for row in out["rows"]:
                 raw = W.find_ref(v.ctx(now), row["ref"])
                 row["can_confirm"] = row["can_confirm"] and self._verified_row_allowed(v, raw, now)
@@ -861,17 +870,18 @@ class App:
             raise
 
     # ── 짝 확인 ──
-    def _link_rows(self, v: Viewer, now: datetime, refs, *, holders_checked: bool) -> List[dict]:
+    def _link_rows(self, v: Viewer, now: datetime, refs, *, holders_checked: bool, selection="all") -> List[dict]:
         """가리킴표 묶음 → 마지막 짝 맞추기의 줄. 하나라도 없거나 · 범위 밖이거나 · 이을 수 없는 줄이면 **전체** 거절.
         ``holders_checked`` (확인 · 미리보기) — 그 계정을 다른 가망이 쥐었으면 그 가망들에도 짝 확인을 할 수 있어야 한다
         (``views.clear_for`` · 범위 밖 광고주의 짝을 빼앗거나 읽지 못하게 · 같은 409 로 누구인지 드러내지 않는다)."""
         if not isinstance(refs, list) or not 0 < len(refs) <= LINK_BATCH_MAX or len(set(map(str, refs))) != len(refs):
             raise HttpError(400, "bad-body")
         ctx = v.ctx(now)
+        selected = SC.clients_in(ctx.org, v.scope, ctx.owns, selection)
         rows = []
         for ref in refs:
             r = W.find_ref(ctx, ref)
-            if r is None:
+            if r is None or r["possibility_id"] not in selected:
                 raise SC.ClientNotVisible()
             SC.require_client(ctx.org, v.scope, ctx.owns, r["possibility_id"], SC.ACT_CONFIRM_LINK)
             rows.append(r)
@@ -912,15 +922,34 @@ class App:
 
     def _h_links_confirm(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         if self._owner_verification and self._verified_linking:
-            body = _body(req, frozenset({"refs", "ad_account_no"}), frozenset({"refs"}))
+            body = _body(req, frozenset({"refs", "ad_account_no", "selection"}), frozenset({"refs"}))
             # 저장 큐 차례에 최신 조직/계정/계약/짝을 다시 읽는다. 앞 요청의 읽기 스냅샷을 쓰지 않는다.
             def confirm(st):
                 current = self._now()
                 fresh = self._fresh_for_write(v, st, current)
-                rows = self._link_rows(fresh, current, body["refs"], holders_checked=True)
-                if not O.allows_raising(fresh.ctx(current).freshness):
+                selection = body.get("selection", "all")
+                catalog = CL.load(st, current, fresh.org, fresh.scope, selection, narrowed=fresh.claims.narrowed)
+                if catalog is None:
+                    rows = self._link_rows(fresh, current, body["refs"], holders_checked=True, selection=selection)
+                else:
+                    refs = body["refs"]
+                    if not isinstance(refs, list) or not 0 < len(refs) <= LINK_BATCH_MAX or len(set(map(str, refs))) != len(refs):
+                        raise HttpError(400, "bad-body")
+                    rows = []
+                    for ref in refs:
+                        row = CL.find_ref(catalog, ref)
+                        if row is None or row["possibility_id"] not in catalog.visible_ids:
+                            raise SC.ClientNotVisible()
+                        SC.require_client(catalog.ctx.org, fresh.scope, catalog.ctx.owns,
+                                          row["possibility_id"], SC.ACT_CONFIRM_LINK)
+                        rows.append(row)
+                    if len({(r["possibility_id"], r["customer_id"]) for r in rows}) != len(rows):
+                        raise HttpError(400, "bad-body")
+                link_ctx = fresh.ctx(current) if catalog is None else catalog.ctx
+                if not O.allows_raising(link_ctx.freshness):
                     raise HttpError(409, "org-stale")
-                if not all(self._verified_row_allowed(fresh, r, current) for r in rows):
+                if not all(CL.allowed(catalog, r) if catalog is not None else
+                           self._verified_row_allowed(fresh, r, current) for r in rows):
                     raise HttpError(409, "not-verified-link")
                 # 이름이 다른 계정은 사람이 원본에서 대조한 광고계정 ID를 하나씩 제출해야 한다.
                 # 고객번호 끝자리나 비슷한 이름만으로 확인하거나 묶어서 우회할 수 없다.
@@ -928,12 +957,26 @@ class App:
                 if different:
                     raw = body.get("ad_account_no")
                     if (len(rows) != 1 or not isinstance(raw, str) or not re.fullmatch(r"[1-9][0-9]{0,14}", raw)
-                            or fresh.ctx(current).accounts[rows[0]["customer_id"]]["ad_account_no"] != int(raw)):
+                            or link_ctx.accounts[rows[0]["customer_id"]]["ad_account_no"] != int(raw)):
                         raise HttpError(409, "account-proof-required")
                 elif "ad_account_no" in body:
                     raise HttpError(400, "bad-body")
+                def guard():
+                    guard_now = self._now()
+                    guard_viewer = self._fresh_for_write(v, st, guard_now)
+                    again = CL.load(st, guard_now, guard_viewer.org, guard_viewer.scope, selection,
+                                    narrowed=guard_viewer.claims.narrowed)
+                    if catalog is None:
+                        if again is not None:
+                            raise HttpError(409, "source-changed")
+                        guarded = self._link_rows(guard_viewer, guard_now, body["refs"], holders_checked=True,
+                                                  selection=selection)
+                        if not all(self._verified_row_allowed(guard_viewer, r, guard_now) for r in guarded):
+                            raise HttpError(409, "not-verified-link")
+                    elif again is None or again.source_key != catalog.source_key or not all(CL.allowed(again, r) for r in rows):
+                        raise HttpError(409, "source-changed")
                 return st.record_decisions([(r["possibility_id"], r["customer_id"]) for r in rows],
-                                           "confirmed", v.idx, current, audit_action="link-confirm")
+                                           "confirmed", v.idx, current, audit_action="link-confirm", guard=guard)
             ids = self._write(confirm)
             return 200, {"decided": len(ids), "decision": "confirmed"}
         return self._decide(req, v, now, "confirmed")

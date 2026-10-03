@@ -27,7 +27,7 @@
     lastInput: Date.now(), refreshing: false, retryAt: 0, retryN: 0, warned: false, bellGen: 0,
     filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
     inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current',
-    dashboard: null, reports: null, reportsGen: 0, linksGen: 0
+    dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null
   };
 
   // ── 작은 도구 ─────────────────────────────────────────────────────
@@ -366,8 +366,8 @@
     return { screen: screen, focus: n || null };
   }
   function go(path) {
-    if (!SCREEN.test(path)) path = '/naver/';
-    if (path !== location.pathname) history.pushState(null, '', path);
+    if (!SCREEN.test(path) && !/^\/naver\/links\?possibility_id=[1-9][0-9]{0,15}$/.test(path)) path = '/naver/';
+    if (path !== location.pathname + location.search) history.pushState(null, '', path);
     route();
   }
   window.addEventListener('popstate', function () { if (state.me) route(); });
@@ -375,6 +375,15 @@
     var r = parse(location.pathname);
     state.gen++;
     state.links = null;
+    state.linksPid = null;
+    if (r.focus === 'links' && location.search) {
+      var linkParams = new URLSearchParams(location.search), pid = linkParams.get('possibility_id');
+      state.linksPid = /^[1-9][0-9]{0,15}$/.test(pid || '') && Number.isSafeInteger(Number(pid)) &&
+        linkParams.toString() === 'possibility_id=' + pid ? Number(pid) : -1;
+    }
+    $('linksShowAll').hidden = state.linksPid === null;
+    $('linksFilter').textContent = state.linksPid === null ? '' : state.linksPid < 0 ?
+      '업체 선택 주소를 확인해 주세요. 잘못된 조건으로 전체 업체를 표시하지 않습니다.' : '선택한 전산 업체의 짝·판단만 표시합니다.';
     put($('linksBody')); $('confirmAuto').hidden = true;
     closeModals();
     if (r.screen === 'client') return openClient(r.id);
@@ -875,6 +884,7 @@
     'name-points-elsewhere': '계정 이름이 다른 업체와 일치', 'ad-account-id-format': '광고 계정 ID 형식 오류',
     'ad-account-not-linked': '광고 계정 ID가 이관 목록에 없음', 'account-identifiers-conflict': '두 ID가 서로 다른 계정 지칭' };
   function renderManagedCoverage(data, message) {
+    var gen = state.gen, selection = state.selection;
     var ready = data && data.ready === true;
     $('coverageStatus').textContent = ready ? '실관리 ' + num(data.total) + ' · 연결 확인 ' + num(data.matched) + ' · 확인 필요 ' + num(data.missing) :
       message || (data ? '원천 자료 확인 필요 · 확정 집계 보류' : '불러오는 중…');
@@ -890,7 +900,10 @@
           return h('span', { class: 'w' }, (MATCHING_REASON[code] || '알 수 없는 매칭 사유') + ' (' + code + ')');
         })), h('td', { class: 'num' }, ready ? num(r.matched_account_count) + ' / ' + num(r.candidate_count) : '— / —'),
         h('td', { class: 'wrap' }, action, ready && (status === 'candidate_pending' || status === 'multiple_candidates') ?
-          h('button', { type: 'button', class: 'btn sm', onclick: function () { go('/naver/links'); } }, '짝 확인 열기') : null));
+          h('button', { type: 'button', class: 'btn sm', onclick: function () {
+            if (gen === state.gen && selection === state.selection && Number.isSafeInteger(r.possibility_id) && r.possibility_id > 0)
+              go('/naver/links?possibility_id=' + r.possibility_id);
+          } }, '짝 확인 열기') : null));
     }) : h('tr', null, h('td', { colspan: 4, class: 'empty' }, ready ? '현재 담당 범위에 실관리 업체가 없습니다.' : message || '최신 자료를 확인하기 전에는 연결 완료로 판단하지 않습니다.')));
   }
   // 보고서는 서버 집계·완결 여부를 그대로 표시한다. 검토는 게시·전송이 아니다.
@@ -1364,14 +1377,20 @@
                 'confirmed-elsewhere': '다른 광고주에 확인된 계정', 'name-points-elsewhere': '계정 이름이 다른 광고주를 가리킴' };
   function loadLinks() {
     var gen = state.gen, selection = state.selection, linkGen = ++state.linksGen;
-    return api('GET', '/links/pending').then(function (j) {
+    return api('GET', linksPath()).then(function (j) {
       if (gen !== state.gen || selection !== state.selection || linkGen !== state.linksGen) return;
       state.links = j; renderLinks(); renderClientLinks();
     }, function (e) { if (gen === state.gen && selection === state.selection && linkGen === state.linksGen) fail(e); });
   }
+  function linksPath() { return '/links/pending' + (state.selection === 'all' ? '' : '?selection=' + encodeURIComponent(state.selection)); }
+  function linkBody(refs) {
+    var body = { refs: refs };
+    if (verifiedLinking() && state.selection !== 'all') body.selection = state.selection;
+    return body;
+  }
   function linkRow(r, where) {
     var act = [], gen = state.gen, links = state.links;
-    if (readOnly()) r = Object.assign({}, r, { can_confirm: verifiedLinking() && r.can_confirm === true, can_reject: false, confirm_blocked: false });
+    if (readOnly()) r = Object.assign({}, r, { can_confirm: linksReady(links) && verifiedLinking() && r.can_confirm === true, can_reject: false });
     var accountProof = null;
     if (r.can_confirm && verifiedLinking() && r.code !== 'same') {
       accountProof = h('input', { type: 'text', inputmode: 'numeric', maxlength: '15', autocomplete: 'off',
@@ -1383,9 +1402,12 @@
       decide(r, 'confirm', ev.currentTarget, accountProof ? accountProof.value.trim() : null);
     } }, '이 계정 맞음'));
     else if (r.confirm_blocked) act.push(h('span', { class: 'blocked-note' }, '조직 자료가 낡아 「이 계정 맞음」은 잠시 막힘'));
+    else if (readOnly()) act.push(h('span', { class: 'blocked-note' }, !linksReady(links) ?
+      '원천 자료 확인 전에는 연결을 확정할 수 없습니다.' : !verifiedLinking() ? '현재 권한으로는 연결을 확정할 수 없습니다.' :
+        '확정 불가 · ' + (BLOCK[r.code] || '번호·후보·현재 담당 권한을 다시 확인해 주세요.')));
     if (!readOnly() && (r.can_confirm || r.confirm_blocked)) act.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { preview(r, ev.currentTarget); } }, '캠페인 이름 보기'));
     if (r.can_reject) act.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { decide(r, 'reject', ev.currentTarget); } }, '아님'));
-    var name = where === 'client' ? null : [h('button', { type: 'button', class: 'link', onclick: function () { go('/naver/clients/' + r.possibility_id); } }, r.name || ''), ' — '];
+    var name = where === 'client' ? null : [linkName(r, r.name || ''), ' — '];
     return h('div', { class: 'line' },
              h('div', { class: 'tx' }, name, PAIR[r.state] || r.state,
                r.state === 'blocked' && r.code ? ' · ' + (BLOCK[r.code] || r.code) : '',
@@ -1395,7 +1417,7 @@
              h('div', { class: 'act' }, act));
   }
   function decisionRow(d, where) {
-    var name = where === 'client' ? null : [h('button', { type: 'button', class: 'link', onclick: function () { go('/naver/clients/' + d.possibility_id); } }, nameOf(d.possibility_id)), ' — '];
+    var name = where === 'client' ? null : [linkName(d, d.name || nameOf(d.possibility_id)), ' — '];
     return h('div', { class: 'line' },
              h('div', { class: 'tx' }, name, d.decision === 'confirmed' ? '사람 확인 「맞음」' : '사람 판단 「아님」',
                h('span', { class: 'w' }, '고객 번호 ••••' + (d.tail || '') + ' · ' + (d.decided_by || '') + ' ' + mdhm(d.decided_at))),
@@ -1408,21 +1430,47 @@
     for (var j = 0; j < lr.length; j++) if (lr[j].possibility_id === pid) return lr[j].name;
     return '광고주';
   }
+  function linkName(row, name) {
+    if (row.detail_available === false || (state.links && state.links.source === 'catalog' && row.detail_available !== true)) return name;
+    var gen = state.gen, links = state.links;
+    return h('button', { type: 'button', class: 'link', onclick: function () {
+      if (gen === state.gen && links === state.links) go('/naver/clients/' + row.possibility_id);
+    } }, name);
+  }
+  function visibleLinks(rows) {
+    return (rows || []).filter(function (r) { return state.linksPid === null || r.possibility_id === state.linksPid; });
+  }
+  function linksReady(links) { return !!links && (links.source !== 'catalog' || links.source_state === 'accepted'); }
+  function automaticRows(links) {
+    return linksReady(links) ? visibleLinks(links.rows).filter(function (r) {
+      return r.state === 'auto' && r.code === 'same' && r.can_confirm === true;
+    }) : [];
+  }
   function renderLinks() {
     if (!state.links) return;
     var L = state.links, box = $('linksBody');
-    var auto = L.rows.filter(function (r) { return r.state === 'auto' && r.code === 'same' && r.can_confirm === true; });
+    var rows = visibleLinks(L.rows), decisions = visibleLinks(L.decisions);
+    var auto = automaticRows(L);
     $('confirmAuto').hidden = !verifiedLinking() || !auto.length;
     $('confirmAuto').textContent = '이름·번호 일치 계정 연결 확정 (' + auto.length + '곳)';
-    $('links-n').textContent = L.rows.length + '건';
+    $('links-n').textContent = rows.length + '건';
     var out = [];
-    if (!L.pairing_at) out.push(h('div', { class: 'empty' }, '아직 짝 맞추기를 받지 못했습니다.'));
+    if (L.source === 'catalog') {
+      out.push(h('div', { class: linksReady(L) ? 'sub' : 'note warn' }, linksReady(L) ?
+        '최신 수락된 전산 업체 목록과 이관 계정 기준입니다.' :
+        ({missing:'수락된 원천 자료가 없습니다.', stale:'원천 자료가 오래되어 연결 확정을 보류합니다.',
+          failed:'원천 자료 수신 실패로 연결 확정을 보류합니다.'}[L.source_state] || '원천 자료 상태를 확인하지 못했습니다.') +
+          ' 전산 업체 목록·이관 목록·조직 자료 동기화를 확인한 뒤 새로고침해 주세요.'));
+    } else if (!L.pairing_at) out.push(h('div', { class: 'empty' }, '아직 짝 맞추기를 받지 못했습니다.'));
     else if (!L.pairing_today) out.push(h('div', { class: 'note warn' }, '오늘 짝 맞추기 전입니다 — 어제 받은 목록입니다.'));
-    L.rows.forEach(function (r) { out.push(linkRow(r)); });
-    if (L.pairing_at && !L.rows.length) out.push(h('div', { class: 'empty' }, '확인할 짝이 없습니다.'));
-    if ((L.decisions || []).length) {
-      out.push(h('div', { class: 'cause' }, '사람이 내린 판단 ', h('span', { class: 'n' }, L.decisions.length + '건 · 거두면 다음 짝 맞추기부터 자동 규칙으로')));
-      L.decisions.forEach(function (d) { out.push(decisionRow(d)); });
+    rows.forEach(function (r) { out.push(linkRow(r)); });
+    if (linksReady(L) && !rows.length && !decisions.length && state.linksPid !== null) out.push(h('div', { class: 'empty' },
+      '선택한 업체의 확인할 짝·판단이 없습니다. 현재 담당 범위, 전산 계정 번호, 연결 후보를 이관 현황에서 확인해 주세요.'));
+    else if ((L.pairing_at || L.source === 'catalog') && linksReady(L) && !rows.length)
+      out.push(h('div', { class: 'empty' }, '확인할 짝이 없습니다.'));
+    if (decisions.length) {
+      out.push(h('div', { class: 'cause' }, '사람이 내린 판단 ', h('span', { class: 'n' }, decisions.length + '건 · 거두면 다음 짝 맞추기부터 자동 규칙으로')));
+      decisions.forEach(function (d) { out.push(decisionRow(d)); });
     }
     put(box, out);
     box.hidden = !state.linksOpen;
@@ -1431,11 +1479,11 @@
   }
   function decide(r, act, btn, accountProof) {
     var gen = state.gen, links = state.links;
-    if (!links || !(links.rows || []).some(function (current) {
+    if (state.busy['confirm-auto'] || !linksReady(links) || !visibleLinks(links.rows).some(function (current) {
       return current.ref === r.ref && (act === 'confirm' ? current.can_confirm === true : current.can_reject === true);
     })) return;
     once('link:' + r.ref, btn, function () {
-      var body = { refs: [r.ref] };
+      var body = linkBody([r.ref]);
       if (accountProof !== null && accountProof !== undefined) body.ad_account_no = accountProof;
       return api('POST', '/links/' + act, body).then(function () {
         if (gen !== state.gen || links !== state.links) return;
@@ -1452,22 +1500,46 @@
     });
   }
   function confirmAutomatic() {
-    var rows = ((state.links && state.links.rows) || []).filter(function (r) { return r.state === 'auto' && r.code === 'same' && r.can_confirm === true; });
-    var gen = state.gen, links = state.links;
+    var rows = automaticRows(state.links);
+    var gen = state.gen, links = state.links, selection = state.selection, pid = state.linksPid, linkGen = state.linksGen;
     if (!verifiedLinking() || !rows.length) return;
     once('confirm-auto', $('confirmAuto'), function () {
-      var count = 0;
+      var count = 0, stopped = false;
+      function current() {
+        return gen === state.gen && selection === state.selection && pid === state.linksPid &&
+          links === state.links && linkGen === state.linksGen;
+      }
       function next() {
-        if (gen !== state.gen || links !== state.links) return Promise.resolve();
+        if (!current()) return Promise.resolve();
         var batch = rows.splice(0, 50);
         if (!batch.length) return Promise.resolve();
-        return api('POST', '/links/confirm', { refs: batch.map(function (r) { return r.ref; }) }).then(function (j) {
-          count += j.decided; return next();
+        return api('POST', '/links/confirm', linkBody(batch.map(function (r) { return r.ref; }))).then(function (j) {
+          if (!current()) return;
+          count += typeof j.decided === 'number' ? j.decided : 0;
+          if (!rows.length) return;
+          // 확정 후 source-bound ref는 모두 바뀐다. 처음 동의한 pair_key만 새 목록에 다시 대조한다.
+          if (rows.some(function (r) { return typeof r.pair_key !== 'string' || !r.pair_key; })) { stopped = true; return; }
+          linkGen = ++state.linksGen;
+          return api('GET', linksPath()).then(function (fresh) {
+            if (!current()) return;
+            links = fresh; state.links = fresh; renderLinks(); renderClientLinks();
+            var candidates = automaticRows(fresh), matched = [];
+            for (var i = 0; i < rows.length; i++) {
+              var same = candidates.filter(function (r) {
+                return r.pair_key === rows[i].pair_key && r.possibility_id === rows[i].possibility_id;
+              });
+              if (same.length !== 1) { stopped = true; return; }
+              matched.push(same[0]);
+            }
+            rows = matched;
+            return next();
+          });
         });
       }
-      return next().then(function () { if (gen === state.gen && links === state.links) toast(count + '곳 연결을 확정했습니다. 「이관 현황」에서 관리·수집 결과를 확인해 주세요.'); },
-        function (e) { if (gen === state.gen && links === state.links) toast(count + '곳 확정 후 중단했습니다 — ' + errText(e)); })
-        .then(function () { if (gen === state.gen && links === state.links) loadLinks(); });
+      return next().then(function () { if (current()) toast(stopped ? count + '곳 확정 후 중단했습니다 — 남은 연결 후보·권한이 바뀌었거나 재확인이 필요합니다. 최신 목록을 확인해 주세요.' :
+        count + '곳 연결을 확정했습니다. 「이관 현황」에서 관리·수집 결과를 확인해 주세요.'); },
+        function (e) { if (current()) toast(count + '곳 확정 후 중단했습니다 — ' + errText(e)); })
+        .then(function () { if (current()) return loadLinks(); });
     });
   }
   var lastCollectionState = null;
@@ -1955,6 +2027,7 @@
     $('dashboardReload').addEventListener('click', function () { state.gen++; openDashboard(); });
     $('collectNow').addEventListener('click', requestCollection);
     $('confirmAuto').addEventListener('click', confirmAutomatic);
+    $('linksShowAll').addEventListener('click', function () { if (parse(location.pathname).focus === 'links') go('/naver/links'); });
     $('scope').addEventListener('change', function () { state.selection = this.value; route(); });
     $('doneToggle').addEventListener('click', function () { if (state.board) { state.doneOpen = !state.doneOpen; renderIssues(); } });
     $('linksToggle').addEventListener('click', function () {

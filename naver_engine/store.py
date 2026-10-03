@@ -3300,9 +3300,10 @@ class Store(ManagedStorage):
             return cur.lastrowid
 
     def record_decisions(self, pairs: Sequence[Tuple[int, int]], decision: str, decided_by: int, at: datetime, *,
-                         audit_action: Optional[str] = None) -> List[int]:
+                         audit_action: Optional[str] = None, guard: Optional[Callable[[], None]] = None) -> List[int]:
         """짝 확인 화면의 **묶음** 판단 — 모든 줄(과 ``audit_action`` 이 있으면 줄마다 열람·쓰기 기록)을 **한 거래로** 쌓는다.
-        하나라도 틀리면 아무것도 적지 않는다(중간에 멈춰도 앞 줄만 남지 않는다 · S11 검토 batch-decisions-not-atomic)."""
+        하나라도 틀리면 아무것도 적지 않는다(중간에 멈춰도 앞 줄만 남지 않는다 · S11 검토 batch-decisions-not-atomic).
+        ``guard`` 는 거래 안에서 원천을 재검사하고 바뀌었으면 예외로 전체 저장을 거절한다."""
         self._need_writer()
         if decision not in DECISIONS:
             raise StoreRefused("판단은 confirmed · rejected 뿐입니다")
@@ -3316,6 +3317,8 @@ class Store(ManagedStorage):
                                                   for pid, _cid in rows]
         self._not_future(at, "판단 시각")
         with self._tx() as c:
+            if guard is not None:
+                guard()   # 원천/담당 재검증과 판단 저장 사이에 다른 writer가 끼지 못하게 한다.
             ids = [c.execute(
                 """INSERT INTO naver_auto_link_decision (possibility_id, customer_id, decision, decided_by, decided_at)
                    VALUES (?, ?, ?, ?, ?)""", (pid, cid, decision, who, t)).lastrowid for pid, cid in rows]

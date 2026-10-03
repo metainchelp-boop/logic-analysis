@@ -64,12 +64,184 @@ function launch(options = {}) {
       return { status: 200, ok: true, json: async () => body };
     } });
   vm.runInContext(app, context);
-  return { elements, requests, text: id => elements.get(id).textContent,
+  return { elements, requests, location, text: id => elements.get(id).textContent,
     buttons: id => tree(elements.get(id)).filter(el => el.tagName === 'BUTTON'),
     scope(value) { const el = elements.get('scope'); el.value = value; el.dispatch('change'); },
-    navigate(screen) { location.pathname = '/naver/' + screen; events.popstate(); } };
+    navigate(screen) { location.href = new URL('/naver/' + screen, location).href; events.popstate(); } };
 }
 async function flush() { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); }
+
+function linkFixture(overrides = {}) {
+  return Object.assign({ ref: 'synthetic-ref-1', pair_key: 'synthetic-pair-1', possibility_id: 1,
+    name: '목표 업체', state: 'auto', code: 'same', can_confirm: true, detail_available: false }, overrides);
+}
+function pending(rows = [], decisions = [], overrides = {}) {
+  return Object.assign({ source: 'catalog', source_state: 'accepted', pairing_at: '2026-10-02T08:00:00+09:00',
+    pairing_today: true, rows, decisions }, overrides);
+}
+function linkResponse(data, request) {
+  if (request.url.includes('/board?')) return { selection: 'all', band: { runs: [] }, counts: {}, rows: [], done_rows: [] };
+  if (request.url.startsWith('/api/naver-auto/links/pending')) return data;
+  return {};
+}
+
+test('실관리 대조의 짝 확인은 선택 업체만 열고 전체보기로 제한을 해제한다', async () => {
+  const data = pending([linkFixture(), linkFixture({ref:'other-ref', possibility_id:2, name:'다른 업체'})], [
+    {decision_id: 1, possibility_id: 1, name: '목표 업체', decision: 'confirmed', detail_available: false},
+    {decision_id: 2, possibility_id: 2, name: '다른 업체', decision: 'confirmed', detail_available: false}
+  ]);
+  const run = launch({ me: {scope:'ALL', owner_verification:true, verified_linking:true}, respond: request => {
+    if (request.url.includes('/accounts?')) return inventory([], {ready:true,total:1,matched:0,missing:1,items:[
+      {possibility_id:1,company_name:'목표 업체',state:'candidate_pending',candidate_count:1}
+    ]});
+    return linkResponse(data, request);
+  } });
+  await flush();
+  run.buttons('coverageRows').find(button => button.textContent === '짝 확인 열기').dispatch('click');
+  await flush();
+  assert.equal(run.location.pathname + run.location.search, '/naver/links?possibility_id=1');
+  assert.match(run.text('linksBody'), /목표 업체/);
+  assert.doesNotMatch(run.text('linksBody'), /다른 업체/);
+  assert.equal(run.text('links-n'), '1건');
+  assert.match(run.text('confirmAuto'), /1곳/);
+  assert.equal(run.buttons('linksBody').filter(button => button.textContent === '목표 업체').length, 0);
+  run.elements.get('linksShowAll').dispatch('click');
+  await flush();
+  assert.equal(run.location.search, '');
+  assert.match(run.text('linksBody'), /다른 업체/);
+  assert.equal(run.text('links-n'), '2건');
+});
+
+test('원천 미수락과 선택 업체 누락은 확정 불가 이유를 표시하고 전체 업체로 넓히지 않는다', async () => {
+  for (const [sourceState, label] of [['missing', /수락된 원천 자료가 없습니다/], ['stale', /원천 자료가 오래되어/],
+    ['failed', /원천 자료 수신 실패/], ['accepted', /선택한 업체의 확인할 짝·판단이 없습니다/]]) {
+    const data = pending([linkFixture({possibility_id:2, name:'다른 업체'})], [], {source_state:sourceState});
+    const run = launch({screen:'links?possibility_id=1', me:{scope:'ALL',owner_verification:true,verified_linking:true},
+      respond: request => linkResponse(data, request)});
+    await flush();
+    assert.match(run.text('linksBody'), label);
+    assert.doesNotMatch(run.text('linksBody'), /다른 업체|아직 짝 맞추기를 받지/);
+    assert.equal(run.elements.get('confirmAuto').hidden, true);
+    run.elements.get('confirmAuto').dispatch('click');
+    assert.equal(run.requests.filter(request => request.method === 'POST').length, 0);
+  }
+});
+
+test('업체 제한 일괄확정은 50건 뒤 최신 ref로 남은 최초 동의 pair만 확정한다', async () => {
+  const original = Array.from({length:53}, (_, index) => linkFixture({ref:'old-'+index, pair_key:'pair-'+index}));
+  let writes = 0;
+  const run = launch({screen:'links?possibility_id=1',me:{scope:'ALL',owner_verification:true,verified_linking:true},
+    respond: request => {
+      if (request.method === 'POST') { writes++; return {decided:request.body.refs.length}; }
+      const rows = writes === 0 ? original.concat(linkFixture({ref:'out-of-filter',pair_key:'other',possibility_id:2})) :
+        writes === 1 ? original.slice(50).map((row,index) => Object.assign({},row,{ref:'fresh-'+index})).concat(
+          linkFixture({ref:'newcomer',pair_key:'newcomer'})) : [];
+      return linkResponse(pending(rows), request);
+    }});
+  await flush();
+  run.elements.get('confirmAuto').dispatch('click');
+  run.elements.get('confirmAuto').dispatch('click');
+  await flush();
+  const posts = run.requests.filter(request => request.method === 'POST');
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0].body.refs.length, 50);
+  assert.deepEqual(posts[1].body.refs, ['fresh-0','fresh-1','fresh-2']);
+  assert.match(run.text('toast'), /53곳 연결을 확정/);
+});
+
+test('일괄확정 중 남은 pair·권한·원천이 바뀌거나 pair 키가 없으면 첫 묶음 뒤 중단한다', async () => {
+  for (const change of ['pair', 'permission', 'state', 'source', 'legacy']) {
+    const original = Array.from({length:51}, (_, index) => linkFixture({ref:'old-'+index,
+      pair_key:change === 'legacy' ? undefined : 'pair-'+index}));
+    let writes = 0;
+    const run = launch({screen:'links',me:{scope:'ALL',owner_verification:true,verified_linking:true},respond:request => {
+      if (request.method === 'POST') { writes++; return {decided:50}; }
+      const fresh = Object.assign({}, original[50], {ref:'fresh-50'});
+      if (change === 'pair') fresh.pair_key = 'changed-account';
+      if (change === 'permission') fresh.can_confirm = false;
+      if (change === 'state') fresh.state = 'candidate';
+      return linkResponse(pending(writes ? [fresh] : original, [],
+        {source_state:writes && change === 'source' ? 'stale' : 'accepted'}), request);
+    }});
+    await flush(); run.elements.get('confirmAuto').dispatch('click'); await flush();
+    assert.equal(run.requests.filter(request => request.method === 'POST').length, 1, change);
+    assert.match(run.text('toast'), /50곳 확정 후 중단.*최신 목록/);
+  }
+});
+
+test('선택 업체의 일괄·개별 확정은 상단 담당 범위를 같은 계약으로 보낸다', async () => {
+  const run = launch({screen:'links?possibility_id=1',me:{scope:'ALL',owner_verification:true,verified_linking:true},
+    respond:request => linkResponse(pending([linkFixture(),linkFixture({possibility_id:2,ref:'other-ref'})]), request)});
+  await flush(); run.scope('me'); await flush();
+  assert.ok(run.requests.some(request => request.url === '/api/naver-auto/links/pending?selection=me'));
+  run.elements.get('confirmAuto').dispatch('click'); await flush();
+  assert.deepEqual(run.requests.filter(request => request.method === 'POST').map(request => request.body),
+    [{refs:['synthetic-ref-1'],selection:'me'}]);
+  run.buttons('linksBody').find(button => button.textContent === '이 계정 맞음').dispatch('click'); await flush();
+  assert.deepEqual(run.requests.filter(request => request.method === 'POST')[1].body,
+    {refs:['synthetic-ref-1'],selection:'me'});
+});
+
+test('일반 모드의 담당 범위별 확정·거절은 기존 refs 전용 저장 계약을 유지한다', async () => {
+  const run = launch({screen:'links',me:{scope:'ALL'},respond:request => linkResponse(pending([
+    linkFixture({can_reject:true,detail_available:true})],[],{source:'legacy'}),request)});
+  await flush(); run.scope('me'); await flush();
+  run.buttons('linksBody').find(button => button.textContent === '이 계정 맞음').dispatch('click'); await flush();
+  run.buttons('linksBody').find(button => button.textContent === '아님').dispatch('click'); await flush();
+  assert.deepEqual(run.requests.filter(request => request.method === 'POST').map(request => request.body),
+    [{refs:['synthetic-ref-1']},{refs:['synthetic-ref-1']}]);
+});
+
+test('범위·페이지 이동 뒤 늦은 짝 응답과 기존 버튼은 화면이나 확정 대상을 되살리지 않는다', async () => {
+  let release, calls = 0;
+  const run = launch({screen:'links?possibility_id=1',me:{scope:'ALL',owner_verification:true,verified_linking:true},respond:request => {
+    if (request.url.includes('/links/pending')) {
+      calls++;
+      if (calls === 2) return new Promise(resolve => { release = resolve; });
+      return pending([linkFixture()]);
+    }
+    return linkResponse({},request);
+  }});
+  await flush();
+  const old = run.buttons('linksBody').find(button => button.textContent === '이 계정 맞음');
+  run.scope('me'); await flush();
+  old.dispatch('click');
+  run.navigate('links?possibility_id=2'); await flush();
+  release(pending([linkFixture({name:'늦은 업체'})])); await flush();
+  old.dispatch('click');
+  run.elements.get('confirmAuto').dispatch('click');
+  assert.equal(run.requests.filter(request => request.method === 'POST').length,0);
+  assert.doesNotMatch(run.text('linksBody'),/늦은 업체|목표 업체/);
+});
+
+test('일괄확정 재조회 중 페이지가 바뀌면 다음 묶음과 늦은 화면 갱신을 보내지 않는다', async () => {
+  const rows = Array.from({length:51},(_,index) => linkFixture({ref:'old-'+index,pair_key:'pair-'+index}));
+  let release, writes = 0;
+  const run = launch({screen:'links',me:{scope:'ALL',owner_verification:true,verified_linking:true},respond:request => {
+    if (request.method === 'POST') { writes++; return {decided:50}; }
+    if (request.url.includes('/links/pending') && writes) return new Promise(resolve => {release=resolve;});
+    if (request.url.includes('/accounts?')) return inventory();
+    return linkResponse(pending(rows),request);
+  }});
+  await flush(); run.elements.get('confirmAuto').dispatch('click'); await flush();
+  run.navigate('transfers'); await flush();
+  release(pending([Object.assign({},rows[50],{ref:'fresh-50'})])); await flush();
+  assert.equal(writes,1);
+  assert.equal(run.text('linksBody'),'');
+  assert.doesNotMatch(run.text('toast'),/확정/);
+});
+
+test('잘못된 업체 제한 주소는 전체 업체 자동확정으로 확대되지 않는다', async () => {
+  for (const query of ['possibility_id=0','possibility_id=1&possibility_id=2','possibility_id=9007199254740992','other=1']) {
+    const run = launch({screen:'links?'+query,me:{scope:'ALL',owner_verification:true,verified_linking:true},
+      respond:request => linkResponse(pending([linkFixture()]),request)});
+    await flush();
+    assert.match(run.text('linksFilter'), /주소를 확인/);
+    assert.doesNotMatch(run.text('linksBody'), /목표 업체/);
+    run.elements.get('confirmAuto').dispatch('click');
+    assert.equal(run.requests.filter(request => request.method === 'POST').length,0);
+  }
+});
 
 test('좁은 화면의 이관 계정 카드도 원래 아홉 항목명을 보존한다', async () => {
   const run = launch({ data: inventory([fixture()]) });
