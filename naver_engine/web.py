@@ -352,7 +352,7 @@ class App:
                 v = self._viewer(environ, now, snapshot=snapshot)
                 status, payload = route.handler(self, req, v, now, **m.groupdict())
                 context = VS.context_key({"version": 1, "viewer": v.idx, "login_at": v.claims.login_at,
-                    "narrowed": v.claims.narrowed, "scope": SC.view_cache_fingerprint(v.org, v.scope),
+                    "narrowed": v.claims.narrowed, "scope": SC.view_cache_identity(v.org, v.scope),
                     "path": sub, "query": query, "date": now.astimezone(KST).date()})
             # 읽기 거래를 닫은 뒤 메모리 캐시만 비교한다. 전송까지 WAL 읽기를 붙잡지 않는다.
             if status == 200:

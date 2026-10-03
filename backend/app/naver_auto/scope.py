@@ -31,8 +31,6 @@
 """
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping, Optional, Union
 
@@ -227,18 +225,17 @@ def _live(org: Org, scope: Any) -> Scope:
 
 # ── 1. 보는 범위 ──────────────────────────────────────────────────
 
-def view_cache_fingerprint(org: Org, scope: Scope) -> str:
-    """현재 조직·범위의 불투명 조회 캐시 지문. 접근 허가는 기존 판정 함수가 매번 따로 한다.
+def view_cache_identity(org: Org, scope: Scope) -> dict:
+    """현재 조직·범위의 복사된 캐시 식별 자료. 접근 허가는 기존 판정 함수가 매번 따로 한다.
 
-    담당 칸을 화면에서 펼치지 않게 한다. 같은 시각의 담당/재직/좁힘 변경도 옛 응답과 구별한다.
+    화면은 이 값을 해시 모듈에 그대로 전달한다. 직렬화·해시는 여기서 하지 않으며 원본을 공유하지 않는다.
+    같은 시각의 담당/재직/좁힘 변경도 옛 응답과 구별한다.
     """
-    value = {"version": 1, "org": {"generated_at": org.generated_at,
+    return {"version": 1, "org": {"generated_at": org.generated_at,
         "people": [asdict(person) for _, person in sorted(org.people.items())],
         "teams": [asdict(team) for _, team in sorted(org.teams.items())],
         "owners": [asdict(owner) for owner in org.owners]},
         "scope": {**asdict(scope), "teams": sorted(scope.teams), "people": sorted(scope.people)}}
-    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def management_people(org: Org) -> frozenset[int]:
