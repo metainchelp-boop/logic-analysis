@@ -298,8 +298,9 @@ def run_structure(reader, store, clock, *, limit=24, max_calls=6, max_seconds=10
                 values.update(status="limited", error_code="STRUCTURE_LIMIT")
             except CheckpointInvalid:
                 values.update(status="limited", error_code="CHECKPOINT_INVALID")
-            except N.RunAbort:
-                values.update(status="partial" if values.get("progressed") else "retry", error_code="REQUEST_BUDGET")
+            except N.RunAbort as exc:
+                values.update(status="partial" if values.get("progressed") else "retry",
+                              error_code=N.KIND_RATE if reader.rate_limited else exc.cause_code or exc.code)
             except (H.NotEligible, H.HandleInvalid, S.StoreRefused):
                 return StructureOutcome("SOURCE_CHANGED", dict(counts))
             except S.StoreError:

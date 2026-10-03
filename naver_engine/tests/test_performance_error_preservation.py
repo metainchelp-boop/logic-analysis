@@ -60,6 +60,11 @@ class PerformanceErrorPreservationTest(unittest.TestCase):
         self.st.success(job, spend=700, conversion=None)
         before = self.st.performance_checks(self.st.now)[A]
         self.st.advance(timedelta(hours=2))
+        for code in ("REQUEST_DEADLINE", "REQUEST_CALL_CAP") * 3:
+            self.assertEqual(self.retry(job, code), "retry")
+            current = self.st.performance_checks(self.st.now)[A]
+            self.assertEqual((current["spend"], current["last_success_at"]), (700, before["last_success_at"]))
+            self.st.advance(timedelta(minutes=2))
         for index in range(4):
             self.retry(job, "STATS_NUMERIC_INVALID")
             self.st.advance(timedelta(minutes=(2, 5, 15, 30)[index]))

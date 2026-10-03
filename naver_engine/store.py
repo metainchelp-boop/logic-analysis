@@ -2104,7 +2104,9 @@ class ManagedStorage:
                                 (job["job_key"],)).fetchone()
             if current is None:
                 raise S.StoreRefused("시작하지 않은 수집입니다")
-            attempts = current[0] + (status == "retry")
+            # 순수 내부 한도는 다음 회차로 양보한 것일 뿐 통신 실패가 아니다.
+            # 원인을 구분하지 못한 구버전 REQUEST_BUDGET은 면제하지 않는다.
+            attempts = current[0] + (status == "retry" and code not in ("REQUEST_DEADLINE", "REQUEST_CALL_CAP"))
             if attempts >= 4 and status == "retry":
                 status = "limited"  # 중단 상태와 마지막 실제 실패 사유를 분리해 보존한다.
             delay = (2, 5, 15, 30)[max(0, min(attempts, 4)-1)] if status == "retry" else 0
@@ -2590,9 +2592,10 @@ class ManagedStorage:
                             (job["job_key"],)).fetchone()
             if row is None:
                 raise StoreRefused("시작하지 않은 구조 수집입니다")
-            attempts = row[0]+(status=="retry")
+            # 상세 원인이 확인된 순수 내부 한도만 실패 횟수에서 제외한다.
+            attempts = row[0]+(status=="retry" and code not in ("REQUEST_DEADLINE", "REQUEST_CALL_CAP"))
             if attempts>=4 and status=="retry":
-                status,code = "limited","RETRY_EXHAUSTED"
+                status = "limited"  # 마지막 실제 실패 사유는 중단 상태와 별도로 보존한다.
             delay = (2,5,15,30)[max(0,min(attempts,4)-1)] if status=="retry" else 0
             c.execute("""UPDATE naver_auto_structure_job SET status=?,checked_at=?,next_try_at=?,
                 attempts=?,error_code=?,reasons_json=? WHERE job_key=?""",
