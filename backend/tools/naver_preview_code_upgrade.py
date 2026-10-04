@@ -12,14 +12,13 @@ import stat
 import sqlite3
 from types import SimpleNamespace
 import uuid
-
 OLD_COMMIT = '0a302856c6177c4f53145abaf9ed31b6a39654f3'
 TARGET_COMMIT = 'a38c53775c112cdf5db420f979093d6bee9e5376'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 OLD_SOURCE_SHA256 = '5c50a4d9197d93c2fe8ac3fb561795739dbc0aaf94f38c21ffdfd240a31057f8'
 TARGET_SOURCE_SHA256 = 'dc442fa19e4809b290124e8a72fa3243d911957176ba6988269ec27ef736302a'
 STORE_SHA256 = {'old':'18488100b2ea88fa243ebe64082d4c29b19264080d5684b4231bb0f7ffff1cc8',
-                'target':'272e8993981823f65fde01b194eeedfb4deaf7c1942f980ff13e5645809752bb'}
+        'target':'272e8993981823f65fde01b194eeedfb4deaf7c1942f980ff13e5645809752bb'}
 CODE_PATHS = {'backend/app/naver_relay.py'} | {'backend/naver_page/'+name for name in
     'app.css app.js index.html report-pdf.js report-ui.js'.split()} | {
     'naver_engine/'+name for name in 'report_views.py reporting.py store.py view_sync.py web.py'.split()
@@ -70,24 +69,24 @@ FAILURE_CODES = frozenset(SQL_ERRORS.values()) | frozenset('CODE_TARGET_NOT_PINN
     'COMMAND_FAILED DIRECTORY_POLICY FILE_PATH FILE_POLICY PREPARED_MANIFEST PREPARED_DIGEST '
     'PREPARED_FILE_CHANGED PREPARED_IMAGE PREPARED_IMAGE_CHANGED SOURCE_NOT_READY UNIT_CHANGED ENGINE_NOT_READY '
     'PAGE_NOT_READY REPORT_ASSET_NOT_READY UNAUTHENTICATED_READ_NOT_DENIED BUSINESS_WRITE_NOT_DENIED SERVICES_NOT_READY'.split())
-
 def _error_labels(error):
     kind = type(error).__name__
     code = error.args[0] if len(error.args) == 1 and isinstance(error.args[0], str) else None
     if isinstance(error,sqlite3.Error):
-        code=SQL_ERRORS.get(getattr(error,'sqlite_errorcode',0)&255)
+        fallback=dict(zip(('database is locked|database table is locked|attempt to write a readonly database|'
+        'unable to open database file|database disk image is malformed|file is not a database|disk I/O error').split('|'),
+        (5,6,8,14,11,26,10)))
+        code=SQL_ERRORS.get(getattr(error,'sqlite_errorcode',fallback.get(code,0))&255)
     return {'error_kind':kind if kind in FAILURE_KINDS else 'OtherError',
-            'error_code':code if code in FAILURE_CODES else 'UNRECOGNIZED'}
-
+        'error_code':code if code in FAILURE_CODES else 'UNRECOGNIZED'}
 def _capture_failure(error, prefix='failed'):
     details = {'stage':STAGE if STAGE in FAILURE_STAGES else 'unknown',
-               'operation':OPERATION if OPERATION in FAILURE_OPERATIONS else 'unknown', **_error_labels(error)}
+        'operation':OPERATION if OPERATION in FAILURE_OPERATIONS else 'unknown', **_error_labels(error)}
     return {prefix+'_'+key:value for key,value in details.items()}
-
 def failure_report(error):
     result = {'stage':STAGE if STAGE in FAILURE_STAGES else 'unknown', **_error_labels(error)}
     choices = {'stage':FAILURE_STAGES|{'unknown'}, 'operation':FAILURE_OPERATIONS|{'unknown'},
-               'error_kind':FAILURE_KINDS|{'OtherError'}, 'error_code':FAILURE_CODES|{'UNRECOGNIZED'}}
+        'error_kind':FAILURE_KINDS|{'OtherError'}, 'error_code':FAILURE_CODES|{'UNRECOGNIZED'}}
     details = getattr(error, 'failure_details', {})
     if isinstance(details, dict):
         for prefix in ('failed', 'cleanup', 'rollback'):
@@ -97,14 +96,13 @@ def failure_report(error):
                 if isinstance(value, str) and value in allowed:
                     result[key] = value
     return result
-
 def validate_package(package, release):
     if (not isinstance(TARGET_COMMIT, str) or not re.fullmatch('[0-9a-f]{40}', TARGET_COMMIT)
-            or TARGET_COMMIT == OLD_COMMIT
-            or not isinstance(TARGET_SOURCE_SHA256, str)
-            or not re.fullmatch('[0-9a-f]{64}', TARGET_SOURCE_SHA256)
-            or any(not isinstance(STORE_SHA256.get(role), str)
-                   or not re.fullmatch('[0-9a-f]{64}', STORE_SHA256[role]) for role in ('old', 'target'))):
+        or TARGET_COMMIT == OLD_COMMIT
+        or not isinstance(TARGET_SOURCE_SHA256, str)
+        or not re.fullmatch('[0-9a-f]{64}', TARGET_SOURCE_SHA256)
+        or any(not isinstance(STORE_SHA256.get(role), str)
+        or not re.fullmatch('[0-9a-f]{64}', STORE_SHA256[role]) for role in ('old', 'target'))):
         raise ValueError('CODE_TARGET_NOT_PINNED')
     if not isinstance(package, dict) or package.get('operation') != 'code-prepare':
         raise ValueError('CODE_PACKAGE')
@@ -116,7 +114,6 @@ def validate_package(package, release):
     if package['baseline'] != EXPECTED_BASELINE:
         raise ValueError('CODE_BASELINE')
     return package
-
 def bootstrap_state(release, upgrade):
     request = upgrade.REQUEST
     if not os.path.lexists(request):
@@ -132,14 +129,13 @@ def bootstrap_state(release, upgrade):
     snapshot = {'request': raw}
     for suffix in ('.json', '.result.json'):
         body = upgrade.read_file(folder/('bootstrap-'+identity+suffix), uid=10001, gid=10001,
-            mode=0o600, maximum=32768)
+        mode=0o600, maximum=32768)
         value = json.loads(body, object_pairs_hook=release.unique)
         if value.get('request_id') != identity or value.get('status') not in (
-                ('started',) if suffix == '.json' else ('completed', 'partial', 'failed_partial')):
+        ('started',) if suffix == '.json' else ('completed', 'partial', 'failed_partial')):
             raise ValueError('BOOTSTRAP_NOT_FINISHED')
         snapshot[suffix] = body
     return snapshot
-
 def current_state(package, host, release, lifecycle, upgrade):
     if os.geteuid() != 0 or host.baseline() != package['baseline']:
         raise ValueError('HOST_BASELINE')
@@ -161,7 +157,6 @@ def current_state(package, host, release, lifecycle, upgrade):
         if lifecycle._state(release, unit, 'UnitFileState') != 'enabled':
             raise ValueError('OLD_UNIT_NOT_ENABLED')
     return path, receipt, files, lifecycle._snapshot(release, path, receipt['images']), bootstrap_state(release, upgrade)
-
 def schema_contract(body):
     tree = ast.parse(body)
     selected = {}
@@ -177,7 +172,6 @@ def schema_contract(body):
     if set(selected)!={'SCHEMA_VERSION','_SCHEMA','_REVISION_COLUMNS','_migrate'}:
         raise ValueError('SCHEMA_CONTRACT_MISSING')
     return selected
-
 def store_contract(body, role):
     if role not in ('old', 'target') or hashlib.sha256(body).hexdigest() != STORE_SHA256.get(role):
         raise ValueError('CODE_STORE_CHANGED')
@@ -185,13 +179,13 @@ def store_contract(body, role):
     versions = [node for node in tree.body if isinstance(node,ast.Assign)
         and any(isinstance(target,ast.Name) and target.id=='SCHEMA_VERSION' for target in node.targets)]
     if (len(versions) != 1 or len(versions[0].targets) != 1
-            or not isinstance(versions[0].value, ast.Constant)
-            or type(versions[0].value.value) is not int or versions[0].value.value != 11):
+        or not isinstance(versions[0].value, ast.Constant)
+        or type(versions[0].value.value) is not int or versions[0].value.value != 11):
         raise ValueError('CODE_SCHEMA_CHANGED')
     sql = None
     for node in tree.body:
         if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='_SCHEMA'
-                for target in node.targets):
+        for target in node.targets):
             if sql is not None or len(node.targets) != 1:
                 raise ValueError('CODE_SCHEMA_CHANGED')
             sql = ast.literal_eval(node.value)
@@ -207,12 +201,11 @@ def store_contract(body, role):
     if not isinstance(sql, tuple) or any(not isinstance(statement, str) for statement in sql):
         raise ValueError('CODE_SCHEMA_CHANGED')
     return sql
-
 def compatible_source(old, new, upgrade):
     read = lambda path: upgrade.read_file(path, mode=0o644, maximum=1024*1024, minimum=0)
     for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
-                 'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
-                 'Dockerfile.naver-relay', 'backend/requirements.txt', 'naver_runtime/bootstrap.py'):
+        'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
+        'Dockerfile.naver-relay', 'backend/requirements.txt', 'naver_runtime/bootstrap.py'):
         if read(old/name) != read(new/name):
             raise ValueError('CODE_INFRASTRUCTURE_CHANGED')
     before, after = read(old/'naver_engine/store.py'), read(new/'naver_engine/store.py')
@@ -223,8 +216,6 @@ def compatible_source(old, new, upgrade):
         if after != target_override(before, name):
             raise ValueError('CODE_OVERRIDE_CHANGED')
     compatible_code_scope(old, new, upgrade)
-
-
 MONITORING_SQL = (
     """CREATE TABLE IF NOT EXISTS naver_auto_morning_progress (
         customer_id INTEGER PRIMARY KEY, possibility_id INTEGER NOT NULL, day TEXT NOT NULL,
@@ -235,30 +226,24 @@ MONITORING_SQL = (
         generation INTEGER NOT NULL, body TEXT, checksum TEXT, size INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (customer_id, kind, slot))""",
 )
-
-
 def migration_contract(before, after):
     old_sql, new_sql = store_contract(before, 'old'), store_contract(after, 'target')
     if new_sql != old_sql or schema_contract(before) != schema_contract(after):
         raise ValueError('CODE_SCHEMA_CHANGED')
-
-
 def target_override(before, name):
     return before.replace(OLD_COMMIT.encode(), TARGET_COMMIT.encode())
-
-
 def stopped_writer(release, lifecycle, path, images, unit):
     if (unit not in lifecycle.UNITS or path.name not in ('naver-'+OLD_COMMIT,'naver-'+TARGET_COMMIT)
-            or not isinstance(images,dict) or not images or set(images)-{OLD_COMMIT,TARGET_COMMIT}):
+        or not isinstance(images,dict) or not images or set(images)-{OLD_COMMIT,TARGET_COMMIT}):
         raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
     name='engine' if unit==lifecycle.UNITS[0] else 'relay'
     allowed={source:value.get(name) for source,value in images.items() if isinstance(value,dict)}
     if len(allowed)!=len(images) or any(not isinstance(v,str) or not re.fullmatch('sha256:[0-9a-f]{64}',v)
-                                      for v in allowed.values()):
+        for v in allowed.values()):
         raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
     if (lifecycle._state(release,unit,'ActiveState') not in ('inactive','failed')
-            or lifecycle._state(release,unit,'SubState') not in ('dead','failed')
-            or lifecycle._state(release,unit,'MainPID')!='0'):
+        or lifecycle._state(release,unit,'SubState') not in ('dead','failed')
+        or lifecycle._state(release,unit,'MainPID')!='0'):
         raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
     ids=release.command(['docker','ps','--all','--no-trunc','--filter',
         'label=com.docker.compose.project=naver-'+name,'--format','{{.ID}}']).decode().strip().splitlines()
@@ -273,13 +258,11 @@ def stopped_writer(release, lifecycle, path, images, unit):
     fmt='{'+','.join(json.dumps(k)+':{{json '+v+'}}' for k,v in fields.items())+'}'
     row=json.loads(release.command(['docker','inspect','--format',fmt,ids[0]]))
     if (not isinstance(row,dict) or not isinstance(row.get('source'),str) or row['source'] not in allowed
-            or row.get('id')!=ids[0] or row.get('image')!=allowed[row['source']]
-            or row.get('project')!='naver-'+name or row.get('service')!='naver-'+name
-            or row.get('running') is not False or row.get('restarting') is not False
-            or type(row.get('pid')) is not int or row['pid']!=0):
+        or row.get('id')!=ids[0] or row.get('image')!=allowed[row['source']]
+        or row.get('project')!='naver-'+name or row.get('service')!='naver-'+name
+        or row.get('running') is not False or row.get('restarting') is not False
+        or type(row.get('pid')) is not int or row['pid']!=0):
         raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
-
-
 def db_snapshot(identity, release, upgrade):
     global OPERATION
     OPERATION = 'snapshot_directory'
@@ -292,8 +275,8 @@ def db_snapshot(identity, release, upgrade):
         OPERATION = 'snapshot_identity'
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
-                or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (10001, 10001, 0o600)
-                or (info.st_dev, info.st_ino) != (db.stat().st_dev, db.stat().st_ino)):
+        or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (10001, 10001, 0o600)
+        or (info.st_dev, info.st_ino) != (db.stat().st_dev, db.stat().st_ino)):
             raise ValueError('DB_IDENTITY')
         OPERATION = 'snapshot_lock'
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -319,8 +302,6 @@ def db_snapshot(identity, release, upgrade):
         return destination, hashlib.sha256(raw).hexdigest()
     finally:
         os.close(fd)
-
-
 def restore_db(snapshot, identity, release, upgrade):
     path, digest = snapshot
     raw = upgrade.read_file(path, mode=0o600, maximum=1024**3)
@@ -342,8 +323,6 @@ def restore_db(snapshot, identity, release, upgrade):
         os.fsync(fd)
     finally:
         os.close(fd)
-
-
 WARM_SCRIPT = r'''
 import json,os,sys,threading
 sys.path[:0]=['/opt/naver-engine','/opt/naver-engine/backend']
@@ -382,8 +361,6 @@ except Exception as error:
     print(json.dumps({'ok':False,'warm_step':step,'warm_error_code':code if code in allowed else 'UNRECOGNIZED'}))
     sys.exit(1)
 '''
-
-
 def warm_sources(path, release):
     global STAGE, OPERATION
     STAGE = 'account_sources_warm'
@@ -394,8 +371,8 @@ def warm_sources(path, release):
     try:
         OPERATION = 'warm_create'
         identity = release.command(check+['run', '--detach', '--no-deps', '--pull', 'never',
-            '--name', name, '--label', 'metainc.naver.warm.source='+TARGET_COMMIT,
-            '--entrypoint', 'python', 'naver-engine', '-I', '-B', '-c', WARM_SCRIPT], timeout=60).decode().strip()
+        '--name', name, '--label', 'metainc.naver.warm.source='+TARGET_COMMIT,
+        '--entrypoint', 'python', 'naver-engine', '-I', '-B', '-c', WARM_SCRIPT], timeout=60).decode().strip()
         if not re.fullmatch('[0-9a-f]{64}', identity):
             raise ValueError('WARM_CONTAINER_ID')
         OPERATION = 'warm_wait'
@@ -405,15 +382,15 @@ def warm_sources(path, release):
         OPERATION = 'warm_result'
         if status != b'0':
             if isinstance(result, dict) and result.get('warm_step') in {
-                    'warm_config','warm_store_open','warm_schema','warm_org_sync','warm_org_contract',
-                    'warm_accounts_sync','warm_catalog_sync','warm_summary'}:
+        'warm_config','warm_store_open','warm_schema','warm_org_sync','warm_org_contract',
+        'warm_accounts_sync','warm_catalog_sync','warm_summary'}:
                 OPERATION = result['warm_step']
             code = result.get('warm_error_code') if isinstance(result, dict) else None
             raise ValueError(code if isinstance(code,str) and code in FAILURE_CODES else 'SOURCE_WARM_FAILED')
         if (result.get('ok') is not True or result.get('org_fresh') is not True
-                or type(result.get('schema')) is not int or result['schema'] != 11
-                or type(result.get('catalog_total')) is not int or result['catalog_total'] < 1
-                or type(result.get('management_count')) is not int or result['management_count'] < 1):
+        or type(result.get('schema')) is not int or result['schema'] != 11
+        or type(result.get('catalog_total')) is not int or result['catalog_total'] < 1
+        or type(result.get('management_count')) is not int or result['management_count'] < 1):
             raise ValueError('SOURCE_WARM_FAILED')
         return result
     except Exception as error:
@@ -437,7 +414,7 @@ def warm_sources(path, release):
                 OPERATION = 'warm_cleanup_remove'
                 release.command(['docker', 'rm', '--force', found], timeout=45)
             elif identity is None:
-                # Late create after timeout.
+        # Late create after timeout.
                 raise ValueError('WARM_CREATE_UNCONFIRMED')
             OPERATION = 'warm_cleanup_absence'
             if release.command(['docker', 'ps', '--all', '--no-trunc', '--filter',
@@ -447,8 +424,6 @@ def warm_sources(path, release):
             refused = RuntimeError('WARM_CLEANUP_FAILED')
             refused.failure_details = {**(failure or _capture_failure(error)), **_capture_failure(error,'cleanup')}
             raise refused from None
-
-
 def compatible_code_scope(old, new, upgrade):
     def inventory(root):
         files = {}
@@ -461,7 +436,7 @@ def compatible_code_scope(old, new, upgrade):
             if name in ('preview-engine.override.yml', 'preview-relay.override.yml'):
                 continue
             files[name] = (stat.S_IMODE(path.stat().st_mode),
-                           upgrade.read_file(path, maximum=1024*1024, minimum=0))
+        upgrade.read_file(path, maximum=1024*1024, minimum=0))
         return files
     before, after = inventory(old), inventory(new)
     if before.keys() - after.keys():
@@ -471,15 +446,13 @@ def compatible_code_scope(old, new, upgrade):
             raise ValueError('CODE_SOURCE_MODE_CHANGED')
         if before.get(name) != value and name not in CODE_PATHS | TEST_PATHS:
             raise ValueError('CODE_SCOPE_CHANGED')
-
-
 def probe(release, source_commit, upgrade):
     report_target = source_commit == TARGET_COMMIT
     management_target = source_commit in (OLD_COMMIT, TARGET_COMMIT)
     if source_commit == OLD_COMMIT:
         source_commit = TARGET_COMMIT
     if (not isinstance(TARGET_COMMIT, str) or not re.fullmatch('[0-9a-f]{40}', TARGET_COMMIT)
-            or source_commit != TARGET_COMMIT):
+        or source_commit != TARGET_COMMIT):
         raise ValueError('CODE_PROBE_SOURCE')
     def request(path, route, method='GET'):
         status, headers, body = release.unix_request(path, route, method)
@@ -524,8 +497,6 @@ def probe(release, source_commit, upgrade):
                     or headers.get('x-content-type-options') != 'nosniff'
                     or headers.get('referrer-policy') != 'no-referrer' or headers.get('content-encoding')):
                 raise ValueError('REPORT_ASSET_NOT_READY')
-
-
 def verify_running(path, receipt, release, lifecycle, upgrade):
     source = receipt.get('source_commit')
     if source not in (OLD_COMMIT, TARGET_COMMIT) or path.name != 'naver-' + source:
@@ -539,8 +510,6 @@ def verify_running(path, receipt, release, lifecycle, upgrade):
     for unit in lifecycle.UNITS:
         if lifecycle._state(release, unit, 'UnitFileState') != 'enabled':
             raise ValueError('CODE_SERVICE_NOT_ENABLED')
-
-
 def verify_database_schema(source, release, upgrade):
     if source not in (OLD_COMMIT, TARGET_COMMIT):
         raise ValueError('CODE_PROBE_SOURCE')
@@ -550,8 +519,6 @@ def verify_database_schema(source, release, upgrade):
     with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as connection:
         connection.execute('PRAGMA trusted_schema=OFF')
         database_contract(connection, source)
-
-
 def database_contract(connection, source):
     if source not in (OLD_COMMIT, TARGET_COMMIT):
         raise ValueError('CODE_PROBE_SOURCE')
@@ -574,8 +541,6 @@ def database_contract(connection, source):
             if connection.execute('PRAGMA table_info('+table+')').fetchall() != \
                     reference.execute('PRAGMA table_info('+table+')').fetchall():
                 raise ValueError(error)
-
-
 def prepare(package, host, release, lifecycle, upgrade):
     global STAGE
     STAGE = 'code_prepare_preflight'
@@ -641,8 +606,6 @@ def prepare(package, host, release, lifecycle, upgrade):
     upgrade.manifest(release, TARGET_COMMIT, package)
     return {'ok':True,'stage':'prepared','source_commit':TARGET_COMMIT,'previous_commit':OLD_COMMIT,
             'services_started':False,'nginx_changed':False,'bootstrap_unchanged':True}
-
-
 def apply(package, host, release, lifecycle, upgrade):
     global STAGE, OPERATION
     STAGE = 'code_apply_preflight'
@@ -716,7 +679,7 @@ def apply(package, host, release, lifecycle, upgrade):
                   'nginx_changed':False,'legacy_containers_unchanged':True,'bootstrap_unchanged':True,
                   'operation_id':identity,'unauthenticated_read_status':401,'business_post_status':403}
         result.update(database_snapshot_verified=True, database_schema=11, inventory_enabled=True,
-                      source_status=source_status, rollback_requires_matching_database=True)
+        source_status=source_status, rollback_requires_matching_database=True)
         OPERATION = 'write_started_receipt'
         release.write_new(started, json.dumps(result, sort_keys=True).encode())
         return result

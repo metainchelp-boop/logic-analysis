@@ -22,3 +22,22 @@ class SQLiteLabelsTest(unittest.TestCase):
         error = RuntimeError('not an approved diagnostic')
         error.sqlite_errorcode = 5
         self.assertEqual(code._error_labels(error)['error_code'], 'UNRECOGNIZED')
+
+    def test_python310_exact_known_messages_only_without_numeric_code(self):
+        code = load('naver_preview_code_upgrade')
+        for message, label in (
+                ('database is locked', 'SQLITE_BUSY'),
+                ('database table is locked', 'SQLITE_LOCKED'),
+                ('attempt to write a readonly database', 'SQLITE_READONLY'),
+                ('unable to open database file', 'SQLITE_CANTOPEN'),
+                ('database disk image is malformed', 'SQLITE_CORRUPT'),
+                ('file is not a database', 'SQLITE_NOTADB'),
+                ('disk I/O error', 'SQLITE_IOERR')):
+            error = sqlite3.OperationalError(message)
+            self.assertFalse(hasattr(error, 'sqlite_errorcode'))
+            self.assertEqual(code.failure_report(error)['error_code'], label)
+            self.assertEqual(code.failure_report(sqlite3.OperationalError(message+' private-value'))['error_code'], 'UNRECOGNIZED')
+            self.assertEqual(code.failure_report(RuntimeError(message))['error_code'], 'UNRECOGNIZED')
+            error.sqlite_errorcode = 1
+            self.assertEqual(code.failure_report(error)['error_code'], 'SQLITE_ERROR')
+        self.assertNotIn('private-value', str(code.failure_report(sqlite3.OperationalError('private-value'))))
