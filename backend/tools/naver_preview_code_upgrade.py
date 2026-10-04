@@ -56,7 +56,8 @@ FAILURE_OPERATIONS = frozenset('none package current_state target_manifest compa
 FAILURE_KINDS = frozenset('ValueError RuntimeError TimeoutError TimeoutExpired CalledProcessError OSError '
     'PermissionError FileNotFoundError BlockingIOError JSONDecodeError OperationalError IntegrityError '
     'TypeError KeyError AttributeError AssertionError ImportError ModuleNotFoundError ConfigError StoreRefused'.split())
-FAILURE_CODES = frozenset('CODE_TARGET_NOT_PINNED CODE_PACKAGE CODE_TARGET CODE_BASELINE CODE_APPLY_FIELDS '
+SQL_ERRORS={n:'SQLITE_'+s for n,s in zip((1,5,6,8,10,11,14,26),'ERROR BUSY LOCKED READONLY IOERR CORRUPT CANTOPEN NOTADB'.split())}
+FAILURE_CODES = frozenset(SQL_ERRORS.values()) | frozenset('CODE_TARGET_NOT_PINNED CODE_PACKAGE CODE_TARGET CODE_BASELINE CODE_APPLY_FIELDS '
     'CODE_OPERATION_ID CODE_ALREADY_ATTEMPTED CODE_POST_STATE CODE_TARGET_SOURCE_CHANGED CODE_FAILED_ROLLED_BACK_DB_PRESERVED '
     'CODE_ROLLBACK_FAILED HOST_BASELINE OLD_BASELINE OLD_SOURCE_CHANGED OLD_UNIT_CHANGED OLD_UNIT_NOT_ENABLED '
     'DEPENDENCY_NOT_ACTIVE BOOTSTRAP_REQUEST BOOTSTRAP_NOT_FINISHED BOOTSTRAP_CHANGED TMPFILES_CHANGED '
@@ -70,19 +71,18 @@ FAILURE_CODES = frozenset('CODE_TARGET_NOT_PINNED CODE_PACKAGE CODE_TARGET CODE_
     'PREPARED_FILE_CHANGED PREPARED_IMAGE PREPARED_IMAGE_CHANGED SOURCE_NOT_READY UNIT_CHANGED ENGINE_NOT_READY '
     'PAGE_NOT_READY REPORT_ASSET_NOT_READY UNAUTHENTICATED_READ_NOT_DENIED BUSINESS_WRITE_NOT_DENIED SERVICES_NOT_READY'.split())
 
-
 def _error_labels(error):
     kind = type(error).__name__
     code = error.args[0] if len(error.args) == 1 and isinstance(error.args[0], str) else None
+    if isinstance(error,sqlite3.Error):
+        code=SQL_ERRORS.get(getattr(error,'sqlite_errorcode',0)&255)
     return {'error_kind':kind if kind in FAILURE_KINDS else 'OtherError',
             'error_code':code if code in FAILURE_CODES else 'UNRECOGNIZED'}
-
 
 def _capture_failure(error, prefix='failed'):
     details = {'stage':STAGE if STAGE in FAILURE_STAGES else 'unknown',
                'operation':OPERATION if OPERATION in FAILURE_OPERATIONS else 'unknown', **_error_labels(error)}
     return {prefix+'_'+key:value for key,value in details.items()}
-
 
 def failure_report(error):
     result = {'stage':STAGE if STAGE in FAILURE_STAGES else 'unknown', **_error_labels(error)}
@@ -97,7 +97,6 @@ def failure_report(error):
                 if isinstance(value, str) and value in allowed:
                     result[key] = value
     return result
-
 
 def validate_package(package, release):
     if (not isinstance(TARGET_COMMIT, str) or not re.fullmatch('[0-9a-f]{40}', TARGET_COMMIT)
@@ -118,7 +117,6 @@ def validate_package(package, release):
         raise ValueError('CODE_BASELINE')
     return package
 
-
 def bootstrap_state(release, upgrade):
     request = upgrade.REQUEST
     if not os.path.lexists(request):
@@ -134,14 +132,13 @@ def bootstrap_state(release, upgrade):
     snapshot = {'request': raw}
     for suffix in ('.json', '.result.json'):
         body = upgrade.read_file(folder/('bootstrap-'+identity+suffix), uid=10001, gid=10001,
-                                 mode=0o600, maximum=32768)
+            mode=0o600, maximum=32768)
         value = json.loads(body, object_pairs_hook=release.unique)
         if value.get('request_id') != identity or value.get('status') not in (
                 ('started',) if suffix == '.json' else ('completed', 'partial', 'failed_partial')):
             raise ValueError('BOOTSTRAP_NOT_FINISHED')
         snapshot[suffix] = body
     return snapshot
-
 
 def current_state(package, host, release, lifecycle, upgrade):
     if os.geteuid() != 0 or host.baseline() != package['baseline']:
@@ -165,7 +162,6 @@ def current_state(package, host, release, lifecycle, upgrade):
             raise ValueError('OLD_UNIT_NOT_ENABLED')
     return path, receipt, files, lifecycle._snapshot(release, path, receipt['images']), bootstrap_state(release, upgrade)
 
-
 def schema_contract(body):
     tree = ast.parse(body)
     selected = {}
@@ -181,7 +177,6 @@ def schema_contract(body):
     if set(selected)!={'SCHEMA_VERSION','_SCHEMA','_REVISION_COLUMNS','_migrate'}:
         raise ValueError('SCHEMA_CONTRACT_MISSING')
     return selected
-
 
 def store_contract(body, role):
     if role not in ('old', 'target') or hashlib.sha256(body).hexdigest() != STORE_SHA256.get(role):
@@ -212,7 +207,6 @@ def store_contract(body, role):
     if not isinstance(sql, tuple) or any(not isinstance(statement, str) for statement in sql):
         raise ValueError('CODE_SCHEMA_CHANGED')
     return sql
-
 
 def compatible_source(old, new, upgrade):
     read = lambda path: upgrade.read_file(path, mode=0o644, maximum=1024*1024, minimum=0)
@@ -427,7 +421,7 @@ def warm_sources(path, release):
         failure = error.failure_details
         raise
     finally:
-        # CLI timeout does not stop Docker; prove writer cleanup.
+        # Prove cleanup after CLI timeout.
         try:
             OPERATION = 'warm_cleanup_find'
             found = release.command(['docker', 'ps', '--all', '--no-trunc', '--filter',
@@ -443,7 +437,7 @@ def warm_sources(path, release):
                 OPERATION = 'warm_cleanup_remove'
                 release.command(['docker', 'rm', '--force', found], timeout=45)
             elif identity is None:
-                # Create may finish after CLI timeout.
+                # Late create after timeout.
                 raise ValueError('WARM_CREATE_UNCONFIRMED')
             OPERATION = 'warm_cleanup_absence'
             if release.command(['docker', 'ps', '--all', '--no-trunc', '--filter',
@@ -505,10 +499,10 @@ def probe(release, source_commit, upgrade):
         raise ValueError('PAGE_NOT_READY')
     if management_target:
         for route, method in (('/reports', 'GET'),
-                              ('/reports/history?possibility_id=1&limit=20', 'GET'),
-                              ('/accounts/reasons?ad_account_no=1&page=0&selection=all', 'GET'),
-                              ('/management/update', 'POST'),
-                              ('/management/collect', 'POST'), ('/reports/review', 'POST')):
+        ('/reports/history?possibility_id=1&limit=20', 'GET'),
+        ('/accounts/reasons?ad_account_no=1&page=0&selection=all', 'GET'),
+        ('/management/update', 'POST'),
+        ('/management/collect', 'POST'), ('/reports/review', 'POST')):
             if release.unix_request(relay, '/api/naver-auto'+route, method)[0] != 401:
                 raise ValueError('CODE_ROUTE_STATUS')
     for route, method, expected in (

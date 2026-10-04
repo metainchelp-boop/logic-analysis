@@ -5,10 +5,17 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
+import tempfile
+import time
 import uuid
 
 OPERATION_ID = 'a49a7ccfe32840298914f121883caee5'
 TARGET_COMMIT = 'e1c4b3526db55d78175a1d6598f3403fdb9398f7'
+REPORT_OPERATION = 'c33d41529d064cf68226e114707a3f8a'
+REPORT_TARGET = 'a38c53775c112cdf5db420f979093d6bee9e5376'
+REPORT_SOURCE_SHA256 = 'dc442fa19e4809b290124e8a72fa3243d911957176ba6988269ec27ef736302a'
+REPORT_OLD = '0a302856c6177c4f53145abaf9ed31b6a39654f3'
 STAGE = 'input'
 STAGES = frozenset(('input','diagnose_preflight','diagnose_readonly','diagnose_journal','diagnose_postflight'))
 FAILURES = frozenset(('DIAG_OPERATION','DIAG_PATH','DIAG_IMAGE','DIAG_IMAGE_CHANGED','DIAG_CONTAINER_CHANGED',
@@ -221,6 +228,96 @@ def files_snapshot(folder,upgrade):
     return result
 
 
+def report_schema_copy(folder,files,upgrade,code):
+    # SQLite may write SHM even with mode=ro. Only disposable copies are opened.
+    with tempfile.TemporaryDirectory(prefix='naver-report-diag-',dir='/tmp') as temporary:
+        copied=Path(temporary).resolve()
+        for filename,info in files.items():
+            if Path(filename).name not in ('engine.db','engine.db-wal','engine.db-shm') or Path(filename).parent!=folder:
+                raise ValueError('DIAG_PATH')
+            raw=upgrade.read_file(Path(filename),uid=10001,gid=10001,mode=0o600,
+                maximum=1024**3,minimum=0 if Path(filename).name!='engine.db' else 1)
+            if len(raw)!=info['size'] or hashlib.sha256(raw).hexdigest()!=info['sha256']:
+                raise ValueError('DIAG_POST_BASELINE')
+            fd=os.open(copied/Path(filename).name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+            with os.fdopen(fd,'wb') as output:
+                output.write(raw)
+        phase='open'
+        connection=None
+        try:
+            connection=sqlite3.connect((copied/'engine.db').as_uri()+'?mode=ro',uri=True,timeout=5)
+            phase='configure'
+            connection.execute('PRAGMA query_only=ON')
+            connection.execute('PRAGMA trusted_schema=OFF')
+            tables={'naver_auto_link_memory','naver_auto_morning_progress','naver_auto_morning_chunk'}
+            def authorize(action,arg1,arg2,*unused):
+                allowed=(action in (sqlite3.SQLITE_SELECT,sqlite3.SQLITE_TRANSACTION)
+                    or action==sqlite3.SQLITE_READ and arg1=='naver_auto_meta'
+                    or action==sqlite3.SQLITE_PRAGMA and arg1=='table_info' and arg2 in tables)
+                return sqlite3.SQLITE_OK if allowed else sqlite3.SQLITE_DENY
+            connection.set_authorizer(authorize)
+            deadline=time.monotonic()+5
+            connection.set_progress_handler(lambda: int(time.monotonic()>deadline),1000)
+            phase='contract'
+            connection.execute('BEGIN')
+            code.database_contract(connection,code.TARGET_COMMIT)
+            return {'schema_contract':'passed','phase':'contract','error_kind':None,
+                    'sqlite_errorcode':None,'sqlite_errorname':None}
+        except sqlite3.Error as error:
+            labels={1:'SQLITE_ERROR',5:'SQLITE_BUSY',6:'SQLITE_LOCKED',8:'SQLITE_READONLY',
+                9:'SQLITE_INTERRUPT',10:'SQLITE_IOERR',11:'SQLITE_CORRUPT',14:'SQLITE_CANTOPEN',
+                17:'SQLITE_SCHEMA',23:'SQLITE_AUTH',26:'SQLITE_NOTADB'}
+            value=getattr(error,'sqlite_errorcode',None)
+            primary=value&255 if type(value) is int else None
+            primary=primary if primary in labels else None
+            return {'schema_contract':'failed','phase':phase,'error_kind':'SQLiteError',
+                    'sqlite_errorcode':primary,'sqlite_errorname':labels.get(primary,'UNRECOGNIZED')}
+        except ValueError as error:
+            if error.args!=('DB_TARGET_SCHEMA',):
+                raise
+            return {'schema_contract':'failed','phase':phase,'error_kind':'DB_TARGET_SCHEMA',
+                    'sqlite_errorcode':None,'sqlite_errorname':None}
+        finally:
+            if connection is not None:
+                connection.close()
+
+
+def report_run(package,host,release,lifecycle,upgrade,code):
+    global STAGE
+    STAGE='diagnose_preflight'
+    if set(package)!={'release','operation_id'} or package['operation_id']!=REPORT_OPERATION:
+        raise ValueError('DIAG_OPERATION')
+    if (code.TARGET_COMMIT!=REPORT_TARGET or code.OLD_COMMIT!=REPORT_OLD
+            or code.TARGET_SOURCE_SHA256!=REPORT_SOURCE_SHA256):
+        raise ValueError('DIAG_SOURCE')
+    if not re.fullmatch(r'[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}',sqlite3.sqlite_version):
+        raise ValueError('DIAG_SCHEMA')
+    prepared=code.validate_package(package['release'],release)
+    before=code.current_state(prepared,host,release,lifecycle,upgrade)
+    target=upgrade.manifest(release,REPORT_TARGET,prepared)
+    release.trusted_dir(code.DATA,uid=10001,gid=10001,mode=0o750)
+    folder=code.DATA/('.account-failed-db-'+REPORT_OPERATION)
+    if folder.resolve()!=folder or not folder.is_dir():
+        raise ValueError('DIAG_PATH')
+    release.trusted_dir(folder,mode=0o700)
+    files=files_snapshot(folder,upgrade)
+    try:
+        STAGE='diagnose_readonly'
+        result=report_schema_copy(folder,files,upgrade,code)
+    finally:
+        STAGE='diagnose_postflight'
+        after=code.current_state(prepared,host,release,lifecycle,upgrade)
+        target_after=upgrade.manifest(release,REPORT_TARGET,prepared)
+        if files_snapshot(folder,upgrade)!=files or after!=before or target_after!=target:
+            raise ValueError('DIAG_POST_BASELINE')
+    return {'ok':True,'mode':'report-failed-schema-copy','source_commit':REPORT_TARGET,
+        'operation_id':REPORT_OPERATION,'host_sqlite_version':sqlite3.sqlite_version,
+        'host_python_version':'.'.join(str(n) for n in sys.version_info[:3]),
+        'diagnosis':result,'database_files_unchanged':True,
+        'existing_app_baseline_unchanged':True,'live_database_opened':False,
+        'database_mutations':0,'external_calls':0,'services_changed':False}
+
+
 def runtime_journal(release):
     since,until='2026-10-02 04:25:00 UTC','2026-10-02 04:26:35 UTC'
     kinds=frozenset(('AttributeError','TypeError','ValueError','RuntimeError','KeyError','NameError','IndexError',
@@ -291,6 +388,8 @@ def runtime_journal(release):
 
 def run(package,host,release,lifecycle,upgrade,code):
     global STAGE
+    if isinstance(package,dict) and package.get('operation_id')==REPORT_OPERATION:
+        return report_run(package,host,release,lifecycle,upgrade,code)
     STAGE='diagnose_preflight'
     if not isinstance(package,dict) or set(package)!={'release','operation_id'} or package['operation_id']!=OPERATION_ID:
         raise ValueError('DIAG_OPERATION')
