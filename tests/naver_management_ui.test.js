@@ -9,10 +9,12 @@ const vm = require('node:vm');
 const page = path.join(__dirname, '../backend/naver_page');
 const html = fs.readFileSync(path.join(page, 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(page, 'app.js'), 'utf8');
+const reportUI = fs.readFileSync(path.join(page, 'report-ui.js'), 'utf8');
 
 class Element {
-  constructor(tag = 'div') {
+  constructor(tag = 'div', registerId) {
     this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.events = {};
+    this.registerId = registerId;
     this.value = ''; this.disabled = false; this._text = '';
     const classes = new Set();
     this.classList = { add: x => classes.add(x), remove: x => classes.delete(x), contains: x => classes.has(x),
@@ -20,7 +22,8 @@ class Element {
   }
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return this._text + this.children.map(x => x.textContent).join(''); }
-  setAttribute(k, v) { this.attrs[k] = String(v); if (k === 'value') this.value = String(v); if (k === 'disabled') this.disabled = true; }
+  setAttribute(k, v) { this.attrs[k] = String(v); if (k === 'value') this.value = String(v); if (k === 'disabled') this.disabled = true;
+    if (k === 'id' && this.registerId) this.registerId(String(v), this); }
   getAttribute(k) { return this.attrs[k]; }
   addEventListener(k, fn) { (this.events[k] ||= []).push(fn); }
   dispatch(k) { if (k === 'click' && this.disabled) return; const event = {currentTarget:this,target:this,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;}};
@@ -60,7 +63,9 @@ function launch(options = {}) {
   const requests = [], events = {}, opened = [];
   const location = new URL('https://watch.invalid/naver/' + (options.screen || 'transfers'));
   const window = { addEventListener: (k, fn) => { events[k] = fn; }, open: (...args) => {opened.push(args); return null;} };
-  const document = { visibilityState: 'visible', getElementById: id => elements.get(id), createElement: tag => new Element(tag),
+  const createElement = tag => new Element(tag, (id, element) => elements.set(id, element));
+  const document = { visibilityState: 'visible', getElementById: id => elements.get(id), createElement,
+    createElementNS: (_namespace, tag) => createElement(tag),
     createTextNode: text => ({ textContent: String(text) }), addEventListener() {}, body: { contains: () => true },
     querySelectorAll: selector => selector === '.modal' ? [...elements].filter(([id]) => id.startsWith('m-')).map(([, el]) => el) : [],
     querySelector: () => null };
@@ -88,6 +93,7 @@ function launch(options = {}) {
         return response;
       } };
     } });
+  vm.runInContext(reportUI, context);
   vm.runInContext(app, context);
   return { elements, requests, opened, location, text: id => elements.get(id).textContent,
     buttons: id => tree(elements.get(id)).filter(el => el.tagName === 'BUTTON'),
@@ -638,114 +644,159 @@ test('범위가 바뀌면 기간 재확인 창과 이전 계정 버튼은 요청
   assert.equal(run.requests.filter(request => request.method === 'POST').length, 0);
 });
 
-test('보고서는 기간·부분합·누락·담당 검토를 표시하며 게시나 송신을 하지 않는다', async () => {
-  const run = launch({ screen: 'reports', data: { schedule: { weekly: '월요일 10:00', monthly: '매월 3일 10:00', timezone: 'Asia/Seoul' }, rows: [{
+function reportFixture(overrides = {}) {
+  const period = {kind:'monthly',start:'2026-09-01',end:'2026-09-30'};
+  const base = {report_id:9,revision_no:1,revision_fingerprint:'fixed-report',possibility_id:1,
+    period_key:'monthly:2026-09-01:2026-09-30',company_name:'합성 보고 업체',status:'ready',
+    generated_at:'2026-10-03T10:00:00+09:00',checked_at:'2026-10-04T10:00:00+09:00',owner:{name:'합성 담당자'},
+    scope:{kind:'account',account_key:'account-1',ad_account_no:'700',account_name:'합성 계정',
+      accounts:[{account_key:'account-1',ad_account_no:'700',account_name:'합성 계정'}]},
+    payload:{format_version:2,period,totals:{},ratios:{},coverage:{},missing:[],missing_count:0,
+      details:{status:'available',daily:[],briefing:[]}}};
+  const payload = {...base.payload,...overrides.payload};
+  if (Array.isArray(overrides.payload?.missing) && !Object.hasOwn(overrides.payload,'missing_count')) payload.missing_count = payload.missing.length;
+  return {...base,...overrides,payload};
+}
+function reportList(reports, request, overrides = {}) {
+  const query = new URL(request.url,'https://watch.invalid').searchParams;
+  return {selection:query.get('selection') || 'all',period:reports[0]?.payload.period || reportFixture().payload.period,
+    total:reports.length,page:0,page_size:20,next_page:null,unlinked_companies:0,
+    schedule:{weekly:'월요일 10:00',monthly:'매월 3일 10:00',timezone:'Asia/Seoul'},
+    rows:reports.map(report => ({report_id:report.report_id,revision_no:report.revision_no,
+      possibility_id:report.possibility_id,company_name:report.company_name,status:report.status,
+      generated_at:report.generated_at,owner:report.owner,workflow:'진행중',...report.scope})),...overrides};
+}
+function reportResponse(reports, request, overrides = {}) {
+  if (request.url.includes('/reports/detail?')) {
+    const id = Number(new URL(request.url,'https://watch.invalid').searchParams.get('report_id'));
+    assert.ok(reports.some(report => report.report_id === id), '저장된 판만 상세로 요청해야 합니다');
+    return reports.find(report => report.report_id === id);
+  }
+  assert.match(request.url,/\/reports\/accounts\?/);
+  return reportList(reports,request,overrides);
+}
+async function showReport(run, index = 0) {
+  await flush();
+  run.elements.get('reportMonthly').dispatch('click'); await flush();
+  const button = run.buttons('reportsRows').filter(item => item.textContent === '보고서 보기')[index];
+  assert.ok(button, '계정 목록에서 저장된 보고서 상세를 열 수 있어야 합니다');
+  button.dispatch('click'); await flush();
+  assert.equal(run.elements.get('reportDetail').hidden,false);
+  assert.equal(run.elements.get('s-reports').classList.contains('view-unverified'),false);
+}
+
+test('보고서는 계정 목록에서 기간·부분합·누락 상세를 열며 게시나 송신을 하지 않는다', async () => {
+  const report = reportFixture({
     report_id: 9, company_name: '합성 보고 업체', status: 'partial', review_status: 'needs_staff_review', can_review: false,
     generated_at: '2026-10-03T10:00:00+09:00', payload: {
       period: { kind: 'monthly', start: '2026-09-01', end: '2026-09-30' }, totals: { spend: 123000, impressions: 1000, clicks: 20, conversions: null },
       ratios: { ctr: 2, cpc: 6150, roas: null }, coverage: { basic_complete: false, expected_account_days: 30, basic_complete_account_days: 29, conversion_complete_account_days: 0 },
       missing: [{ day: '2026-09-03', account_index: 1, reason: 'metrics_incomplete', metrics: ['spend'] }]
     }
-  }] } });
+  });
+  const run = launch({screen:'reports',respond:req => reportResponse([report],req)});
   await flush();
-  assert.ok(run.requests.some(r => r.url === '/api/naver-auto/reports?selection=all&view_sync=1'));
-  assert.match(run.text('reportsSchedule'), /월요일 10:00.*매월 3일 10:00.*Asia\/Seoul/);
+  assert.ok(run.requests.some(r => r.url === '/api/naver-auto/reports/accounts?selection=all&kind=weekly&page=0&view_sync=1'));
+  assert.match(run.text('reportsSchedule'), /월요일 10:00.*매월 3일 10:00.*한국시간/);
   assert.match(run.text('reportsRows'), /합성 보고 업체.*2026-09-01 ~ 2026-09-30.*부분 집계/);
-  assert.match(run.text('reportsRows'), /확인된 광고비.*123,000원/);
-  assert.match(run.text('reportsRows'), /누락 1.*2026-09-03.*일부 지표 미수신.*광고비/);
-  assert.match(run.text('reportsRows'), /담당 검토 필요/);
-  assert.equal(run.buttons('reportsRows').length, 0);
+  await showReport(run);
+  assert.ok(run.requests.some(r => r.url === '/api/naver-auto/reports/detail?report_id=9&account_key=account-1'));
+  assert.match(run.text('reportDetail'), /월간 보고서.*2026-09-01 ~ 2026-09-30/);
+  assert.match(run.text('reportDetail'), /광고비.*123,000원.*확인된 범위 · 전체 수치 아님/);
+  assert.match(run.text('reportDetail'), /누락 1.*2026-09-03.*일부 지표 미수신.*광고비/);
+  assert.match(run.text('reportDetail'), /다운로드는 발송이 아닙니다/);
+  assert.ok(!run.buttons('reportDetail').some(button => /검토 승인|검토 보류|게시|발송/.test(button.textContent)));
   assert.equal(run.requests.filter(r => r.method !== 'GET').length, 0);
 });
 
 test('보고서 정정판은 감소·명시적 0·대조 대기를 표시하고 내부 원천 지문을 노출하지 않는다', async () => {
-  const run = launch({ screen: 'reports', data: { rows: [{
+  const report = reportFixture({
     report_id: 12, revision_no: 3, status: 'ready', can_review: true,
     validation: { status: 'pending', last_attempt_at: '2026-10-03T09:00:00+09:00',
       last_checked_at: '2026-10-02T11:00:00+09:00', pending_account_days: 2, source_snapshot_fingerprint: 'PRIVATE_FINGERPRINT' },
     change_summary: { previous_report_id: 11, changed_metrics: ['spend', 'conversions'],
-      metric_deltas: { spend: -1000, conversions: 0 }, changed_days: ['2026-09-30'], completeness_changed: true },
+      metric_deltas: { spend: -1000, conversions: 0 }, changed_days: ['2026-09-30'], completeness_changed: true, comparison_changed: true },
     payload: { totals: { spend: 0 }, period: { kind: 'monthly', start: '2026-09-01', end: '2026-09-30' } }
-  }] } });
-  await flush();
-  assert.match(run.text('reportsRows'), /3판.*원천 재확인 대기/);
-  assert.match(run.text('reportsRows'), /광고비.*-1,000원.*전환.*0/);
-  assert.match(run.text('reportsRows'), /2026-09-30.*완결 상태 변경/);
-  assert.match(run.text('reportsRows'), /남은 계정×일 2/);
-  assert.doesNotMatch(run.text('reportsRows'), /PRIVATE_FINGERPRINT/);
-  assert.ok(!run.buttons('reportsRows').some(button => button.textContent === '검토 승인'));
-  assert.ok(!run.buttons('reportsRows').some(button => button.textContent === '검토 보류'));
+  });
+  const run = launch({screen:'reports',respond:req => reportResponse([report],req)});
+  await showReport(run);
+  assert.match(run.text('reportDetail'), /3판.*원천 재확인 대기/);
+  assert.match(run.text('reportDetail'), /광고비.*0원/);
+  assert.match(run.text('reportDetail'), /광고비.*-1,000원.*전환.*0/);
+  assert.match(run.text('reportDetail'), /2026-09-30.*완결 상태 변경/);
+  assert.match(run.text('reportDetail'), /전주·전월 비교 자료 변경 · 선택 기간의 합계가 같아도 비교 수치는 달라질 수 있습니다\./);
+  assert.match(run.text('reportDetail'), /남은 계정×일 2/);
+  assert.doesNotMatch(run.text('reportDetail'), /PRIVATE_FINGERPRINT/);
+  assert.ok(!run.buttons('reportDetail').some(button => /검토 승인|검토 보류/.test(button.textContent)));
   assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
 });
 
 test('이전 판은 요청할 때만 페이지별 조회하며 담당 범위가 바뀐 뒤의 늦은 이력을 폐기한다', async () => {
   let release;
-  const row = { report_id: 12, possibility_id: 1, period_key: 'monthly:2026-09-01:2026-09-30',
-    revision_no: 3, company_name: '현재 보고 업체', status: 'ready', payload: {} };
+  const row = reportFixture({report_id:12,revision_no:3,company_name:'현재 보고 업체'});
   const run = launch({ screen: 'reports', respond: request => {
     if (request.url.includes('/reports/history?')) {
       if (request.url.includes('before_report_id=10')) return new Promise(resolve => { release = resolve; });
       return { items: [{ ...row, report_id: 10, revision_no: 2, company_name: '이전 보고 업체', can_review: true }], next_before_report_id: 10 };
     }
-    return { rows: [row] };
+    return reportResponse([row],request);
   } });
-  await flush();
+  await showReport(run);
   assert.equal(run.requests.filter(request => request.url.includes('/reports/history?')).length, 0);
-  const history = tree(run.elements.get('reportsRows')).find(el => el.tagName === 'DETAILS' && el.className === 'report-history');
+  const history = tree(run.elements.get('reportDetail')).find(el => el.tagName === 'DETAILS' && el.className === 'report-history');
   assert.ok(history);
   history.open = true; history.dispatch('toggle'); history.dispatch('toggle'); await flush();
   assert.equal(run.requests.filter(request => request.url.includes('/reports/history?')).length, 1);
-  assert.match(run.text('reportsRows'), /이전 보고 업체.*2판.*이전 판 기록/);
-  assert.ok(!run.buttons('reportsRows').some(button => button.textContent === '검토 승인'));
-  const older = run.buttons('reportsRows').find(button => button.textContent === '더 이전 판');
+  assert.match(run.text('reportDetail'), /당시 저장된 업체 합산 이력.*2판/);
+  assert.ok(!run.buttons('reportDetail').some(button => button.textContent === '검토 승인'));
+  const older = run.buttons('reportDetail').find(button => button.textContent === '더 이전 판');
   older.dispatch('click'); await flush();
   assert.ok(run.requests.some(request => request.url.includes('period_key=monthly%3A2026-09-01%3A2026-09-30') && request.url.includes('limit=20')));
   run.scope('person:2'); await flush();
   release({ items: [{ ...row, company_name: '폐기할 과거 담당 자료' }], next_before_report_id: null }); await flush();
-  assert.doesNotMatch(run.text('reportsRows'), /폐기할 과거 담당 자료/);
+  assert.doesNotMatch(run.text('reportsRows') + run.text('reportDetail'), /폐기할 과거 담당 자료/);
   const count = run.requests.length; older.dispatch('click'); await flush();
   assert.equal(run.requests.length, count);
   assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
 });
 
 test('모니터링 보고서는 서버 검토 권한이 있어도 검토 상태만 읽고 승인·보류 입력을 만들지 않는다', async () => {
-  const data = { rows: [
-    { report_id: 9, status: 'ready', can_review: true, payload: {} },
-    { report_id: 10, status: 'partial', can_review: false, payload: {} },
-    { report_id: 11, status: 'ready', can_review: 'true', payload: {} }
-  ] };
-  const run = launch({ screen: 'reports', respond: req => req.method === 'GET' ? data : {} });
-  await flush();
-  assert.deepEqual(run.buttons('reportsRows').map(x => x.textContent), []);
-  run.elements.get('reviewSave').dispatch('click');
-  assert.equal(run.requests.filter(r => r.method === 'POST').length, 0);
-  run.elements.get('reviewNote').value = '기간과 누락을 확인함';
-  run.elements.get('reviewSave').dispatch('click');
-  await flush();
-  assert.equal(run.requests.filter(r => r.method === 'POST').length, 0);
-  assert.match(run.text('reportsRows'), /모니터링.*읽기 전용/);
+  for (const can_review of [true,false,'true']) {
+    const report = reportFixture({can_review});
+    const run = launch({screen:'reports',respond:req => reportResponse([report],req)});
+    await showReport(run);
+    assert.equal(run.buttons('reportDetail').some(button => /검토 승인|검토 보류/.test(button.textContent)),false);
+    run.elements.get('reviewSave').dispatch('click');
+    assert.equal(run.requests.filter(r => r.method === 'POST').length,0);
+    run.elements.get('reviewNote').value = '기간과 누락을 확인함';
+    run.elements.get('reviewSave').dispatch('click'); await flush();
+    assert.equal(run.requests.filter(r => r.method !== 'GET').length,0);
+    assert.match(run.text('reportDetail'),/다운로드는 발송이 아닙니다/);
+  }
 });
 
 test('보고서 페이지는 담당 범위 안에서 이동하고 누락 전체 수를 잘라 표시하지 않는다', async () => {
   const run = launch({ screen: 'reports', respond: req => {
     const second = req.url.includes('&page=1');
-    return { total: 21, page: second ? 1 : 0, page_size: 20, next_page: second ? null : 1,
-      rows: [{ company_name: second ? '다음 보고 업체' : '처음 보고 업체', payload: {
+    const report = reportFixture({company_name:second ? '다음 보고 업체' : '처음 보고 업체',payload:{
         missing_count: 130, missing_truncated: true,
         missing: Array.from({ length: 100 }, () => ({ day: '2026-09-01', account_index: 1, reason: 'day_missing' }))
-      } }] };
+      }});
+    return reportResponse([report],req,{total:21,page:second ? 1 : 0,next_page:second ? null : 1});
   } });
-  await flush();
-  assert.match(run.text('reportsRows'), /누락 130건.*앞 100건 표시 · 전체 누락 130건/);
+  await showReport(run);
+  assert.match(run.text('reportDetail'), /누락 130건.*앞 100건 표시 · 전체 누락 130건/);
+  run.buttons('reportDetail').find(button => button.textContent === '← 보고서 목록').dispatch('click'); await flush();
   const next = run.buttons('reportsPages')[0]; next.dispatch('click'); await flush();
   assert.match(run.text('reportsRows'), /다음 보고 업체/);
-  assert.match(run.text('reportsStatus'), /보고서 21건 · 2페이지/);
-  assert.deepEqual(run.buttons('reportsPages').map(el => el.textContent), ['이전 보고서']);
+  assert.match(run.text('reportsStatus'), /관리 중인 광고 계정 21개/);
+  assert.match(run.text('reportsPages'), /2페이지/);
+  assert.deepEqual(run.buttons('reportsPages').map(el => el.textContent), ['이전']);
   run.scope('person:2'); await flush();
   const count = run.requests.length; next.dispatch('click'); await flush();
   assert.equal(run.requests.length, count);
   // 이 fixture는 구버전 전체 응답이므로 다음 페이지부터는 기존 GET 계약으로 호환한다.
-  assert.ok(run.requests.some(req => req.url === '/api/naver-auto/reports?selection=all&page=1'));
+  assert.ok(run.requests.some(req => /\/reports\/accounts\?selection=all&kind=monthly&page=1$/.test(req.url)));
   assert.equal(run.requests.filter(req => req.method !== 'GET').length, 0);
 });
 
@@ -771,20 +822,21 @@ test('관리 입력은 노출되지 않으며 범위 변경 뒤 늦은 조회 �
 
 test('보고서의 늦은 응답은 범위 변경 뒤 복원되지 않으며 검토 입력은 동작하지 않는다', async () => {
   const pending = [];
-  const data = { rows: [{ report_id: 1, company_name: '최초 보고서', can_review: true, status: 'ready', payload: {} }] };
-  const run = launch({ screen: 'reports', respond: req => req.url.includes('selection=all') ? data : new Promise(resolve => pending.push(resolve)) });
+  const report = reportFixture({report_id:1,company_name:'최초 보고서',can_review:true});
+  const run = launch({ screen: 'reports', respond: req => req.url.includes('selection=all') ? reportList([report],req) : new Promise(resolve => pending.push({resolve,request:req})) });
   await flush();
-  assert.deepEqual(run.buttons('reportsRows'), []);
+  assert.deepEqual(run.buttons('reportsRows').map(button => button.textContent), ['보고서 보기']);
   run.elements.get('reviewNote').value = '검토';
   run.scope('person:2'); run.elements.get('reviewSave').dispatch('click');
   run.elements.get('reviewSave').dispatch('click');
   assert.equal(run.requests.filter(r => r.method === 'POST').length, 0);
   assert.equal(run.text('reportsRows'), '');
   run.scope('person:3');
-  pending[1]({ rows: [{ company_name: '최신 보고서', payload: {} }] }); await flush();
-  pending[0](data); await flush();
+  pending[1].resolve(reportList([reportFixture({company_name:'최신 보고서'})],pending[1].request)); await flush();
+  pending[0].resolve(reportList([report],pending[0].request)); await flush();
   assert.match(run.text('reportsRows'), /최신 보고서/);
   assert.doesNotMatch(run.text('reportsRows'), /최초 보고서/);
+  assert.equal(run.requests.filter(r => r.method !== 'GET').length, 0);
 });
 
 test('원천이 낡으면 기존 연결 숫자를 완료로 표시하지 않고 문자열은 텍스트로만 표시한다', async () => {

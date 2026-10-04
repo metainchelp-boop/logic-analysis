@@ -1298,6 +1298,7 @@
         return h('li', null, (names[key] || key) + ' ' + value);
       })),
       (change.changed_days || []).length ? h('p', { class: 'report-meta' }, '변경 실적일 ' + change.changed_days.join(' · ')) : null,
+      change.comparison_changed === true ? h('p', { class: 'report-meta' }, '전주·전월 비교 자료 변경 · 선택 기간의 합계가 같아도 비교 수치는 달라질 수 있습니다.') : null,
       change.completeness_changed === true ? h('p', { class: 'report-meta' }, '완결 상태 변경 · 숫자와 함께 누락·전환 확인 상태를 확인해 주세요.') : null);
   }
   function reportHistory(row) {

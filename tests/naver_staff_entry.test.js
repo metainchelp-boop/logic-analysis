@@ -11,6 +11,7 @@ const vm = require('node:vm');
 const page = path.join(__dirname, '../backend/naver_page');
 const bootstrap = fs.readFileSync(path.join(page, 'sso-bootstrap.js'), 'utf8');
 const app = fs.readFileSync(path.join(page, 'app.js'), 'utf8');
+const reports = fs.readFileSync(path.join(page, 'report-ui.js'), 'utf8');
 const html = fs.readFileSync(path.join(page, 'index.html'), 'utf8');
 const requestId = 'R'.repeat(43);
 const code = 'C'.repeat(43);
@@ -50,6 +51,11 @@ class Element {
 
 function launch(options = {}) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(match => [match[1], new Element()]));
+  function findDynamic(root, id) {
+    if (root.attrs && root.attrs.id === id) return root;
+    for (const child of root.children || []) { const found = findDynamic(child, id); if (found) return found; }
+    return null;
+  }
   const events = new Map();
   const timers = new Map();
   const intervals = new Map();
@@ -91,7 +97,7 @@ function launch(options = {}) {
     visibilityState: 'visible',
     title: '네이버 관제',
     referrer: options.referrer === undefined ? 'https://metainc.co.kr/ad-studio' : options.referrer,
-    getElementById: id => elements.get(id) || null,
+    getElementById: id => elements.get(id) || [...elements.values()].map(el => findDynamic(el, id)).find(Boolean) || null,
     querySelectorAll: () => [],
     querySelector: () => null,
     createElement: () => new Element(),
@@ -124,13 +130,15 @@ function launch(options = {}) {
         status: 200, body: { token: 'synthetic-session-token', expires_in: 3600 }
       }) : url.endsWith('/session/refresh') ? (options.refresh ? options.refresh() : {
         status: 200, body: { token: 'synthetic-refreshed-token', expires_in: 3600 }
-      }) : url.includes('/reports?') ? { status: 200, body: { selection: 'all', rows: [], page: 0, total: 0, next_page: null } } :
+      }) : url.includes('/reports/accounts?') ? { status: 200, body: { selection: 'all', rows: [], page: 0, total: 0, next_page: null,
+        period: {kind:'weekly',start:'2026-09-21',end:'2026-09-27'}, schedule:{} } } :
         (options.me || { status: 200, body: { scope: 'MINE', name: '합성 직원' } });
       return { status: response.status, ok: response.status >= 200 && response.status < 300,
         json: async () => response.body };
     }
   });
   vm.runInContext(bootstrap, context, { filename: 'sso-bootstrap.js' });
+  vm.runInContext(reports, context, { filename: 'report-ui.js' });
   vm.runInContext(app, context, { filename: 'app.js' });
   return {
     window, location, storage, requests, messages, trace, elements, events, timers,
@@ -194,7 +202,7 @@ test('암호화 작업이 늦게 완료되어도 실제 준비 메시지와 화�
   run.message();
   await until(() => run.elements.get('s-reports').classList.contains('on'));
   assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me',
-    '/api/naver-auto/health?runtime=1', '/api/naver-auto/reports?selection=all&view_sync=1']);
+    '/api/naver-auto/health?runtime=1', '/api/naver-auto/reports/accounts?selection=all&kind=weekly&page=0&view_sync=1']);
 });
 
 test('암호화가 끝나지 않으면 대기 제한 시간에 실패하며 무한히 기다리지 않는다', { timeout: 1000 }, async () => {
@@ -316,7 +324,7 @@ test('허용 출처의 정상 로그인은 실제 PKCE와 한 번의 교환을 �
       assert.deepEqual(run.trace, ['clean-url', 'ready', 'fetch', 'fetch', 'fetch', 'fetch']);
       assert.equal(run.location.search, '');
       assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me',
-        '/api/naver-auto/health?runtime=1', '/api/naver-auto/reports?selection=all&view_sync=1']);
+        '/api/naver-auto/health?runtime=1', '/api/naver-auto/reports/accounts?selection=all&kind=weekly&page=0&view_sync=1']);
       assert.deepEqual(run.requests.map(request => request.init.method), ['POST', 'GET', 'GET', 'GET']);
       assert.equal(run.requests[1].init.headers.Authorization, 'Bearer synthetic-session-token');
       for (const request of run.requests) {

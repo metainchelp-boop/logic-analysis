@@ -598,7 +598,7 @@ class ManagedStorageTest(TM.Base):
                     for cid in call.query.get("ids", call.query.get("id", []))][len(first_ids):]
         self.assertEqual(repeated, first_ids)
 
-    def test_corrected_weekly_revision_can_return_to_old_fingerprint_without_resurrecting_review(self):
+    def test_corrected_weekly_values_can_return_without_reusing_source_fingerprint_or_review(self):
         self.confirmed_periods()
         key = "weekly:2026-09-28:2026-10-04"
         self.st.generate_reports(self.fc.now())
@@ -615,8 +615,15 @@ class ManagedStorageTest(TM.Base):
         self.st.generate_reports(self.fc.now())
         third = self.report(key)
         self.assertGreater(third["report_id"], second["report_id"])
-        self.assertEqual(third["revision_fingerprint"], first["revision_fingerprint"])
+        self.assertEqual(third["payload"]["totals"], first["payload"]["totals"])
+        self.assertEqual(third["payload"]["ratios"], first["payload"]["ratios"])
+        self.assertEqual(third["payload"]["details"]["daily"], first["payload"]["details"]["daily"])
+        # 같은 숫자로 복귀해도 v2는 바뀐 원천 판의 증거를 지문에 고정한다.
+        self.assertNotEqual(third["revision_fingerprint"], first["revision_fingerprint"])
         self.assertIsNone(third["review"])
+        self.revise_yesterday({"salesAmt": 1000})
+        self.st.generate_reports(self.fc.now())
+        self.assertEqual(self.report(key)["report_id"], third["report_id"])
 
     def test_manual_request_has_owner_employment_and_one_hour_duplicate_guards(self):
         self.managed()

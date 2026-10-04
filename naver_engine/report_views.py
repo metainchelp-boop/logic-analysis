@@ -116,21 +116,19 @@ def accounts(ctx, store, scope, owns, query):
     if page and page*PAGE_SIZE >= total:
         raise QueryInvalid()
     page_rows = rows[page*PAGE_SIZE:(page+1)*PAGE_SIZE]
-    latest = {r["possibility_id"]: r for r in store.report_snapshots()
-              if r["possibility_id"] in companies and r["period_key"] == period.key}
+    latest = store.report_latest_ids(period.key, sorted({row["possibility_id"] for row in page_rows}))
     snapshots = {}
     for row in page_rows:
-        report = latest.get(row["possibility_id"])
-        if report is None:
+        rid = latest.get(row["possibility_id"])
+        if rid is None:
             continue
-        rid = report["report_id"]
         if rid not in snapshots:
             snapshots[rid] = store.report_snapshot_detail(rid)
         raw = snapshots[rid]
         selected = _account_payload(raw["payload"], row["account_key"]) if raw else None
         if raw is None or (raw["payload"].get("format_version") == 2 and selected is None):
             continue
-        row.update(report_id=rid, revision_no=report.get("revision_no"), generated_at=report["generated_at"],
+        row.update(report_id=rid, revision_no=raw.get("revision_no"), generated_at=raw["generated_at"],
                    status=selected["status"] if selected else "collecting",
                    details_status=selected.get("details", {}).get("status", "legacy_unavailable") if selected else "legacy_unavailable")
     return {"rows": page_rows, "total": total, "page": page,

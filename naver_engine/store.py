@@ -1519,7 +1519,7 @@ def _report_generate(store, now):
                     WHERE possibility_id=? AND period_key=? ORDER BY report_id DESC LIMIT 1""", (pid, period.key)))
                 report = R.snapshot(period, expected, rows, now, has_open_issues=pid in issues,
                                     previous_customers=prior_expected, previous_rows=prior_rows)
-                if previous and json.loads(previous[0]["payload_json"]).get("format_version", 1) < R.FORMAT_VERSION \
+                if len(previous) > 0 and json.loads(previous[0]["payload_json"]).get("format_version", 1) < R.FORMAT_VERSION \
                         and not (report["coverage"]["basic_complete_account_days"] or
                                  report["coverage"]["conversion_complete_account_days"]):
                     # 입증할 원천이 없는 옛 판은 미보관 표시로 남긴다. 빈 새 판으로 대체하지 않는다.
@@ -1568,7 +1568,7 @@ def _report_generate(store, now):
                                                                required_after={cid: required_after[cid]})
                         old_account = (old_payload or {}).get("_account_reports", {}).get(cid)
                         account.update(revision_no=revision,
-                            change_summary=R.revision_metadata(old_account, account, previous["report_id"] if previous else None),
+                            change_summary=R.revision_metadata(old_account, account, previous["report_id"] if previous is not None else None),
                             validation=_report_public_validation(account_validation))
                         reference_for(account, (prior_payload or {}).get("_account_reports", {}).get(cid))
                     if old_payload is not None and old_payload.get("format_version", 1) < R.FORMAT_VERSION:
@@ -1679,6 +1679,23 @@ def _report_snapshots(store):
                 WHERE n.possibility_id=r.possibility_id AND n.period_key=r.period_key)
             ORDER BY generated_at DESC,report_id DESC"""))
         return _report_present(store, rows, current=True)
+
+
+def _report_latest_ids(store, period_key, possibility_ids):
+    """현재 목록 한 페이지의 최신 판 ID만 읽으며 상세 JSON은 파싱하지 않는다."""
+    _report_period(period_key)
+    ids = tuple(possibility_ids)
+    if len(ids) > 20:
+        raise StoreRefused("보고서 목록은 최대 20개 업체씩 조회합니다")
+    for pid in ids:
+        _pos_int(pid, "업체")
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    with _report_read_snapshot(store):
+        return dict(store._conn.execute("""SELECT possibility_id,MAX(report_id)
+            FROM naver_auto_report_snapshot WHERE period_key=? AND possibility_id IN ("""+
+            placeholders+") GROUP BY possibility_id", (period_key, *ids)).fetchall())
 
 
 def _report_history(store, possibility_id, actor, now, *, period_key=None, before_report_id=None, limit=20):
@@ -2682,6 +2699,9 @@ class ManagedStorage:
 
     def report_snapshot_detail(self, report_id):
         return _report_snapshot_detail(self, report_id)
+
+    def report_latest_ids(self, period_key, possibility_ids):
+        return _report_latest_ids(self, period_key, possibility_ids)
 
     def report_history(self, possibility_id, actor, now, *, period_key=None, before_report_id=None, limit=20):
         return _report_history(self, possibility_id, actor, now, period_key=period_key,

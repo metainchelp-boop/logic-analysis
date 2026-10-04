@@ -152,6 +152,76 @@ function findButton(element, label) {
 }
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 
+function findClass(element, name) {
+  if (element.classList.contains(name)) return element;
+  for (const child of element.children) { const found = findClass(child, name); if (found) return found; }
+  return null;
+}
+
+async function renderReportFixture(report) {
+  const fixture = harness();
+  const first = fixture.ui.load();
+  fixture.requests[0].resolve(full());
+  await first;
+  findButton(fixture.$('reportsRows'), '보고서 보기').fire('click');
+  fixture.requests[1].resolve(report);
+  await flush();
+  return fixture;
+}
+
+test('누락 목록은 날짜·계정순번과 알려진 한국어 사유·지표만 최대 100건 표시한다', async () => {
+  const report = detailData();
+  report.payload.missing = Array.from({length: 120}, (_, index) => ({
+    day: '2026-09-21', account_index: index + 1, reason: 'day_missing', metrics: ['imp', 'clk', 'spend']
+  }));
+  report.payload.missing[1].reason = 'source_unverified';
+  report.payload.missing[2].reason = 'metrics_incomplete';
+  report.payload.missing[2].metrics = ['conversions', 'conversion_value'];
+  report.payload.missing[3].reason = 'PRIVATE_REASON_TOKEN';
+  report.payload.missing[3].metrics = ['PRIVATE_METRIC_TOKEN'];
+  report.payload.missing_count = 125;
+  report.payload.missing_truncated = true;
+  const fixture = await renderReportFixture(report);
+  const section = findClass(fixture.$('reportDetail'), 'report-missing');
+  assert.ok(section, '구체적인 누락 목록이 있어야 합니다');
+  assert.match(section.textContent, /누락 125건/);
+  assert.match(section.textContent, /2026-09-21 · 계정 순번 1 · 해당 날짜 미수집 · 노출·클릭·광고비/);
+  assert.match(section.textContent, /원천 확인 전/);
+  assert.match(section.textContent, /일부 지표 미수신 · 전환·전환 매출/);
+  assert.match(section.textContent, /사유 미확인 · 지표 미확인/);
+  assert.match(section.textContent, /앞 100건 표시 · 전체 누락 125건/);
+  assert.doesNotMatch(section.textContent, /PRIVATE_|계정 순번 101/);
+});
+
+test('확인된 빈 누락 배열과 이전 판 미보관·상세 없는 양수 건수를 구분한다', async () => {
+  const cases = [
+    {patch: {missing: [], missing_count: 0}, knownZero: true},
+    {patch: {missing: [], format_version: 1, details: {status: 'legacy_unavailable'}}, knownZero: true},
+    {patch: {missing: [], missing_count: null, format_version: 1,
+      details: {status: 'legacy_unavailable'}}, knownZero: false},
+    {patch: {}, knownZero: false},
+    {patch: {missing_count: 0}, knownZero: false},
+    {patch: {missing: [], missing_count: 5}, knownZero: false, count: 5}
+  ];
+  for (const item of cases) {
+    const report = detailData();
+    Object.assign(report.payload, item.patch);
+    const fixture = await renderReportFixture(report);
+    const section = findClass(fixture.$('reportDetail'), 'report-missing');
+    assert.ok(section);
+    if (item.knownZero) {
+      assert.match(section.textContent, /누락 0건/);
+      assert.match(section.textContent, /서버가 보고한 누락이 없습니다/);
+    } else {
+      assert.doesNotMatch(section.textContent, /누락 0건|누락이 없습니다|누락 없음/);
+      if (item.count) {
+        assert.match(section.textContent, /전체 누락 5건/);
+        assert.match(section.textContent, /누락 상세가 보관되지 않았거나 확인되지 않았습니다/);
+      } else assert.match(section.textContent, /누락 상세 미보관·미확인/);
+    }
+  }
+});
+
 test('미생성 기간 상세에서 재진입하면 목록을 재검증한 뒤 신선도 게이트를 해제한다', async () => {
   for (const nextReportId of [null, 8]) {
     const fixture = harness();

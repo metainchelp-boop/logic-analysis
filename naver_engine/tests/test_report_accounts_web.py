@@ -111,6 +111,43 @@ class ReportAccountsWebTest(unittest.TestCase):
         self.assertNotIn(b"PRIVATE-ID", raw)
         self.assertNotIn(str(TW.A).encode(), raw)
 
+    def test_account_list_parses_only_latest_snapshots_in_the_visible_requested_period(self):
+        self.seed_report(1, spend=100)
+        self.seed_report(2, spend=200)
+        self.seed_report(3, spend=900, anchor="2026-09-14")
+        self.seed_report(4, pid=12, cid=TW.B)
+        self.store._conn.execute("""UPDATE naver_auto_report_snapshot SET payload_json=?
+            WHERE report_id IN (1,3,4)""", ("not-json-outside-request",))
+
+        status, body, _, _ = self.get()
+        self.assertEqual(status, 200, body)
+        self.assertEqual([(row["possibility_id"], row["report_id"], row["revision_no"])
+                          for row in body["rows"]], [(11, 2, 2)])
+
+    def test_latest_report_ids_are_bounded_read_only_and_do_not_parse_payloads(self):
+        self.seed_report(1)
+        self.seed_report(2)
+        self.seed_report(3, anchor="2026-09-14")
+        self.seed_report(4, pid=12, cid=TW.B)
+        self.store._conn.execute("UPDATE naver_auto_report_snapshot SET payload_json=?", ("not-json",))
+        period = R.period("weekly", date(2026, 9, 21)).key
+        before = self.store._conn.total_changes
+        self.assertEqual(self.store.report_latest_ids(period, list(range(11, 31))), {11: 2, 12: 4})
+        self.assertEqual(self.store.report_latest_ids(period, [11, 11]), {11: 2})
+        self.assertEqual(self.store._conn.total_changes, before)
+        for invalid in (list(range(11, 32)), [0], [True], ["11) OR 1=1 --"]):
+            with self.subTest(ids=invalid), self.assertRaises(S.StoreRefused):
+                self.store.report_latest_ids(period, invalid)
+        with self.assertRaises(S.StoreRefused):
+            self.store.report_latest_ids("weekly:2026-09-21:2026-09-27' OR 1=1 --", [11])
+        statements = []
+        self.store._conn.set_trace_callback(statements.append)
+        try:
+            self.assertEqual(self.store.report_latest_ids(period, []), {})
+            self.assertEqual(statements, [])
+        finally:
+            self.store._conn.set_trace_callback(None)
+
     def test_account_revalidation_is_not_the_whole_company_revalidation(self):
         self.seed_report()
         key = hashlib.sha256(str(TW.A).encode()).hexdigest()
@@ -215,8 +252,16 @@ class ReportAccountsWebTest(unittest.TestCase):
         self.assertEqual((first["total"], len(first["rows"]), first["next_page"]), (25, 20, 1))
         last = self.get(query="kind=weekly&anchor=2026-09-21&page=1", actor=0)[1]
         self.assertEqual(len(last["rows"]), 5)
+        self.seed_report(1)
+        self.seed_report(2, pid=35, cid=TW.A+24)
+        self.store._conn.execute("UPDATE naver_auto_report_snapshot SET payload_json=? WHERE report_id=1",
+                                 ("not-json-outside-page",))
+        status, last, _, _ = self.get(query="kind=weekly&anchor=2026-09-21&page=1", actor=0)
+        self.assertEqual(status, 200, last)
+        self.assertEqual(next(row["report_id"] for row in last["rows"] if row["possibility_id"] == 35), 2)
         found = self.get(query="kind=weekly&anchor=2026-09-21&q=8000024", actor=0)[1]
         self.assertEqual((found["total"], found["rows"][0]["ad_account_no"]), (1, "8000024"))
+        self.assertEqual(found["rows"][0]["report_id"], 2)
         hidden = self.get(query="kind=weekly&anchor=2026-09-21&q=8000024")[1]
         self.assertEqual((hidden["total"], hidden["rows"]), (0, []))
 

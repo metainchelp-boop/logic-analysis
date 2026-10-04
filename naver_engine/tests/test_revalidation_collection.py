@@ -114,7 +114,10 @@ class RevalidationStorageBoundaryTest(unittest.TestCase):
             self.assertEqual((saved["spend"], saved["source_revision"]), (spend, revision))
             self.assertEqual(saved["checked_at"], S._kst_text(self.st.now, "시험"))
         self.assertEqual(self.st._conn.execute("SELECT COUNT(*) FROM naver_auto_daily_revision").fetchone()[0], 2)
-        self.assertEqual(self.st._conn.execute("SELECT COUNT(*) FROM naver_auto_report_dirty WHERE pending=1").fetchone()[0], 2)
+        # 정정일의 두 기간뿐 아니라 그 값을 직전 비교로 쓰는 다음 두 기간도 대기한다.
+        self.assertEqual(set(self.st._conn.execute("SELECT possibility_id,period_key FROM naver_auto_report_dirty WHERE pending=1")), {
+            (11, "weekly:2026-09-28:2026-10-04"), (11, "weekly:2026-10-05:2026-10-11"),
+            (11, "monthly:2026-10-01:2026-10-31"), (11, "monthly:2026-11-01:2026-11-30")})
 
     def test_older_source_and_generation_cannot_overwrite_verified_success(self):
         job = self.st.job()
@@ -161,7 +164,9 @@ class RevalidationStorageBoundaryTest(unittest.TestCase):
         self.st.advance(timedelta(hours=1))
         self.st._conn.execute("UPDATE naver_auto_report_dirty SET pending=0")
         self.st.performance_manual_request(A,100,self.st.now,start=day,end=day,possibility_id=11)
-        self.assertEqual(self.st._conn.execute("SELECT COUNT(*) FROM naver_auto_report_dirty WHERE pending=1").fetchone()[0], 2)
+        self.assertEqual(set(self.st._conn.execute("SELECT possibility_id,period_key FROM naver_auto_report_dirty WHERE pending=1")), {
+            (11, "weekly:2026-09-28:2026-10-04"), (11, "weekly:2026-10-05:2026-10-11"),
+            (11, "monthly:2026-10-01:2026-10-31"), (11, "monthly:2026-11-01:2026-11-30")})
         queued = self.st.performance_checks(self.st.now)[A]["revalidation"]
         self.assertEqual((queued["status"], queued["checked_at"], queued["kind"]), ("pending",None,"manual_period"))
         manual = next(j for j in self.st.performance_work(self.st.now) if j["kind"] == "manual_period")

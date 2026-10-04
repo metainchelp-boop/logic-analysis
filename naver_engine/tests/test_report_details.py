@@ -116,6 +116,25 @@ class ReportDetailTests(unittest.TestCase):
         self.assertEqual(first["details"]["comparison"]["totals"], changed["details"]["comparison"]["totals"])
         self.assertNotEqual(first["revision_fingerprint"], changed["revision_fingerprint"])
 
+    def test_restored_values_have_new_source_revision_but_time_only_rechecks_keep_fingerprint(self):
+        rows = daily_rows()
+        for row in rows:
+            row["source_revision"] = 1
+        first = R.snapshot(WEEK, (101,), rows, NOW)
+        rows[0].update(spend=2000, source_revision=2)
+        changed = R.snapshot(WEEK, (101,), rows, NOW)
+        rows[0].update(spend=1000, source_revision=3)
+        restored = R.snapshot(WEEK, (101,), rows, NOW)
+        self.assertEqual(restored["totals"], first["totals"])
+        self.assertEqual(restored["details"]["daily"], first["details"]["daily"])
+        self.assertEqual(len({report["revision_fingerprint"] for report in (first, changed, restored)}), 3)
+        self.assertEqual(restored["_source_manifest"][0]["source_revision"], 3)
+        later = NOW+timedelta(hours=1)
+        for row in rows:
+            row.update(checked_at=later.isoformat(), source_at=later.isoformat(), source_generation=later.isoformat())
+        rechecked = R.snapshot(WEEK, (101,), rows, later)
+        self.assertEqual(rechecked["revision_fingerprint"], restored["revision_fingerprint"])
+
     def test_extreme_small_comparison_denominator_never_creates_infinite_json_numbers(self):
         prior = R.previous_period(WEEK)
         older = daily_rows(prior)

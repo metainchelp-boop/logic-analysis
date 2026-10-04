@@ -132,9 +132,10 @@
           cells.forEach(function (cell,index) { cell.setAttribute('data-label',labels[index]); });
           return h.apply(null,['tr',{'data-account-key':row.account_key,'data-report':row.report_id}].concat(cells));
         })))) : h('div',{class:'card empty'},filter.q ? '검색 조건에 맞는 관리 계정이 없습니다. 업체명이나 광고 계정 ID를 다시 확인해 주세요.' : '현재 담당 범위에 연결된 실관리 광고 계정이 없습니다. 이관 현황에서 계정 연결을 확인해 주세요.'));
-      put($('reportsPages'),filter.page > 0 ? h('button',{type:'button',class:'btn',onclick:function () { load(filter.page-1); }},'이전') : null,
+      function page(next) { if (listReady && !selected && context() === ctx && env.active() && lastList === data) load(next); }
+      put($('reportsPages'),filter.page > 0 ? h('button',{type:'button',class:'btn',onclick:function () { page(data.page-1); }},'이전') : null,
         h('span',{class:'hint'},String(filter.page+1) + '페이지'),data.next_page !== null && typeof data.next_page === 'number' ?
-          h('button',{type:'button',class:'btn',onclick:function () { load(data.next_page); }},'다음') : null);
+          h('button',{type:'button',class:'btn',onclick:function () { page(data.next_page); }},'다음') : null);
     }
     function detailPath(reportId,account) { return '/reports/detail?report_id=' + reportId + '&account_key=' + encodeURIComponent(account); }
     function open(row,account) {
@@ -247,9 +248,29 @@
             h('p',{class:'report-meta'},'기본 지표 ' + env.num((p.coverage || {}).basic_complete_account_days) + '/' + env.num((p.coverage || {}).expected_account_days) +
               ' 계정×일 · 전환 지표 ' + env.num((p.coverage || {}).conversion_complete_account_days) + '/' + env.num((p.coverage || {}).expected_account_days) + ' 계정×일'),
             h('p',{class:'hint'},'누락된 일자나 지표는 0이 아닙니다. 부분 집계 PDF에도 미확인 범위를 표시합니다.'),
-            h('details',{class:'nr-day-table'},h('summary',null,'일별 숫자 보기'),dailyTable(detail.daily || [])),history(report,mark,ctx)),
+            missingDetails(p),h('details',{class:'nr-day-table'},h('summary',null,'일별 숫자 보기'),dailyTable(detail.daily || [])),history(report,mark,ctx)),
           h('footer',{class:'nr-report-footer'},'META I&C · 네이버 광고 성과 보고서',h('span',null,'다운로드는 발송이 아닙니다. 사본은 이후 정정되어도 자동 변경되지 않습니다.'))));
       renderChart(report);
+    }
+    function missingDetails(payload) {
+      var rows = Array.isArray(payload.missing) ? payload.missing : null;
+      var count = rows ? rows.length : null;
+      if (Object.prototype.hasOwnProperty.call(payload,'missing_count')) count = rows && Number.isSafeInteger(payload.missing_count) &&
+        payload.missing_count >= rows.length ? payload.missing_count : null;
+      var reasons = {day_missing:'해당 날짜 미수집',source_unverified:'원천 확인 전',metrics_incomplete:'일부 지표 미수신'};
+      var metrics = {imp:'노출',impressions:'노출',clk:'클릭',clicks:'클릭',spend:'광고비',conversions:'전환',conversion_value:'전환 매출'};
+      function label(labels,key,fallback) { return typeof key === 'string' && Object.prototype.hasOwnProperty.call(labels,key) ? labels[key] : fallback; }
+      var shown = (rows || []).slice(0,100);
+      return h('details',{class:'report-missing'},h('summary',null,count === null ? '누락 상세 미보관·미확인' : '누락 ' + env.num(count) + '건 · 날짜·지표 확인'),
+        shown.length ? h('ul',null,shown.map(function (item) {
+          item = item && typeof item === 'object' ? item : {};
+          var day = typeof item.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.day) ? item.day : '날짜 미확인';
+          var index = Number.isSafeInteger(item.account_index) && item.account_index > 0 ? env.num(item.account_index) : '미확인';
+          var names = Array.isArray(item.metrics) && item.metrics.length ? item.metrics.slice(0,16).map(function (key) { return label(metrics,key,'지표 미확인'); }).join('·') : '지표 미확인';
+          return h('li',null,day + ' · 계정 순번 ' + index + ' · ' + label(reasons,item.reason,'사유 미확인') + ' · ' + names);
+        })) : h('p',null,count === 0 ? '서버가 보고한 누락이 없습니다. 집계 범위와 생성 상태는 별도로 확인해 주세요.' :
+          '이 판의 누락 상세가 보관되지 않았거나 확인되지 않았습니다.'),
+        count !== null && count > shown.length ? h('p',{class:'hint'},'앞 ' + env.num(shown.length) + '건 표시 · 전체 누락 ' + env.num(count) + '건') : null);
     }
     function dailyTable(days) {
       return days.length ? h('table',null,h('thead',null,h('tr',null,['날짜','광고비','노출','클릭','전환','상태'].map(function (name) { return h('th',null,name); }))),
@@ -263,6 +284,7 @@
         read();
       }},h('summary',null,'이전 판 · 정정 이력'),content);
       function read(before) {
+        if (!fresh(mark,ctx) || displayed !== report) return;
         return env.api('GET','/reports/history?possibility_id=' + report.possibility_id + '&period_key=' + encodeURIComponent(report.period_key) + '&limit=20' +
           (before ? '&before_report_id=' + before : '')).then(function (data) {
           if (!fresh(mark,ctx)) return;
