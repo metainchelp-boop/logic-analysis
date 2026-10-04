@@ -33,10 +33,12 @@ from naver_engine.session import load_token_secret
 OPENSSL = "/usr/bin/openssl"
 BRANCH = "refs/heads/codex/naver-ad-account-matching-20261001"
 ACCOUNT_FIRST_BRANCH = "refs/heads/codex/naver-account-first-20261002"
-ACCOUNT_FIRST_COMMIT = "0a302856c6177c4f53145abaf9ed31b6a39654f3"
+ACCOUNT_FIRST_COMMIT = "a38c53775c112cdf5db420f979093d6bee9e5376"
 # 승인된 관리 경로 생성 영수증 36806904207. 입력값으로 이 지문을 바꿀 수 없다.
 SERVER_CERT_PEM_SHA256 = "8edff7ceaa6538bc91df7ebd1723bc6889dbebb232e1955d8dfa4131c4a5acc7"
 MAX_BUNDLE = 2 * 1024 * 1024
+MAX_PAYLOAD = 3 * 1024 * 1024
+PAYLOAD_GZIP_MAGIC = b"NAVER-PREVIEW-PAYLOAD-GZIP-1\n"
 SECRET_NAMES = (
     "SSO_NAVER_CONTROL_CLIENT_KEY", "NAVER_ENGINE_ERP_KEY", "NAVER_AUTO_TOKEN_SECRET",
     "NAVER_MGR_CUSTOMER_ID", "NAVER_MGR_API_KEY", "NAVER_MGR_SECRET_KEY",
@@ -162,7 +164,9 @@ def new_file(path, content):
         os.fsync(stream.fileno())
 
 
-def seal_bundle(env, certificate, output, *, source_commit, source_tar_gz):
+def seal_bundle(env, certificate, output, *, source_commit, source_tar_gz, compress_payload=False):
+    if type(compress_payload) is not bool:
+        raise SealError("INVALID_PAYLOAD_ENCODING")
     cert, normalized = public_certificate(certificate)
     certificate_sha256 = hashlib.sha256(normalized.encode("ascii")).hexdigest()
     if certificate_sha256 != SERVER_CERT_PEM_SHA256:
@@ -175,6 +179,12 @@ def seal_bundle(env, certificate, output, *, source_commit, source_tar_gz):
                           "source_commit": source_commit,
                           "source_tar_gz_b64": base64.b64encode(source_tar_gz).decode("ascii")},
                          ensure_ascii=True, separators=(",", ":")).encode("ascii")
+    if compress_payload:
+        if source_commit != ACCOUNT_FIRST_COMMIT:
+            raise SealError("UNAPPROVED_COMPRESSED_SOURCE")
+        if len(payload) > MAX_PAYLOAD:
+            raise SealError("PAYLOAD_TOO_LARGE")
+        payload = PAYLOAD_GZIP_MAGIC + gzip.compress(payload, mtime=0)
     if len(payload) >= MAX_BUNDLE - 4096:
         raise SealError("BUNDLE_TOO_LARGE")
     output = Path(output)
@@ -223,7 +233,8 @@ def main():
         source_commit = ACCOUNT_FIRST_COMMIT if branch == ACCOUNT_FIRST_BRANCH else os.environ.get("GITHUB_SHA", "")
         source = source_archive(source_commit, checkout_commit=os.environ.get("GITHUB_SHA", ""))
         receipt = seal_bundle(os.environ, certificate, os.environ.get("PREVIEW_SEAL_OUTPUT", ""),
-                              source_commit=source_commit, source_tar_gz=source)
+                              source_commit=source_commit, source_tar_gz=source,
+                              compress_payload=branch == ACCOUNT_FIRST_BRANCH)
         print(json.dumps(receipt, sort_keys=True))
         return 0
     except SealError as error:

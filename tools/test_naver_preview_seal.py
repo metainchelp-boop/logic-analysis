@@ -1,5 +1,6 @@
 """실제 합성 RSA/Ed25519·OpenSSL 시험. 운영 키·네트워크·서버는 사용하지 않는다."""
 import contextlib
+import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 import gzip
@@ -8,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+import random
 import subprocess
 import sys
 import tarfile
@@ -73,10 +75,19 @@ class SealTest(unittest.TestCase):
                 serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode() + "\n",
         }
 
-    def seal(self, env=None, cert=None):
+    def seal(self, env=None, cert=None, *, compress_payload=False, source_tar_gz=b"synthetic-source"):
         with patch.object(P, "OPENSSL", OPENSSL):
             return P.seal_bundle(self.env if env is None else env, self.cert if cert is None else cert,
-                                 self.output, source_commit="a" * 40, source_tar_gz=b"synthetic-source")
+                                 self.output, source_commit=P.ACCOUNT_FIRST_COMMIT if compress_payload else "a" * 40,
+                                 source_tar_gz=source_tar_gz, compress_payload=compress_payload)
+
+    def decrypted_wire(self):
+        private = self.root / "synthetic-decryption-key.pem"
+        private.write_bytes(self.key.private_bytes(serialization.Encoding.PEM,
+                            serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        return subprocess.run([OPENSSL, "cms", "-decrypt", "-binary", "-inform", "DER",
+                               "-in", str(self.output / "runtime-secrets.cms"), "-inkey", str(private)],
+                              capture_output=True, timeout=10, check=True).stdout
 
     def test_roundtrip_contains_exact_runtime_and_backup_files_only(self):
         receipt = self.seal()
@@ -108,6 +119,90 @@ class SealTest(unittest.TestCase):
         self.assertEqual(receipt["ciphertext_size"], len(cipher))
         self.assertLess(len(cipher), 20 * 1024)
         self.assertEqual({p.name for p in self.output.iterdir()}, {"runtime-secrets.cms", "receipt.json"})
+
+    def test_compressed_approved_source_roundtrip_preserves_schema_one_and_source_bytes(self):
+        commit = "a38c53775c112cdf5db420f979093d6bee9e5376"
+        source = b"synthetic-approved-source"
+        with patch.object(P, "OPENSSL", OPENSSL):
+            receipt = P.seal_bundle(self.env, self.cert, self.output, source_commit=commit,
+                                    source_tar_gz=source, compress_payload=True)
+        wire = self.decrypted_wire()
+        magic = b"NAVER-PREVIEW-PAYLOAD-GZIP-1\n"
+        self.assertTrue(wire.startswith(magic))
+        raw = gzip.decompress(wire[len(magic):])
+        self.assertEqual(wire, magic + gzip.compress(raw, mtime=0))
+        payload = json.loads(raw)
+        self.assertEqual(payload["schema"], 1)
+        self.assertEqual(payload["purpose"], "naver-owner-verification-runtime")
+        self.assertEqual(payload["source_commit"], commit)
+        self.assertEqual(base64.b64decode(payload["source_tar_gz_b64"], validate=True), source)
+        self.assertEqual(payload["files"], P.runtime_files(self.env))
+        self.assertEqual(receipt["source_tar_gz_sha256"], hashlib.sha256(source).hexdigest())
+        self.assertEqual({p.name for p in self.output.iterdir()}, {"runtime-secrets.cms", "receipt.json"})
+
+    def test_compressed_encoding_is_explicit_boolean_and_requires_approved_pin(self):
+        for index, value in enumerate((None, 1, "true")):
+            with self.subTest(value=value), patch.object(P, "OPENSSL", OPENSSL), \
+                    self.assertRaisesRegex(P.SealError, "INVALID_PAYLOAD_ENCODING"):
+                P.seal_bundle(self.env, self.cert, self.root / ("invalid-encoding-" + str(index)),
+                              source_commit=P.ACCOUNT_FIRST_COMMIT, source_tar_gz=b"source", compress_payload=value)
+        with self.assertRaisesRegex(P.SealError, "UNAPPROVED_COMPRESSED_SOURCE"):
+            P.seal_bundle(self.env, self.cert, self.output, source_commit="a" * 40,
+                          source_tar_gz=b"source", compress_payload=True)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_approved_full_source_and_max_runtime_lengths_fit_unchanged_wire_and_cipher_limits(self):
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
+                              check=True, timeout=10).stdout.decode().strip()
+        source = P.source_archive(P.ACCOUNT_FIRST_COMMIT, checkout_commit=head)
+        rng = random.Random(20261004)
+        def text(size):
+            return "".join(chr(rng.randrange(33, 127)) for _ in range(size))
+        env = {**self.env, "SSO_NAVER_CONTROL_CLIENT_KEY": "f" * 64,
+               "NAVER_ENGINE_ERP_KEY": text(256), "NAVER_AUTO_TOKEN_SECRET": text(512),
+               "NAVER_MGR_CUSTOMER_ID": "9" * 15, "NAVER_MGR_API_KEY": text(512),
+               "NAVER_MGR_SECRET_KEY": text(512)}
+        receipt = self.seal(env=env, compress_payload=True, source_tar_gz=source)
+        wire = self.decrypted_wire()
+        raw = gzip.decompress(wire[len(P.PAYLOAD_GZIP_MAGIC):])
+        payload = json.loads(raw)
+        self.assertEqual(base64.b64decode(payload["source_tar_gz_b64"], validate=True), source)
+        self.assertEqual(receipt["source_tar_gz_sha256"], hashlib.sha256(source).hexdigest())
+        self.assertEqual(P.MAX_BUNDLE, 2 * 1024 * 1024)
+        self.assertEqual(P.MAX_PAYLOAD, 3 * 1024 * 1024)
+        self.assertLess(len(source), P.MAX_BUNDLE)
+        self.assertLess(len(wire), P.MAX_BUNDLE - 4096)
+        self.assertLessEqual(receipt["ciphertext_size"], P.MAX_BUNDLE)
+        self.assertLessEqual(len(raw), P.MAX_PAYLOAD)
+        # Conservative size-only bound, not credentials accepted by runtime_files:
+        # real env max 2670 bytes; certificate/key <=4096, and even the fixed ECDSA host
+        # line receives 4096 here. Incompressible printable text overstates PEM entropy.
+        self.assertEqual(len(payload["files"][0]["content"]), 2670)
+        for row in payload["files"][1:]:
+            row["content"] = text(4096)
+        self.assertEqual(sum(len(row["content"]) for row in payload["files"]), 14958)
+        bounded = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+        self.assertLessEqual(len(bounded), P.MAX_PAYLOAD)
+        self.assertLess(len(P.PAYLOAD_GZIP_MAGIC + gzip.compress(bounded, mtime=0)), P.MAX_BUNDLE - 4096)
+
+    def test_compressed_json_wire_and_ciphertext_overflow_are_refused_before_output(self):
+        with patch.object(P, "MAX_PAYLOAD", 1), self.assertRaisesRegex(P.SealError, "PAYLOAD_TOO_LARGE"):
+            self.seal(compress_payload=True)
+        self.assertFalse(self.output.exists())
+        source = random.Random(20261004).randbytes(P.MAX_BUNDLE - 1)
+        with self.assertRaisesRegex(P.SealError, "BUNDLE_TOO_LARGE"):
+            self.seal(compress_payload=True, source_tar_gz=source)
+        self.assertFalse(self.output.exists())
+        oversized = subprocess.CompletedProcess([], 0, stdout=b"x" * (P.MAX_BUNDLE + 1))
+        with patch.object(P.subprocess, "run", return_value=oversized), \
+                self.assertRaisesRegex(P.SealError, "CIPHERTEXT_TOO_LARGE"):
+            self.seal(compress_payload=True)
+        self.assertFalse(self.output.exists())
+        # Legacy mode must still refuse JSON beyond its original 2MiB-4096 bound,
+        # even if its repetitive source could fit the compressed encoding.
+        with self.assertRaisesRegex(P.SealError, "BUNDLE_TOO_LARGE"):
+            self.seal(source_tar_gz=b"x" * (1600 * 1024))
+        self.assertFalse(self.output.exists())
 
     def test_invalid_public_certificates_are_rejected_before_output(self):
         expired = certificate(self.key, expired=True)
@@ -180,15 +275,18 @@ class SealTest(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_tampered_ciphertext_is_not_accepted_by_real_openssl(self):
-        self.seal()
         private = self.root / "synthetic-key.pem"
         private.write_bytes(self.key.private_bytes(serialization.Encoding.PEM,
                             serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
-        cipher = bytearray((self.output / "runtime-secrets.cms").read_bytes())
-        cipher[-5] ^= 1
-        result = subprocess.run([OPENSSL, "cms", "-decrypt", "-binary", "-inform", "DER", "-inkey", str(private)],
-                                 input=bytes(cipher), capture_output=True, timeout=10)
-        self.assertNotEqual(result.returncode, 0)
+        for compressed in (False, True):
+            with self.subTest(compressed=compressed):
+                self.output = self.root / ("cipher-" + str(compressed))
+                self.seal(compress_payload=compressed)
+                cipher = bytearray((self.output / "runtime-secrets.cms").read_bytes())
+                cipher[-5] ^= 1
+                result = subprocess.run([OPENSSL, "cms", "-decrypt", "-binary", "-inform", "DER", "-inkey", str(private)],
+                                         input=bytes(cipher), capture_output=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
 
     def workflow_env(self):
         return {**self.env, "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": P.BRANCH,
@@ -209,6 +307,9 @@ class SealTest(unittest.TestCase):
             "public_certificate_sha256", "source_commit", "source_tar_gz_sha256"})
         self.assertEqual({p.name for p in self.root.iterdir()}, {"cipher-only"})
         self.assertTrue(all(p.stat().st_mode & 0o777 == 0o600 for p in self.output.iterdir()))
+        legacy = self.decrypted_wire()
+        self.assertTrue(legacy.startswith(b"{"))
+        self.assertEqual(json.loads(legacy)["schema"], 1)
 
     def test_account_first_cli_seals_only_approved_source_commit(self):
         # Release tooling may advance, but the approved application archive must not.
@@ -220,9 +321,10 @@ class SealTest(unittest.TestCase):
              contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             self.assertEqual(P.main(), 0)
         receipt = json.loads(stdout.getvalue())
-        self.assertEqual(receipt["source_commit"], "0a302856c6177c4f53145abaf9ed31b6a39654f3")
+        self.assertEqual(receipt["source_commit"], "a38c53775c112cdf5db420f979093d6bee9e5376")
         self.assertEqual(receipt["source_tar_gz_sha256"], hashlib.sha256(b"APPROVED_SOURCE").hexdigest())
         self.assertEqual(stderr.getvalue(), "")
+        self.assertTrue(self.decrypted_wire().startswith(b"NAVER-PREVIEW-PAYLOAD-GZIP-1\n"))
 
     def test_cli_context_wrong_modes_and_subprocess_errors_never_leak(self):
         for field, value in (("GITHUB_EVENT_NAME", "push"), ("GITHUB_REF", "refs/heads/main"),
