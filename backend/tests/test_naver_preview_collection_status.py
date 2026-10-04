@@ -21,6 +21,57 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
+    def test_emitted_identity_failure_returns_only_fixed_diagnostic_not_partial_counts(self):
+        output = io.StringIO()
+        with patch.object(os, 'geteuid', return_value=0), contextlib.redirect_stdout(output):
+            exec(compile(M.script(reports=True), '<failed-status-script>', 'exec'), {})
+        self.assertEqual(json.loads(output.getvalue()), {'diagnostic_failure': {
+            'stage':'identity', 'error_kind':'ValueError', 'sqlite_primary':None}})
+
+    def test_emitted_reports_sql_failure_preserves_original_stage_through_cleanup(self):
+        for close_fails in (False, True):
+            with self.subTest(close_fails=close_fails):
+                result, output = self.complete_emitted_fixture(deny_json=True, close_fails=close_fails)
+                self.assertEqual(result, {'diagnostic_failure': {
+                    'stage':'reports', 'error_kind':'OperationalError', 'sqlite_primary':'SQLITE_ERROR'}})
+                self.assertNotIn('PRIVATE', output)
+                self.assertNotIn('collection', result)
+
+    def test_diagnostic_labels_use_only_sqlite_primary_codes_and_never_exception_text(self):
+        for code, label in ((5,'SQLITE_BUSY'),(261,'SQLITE_BUSY'),(9,'SQLITE_INTERRUPT'),
+                            (23,'SQLITE_AUTH'),(26,'SQLITE_NOTADB'),(999,'UNRECOGNIZED'),
+                            (None,'UNRECOGNIZED'),(True,'UNRECOGNIZED')):
+            error = sqlite3.OperationalError('PRIVATE SQL account=987654321 /private/path')
+            error.sqlite_errorcode = code
+            error.sqlite_errorname = 'PRIVATE'
+            self.assertEqual(M.diagnostic_failure('reports', error), dict(stage='reports',
+                error_kind='OperationalError',sqlite_primary=label))
+        private_error = type('PRIVATE_customer_987654321', (Exception,), {})('PRIVATE')
+        self.assertEqual(M.diagnostic_failure('PRIVATE', private_error), dict(stage='UNRECOGNIZED',
+            error_kind='UNRECOGNIZED',sqlite_primary=None))
+        # A real SQLite interruption confirms the runtime numeric-code path, not message parsing.
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        db.set_progress_handler(lambda: 1, 1)
+        with self.assertRaises(sqlite3.OperationalError) as caught:
+            db.execute('SELECT 1')
+        self.assertEqual(M.diagnostic_failure('core', caught.exception), dict(stage='core',
+            error_kind='OperationalError',sqlite_primary='SQLITE_INTERRUPT'))
+
+    def test_diagnostic_projection_rejects_unknown_fields_shapes_and_labels(self):
+        valid = {'diagnostic_failure':dict(stage='reports',error_kind='OperationalError',
+                                          sqlite_primary='SQLITE_INTERRUPT')}
+        self.assertEqual(M.diagnostic_projection(valid), valid['diagnostic_failure'])
+        for mutate in (lambda v:v.update(collection={}),
+                lambda v:v['diagnostic_failure'].update(raw_error='PRIVATE'),
+                lambda v:v['diagnostic_failure'].update(stage=['reports']),
+                lambda v:v['diagnostic_failure'].update(error_kind='PRIVATE'),
+                lambda v:v['diagnostic_failure'].update(sqlite_primary=9),
+                lambda v:v.update(diagnostic_failure=None)):
+            value = json.loads(json.dumps(valid)); mutate(value)
+            with self.assertRaisesRegex(ValueError, '^COLLECTION_DIAGNOSTIC$'):
+                M.diagnostic_projection(value)
+
     def test_catalog_diagnostics_accept_only_five_reviewed_product_commits(self):
         self.assertEqual(M.CATALOG_LINKS_COMMITS, frozenset({
             '6e4b035901027fef29266de218bfb0594227a3fe',
@@ -291,6 +342,18 @@ class CollectionTest(unittest.TestCase):
             self.assertNotIn('PRIVATE',str(caught.exception))
 
     def test_complete_emitted_script_executes_policy_and_sql_under_the_actual_reader_authorizer(self):
+        result, output = self.complete_emitted_fixture()
+        result = M.project(result)
+        self.assertEqual(result['catalog_links']['can_confirm'], 4)
+        self.assertEqual(result['managed_catalog_links']['can_confirm'], 4)
+        self.assertEqual(result['daily_limited']['current_daily_targets'], 1)
+        self.assertEqual(result['morning_progress'], dict(day=result['today'],
+            scope='today_current_generation_not_run_completion',states={},current_chunks={}))
+        self.assertEqual(result['reports'], {kind:dict(period_key=None,latest_company_reports=0,
+            versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None) for kind in ('weekly','monthly')})
+        self.assertNotIn('PRIVATE', output)
+
+    def complete_emitted_fixture(self, *, deny_json=False, close_fails=False):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         db = sqlite3.connect(':memory:', isolation_level=None)
         self.addCleanup(db.close)
@@ -298,15 +361,27 @@ class CollectionTest(unittest.TestCase):
             db.execute(sql)
         db.executescript((Path(__file__).with_name('fixtures')/'naver_monitoring_progress.sql').read_text())
         db.execute("INSERT INTO naver_auto_meta VALUES ('schema_version','11')")
+        if deny_json:
+            db.execute("INSERT INTO naver_auto_report_snapshot (possibility_id,period_key,"
+                "generated_at,status,payload_json,revision_fingerprint,review_status) VALUES (987654321,"
+                "'weekly:2026-09-21:2026-09-27',"
+                "'2026-10-04T10:00:00+09:00','partial','{\"format_version\":2,\"private\":\"PRIVATE\"}','PRIVATE','ready')")
         scope = dict(_A=sqlite3)
         exec(fixture['new_observed_unsealed']['authorizer'], scope)
-        db.set_authorizer(scope['_authorizer'](scope['PHASE_READ']))
+        actual_authorizer = scope['_authorizer'](scope['PHASE_READ'])
+        def authorize(action, arg1, arg2, database, source):
+            if deny_json and action == sqlite3.SQLITE_FUNCTION and arg2 == 'json_valid':
+                return sqlite3.SQLITE_DENY
+            return actual_authorizer(action, arg1, arg2, database, source)
+        db.set_authorizer(authorize)
         before = db.total_changes
         context, rules = self.monitoring_catalog_fixture()
         rules.W.load_org = lambda store: context.ctx.org
         rules.SC.scope_of = lambda org, actor: context.scope
         rules.load = lambda *args, **kwargs: context
         reader = types.SimpleNamespace(_conn=db, meta=lambda key:'11', close=Mock())
+        if close_fails:
+            reader.close.side_effect = RuntimeError('PRIVATE cleanup error /path/987654321')
         engine = types.ModuleType('naver_engine')
         engine.store = types.SimpleNamespace(open_reader=lambda path:reader)
         engine.catalog_links = rules
@@ -326,20 +401,12 @@ class CollectionTest(unittest.TestCase):
                 patch.object(Path,'resolve',resolve), patch.object(os,'open',side_effect=FileNotFoundError), \
                 contextlib.redirect_stdout(output):
             exec(compile(M.script(catalog_links=True,daily_limited=True,morning_progress=True,reports=True),'<complete-status-script>','exec'), {})
-        result = M.project(json.loads(output.getvalue()))
-        self.assertEqual(result['catalog_links']['can_confirm'], 4)
-        self.assertEqual(result['managed_catalog_links']['can_confirm'], 4)
-        self.assertEqual(result['daily_limited']['current_daily_targets'], 1)
-        self.assertEqual(result['morning_progress'], dict(day=result['today'],
-            scope='today_current_generation_not_run_completion',states={},current_chunks={}))
-        self.assertEqual(result['reports'], {kind:dict(period_key=None,latest_company_reports=0,
-            versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None) for kind in ('weekly','monthly')})
         self.assertEqual(db.total_changes, before)
         self.assertFalse(db.in_transaction)
         reader.close.assert_called_once()
         with self.assertRaises(sqlite3.DatabaseError):
             db.execute("UPDATE naver_auto_meta SET value='12'")
-        self.assertNotIn('PRIVATE', output.getvalue())
+        return json.loads(output.getvalue()), output.getvalue()
 
     def test_native_policy_refusals_are_bounded_and_allowed_must_still_agree(self):
         context, rules = self.monitoring_catalog_fixture()
@@ -626,7 +693,9 @@ class CollectionTest(unittest.TestCase):
                 values['morning_progress'] = morning
                 values['reports'] = {kind:dict(period_key=None,latest_company_reports=0,
                     versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None) for kind in ('weekly','monthly')}
-            failures = [None,'image','mount','rootfs','output','restart','unexpected_daily']
+            failures = [None,'image','mount','rootfs','output','restart','unexpected_daily',
+                'diagnostic','diagnostic_extra','diagnostic_stage','diagnostic_kind',
+                'diagnostic_primary','diagnostic_size','diagnostic_restart']
             failures.append('morning_missing' if commit in M.MONITORING_COMMITS else 'unexpected_morning')
             failures.append('reports_missing' if commit in M.MONITORING_COMMITS else 'unexpected_reports')
             if 'catalog_links' in values:
@@ -654,15 +723,28 @@ class CollectionTest(unittest.TestCase):
                     if args[1] == 'inspect':
                         inspections.append(1)
                         return json.dumps(dict(id=cid,image=image,running=True,user='10001:10001',project='naver-engine',
-                            service='naver-engine',started='2026-10-01T13:00:00+09:00',oom_killed=False,restarts=int(failure=='restart' and len(inspections)>1),
+                            service='naver-engine',started='2026-10-01T13:00:00+09:00',oom_killed=False,restarts=int(failure in ('restart','diagnostic_restart') and len(inspections)>1),
                             readonly=failure!='rootfs',data=[dict(Type='bind',Destination='/var/lib/naver-engine',
                             Source='/legacy' if failure=='mount' else '/var/lib/metainc/naver-engine')])).encode()
                     if args[1] == 'exec':
                         ast.parse(kwargs['data'])
+                        self.assertEqual(kwargs['timeout'], 30)
                         self.assertEqual(kwargs['data'].decode().count('if True:'),
                             int(commit in M.CATALOG_LINKS_COMMITS)+int(commit in M.DAILY_LIMITED_COMMITS)
                             +2*int(commit in M.MONITORING_COMMITS))
                         self.assertEqual(args, ['docker','exec','-i','--user','10001:10001',cid,'python','-I','-B','-'])
+                        if failure and failure.startswith('diagnostic'):
+                            diagnostic = {'diagnostic_failure':dict(stage='reports',
+                                error_kind='OperationalError',sqlite_primary='SQLITE_INTERRUPT')}
+                            if failure == 'diagnostic_extra':
+                                diagnostic['collection'] = values
+                            if failure in ('diagnostic_stage','diagnostic_kind','diagnostic_primary'):
+                                key = {'diagnostic_stage':'stage','diagnostic_kind':'error_kind',
+                                       'diagnostic_primary':'sqlite_primary'}[failure]
+                                diagnostic['diagnostic_failure'][key] = 'PRIVATE SQL /path/987654321'
+                            if failure == 'diagnostic_size':
+                                return json.dumps(diagnostic).encode()+b' '*32768
+                            return json.dumps(diagnostic).encode()
                         if failure == 'catalog_missing':
                             return json.dumps({key:value for key,value in values.items() if key != 'catalog_links'}).encode()
                         if failure in ('daily_limited_missing','managed_catalog_links_missing'):
@@ -683,7 +765,15 @@ class CollectionTest(unittest.TestCase):
                     self.fail('unexpected command')
                 release.command.side_effect = command
                 with self.subTest(failure=failure), patch.object(M.os, 'geteuid', return_value=0):
-                    if failure:
+                    if failure == 'diagnostic':
+                        result = M.run(package, host, release)
+                        self.assertEqual(result, dict(ok=False, mode='collection-status',source_commit=commit,
+                            stage='reports',error_kind='OperationalError',sqlite_primary='SQLITE_INTERRUPT',
+                            mutations=0,existing_app_baseline_unchanged=True))
+                        self.assertEqual(len(inspections), 2)
+                        self.assertNotIn('collection', result)
+                        self.assertNotIn('PRIVATE', json.dumps(result))
+                    elif failure:
                         with self.assertRaises(ValueError):
                             M.run(package, host, release)
                     else:

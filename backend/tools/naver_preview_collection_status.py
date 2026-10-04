@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import stat
 from datetime import date, datetime, timedelta
 
@@ -41,6 +42,39 @@ LINK_REFUSALS = frozenset('scope_denied selection_denied permission_denied compa
     'stage-time-unknown stage-stale stage-time-in-future end-date-invalid ended-end-date-unknown ended-over-14-days'.split())
 MORNING_STATES = frozenset(('reading', 'blocked', 'consumed'))
 MORNING_KINDS = frozenset(('daily', 'summary'))
+DIAGNOSTIC_STAGES = frozenset(('identity','reader','snapshot','core','catalog','daily','managed',
+    'morning','reports','rollback','close','bootstrap','output','UNRECOGNIZED'))
+DIAGNOSTIC_KINDS = frozenset(('ValueError','RuntimeError','TypeError','KeyError','AttributeError',
+    'JSONDecodeError','PermissionError','FileNotFoundError','OSError','OperationalError',
+    'DatabaseError','IntegrityError','ProgrammingError','InterfaceError','NotSupportedError',
+    'DataError','InternalError','MemoryError','UNRECOGNIZED'))
+SQLITE_PRIMARY = {1:'SQLITE_ERROR',5:'SQLITE_BUSY',6:'SQLITE_LOCKED',8:'SQLITE_READONLY',
+    9:'SQLITE_INTERRUPT',10:'SQLITE_IOERR',11:'SQLITE_CORRUPT',14:'SQLITE_CANTOPEN',
+    17:'SQLITE_SCHEMA',18:'SQLITE_TOOBIG',19:'SQLITE_CONSTRAINT',20:'SQLITE_MISMATCH',
+    21:'SQLITE_MISUSE',23:'SQLITE_AUTH',26:'SQLITE_NOTADB'}
+
+
+def diagnostic_failure(stage, error):
+    kind = type(error).__name__
+    primary = None
+    if isinstance(error, sqlite3.Error):
+        code = getattr(error, 'sqlite_errorcode', None)
+        primary = SQLITE_PRIMARY.get(code & 255, 'UNRECOGNIZED') if type(code) is int else 'UNRECOGNIZED'
+    return {'stage':stage if stage in DIAGNOSTIC_STAGES else 'UNRECOGNIZED',
+            'error_kind':kind if kind in DIAGNOSTIC_KINDS else 'UNRECOGNIZED',
+            'sqlite_primary':primary}
+
+
+def diagnostic_projection(value):
+    if not isinstance(value, dict) or set(value) != {'diagnostic_failure'}:
+        raise ValueError('COLLECTION_DIAGNOSTIC')
+    item = value['diagnostic_failure']
+    if (not isinstance(item, dict) or set(item) != {'stage','error_kind','sqlite_primary'}
+            or not isinstance(item['stage'], str) or item['stage'] not in DIAGNOSTIC_STAGES
+            or not isinstance(item['error_kind'], str) or item['error_kind'] not in DIAGNOSTIC_KINDS
+            or item['sqlite_primary'] not in (None, 'UNRECOGNIZED', *SQLITE_PRIMARY.values())):
+        raise ValueError('COLLECTION_DIAGNOSTIC')
+    return dict(item)
 
 
 def bootstrap_empty(state):
@@ -620,40 +654,60 @@ def validate_package(package):
 
 
 def script(*, catalog_links=False, daily_limited=False, morning_progress=False, reports=False):
-    parts = ['import json,os,sys,stat,re,time\nfrom pathlib import Path\nfrom datetime import date,datetime,timedelta,timezone\n', PROJECTION_SOURCE]
+    parts = ['import json,os,sys,stat,re,time,sqlite3\nfrom pathlib import Path\nfrom datetime import date,datetime,timedelta,timezone\n', PROJECTION_SOURCE]
     parts.append("""
+diagnostic_stage='identity'
+failure=None
 try:
     if os.geteuid()!=10001:
         raise ValueError('READER_IDENTITY')
     os.environ.clear()
     sys.path[:0]=['/opt/naver-engine','/opt/naver-engine/backend']
+    diagnostic_stage='reader'
     from naver_engine import store as S
     reader=S.open_reader('/var/lib/naver-engine/engine.db')
     try:
+        diagnostic_stage='snapshot'
         deadline=time.monotonic()+20
         reader._conn.set_progress_handler(lambda: time.monotonic()>=deadline,10000)
         reader._conn.execute('BEGIN')
         now=datetime.now(timezone(timedelta(hours=9)))
+        diagnostic_stage='core'
         result=collect(reader,now.date().isoformat())
         if CATALOG_LINK_DIAGNOSTIC:
+            diagnostic_stage='catalog'
             result['catalog_links']=collect_catalog_links(reader,now)
         if DAILY_LIMITED_DIAGNOSTIC:
+            diagnostic_stage='daily'
             from naver_engine import management_store as MS
             result['daily_limited']=collect_daily_limited(reader._conn,now.date().isoformat(),MS.snapshot(reader,now))
+            diagnostic_stage='managed'
             result['managed_catalog_links']=collect_catalog_links(reader,now,managed_only=True)
         if MORNING_PROGRESS_DIAGNOSTIC:
+            diagnostic_stage='morning'
             result['morning_progress']=collect_morning_progress(reader._conn,now.date().isoformat())
         if REPORTS_DIAGNOSTIC:
+            diagnostic_stage='reports'
             result['reports']=collect_reports(reader._conn)
+    except Exception as error:
+        failure=diagnostic_failure(diagnostic_stage,error)
+        raise
     finally:
         try:
+            diagnostic_stage='rollback'
             reader._conn.execute('ROLLBACK')
+        except Exception as error:
+            failure=failure or diagnostic_failure(diagnostic_stage,error)
+            raise
         finally:
+            diagnostic_stage='close'
             reader.close()
+    diagnostic_stage='bootstrap'
     result['bootstrap']=read_bootstrap()
+    diagnostic_stage='output'
     print(json.dumps(result,sort_keys=True))
-except Exception:
-    sys.exit(1)
+except Exception as error:
+    print(json.dumps({'diagnostic_failure':failure or diagnostic_failure(diagnostic_stage,error)},sort_keys=True))
 """.replace('CATALOG_LINK_DIAGNOSTIC', repr(catalog_links)).replace('DAILY_LIMITED_DIAGNOSTIC', repr(daily_limited))
        .replace('MORNING_PROGRESS_DIAGNOSTIC', repr(morning_progress)).replace('REPORTS_DIAGNOSTIC', repr(reports)))
     return '\n'.join(parts).encode()
@@ -769,7 +823,16 @@ def run(package, host, release):
                             reports=commit in MONITORING_COMMITS), timeout=30)
     if len(raw) > 32768:
         raise ValueError('STATUS_SIZE')
-    values = project(json.loads(raw, object_pairs_hook=release.unique))
+    value = json.loads(raw, object_pairs_hook=release.unique)
+    if isinstance(value, dict) and 'diagnostic_failure' in value:
+        failure = diagnostic_projection(value)
+        STAGE = 'postflight'
+        if container() != before or host.baseline() != package['baseline']:
+            raise ValueError('POST_BASELINE')
+        # The receiver exits nonzero for ok=False. No partial aggregates become success or zeros.
+        return {'ok':False,'mode':'collection-status','source_commit':commit,**failure,
+                'mutations':0,'existing_app_baseline_unchanged':True}
+    values = project(value)
     if ('catalog_links' in values) != (commit in CATALOG_LINKS_COMMITS):
         raise ValueError('CATALOG_LINK_FIELDS')
     if ('daily_limited' in values) != (commit in DAILY_LIMITED_COMMITS):
