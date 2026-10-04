@@ -10,7 +10,7 @@ from test_naver_preview_code_upgrade import load, StoreScopeTest
 
 
 class SameSchemaContractTest(unittest.TestCase):
-    def test_actual_schema11_sql_and_initializer_are_preserved_for_both_pinned_sources(self):
+    def test_actual_schema11_sql_and_initializer_accept_only_reviewed_monitoring_additions(self):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         code = load('naver_preview_code_upgrade')
         code.TARGET_COMMIT = 'b'*40
@@ -21,6 +21,9 @@ class SameSchemaContractTest(unittest.TestCase):
             sources[role] = ('SCHEMA_VERSION=11\n_SCHEMA='+repr(old_sql)+'\n'+
                 '_SCHEMA += '+repr(sql[len(old_sql):])+'\n_REVISION_COLUMNS='+repr(contract['revision_columns'])+'\n'+
                 contract['migrate']+'\n# unchanged pinned store\n').encode()
+        sources['target'] = sources['target'].replace(b'_REVISION_COLUMNS={',
+            b"_REVISION_COLUMNS={'naver_auto_link_memory': (('auto_identity_fingerprint', 'TEXT'),), ") + \
+            b'\n_SCHEMA += '+repr(StoreScopeTest.MONITORING_SQL).encode()+b'\n'
         with tempfile.TemporaryDirectory() as directory:
             old, new = (Path(directory).resolve()/part for part in ('old', 'new'))
             for path, role in ((old, 'old'), (new, 'target')):
@@ -36,7 +39,7 @@ class SameSchemaContractTest(unittest.TestCase):
             hashes = {role: hashlib.sha256(body).hexdigest() for role, body in sources.items()}
             with patch.object(code, 'STORE_SHA256', hashes):
                 code.compatible_source(old, new, upgrade)
-                self.assertEqual(code.store_contract(sources['target'], 'target'), sql)
+                self.assertEqual(code.store_contract(sources['target'], 'target'), sql+StoreScopeTest.MONITORING_SQL)
 
     def test_pending_commit_archive_or_store_hash_cannot_prepare(self):
         code = load('naver_preview_code_upgrade')
@@ -69,7 +72,7 @@ class SameSchemaContractTest(unittest.TestCase):
     def test_existing_revision_columns_and_initializer_must_remain_identical(self):
         code = load('naver_preview_code_upgrade')
         source = StoreScopeTest.TARGET_SOURCE
-        self.assertEqual(code.schema_contract(StoreScopeTest.SOURCE), code.schema_contract(source))
+        self.assertEqual(code.schema_contract(StoreScopeTest.SOURCE)['_migrate'], code.schema_contract(source)['_migrate'])
         for changed in (
                 source.replace(b"source_wait_attempts", b"unreviewed_attempts"),
                 source.replace(b"INTEGER NOT NULL DEFAULT 1", b"INTEGER NOT NULL DEFAULT 2"),

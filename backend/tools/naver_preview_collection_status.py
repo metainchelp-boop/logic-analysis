@@ -8,10 +8,11 @@ from datetime import date, datetime, timedelta
 
 STAGE = 'input'
 CATALOG_LINKS_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
-# Store/handles/management are unchanged; the new blocker delegation has the same boolean policy.
+# These releases expose the same read-only diagnostics, including policy-aware target checks.
 DAILY_LIMITED_COMMIT = '01344b145d0b679a6ee730d7fa4b5990278dd654'
 RUNTIME_STATUS_COMMIT = '1b790b864ce27766251a205259fa6a332f60f72b'
-DAILY_LIMITED_COMMITS = frozenset((DAILY_LIMITED_COMMIT, RUNTIME_STATUS_COMMIT))
+MONITORING_COMMIT = '0a302856c6177c4f53145abaf9ed31b6a39654f3'
+DAILY_LIMITED_COMMITS = frozenset((DAILY_LIMITED_COMMIT, RUNTIME_STATUS_COMMIT, MONITORING_COMMIT))
 CATALOG_LINKS_COMMITS = DAILY_LIMITED_COMMITS | frozenset((CATALOG_LINKS_COMMIT,))
 PROJECTION_SOURCE = r'''
 STAGES = frozenset(('진행중', '전략관리', '사후관리', '홀딩중', '재계약진행중', '환불중', '계약만료'))

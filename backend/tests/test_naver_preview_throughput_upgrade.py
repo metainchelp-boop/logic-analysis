@@ -10,7 +10,7 @@ from test_naver_preview_code_upgrade import load
 
 
 class SameSchemaContractTest(unittest.TestCase):
-    def test_even_repinned_store_method_change_is_outside_this_ui_only_release(self):
+    def test_repinned_method_change_cannot_omit_the_required_monitoring_migration(self):
         code = load('naver_preview_code_upgrade')
         contract = json.loads((Path(__file__).with_name('fixtures') / 'naver_schema10_11_contract.json').read_text())['new_observed_unsealed']
         source = ('SCHEMA_VERSION=11\n_SCHEMA=' + repr(tuple(contract['sql'])) + '\n' +
@@ -35,7 +35,7 @@ class SameSchemaContractTest(unittest.TestCase):
             upgrade = Mock(read_file=lambda path, **kwargs: Path(path).read_bytes())
             hashes = {'old': hashlib.sha256(source).hexdigest(), 'target': hashlib.sha256(target).hexdigest()}
             with patch.object(code, 'STORE_SHA256', hashes):
-                with self.assertRaisesRegex(ValueError, 'CODE_SCOPE_CHANGED'):
+                with self.assertRaisesRegex(ValueError, 'CODE_SCHEMA_CHANGED'):
                     code.compatible_source(old, new, upgrade)
 
 

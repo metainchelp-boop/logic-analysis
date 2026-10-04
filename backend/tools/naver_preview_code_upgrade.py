@@ -1,4 +1,4 @@
-"""Exact pinned schema11→11 runtime-status/link-blocker release; paired snapshot rollback."""
+"""Pinned additive schema11 release with paired DB rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -13,21 +13,30 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = '01344b145d0b679a6ee730d7fa4b5990278dd654'
-# Reviewed final application commit, archive and complete store bytes; CI/deployment are separate gates.
-TARGET_COMMIT = '1b790b864ce27766251a205259fa6a332f60f72b'
+OLD_COMMIT = '1b790b864ce27766251a205259fa6a332f60f72b'
+# Exact approved source; CI remains a separate gate.
+TARGET_COMMIT = '0a302856c6177c4f53145abaf9ed31b6a39654f3'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = '0faf3865ec14802d96bf51fa376961064196105e52578f24c93e56430120693d'
-TARGET_SOURCE_SHA256 = 'ea7d119e539745cf5b9e183a669a64592d179ca5d205ece75b6af8b3368f0533'
+OLD_SOURCE_SHA256 = 'ea7d119e539745cf5b9e183a669a64592d179ca5d205ece75b6af8b3368f0533'
+TARGET_SOURCE_SHA256 = '5c50a4d9197d93c2fe8ac3fb561795739dbc0aaf94f38c21ffdfd240a31057f8'
 STORE_SHA256 = {'old':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e',
-                'target':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e'}
-CODE_PATHS = {'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
-              'naver_engine/catalog_links.py', 'naver_engine/runtime_view.py', 'naver_engine/web.py',
-              'naver_runtime/__main__.py', 'naver_runtime/runtime_status.py', 'naver_runtime/scheduler.py'}
-TEST_PATHS = {'naver_engine/tests/catalog_links_screen_browser.js', 'naver_engine/tests/runtime_indicator_unit.js',
-              'naver_engine/tests/runtime_status_screen_browser.js', 'naver_engine/tests/test_catalog_links.py',
-              'naver_engine/tests/test_manual_limited_recovery.py', 'naver_engine/tests/test_runtime_status_screen.py',
-              'naver_engine/tests/test_runtime_status_web.py', 'naver_runtime/tests/test_runtime_status.py'}
+                'target':'18488100b2ea88fa243ebe64082d4c29b19264080d5684b4231bb0f7ffff1cc8'}
+# Exact paths, compactly represented for the bounded transport.
+CODE_PATHS = {'backend/app/naver_auto/matching.py', 'backend/app/naver_auto/org_snapshot.py',
+              'backend/naver_page/app.js', 'backend/naver_page/index.html', 'backend/naver_page/sso-bootstrap.js'} | {
+    'naver_engine/'+name for name in ('backup.py catalog_links.py inventory.py management.py management_store.py '
+        'morning.py morning_progress.py naver_read.py performance_reads.py store.py structure_reads.py sync.py web.py').split()
+} | {'naver_runtime/'+name for name in 'collection_requests.py scheduler.py writer.py'.split()}
+TEST_PATHS = {'naver_engine/tests/'+name for name in (
+    'catalog_links_screen_browser.js fluid_screen_audit.js inventory_screen_browser.js management_screen_browser.js '
+    'owner_screen_browser.js screen_browser.js test_account_catalog.py test_auto_identity_memory.py test_backup.py '
+    'test_catalog_links.py test_catalog_links_screen.py test_links.py test_managed_storage.py '
+    'test_monitoring_identity_policy.py test_morning_continuous.py test_morning_progress.py test_owner_screen_copy.py '
+    'test_performance_budget_wait.py test_performance_retry_cause.py test_reason_page_web.py test_report_paging.py '
+    'test_report_revisions.py test_revision_schema.py test_screen.py test_sso_monitor_browser.py '
+    'test_structure_retry_budget.py test_sync.py test_view_sync_web.py verified_collection_browser.js').split()
+} | {'naver_runtime/tests/'+name for name in ('test_auto_identity_proxy.py test_collection_load.py '
+    'test_morning_progress_proxy.py test_runtime_status.py test_scheduler.py test_scheduler_cadence.py test_writer.py').split()}
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'
@@ -73,7 +82,7 @@ def _capture_failure(error, prefix='failed'):
 
 
 def failure_report(error):
-    """Fixed labels only: exception text, command args, stderr, paths and env never escape."""
+    """Return fixed labels, never raw exception data."""
     result = {'stage':STAGE if STAGE in FAILURE_STAGES else 'unknown', **_error_labels(error)}
     choices = {'stage':FAILURE_STAGES|{'unknown'}, 'operation':FAILURE_OPERATIONS|{'unknown'},
                'error_kind':FAILURE_KINDS|{'OtherError'}, 'error_code':FAILURE_CODES|{'UNRECOGNIZED'}}
@@ -109,7 +118,7 @@ def validate_package(package, release):
 
 
 def bootstrap_state(release, upgrade):
-    """Require durable prior completion; snapshot only, never replay or repair approvals."""
+    """Require prior completion; never replay approval."""
     request = upgrade.REQUEST
     if not os.path.lexists(request):
         return None
@@ -172,7 +181,7 @@ def schema_contract(body):
 
 
 def store_contract(body, role):
-    """No method exception: the complete reviewed old/target bytes are immutable."""
+    """Pin complete old/target bytes without exceptions."""
     if role not in ('old', 'target') or hashlib.sha256(body).hexdigest() != STORE_SHA256.get(role):
         raise ValueError('CODE_STORE_CHANGED')
     tree = ast.parse(body)
@@ -204,7 +213,7 @@ def store_contract(body, role):
 
 
 def compatible_source(old, new, upgrade):
-    # Exact reviewed delta/compact views only; schema11 SQL, initializer and infrastructure stay fixed.
+    # Pin schema additions and unchanged infrastructure.
     read = lambda path: upgrade.read_file(path, mode=0o644, maximum=1024*1024, minimum=0)
     for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
                  'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
@@ -212,9 +221,7 @@ def compatible_source(old, new, upgrade):
         if read(old/name) != read(new/name):
             raise ValueError('CODE_INFRASTRUCTURE_CHANGED')
     before, after = read(old/'naver_engine/store.py'), read(new/'naver_engine/store.py')
-    old_sql, new_sql = store_contract(before, 'old'), store_contract(after, 'target')
-    if old_sql != new_sql or schema_contract(before) != schema_contract(after):
-        raise ValueError('CODE_SCHEMA_CHANGED')
+    migration_contract(before, after)
     for name in ('engine', 'relay'):
         before = upgrade.read_file(old/('preview-'+name+'.override.yml'), mode=0o600)
         after = upgrade.read_file(new/('preview-'+name+'.override.yml'), mode=0o600)
@@ -223,16 +230,43 @@ def compatible_source(old, new, upgrade):
     compatible_code_scope(old, new, upgrade)
 
 
+MONITORING_SQL = (
+    """CREATE TABLE IF NOT EXISTS naver_auto_morning_progress (
+        customer_id INTEGER PRIMARY KEY, possibility_id INTEGER NOT NULL, day TEXT NOT NULL,
+        binding TEXT NOT NULL, campaign_fingerprint TEXT NOT NULL, generation INTEGER NOT NULL,
+        status TEXT NOT NULL, next_try_at TEXT NOT NULL, payload_bytes INTEGER NOT NULL DEFAULT 0)""",
+    """CREATE TABLE IF NOT EXISTS naver_auto_morning_chunk (
+        customer_id INTEGER NOT NULL, kind TEXT NOT NULL, slot INTEGER NOT NULL,
+        generation INTEGER NOT NULL, body TEXT, checksum TEXT, size INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (customer_id, kind, slot))""",
+)
+
+
+def migration_contract(before, after):
+    """Require exactly one nullable column and two tables."""
+    old_sql, new_sql = store_contract(before, 'old'), store_contract(after, 'target')
+    old_contract, new_contract = schema_contract(before), schema_contract(after)
+    def columns(body):
+        nodes = [node for node in ast.parse(body).body if isinstance(node, ast.Assign)
+                 and any(isinstance(target, ast.Name) and target.id == '_REVISION_COLUMNS'
+                         for target in node.targets)]
+        if len(nodes) != 1 or len(nodes[0].targets) != 1:
+            raise ValueError('CODE_SCHEMA_CHANGED')
+        return ast.literal_eval(nodes[0].value)
+    old_columns, new_columns = columns(before), columns(after)
+    if (not isinstance(old_columns, dict) or 'naver_auto_link_memory' in old_columns
+            or new_columns != {'naver_auto_link_memory': (('auto_identity_fingerprint', 'TEXT'),), **old_columns}
+            or new_sql != old_sql + MONITORING_SQL
+            or any(old_contract[key] != new_contract[key] for key in ('SCHEMA_VERSION', '_migrate'))):
+        raise ValueError('CODE_SCHEMA_CHANGED')
+
+
 def target_override(before, name):
     return before.replace(OLD_COMMIT.encode(), TARGET_COMMIT.encode())
 
 
 def stopped_writer(release, lifecycle, path, images, unit):
-    """Prove no writer; a failed supervisor alone is neither success nor failure.
-
-    images maps only pinned source commits to their prepared engine/relay digests.
-    Rollback may encounter either source after a partial container recreation.
-    """
+    """Prove no writer using pinned images, including a partially recreated pair."""
     if (unit not in lifecycle.UNITS or path.name not in ('naver-'+OLD_COMMIT,'naver-'+TARGET_COMMIT)
             or not isinstance(images,dict) or not images or set(images)-{OLD_COMMIT,TARGET_COMMIT}):
         raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
@@ -287,8 +321,7 @@ def db_snapshot(identity, release, upgrade):
         release.write_new(destination, b'')
         with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as source, closing(sqlite3.connect(destination)) as target:
             OPERATION = 'snapshot_schema'
-            if source.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != ('11',):
-                raise ValueError('DB_OLD_SCHEMA')
+            database_contract(source, OLD_COMMIT)
             OPERATION = 'snapshot_copy'
             source.backup(target)
             OPERATION = 'snapshot_integrity'
@@ -309,7 +342,7 @@ def db_snapshot(identity, release, upgrade):
 
 
 def restore_db(snapshot, identity, release, upgrade):
-    """Keep failed files recoverable; restore the matching schema11 snapshot before the old image."""
+    """Preserve failed files and restore matching DB before the old image."""
     path, digest = snapshot
     raw = upgrade.read_file(path, mode=0o600, maximum=1024**3)
     if hashlib.sha256(raw).hexdigest() != digest:
@@ -378,8 +411,7 @@ def warm_sources(path, release):
     STAGE = 'account_sources_warm'
     check = release.compose(path, 'engine')
     name = 'naver-warm-'+TARGET_COMMIT+'-'+uuid.uuid4().hex
-    # The stopped engine's existing project network is needed for Naver HTTPS.
-    # Keep the container name/ownership unique without allocating a new bridge.
+    # Reuse the existing network; uniquely identify the warm-up container.
     identity = None
     failure = None
     try:
@@ -441,7 +473,7 @@ def warm_sources(path, release):
 
 
 def compatible_code_scope(old, new, upgrade):
-    """Only the reviewed runtime delta may differ; no deletions or filesystem escapes."""
+    """Allow only reviewed changes, without deletion or path escape."""
     def inventory(root):
         files = {}
         for path in root.rglob('*'):
@@ -466,10 +498,10 @@ def compatible_code_scope(old, new, upgrade):
 
 
 def probe(release, source_commit, upgrade):
-    """Both pinned schema11 sources retain the same authenticated management contract."""
+    """Both sources retain the same authenticated routes."""
     management_target = source_commit in (OLD_COMMIT, TARGET_COMMIT)
     if source_commit == OLD_COMMIT:
-        # The deployed base already has authenticated verified-link and collection routes.
+        # Both versions use the verified-link routes.
         source_commit = TARGET_COMMIT
     if (not isinstance(TARGET_COMMIT, str) or not re.fullmatch('[0-9a-f]{40}', TARGET_COMMIT)
             or source_commit != TARGET_COMMIT):
@@ -523,17 +555,42 @@ def verify_running(path, receipt, release, lifecycle, upgrade):
 
 
 def verify_database_schema(source, release, upgrade):
-    """Read actual metadata after start or paired rollback; both pinned sources require schema11."""
+    """Verify actual target/restored shape, not just version 11."""
     if source not in (OLD_COMMIT, TARGET_COMMIT):
         raise ValueError('CODE_PROBE_SOURCE')
     release.trusted_dir(DATA, uid=10001, gid=10001, mode=0o750)
     db = DATA/'engine.db'
     upgrade.read_file(db, uid=10001, gid=10001, mode=0o600, maximum=1024**3)
-    expected = '11'
     with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as connection:
         connection.execute('PRAGMA trusted_schema=OFF')
-        if connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != (expected,):
-            raise ValueError('DB_OLD_SCHEMA' if source == OLD_COMMIT else 'DB_TARGET_SCHEMA')
+        database_contract(connection, source)
+
+
+def database_contract(connection, source):
+    """Used for the pre-migration snapshot and post-start/rollback checks."""
+    if source not in (OLD_COMMIT, TARGET_COMMIT):
+        raise ValueError('CODE_PROBE_SOURCE')
+    error = 'DB_OLD_SCHEMA' if source == OLD_COMMIT else 'DB_TARGET_SCHEMA'
+    if connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != ('11',):
+        raise ValueError(error)
+    columns = connection.execute('PRAGMA table_info(naver_auto_link_memory)').fetchall()
+    old_columns = [(0, 'possibility_id', 'INTEGER', 1, None, 1),
+                   (1, 'customer_id', 'INTEGER', 1, None, 2),
+                   (2, 'link', 'TEXT', 1, None, 3),
+                   (3, 'first_matched_at', 'TEXT', 1, None, 0),
+                   (4, 'last_matched_at', 'TEXT', 1, None, 0)]
+    wanted = old_columns + ([(5, 'auto_identity_fingerprint', 'TEXT', 0, None, 0)]
+                            if source == TARGET_COMMIT else [])
+    if columns != wanted:
+        raise ValueError(error)
+    with closing(sqlite3.connect(':memory:')) as reference:
+        if source == TARGET_COMMIT:
+            for statement in MONITORING_SQL:
+                reference.execute(statement)
+        for table in ('naver_auto_morning_progress', 'naver_auto_morning_chunk'):
+            if connection.execute('PRAGMA table_info('+table+')').fetchall() != \
+                    reference.execute('PRAGMA table_info('+table+')').fetchall():
+                raise ValueError(error)
 
 
 def prepare(package, host, release, lifecycle, upgrade):
