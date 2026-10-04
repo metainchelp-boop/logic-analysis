@@ -21,27 +21,33 @@ def snapshot(store, now, *, stage_states=None) -> dict:
     pairs, companies = {}, {}
     if current:
         companies = {row["possibility_id"]: row for row in catalog["items"]}
-        result, _ = I._matching(SimpleNamespace(accounts=accounts, live_decisions=store.current_decisions()), catalog)
+        result, _ = I._matching(SimpleNamespace(accounts=accounts, live_decisions=store.current_decisions()), catalog,
+                               auto_evidence=I.automatic_evidence(store))
         pairs = {pair.customer_id: pair for pair in result.pairs}
     rows = {}
     for cid, account in accounts.items():
         pair = pairs.get(cid)
         company = companies.get(pair.possibility_id) if pair else None
-        pid = company["possibility_id"] if company else None
         stage = company["stage"] if company and company["stage_known"] and not company["stage_hidden"] else None
         stage_key = "".join(stage.split()) if stage else None
+        # 현재 이관 계정은 회사 귀속이 보류되어도 주간 원천 수집을 한다.
+        # 숨김/미확인 업체의 번호 매칭을 직원 접근이나 ERP 귀속으로 승격하지 않는다.
+        # 기존 연결 결정은 조회만 하며 이 분류 전환으로 지우지 않는다.
+        pid = company["possibility_id"] if company and stage_key else None
         previous = states.get(cid, {})
         same_stage = previous.get("possibility_id") == pid and previous.get("stage_key") == stage_key
         revision = previous.get("stage_revision") if same_stage else None
         revision = revision or (f"pending:{pid}:{stage_key}" if pid is not None else None)
         excluded = previous.get("excluded_revision") if same_stage else None
         included = previous.get("included_revision") if same_stage else None
-        decision = P.classify(stage=stage, stage_revision=revision, matched=company is not None,
+        decision = P.classify(stage=stage, stage_revision=revision, matched=pid is not None,
                               authority_valid=account["present"] == 1, source_current=current,
                               excluded_revision=excluded, included_revision=included)
         rows[cid] = {"decision": decision, "possibility_id": pid, "stage": stage, "stage_key": stage_key,
-                     "stage_revision": revision, "excluded_revision": excluded, "matched": company is not None,
+                     "stage_revision": revision, "excluded_revision": excluded, "matched": pid is not None,
                      "included_revision": included,
+                     "_auto_identity": ((pair.possibility_id, pair.auto_identity_fingerprint)
+                                        if pair and pair.auto_identity_fingerprint else None),
                      "snapshot_at": snapshot_at, "source_current": current, "catalog_status": catalog_state}
     return rows
 

@@ -552,6 +552,27 @@ def accept_snapshot(payload: Any, prev: Optional[Org], now: Optional[datetime] =
     return SnapshotDecision(ok=check.ok, org=new if check.ok else prev, check=check)
 
 
+def check_monitoring_snapshot(new: Org, prev: Optional[Org], now: Optional[datetime] = None) -> SnapshotCheck:
+    """대표 전체/직원 본인 관제 전용. 팀 계층은 권한의 근거가 아니다.
+
+    공용 check_snapshot/accept_snapshot의 기존 안전 의미는 바꾸지 않는다.
+    직원·대표·담당·시각·원천 완전성 검증은 그대로 유지하고, 팀 구조만의
+    이상은 관제 목록 누락이나 조직 확인 대기로 만들지 않고 경고로 기록한다.
+    이미 파싱된 Org만 받으므로 잘못된 형식을 임의로 고치거나 부분 수락하지 않는다.
+    """
+    strict = check_snapshot(new, prev, now)
+    team_only = {"CYCLE", "PARENT_LOST", "SYSTEM_TEAM_LOST", "MANAGER_SPIKE"}
+    reasons, warnings = [], list(strict.warnings)
+    for finding in strict.reasons:
+        if finding.code == "EMPTY" and new.active_count() > 0 and not new.teams:
+            warnings.append(Finding("TEAM_EMPTY", "팀 목록이 비었습니다 — 본인 담당 관제 범위에는 영향이 없습니다"))
+        elif finding.code in team_only:
+            warnings.append(Finding(finding.code, finding.message + " — 본인 담당 관제 범위에는 영향이 없습니다"))
+        else:
+            reasons.append(finding)
+    return SnapshotCheck(ok=not reasons, reasons=tuple(reasons), warnings=tuple(warnings))
+
+
 # ── 신선도 ─────────────────────────────────────────────────────────
 
 def org_freshness(generated_dt: Optional[datetime], now: datetime) -> str:

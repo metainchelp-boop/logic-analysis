@@ -303,9 +303,8 @@ class BackupJob:
     def __call__(self, store, now: datetime) -> BackupResult:
         instant = _instant(now)
         today = instant.astimezone(KST).date()
-        runs = store.runs_on(today)
-        if not any(r["status"] in ("done", "failed") for r in runs) or any(r["status"] == "running" for r in runs):
-            return BackupResult("WAITING_FOR_MORNING")
+        # 연속 수집에서는 아침 회차 완료가 영구히 오지 않을 수 있다.
+        # snapshot_to의 일관된 SQLite 스냅샷으로 하루 1회 백업을 독립 실행한다.
         if self.state["last_offsite_day"] == today.isoformat():
             return BackupResult("ALREADY_BACKED_UP", offsite_verified=True)
         last = self.state["last_attempt_at"]

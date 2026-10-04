@@ -116,20 +116,21 @@ class SchedulerTest(TestCase):
                 self.assertEqual(task._inventory().code, "BUDGET")
                 self.assertTrue(reader.rate_limited)
                 self.assertEqual(reader.pauses, 0)
-                self.assertEqual(len(http.calls), 3)
+                self.assertEqual(len(http.calls), 4)
                 first = "daily-1" if kind == "backfill" else kind+"-0"
                 self.assertEqual(set(store.results), {first})
                 self.assertEqual(store.results[first]["status"], "retry")
 
     @patch.object(socket.socket, "connect", side_effect=AssertionError("외부 송신 금지"))
-    def test_slow_single_account_never_uses_more_than_ten_seconds(self, _network):
+    def test_slow_single_account_uses_twenty_second_budget_but_keeps_eight_call_cap(self, _network):
         clock, http, store, reader, task = self.inventory_scene(["daily"], campaign_count=9, period_days=2)
         http.tick = lambda call: clock.advance(2)
         started = clock.now()
         self.assertEqual(task._inventory().counts, {"partial": 1})
-        self.assertEqual((clock.now()-started).total_seconds(), 10)
-        self.assertEqual(len(http.calls), 5)
+        self.assertEqual((clock.now()-started).total_seconds(), 16)
+        self.assertEqual(len(http.calls), 8)
         self.assertNotIn("daily_rows", store.results["daily-0"])
+        self.assertEqual(store.progress["daily-0"]["next_index"], 6)
 
     @patch.object(socket.socket, "connect", side_effect=AssertionError("외부 송신 금지"))
     def test_performance_and_structure_share_the_same_account_eight_call_and_ten_second_limits(self, _network):
@@ -265,6 +266,15 @@ class SchedulerTest(TestCase):
             self.assertEqual(task.tick()["state"], "ok")
         self.assertEqual(calls, ["alerts", "backup"])
         alert.assert_not_called()
+
+    def test_backup_runs_without_any_morning_run(self):
+        cfg = Config("/synthetic/data/db", "/synthetic/socket/sock", backup_enabled=True)
+        st, backup = Mock(), Mock(return_value=BackupResult("ALREADY_BACKED_UP"))
+        st.runs_on.return_value = []
+        task = Scheduler(cfg, st, backup_job=backup, clock=lambda: NOW)
+        self.assertEqual(task.tick()["state"], "ok")
+        backup.assert_called_once()
+        st.runs_on.assert_not_called()
 
     def test_backup_failure_is_health_failure_and_durable_system_alert(self):
         cfg = Config("/synthetic/data/db", "/synthetic/socket/sock", backup_enabled=True)

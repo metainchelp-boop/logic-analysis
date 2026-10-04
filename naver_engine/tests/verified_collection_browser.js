@@ -35,6 +35,8 @@ const cfg = JSON.parse(process.argv[2]);
     await page.click('#confirmAuto');
     assert.equal((await confirmation).status(), 200);
     await page.waitForSelector('#confirmAuto[hidden]', { state: 'attached' });
+    assert.equal(await page.isVisible('#collectNow'), false);
+    await page.click('#collectionControls > summary');
     const request = page.waitForResponse(r => r.url().endsWith('/collection/request'));
     await page.click('#collectNow');
     assert.equal((await request).status(), 200);

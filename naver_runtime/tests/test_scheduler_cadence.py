@@ -77,18 +77,19 @@ class SchedulerCadenceTests(TestCase):
         self.assertEqual(len(self.readers), 2)
         self.assertEqual(len(self.reports), 1)
 
-    def test_inventory_with_http_waits_30_seconds_after_completion(self):
-        self.performance_jobs()
+    def test_pending_inventory_continues_without_fixed_pause_and_shares_pacing(self):
+        self.performance_jobs(8)
+        sent = []
+        self.http.tick = lambda call: sent.append(self.clock.monotonic())
         task = self.scheduler(inventory_enabled=True)
         task.tick()
-        self.assertEqual(len(self.http.calls), 3)
-        self.assertAlmostEqual(task.next_delay(), 30)
-        self.clock.advance(29.9)
-        task.tick()
-        self.assertEqual(len(self.readers), 1)
-        self.clock.advance(.1)
+        first_calls = len(self.http.calls)
+        self.assertGreater(first_calls, 0)
+        self.assertAlmostEqual(task.next_delay(), 0)
         task.tick()
         self.assertEqual(len(self.readers), 2)
+        self.assertGreater(len(sent), first_calls)
+        self.assertTrue(all(b-a >= 1/N.CALLS_PER_SEC-1e-9 for a,b in zip(sent,sent[1:])))
 
     def test_rate_limit_survives_new_readers_for_300_seconds(self):
         self.performance_jobs()
@@ -96,7 +97,7 @@ class SchedulerCadenceTests(TestCase):
         task = self.scheduler(inventory_enabled=True)
         task.tick()
         self.assertTrue(self.readers[0].rate_limited)
-        self.assertEqual(len(self.http.calls), 3)
+        self.assertGreaterEqual(len(self.http.calls), 3)
         self.assertAlmostEqual(task.next_delay(), 60)
         self.clock.advance(60)
         task.tick()
@@ -114,6 +115,7 @@ class SchedulerCadenceTests(TestCase):
         """예약 연결만 분리한다. 단계 내부 HTTP/429 판정은 실제 reader를 사용한다."""
         stages = []
         self.store.thresholds = lambda: None
+        self.store.monitoring_readiness = lambda now: None
         self.http.route(r"/manager-accounts", lambda call: (200, {"content": [], "totalElements": 0}))
         def read(name, reader):
             stages.append(name)
@@ -121,9 +123,11 @@ class SchedulerCadenceTests(TestCase):
         self.context.enter_context(patch.object(L, "accounts_due", return_value=True))
         self.context.enter_context(patch.object(L, "sync_accounts", side_effect=lambda reader, *a: read("accounts", reader)))
         self.context.enter_context(patch.object(M, "morning_due", return_value=True))
+        self.context.enter_context(patch.object(M, "continuous_due", return_value=True))
         self.context.enter_context(patch.object(M, "readiness", return_value=None))
         self.context.enter_context(patch.object(M, "run_morning", side_effect=lambda reader, *a, **kw: read("morning", reader)))
-        self.context.enter_context(patch("naver_runtime.scheduler._ManagedMorningStore", side_effect=lambda store, now: store))
+        self.context.enter_context(patch.object(M, "run_continuous", side_effect=lambda reader, *a, **kw: read("morning", reader)))
+        self.context.enter_context(patch("naver_runtime.scheduler._ManagedMorningStore", side_effect=lambda store, now, *args: store))
         return stages
 
     def test_inventory_rate_limit_blocks_same_tick_morning_but_not_reports(self):
@@ -225,7 +229,7 @@ class SchedulerCadenceTests(TestCase):
             self.assertEqual(main.run(Config("/synthetic/data/db", "/synthetic/socket/sock",
                                              inventory_enabled=True), {}, stop=stop), 0)
         self.assertEqual(len(self.http.calls), 3)
-        wait.assert_called_once_with(30)
+        wait.assert_called_once_with(0)
 
     def test_structure_rate_limit_also_holds_the_next_reader(self):
         self.performance_jobs(0)
@@ -281,8 +285,7 @@ class SchedulerCadenceTests(TestCase):
         task.tick()
         self.assertEqual(len(self.readers), 2)
         self.assertEqual(len(self.reports), 1)
-        self.assertGreater(task.next_delay(), 19)
-        self.assertLess(task.next_delay(), 20)
+        self.assertEqual(task.next_delay(), 0)
 
     def test_source_failure_and_empty_queue_still_wait_without_spinning(self):
         for valid in (False, True):
@@ -325,13 +328,19 @@ class SchedulerCadenceTests(TestCase):
         self.assertFalse(running.is_alive())
         self.assertEqual(outcomes, [{"state": "ok", "errors": []}])
 
-    def test_variable_response_ticks_never_overlap_24_call_30_second_windows(self):
+    def test_variable_response_ticks_share_pacing_with_24_call_40_second_bounds(self):
         self.performance_jobs(10)
         self.structure_jobs(4)
         sends, duration = [], [0]
+        original_send = self.http.send
+        remaining = [20]
+        def send(req, timeout):
+            remaining[0] = timeout
+            return original_send(req, timeout)
+        self.http.send = send
         def response(call):
             sends.append(self.clock.monotonic())
-            self.clock.advance(duration[0])
+            self.clock.advance(min(duration[0], remaining[0]))
         self.http.tick = response
         task = self.scheduler(inventory_enabled=True)
         starts, finishes = [], []
@@ -351,7 +360,7 @@ class SchedulerCadenceTests(TestCase):
             self.clock.advance(task.next_delay())
         self.assertEqual(self.readers[0].calls, 24)
         self.assertTrue(all(reader.calls <= 24 for reader in self.readers))
-        self.assertTrue(all(end-start <= 30 for start, end in zip(starts, finishes)))
-        self.assertTrue(all(start-end >= 30-1e-8 for start, end in zip(starts[1:], finishes)))
+        self.assertTrue(all(end-start <= 40 for start, end in zip(starts, finishes)))
+        self.assertTrue(all(start-end >= -1e-8 for start, end in zip(starts[1:], finishes)))
         self.assertTrue(all(later-earlier >= 1/N.CALLS_PER_SEC-1e-8 for earlier, later in zip(sends, sends[1:])))
-        self.assertTrue(all(sum(start <= at < start+30-1e-8 for at in sends) <= 24 for start in sends))
+        self.assertTrue(all(sum(start <= at < start+30-1e-8 for at in sends) <= 90 for start in sends))

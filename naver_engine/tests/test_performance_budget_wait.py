@@ -1,5 +1,6 @@
 """실제 Store/메모리 SQL에서 내부 한도 대기와 실제 실패 예산을 구분한다."""
 from pathlib import Path
+from datetime import timedelta
 import runpy
 import socket
 import unittest
@@ -32,27 +33,31 @@ class PerformanceBudgetWaitTest(unittest.TestCase):
         self.assertEqual((current["status"], current["error_code"]), (result, code))
         return result
 
-    def test_pure_internal_limits_keep_waiting_after_four_rounds_with_existing_delay(self):
+    def test_pure_internal_limits_resume_immediately_without_spending_failure_attempts(self):
         for code in ("REQUEST_DEADLINE", "REQUEST_CALL_CAP") * 3:
             self.assertEqual(self.record(code), "retry")
-            with self.assertRaises(S.StoreRefused):
-                self.store.begin_performance_check(self.job, self.clock.now())
-            self.clock.advance(119)
-            self.assertNotIn(self.job["job_key"],
-                [row["job_key"] for row in self.store.performance_work(self.clock.now())])
-            self.clock.advance(1)
             self.assertIn(self.job["job_key"],
                 [row["job_key"] for row in self.store.performance_work(self.clock.now())])
 
-    def test_internal_wait_does_not_clear_three_real_failures_or_shorten_backoff(self):
+    def test_transient_limited_probes_hourly_without_erasing_attempts(self):
+        for delay in (2, 5, 15):
+            self.assertEqual(self.record("NETWORK"), "retry")
+            self.clock.advance(delay*60)
+        self.assertEqual(self.record("NETWORK"), "limited")
+        self.clock.advance(3599)
+        self.assertNotIn(self.job["job_key"], [r["job_key"] for r in self.store.performance_work(self.clock.now())])
+        self.clock.advance(1)
+        self.assertIn(self.job["job_key"], [r["job_key"] for r in self.store.performance_work(self.clock.now())])
+        self.assertEqual(self.record("SERVER"), "limited")
+        row = self.store._conn.execute("SELECT attempts FROM naver_auto_performance_job WHERE job_key=?", (self.job["job_key"],)).fetchone()
+        self.assertEqual(row[0], 5)
+
+    def test_internal_yield_does_not_clear_three_real_failures_or_renew_elapsed_backoff(self):
         for code, delay in (("SERVER", 2), ("NETWORK", 5), ("RATE", 15)):
             self.assertEqual(self.record(code), "retry")
             self.clock.advance(delay * 60)
             self.assertEqual(self.record("REQUEST_DEADLINE"), "retry")
-            self.clock.advance(delay * 60 - 1)
-            with self.assertRaises(S.StoreRefused):
-                self.store.begin_performance_check(self.job, self.clock.now())
-            self.clock.advance(1)
+            self.assertIn(self.job["job_key"], [r["job_key"] for r in self.store.performance_work(self.clock.now())])
         self.assertEqual(self.record("SERVER"), "limited")
         self.clock.advance(1800)
         with self.assertRaises(S.StoreRefused):
@@ -64,14 +69,42 @@ class PerformanceBudgetWaitTest(unittest.TestCase):
         for index, delay in enumerate((2, 5, 15, 30)):
             self.assertEqual(self.record("REQUEST_BUDGET"), "limited" if index == 3 else "retry")
             self.clock.advance(delay * 60)
+        self.assertNotIn(self.job["job_key"], [r["job_key"] for r in self.store.performance_work(self.clock.now())])
+        self.clock.advance(1800)
+        self.assertIn(self.job["job_key"], [r["job_key"] for r in self.store.performance_work(self.clock.now())])
+        self.assertEqual(self.record("REQUEST_DEADLINE"), "limited")
+        row = self.store._conn.execute("SELECT attempts,next_try_at FROM naver_auto_performance_job WHERE job_key=?", (self.job["job_key"],)).fetchone()
+        self.assertEqual(row[0], 4)
+        self.assertEqual(row[1], S._kst_text(self.clock.now()+timedelta(hours=1), "대기"))
 
-    def test_already_limited_internal_deadline_is_not_automatically_reopened(self):
+    def test_auth_and_invalid_checkpoints_are_not_automatically_reopened(self):
+        for code,status in (("KEY_REJECTED","reauth_required"),("UNEXPECTED","limited")):
+            with self.subTest(code=code):
+                fixture = make_fixture(1,1)
+                self.addCleanup(fixture.store.close)
+                job = fixture.store.performance_work(fixture.clock.now(),1)[0]
+                fixture.store.begin_performance_check(job, fixture.clock.now())
+                fixture.store.record_performance_check(job, fixture.clock.now(), {"status":status,"error_code":code})
+                fixture.clock.advance(3600)
+                self.assertNotIn(job["job_key"], [r["job_key"] for r in fixture.store.performance_work(fixture.clock.now())])
+
+    def test_account_guard_selection_only_checks_bounded_lane_candidates(self):
+        fixture = make_fixture(100,100)
+        self.addCleanup(fixture.store.close)
+        with patch.object(fixture.store,"_collection_account_ready",wraps=fixture.store._collection_account_ready) as guard:
+            jobs = fixture.store.performance_work(fixture.clock.now(),24)
+        self.assertEqual(len(jobs),24)
+        self.assertLessEqual(guard.call_count,48)
+
+    def test_already_limited_internal_deadline_probes_only_after_one_hour(self):
         self.assertEqual(self.record("REQUEST_DEADLINE", status="limited"), "limited")
         self.clock.advance(1800)
         with self.assertRaises(S.StoreRefused):
             self.store.begin_performance_check(self.job, self.clock.now())
         self.assertNotIn(self.job["job_key"],
             [row["job_key"] for row in self.store.performance_work(self.clock.now())])
+        self.clock.advance(1800)
+        self.assertIn(self.job["job_key"], [r["job_key"] for r in self.store.performance_work(self.clock.now())])
 
     def test_reader_call_cap_waits_then_real_server_failure_still_stops_on_fourth(self):
         fixture = self.fixture
@@ -98,7 +131,7 @@ class PerformanceBudgetWaitTest(unittest.TestCase):
             self.assertEqual(state["error_code"], "REQUEST_DEADLINE")
             self.assertIsNone(state["spend"])
             self.clock.advance(120)
-        self.assertEqual(len(fixture.http.calls), 5)
+        self.assertEqual(len(fixture.http.calls), 10)
         fixture.http.tick = None
         self.assertEqual(fixture.run(limit=1).counts, {"ok": 1})
         state = self.store.performance_checks(self.clock.now())[self.job["customer_id"]]

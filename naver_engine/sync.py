@@ -202,19 +202,26 @@ def _baseline_codes(new: O.Org, base: Optional[dict]) -> list:
     return out
 
 
-def _org_codes(payload, prev: Optional[O.Org], unreadable: bool, base: Optional[dict], now: datetime):
+def _org_codes(payload, prev: Optional[O.Org], unreadable: bool, base: Optional[dict], now: datetime,
+               *, account_monitoring=False):
     """(새 조직 또는 None, 버림 코드, 경고 코드)."""
     try:
         new = O.parse_org_snapshot(payload)
     except O.SnapshotFormatError:
         return None, ("FORMAT",), ()
-    check = O.check_snapshot(new, prev, now)
+    check = (O.check_monitoring_snapshot if account_monitoring else O.check_snapshot)(new, prev, now)
     codes = [f.code for f in check.reasons]
+    warnings = [f.code for f in check.warnings]
     if unreadable:
         codes.insert(0, CODE_STORED_UNREADABLE)
     else:
-        codes += _baseline_codes(new, base)
-    return new, _unique(codes), _unique(f.code for f in check.warnings)
+        baseline_codes = _baseline_codes(new, base)
+        for code in baseline_codes:
+            if account_monitoring and code == CODE_MANAGER_SPIKE_BASELINE:
+                warnings.append(code)
+            else:
+                codes.append(code)
+    return new, _unique(codes), _unique(warnings)
 
 
 def _org_counts(org: O.Org) -> Tuple[int, int, int]:
@@ -232,8 +239,10 @@ def _refuse_org(store: S.Store, body, now: datetime, codes, new: Optional[O.Org]
     return _refused_plain(store, S.SYNC_ORG, codes, now, rows)
 
 
-def sync_org(reader: E.ErpReader, store: S.Store, now: datetime) -> SyncResult:
-    """조직 스냅숏을 한 번 받는다(회차마다 새 reader)."""
+def sync_org(reader: E.ErpReader, store: S.Store, now: datetime, *, account_monitoring=False) -> SyncResult:
+    """조직 스냅숏을 한 번 받는다. 본인 담당 관제 옵션은 팀 이상만 경고로 격리한다."""
+    if type(account_monitoring) is not bool:
+        raise ValueError("계정 관제 여부는 참/거짓이어야 합니다")
     _need_time(now)
     _need_fresh_reader(reader)
     try:
@@ -244,7 +253,8 @@ def sync_org(reader: E.ErpReader, store: S.Store, now: datetime) -> SyncResult:
         return _failed(store, S.SYNC_ORG, CODE_UNEXPECTED, now, ORG_ALERT_AFTER)
     try:
         prev, unreadable, base = _org_state(store)
-        new, codes, warnings = _org_codes(payload, prev, unreadable, base, now)
+        new, codes, warnings = _org_codes(payload, prev, unreadable, base, now,
+                                         account_monitoring=account_monitoring)
         if codes:
             return _refuse_org(store, O.unwrap(payload) if new is not None else payload, now, codes, new)
         try:

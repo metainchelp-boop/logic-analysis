@@ -49,6 +49,7 @@ from . import inventory as INV
 from . import catalog_links as CL
 from . import dashboard as DASH
 from . import management_store as MS
+from . import management as MG
 from . import reporting as R
 from . import view_sync as VS
 from . import runtime_view as RV
@@ -669,7 +670,15 @@ class App:
         page, page_size = int(raw_page), 20
         ctx, owns, names, catalog_current = self._report_context(v, now)
         visible = SC.clients_in(ctx.org, v.scope, owns, req.query.get("selection", "all"))
-        reports = [r for r in v.store.report_snapshots() if r["possibility_id"] in visible]
+        catalog, state = INV.catalog_status(v.store, now)
+        if state != "accepted":
+            raise HttpError(503, "catalog-stale")
+        managed = {row["possibility_id"] for row in catalog["items"]
+                   if row["stage_known"] and not row["stage_hidden"]
+                   and "".join((row["stage"] or "").split()) in MG.DAILY_STAGES}
+        # 기본 목록만 현재 실관리로 좁힌다. 과거 보고서/일별 실적은 삭제하지 않는다.
+        reports = [r for r in v.store.report_snapshots() if r["possibility_id"] in visible
+                   and r["possibility_id"] in managed]
         total = len(reports)
         if page > 0 and page*page_size >= total:
             raise HttpError(400, "bad-query")

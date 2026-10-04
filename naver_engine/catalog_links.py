@@ -8,7 +8,7 @@ import os
 from typing import Optional
 
 from app.naver_auto import matching as M, org_snapshot as O, scope as SC
-from . import handles as H, inventory as I, links as L, store as S, views as W
+from . import inventory as I, links as L, store as S, views as W
 
 _REF_KEY = os.urandom(32)
 _REF_PREFIX = "catalog:"
@@ -56,6 +56,7 @@ def load(store, now, org, scope, selection="all", *, narrowed=False):
             names.setdefault(key, set()).add(pid)
     visible_ids = SC.clients_in(org, scope, owns, selection)
     snapshot = store.inventory_snapshot(now)
+    auto_evidence = I.automatic_evidence(store)
     source = {"catalog": catalog, "catalog_status": catalog_status,
               "accounts": list(base.accounts.values()), "accounts_at": store.accounts_read_at(),
               "accounts_sync": store.last_sync(S.SYNC_ACCOUNTS),
@@ -64,8 +65,8 @@ def load(store, now, org, scope, selection="all", *, narrowed=False):
                       "teams": [asdict(t) for _, t in sorted(org.teams.items())],
                       "owners": [asdict(owner) for owner in org.owners]},
               "decisions": [asdict(d) for d in base.live_decisions + base.lost_decisions],
-              # 기존 계약의 읽기 실패/종료일 근거가 있으면 확인에서도 버리지 않는다.
-              "legacy": list(base.prospects.values()), "scope": asdict(scope), "selection": selection,
+              "auto_evidence": [[pid, cid, value] for (pid, cid), value in sorted(auto_evidence.items())],
+              "scope": asdict(scope), "selection": selection,
               "narrowed": narrowed}
     source_key = hashlib.sha256(_json(source).encode("utf-8")).hexdigest()
     if state == "accepted" and snapshot is None:
@@ -75,7 +76,7 @@ def load(store, now, org, scope, selection="all", *, narrowed=False):
     rows = {}
     if state == "accepted":
         try:
-            result, _ = I._matching(base, catalog)
+            result, _ = I._matching(base, catalog, auto_evidence=auto_evidence)
             raw = L._rows(result, base.live_decisions, base.lost_decisions, store.account_times(),
                           set(companies), set())
             for row in raw:
@@ -135,22 +136,17 @@ def block_reason(context, row):
     own, company, account = ctx.owns.get(pid), context.companies.get(pid), ctx.accounts.get(cid)
     if own is None or SC.ACT_CONFIRM_LINK not in SC.allowed_actions(ctx.org, scope, own):
         return "confirmation-not-permitted"
-    if not company or company["stage_hidden"] or not company["stage_known"]:
-        return "company-stage-unavailable"
+    if not company:
+        return "company-unavailable"
     if not account or account["present"] != 1:
         return "account-unavailable"
     if W.link_holders(ctx, pid, cid) or row.get("claimed_elsewhere"):
         return "account-claimed-elsewhere"
     if any(d.possibility_id == pid and d.customer_id == cid for d in ctx.live_decisions):
         return "pair-already-decided"
-    legacy, end = ctx.prospects.get(pid), None
-    if legacy is not None:
-        if legacy["stage_conflict"]:
-            return "contract-stage-conflict"
-        if legacy["end_unreadable"]:
-            return "contract-end-unreadable"
-        end = None if legacy["latest_end_date"] is None else date.fromisoformat(legacy["latest_end_date"])
-    return H.eligibility_reason(company["stage"], context.catalog_at, end, ctx.now)
+    # 계정 신원 확인은 현재 번호·이관·담당으로 결정한다. 계약 종료일과
+    # 관리 단계는 수집 주기이며 구형 광고 실행 handle의 자격 조건이 아니다.
+    return None
 
 
 def pending(context):

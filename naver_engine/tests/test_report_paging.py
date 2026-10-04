@@ -134,6 +134,23 @@ class ReportPagingTest(unittest.TestCase):
         self.assertEqual(seen, list(range(26, 53)))
         self.assertEqual(self.get(100, "selection=person:101")[0], 404)
 
+    def test_only_current_managed_companies_are_listed_without_deleting_old_reports(self):
+        before = deepcopy(self.store.rows)
+        for company in self.store.catalog["items"]:
+            if company["possibility_id"] == 12:
+                company["stage"] = "계약 만료"
+        status, body, _headers, _raw = self.get()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["total"], 27)
+        self.assertTrue(all(row["possibility_id"] == 11 for row in body["rows"]))
+        self.assertEqual(self.get(101)[1]["total"], 0)
+        self.assertEqual(self.store.rows, before)
+
+    def test_unknown_or_hidden_stage_is_not_a_current_report_target(self):
+        self.store.catalog["items"][0]["stage_hidden"] = True
+        self.store.catalog["items"][1]["stage_known"] = False
+        self.assertEqual(self.get()[1]["total"], 0)
+
     def test_bad_duplicate_and_out_of_range_page_requests_are_rejected(self):
         for query in ("page=-1", "page=01", "page=1.0", "page=true", "page=", "page=1000000",
                       "page=3", "page=999999", "page=0&page=1", "page=%ZZ", "page_size=1000"):

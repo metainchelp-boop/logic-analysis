@@ -161,14 +161,16 @@ class BackupTest(unittest.TestCase):
         self.assertIsNotNone(restarted.status()["last_offsite_at"])
         self.assertNotIn(sent[0], json.dumps(restarted.status()))
 
-    def test_job_waits_for_morning_and_refuses_untrusted_status_file(self):
+    def test_job_is_independent_of_morning_runs_and_refuses_untrusted_status_file(self):
         class StoreProxy:
+            snapshot_to = staticmethod(BackupTest.snapshot)
             def runs_on(self, day):
-                return []
+                raise AssertionError("백업은 아침 회차 유무나 진행 상태에 의존하지 않습니다")
         root = self.root / "job"
-        job = B.BackupJob(root, self.encrypt, lambda path: self.fail("보내면 안 됩니다"))
-        self.assertEqual(job(StoreProxy(), NOW).code, "WAITING_FOR_MORNING")
-        self.assertIsNone(job.status()["last_attempt_at"])
+        job = B.BackupJob(root, self.encrypt,
+                         lambda path: {"sha256": B.file_digest(path), "size": path.stat().st_size})
+        self.assertEqual(job(StoreProxy(), NOW).code, "OFFSITE_OK")
+        self.assertIsNotNone(job.status()["last_attempt_at"])
         state = root / "state.json"
         state.write_text("not-json")
         state.chmod(0o600)

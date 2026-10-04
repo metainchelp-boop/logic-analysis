@@ -97,6 +97,29 @@ class InventoryViewTest(TM.Base):
         with self.assertRaises(SC.ScopeError):
             self.board(100, selection="person:101")
 
+    def test_ceo_can_collect_uncertain_accounts_weekly_without_company_attribution(self):
+        self.save([company(11, "진행중", company_name=TM.NAMES[TM.A], stage_hidden=True),
+                   company(12, None, company_name=TM.NAMES[TM.B], stage_known=False),
+                   company(13, "진행중", company_name=TM.NAMES[TM.C_]),
+                   company(14, "진행중", company_name=TM.NAMES[TM.C_])],
+                  [E.NaverIdRow(11, M.VENDOR_NAVER, str(TM.A)),
+                   E.NaverIdRow(12, M.VENDOR_NAVER, str(TM.B)),
+                   E.NaverIdRow(13, M.VENDOR_NAVER, str(TM.C_)),
+                   E.NaverIdRow(14, M.VENDOR_NAVER, str(TM.C_))])
+        self.st.synchronize_management(self.fc.now())
+        result = self.board()
+        self.assertEqual(result["counts"], {"matched": 0, "no_erp_record": 0, "unclassified": 3})
+        for row in result["rows"]:
+            self.assertEqual(row["management"]["cadence"], "weekly")
+            self.assertTrue(row["management"]["can_collect"])
+            self.assertFalse(row["management"]["can_manage"])
+            self.assertIsNone(row["possibility_id"])
+            self.assertIsNone(row["company_name"])
+            self.assertIsNone(row["owner"])
+            self.assertEqual(row["reason"], "MATCH_REVIEW")
+        self.assertEqual(self.board(100)["rows"], [])
+        self.assertEqual(self.board(101)["rows"], [])
+
     def test_catalog_missing_stale_or_failed_does_not_claim_unregistered(self):
         self.assertEqual(self.board()["counts"]["no_erp_record"], 0)
         self.save([company(11)])

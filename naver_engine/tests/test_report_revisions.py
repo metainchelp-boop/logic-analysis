@@ -23,6 +23,9 @@ class ReportAdapter(S.ManagedStorage):
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
         self.groups = {101: 11}
         self.cadence = "daily"
+        self.stage = "진행중"
+        self.attributable = True
+        self.human_confirmed = True
         self.open_issue_pids = set()
         self.fail_period = None
 
@@ -53,10 +56,13 @@ class ReportAdapter(S.ManagedStorage):
             raise
 
     def synchronize_management(self, now):
-        return {cid: {"possibility_id": pid, "decision": SimpleNamespace(cadence=self.cadence)}
+        return {cid: {"possibility_id": pid, "stage": self.stage,
+                      "decision": SimpleNamespace(cadence=self.cadence, attributable=self.attributable)}
                 for cid, pid in self.groups.items()}
 
     def current_decisions(self):
+        if not self.human_confirmed:
+            return []
         return [SimpleNamespace(customer_id=cid, possibility_id=pid, decision="confirmed")
                 for cid, pid in self.groups.items()]
 
@@ -110,6 +116,78 @@ class ReportRevisionTests(unittest.TestCase):
     def report(self, key, pid=11):
         return next(row for row in self.st.report_snapshots()
                     if row["period_key"] == key and row["possibility_id"] == pid)
+
+    def test_nonmanaged_accounts_keep_daily_records_without_creating_reports(self):
+        week = R.period("weekly", date(2026, 9, 28))
+        self.st.cadence, self.st.stage = "weekly", "계약 만료"
+        self.st.seed(week.start, week.end)
+        records = self.st.daily_performance([101], week.start, week.end)
+        self.assertEqual(self.st.generate_reports(self.st.now)["generated"], 0)
+        self.assertEqual(self.st.report_snapshots(), [])
+        self.assertEqual(self.st.daily_performance([101], week.start, week.end), records)
+
+    def test_unique_id_automatic_link_gets_report_without_inventing_human_confirmation(self):
+        week = R.period("weekly", date(2026, 9, 28))
+        self.st.human_confirmed = False
+        self.st.seed(week.start, week.end)
+        self.st.generate_reports(self.st.now)
+        self.assertEqual(self.report(week.key)["payload"]["totals"]["spend"], 7000)
+        self.assertEqual(self.st.current_decisions(), [])
+
+    def test_unattributable_source_does_not_create_company_report(self):
+        week = R.period("weekly", date(2026, 9, 28))
+        self.st.attributable = False
+        self.st.seed(week.start, week.end)
+        self.assertEqual(self.st.generate_reports(self.st.now)["generated"], 0)
+        self.assertEqual(self.st.report_snapshots(), [])
+
+    def test_new_current_account_cannot_leave_existing_report_falsely_complete(self):
+        week = R.period("weekly", date(2026, 9, 28))
+        self.st.seed(week.start, week.end)
+        self.st.generate_reports(self.st.now)
+        self.assertEqual(self.report(week.key)["validation"]["status"], "complete")
+        self.st.groups[102] = 11
+        self.st.generate_reports(self.st.now)
+        current = self.report(week.key)
+        self.assertNotEqual(current["validation"]["status"], "complete")
+        self.assertEqual(current["validation"]["pending_account_days"], 7)
+        expected = self.st._conn.execute("""SELECT expected_customers_json FROM naver_auto_report_validation
+            WHERE possibility_id=11 AND period_key=?""", (week.key,)).fetchone()[0]
+        self.assertEqual(json.loads(expected), [101, 102])
+
+    def test_account_moved_to_company_after_period_does_not_rewrite_prior_report_scope(self):
+        week = R.period("weekly", date(2026, 9, 28))
+        self.st.seed(week.start, week.end)
+        self.st.generate_reports(self.st.now)
+        first = self.report(week.key)
+        self.st.groups[102] = 11
+        self.st._conn.execute("UPDATE naver_auto_report_dirty SET pending=1")
+        with patch.object(self.st, "_performance_attribution_start", side_effect=lambda cid, pid:
+                          "2026-10-05" if cid == 102 else None):
+            self.st.generate_reports(self.st.now)
+        self.assertEqual(self.report(week.key)["report_id"], first["report_id"])
+        self.assertEqual(self.report(week.key)["validation"]["status"], "complete")
+
+    def test_leaving_managed_stage_preserves_prior_report_and_resumes_after_return(self):
+        week = R.period("weekly", date(2026, 9, 28))
+        self.st.seed(week.start, week.end)
+        self.st.generate_reports(self.st.now)
+        first = self.report(week.key)
+        self.st.cadence, self.st.stage = "weekly", "환불 완료"
+        self.st.now += timedelta(hours=1)
+        self.st.seed(week.start, week.start, spend=500)
+        self.assertEqual(self.st.generate_reports(self.st.now)["generated"], 0)
+        self.assertEqual(self.report(week.key)["report_id"], first["report_id"])
+        self.assertEqual(self.st.daily_performance([101], week.start, week.start)[0]["spend"], 500)
+        self.st.cadence, self.st.stage = "daily", "재계약 진행중"
+        self.st.generate_reports(self.st.now)
+        self.assertGreater(self.report(week.key)["report_id"], first["report_id"])
+
+    def test_manual_daily_inclusion_does_not_make_nonmanaged_company_a_report_target(self):
+        self.st.cadence, self.st.stage = "daily", "홀딩중"
+        self.st.seed(date(2026, 9, 28), date(2026, 10, 4))
+        self.assertEqual(self.st.generate_reports(self.st.now)["generated"], 0)
+        self.assertEqual(self.st.report_snapshots(), [])
 
     def test_issue_only_changes_requeue_weekly_review_policy_without_new_source(self):
         week = R.period("weekly", date(2026, 9, 28))
@@ -260,13 +338,15 @@ class ReportRevisionTests(unittest.TestCase):
         self.st.generate_reports(self.st.now)
         old = self.report(month.key)
         new = self.report(month.key, pid=12)
-        self.assertEqual(old["payload"]["totals"]["spend"], 29500)
-        self.assertGreater(old["report_id"], first["report_id"])
+        # 더는 실관리 연결이 없는 이전 업체의 보고서는 보존만 한다. 원천 정정도 새 업체로 옮기지 않는다.
+        self.assertEqual(old["payload"]["totals"]["spend"], 30000)
+        self.assertEqual(old["report_id"], first["report_id"])
+        self.assertEqual(self.st.daily_performance([101], month.start, month.start, possibility_id=11)[0]["spend"], 500)
         self.assertIsNone(new["payload"]["totals"]["spend"])
 
     def test_bounded_advertiser_batch_preserves_unprocessed_dirty_for_next_run(self):
         day = date(2025, 8, 6)
-        self.st.groups = {}
+        self.st.groups = {101+index: 11+index for index in range(21)}
         for index in range(21):
             self.st.seed(day, day, cid=101+index, pid=11+index)
         first = self.st.generate_reports(self.st.now)
@@ -314,18 +394,18 @@ class ReportRevisionTests(unittest.TestCase):
                 self.assertEqual(report["validation"]["status"], "pending")
                 self.assertIsNone(report["validation"]["last_checked_at"])
 
-    def test_unmanaged_monthly_report_reuses_last_sunday_without_weekday_recheck(self):
+    def test_unmanaged_monthly_source_stays_available_without_report(self):
         month = R.period("monthly", date(2026, 1, 3))
         self.st.cadence = "weekly"
+        self.st.stage = "계약 만료"
         self.st.now = datetime(2026, 2, 1, 10, tzinfo=S.KST)
         self.st.seed(month.start, month.end)
         self.st.now = datetime(2026, 2, 3, 10, tzinfo=S.KST)
-        self.st.generate_reports(self.st.now)
-        report = self.report(month.key)
-        self.assertEqual(report["validation"]["status"], "complete")
-        self.assertEqual(report["validation"]["last_checked_at"], "2026-02-01T10:00:00+09:00")
-        self.assertNotIn("_required_after", report["validation"])
-        self.st.record_report_review(report["report_id"], 100, self.st.now, "approved", "일요일 대조 확인")
+        self.assertEqual(self.st.generate_reports(self.st.now)["generated"], 0)
+        self.assertEqual(self.st.report_snapshots(), [])
+        rows = self.st.daily_performance([101], month.start, month.end)
+        self.assertEqual(len(rows), 31)
+        self.assertTrue(all(row["checked_at"] == "2026-02-01T10:00:00+09:00" for row in rows))
 
 
 if __name__ == "__main__":

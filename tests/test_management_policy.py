@@ -37,10 +37,10 @@ class ManagementPolicyTest(unittest.TestCase):
                 self.assertFalse(decision.attributable)
                 self.assertEqual(decision.reason, "UNMATCHED_ACCOUNT")
 
-    def test_exclusion_reduces_daily_to_weekly_only_for_its_stage_revision(self):
+    def test_historical_exclusion_does_not_override_system_daily_stage(self):
         excluded = self.classify(excluded_revision="stage-1")
-        self.assertEqual(excluded.cadence, "weekly")
-        self.assertEqual(excluded.reason, "MANUAL_EXCLUSION")
+        self.assertEqual(excluded.cadence, "daily")
+        self.assertEqual(excluded.reason, "MANAGED_STAGE")
         self.assertTrue(excluded.attributable)
         restored = self.classify(stage="사후관리", stage_revision="stage-2",
                                  excluded_revision="stage-1")
@@ -57,13 +57,18 @@ class ManagementPolicyTest(unittest.TestCase):
                     self.assertFalse(decision.attributable)
                     self.assertEqual(decision.reason, reason)
 
-    def test_unconfirmed_stage_or_revision_does_not_become_nonmanagement(self):
-        for changes in (dict(stage=None), dict(stage=" \t"), dict(stage_revision=None)):
+    def test_unconfirmed_stage_is_weekly_without_company_attribution(self):
+        for changes in (dict(stage=None), dict(stage=" \t")):
             with self.subTest(changes=changes):
                 decision = self.classify(**changes)
-                self.assertEqual(decision.cadence, "blocked")
+                self.assertEqual(decision.cadence, "weekly")
                 self.assertEqual(decision.reason, "UNKNOWN_STAGE")
                 self.assertFalse(decision.attributable)
+
+    def test_known_stage_without_revision_cannot_apply_a_management_override(self):
+        decision = self.classify(stage_revision=None)
+        self.assertEqual(decision.cadence, "blocked")
+        self.assertFalse(decision.attributable)
 
     def test_non_boolean_authority_inputs_are_rejected_instead_of_truthy(self):
         for field in ("matched", "authority_valid", "source_current"):
@@ -174,11 +179,13 @@ class ManagementPolicyTest(unittest.TestCase):
         daily = M.period_for("daily", date(2024, 3, 1))
         self.assertEqual((daily.since, daily.until), (date(2024, 2, 29), date(2024, 2, 29)))
 
-    def test_explicit_inclusion_is_daily_only_for_current_matched_known_stage(self):
+    def test_historical_inclusion_does_not_override_system_weekly_stage(self):
         included = self.classify(stage="환불완료", included_revision="stage-1")
-        self.assertEqual((included.cadence, included.reason), ("daily", "MANUAL_INCLUSION"))
+        self.assertEqual((included.cadence, included.reason), ("weekly", "NONMANAGED_STAGE"))
         self.assertEqual(self.classify(stage="환불완료", included_revision="old-stage").cadence, "weekly")
         self.assertEqual(self.classify(matched=False, included_revision="stage-1").cadence, "weekly")
-        self.assertEqual(self.classify(stage=None, included_revision="stage-1").cadence, "blocked")
+        unknown = self.classify(stage=None, included_revision="stage-1")
+        self.assertEqual(unknown.cadence, "weekly")
+        self.assertFalse(unknown.attributable)
         self.assertEqual(self.classify(included_revision="stage-1", excluded_revision="stage-1").cadence,
-                         "weekly")
+                         "daily")

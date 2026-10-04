@@ -101,7 +101,7 @@ def collect(store, actor, options):
                 and clock.now() - hold["at"] <= S.HOLD_TTL):
             return refused("HOLD_PENDING")
     clock.remaining()
-    org = Y.sync_org(options["erp_factory"](), store, clock.now())
+    org = Y.sync_org(options["erp_factory"](), store, clock.now(), account_monitoring=True)
     if org.outcome != S.SYNC_ACCEPTED:
         return refused("ORG_NOT_ACCEPTED")
     if not owner_allowed(store, actor, clock.now()):

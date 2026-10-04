@@ -34,7 +34,7 @@ class PerformanceRetryCauseTests(unittest.TestCase):
                 fixture.http.script("/ncc/campaigns", *((reply,) * 4))
                 started = fixture.clock.monotonic()
 
-                self.assertEqual(fixture.run().counts, {"retry": 1})
+                self.assertEqual(fixture.run(max_seconds=10).counts, {"retry": 1})
 
                 self.assertEqual(fixture.result["error_code"], expected)
                 self.assertEqual(fixture.reader.calls, 3)
@@ -119,7 +119,7 @@ class PerformanceRetryCauseTests(unittest.TestCase):
         fixture.http.tick = lambda call: fixture.clock.advance(1)
         fixture.http.script("/ncc/campaigns", (429, {"code": 1016}), *((503, {}),) * 3)
 
-        outcome = fixture.run()
+        outcome = fixture.run(max_seconds=10)
 
         self.assertEqual(outcome.code, "BUDGET")
         self.assertEqual(outcome.counts, {"retry": 1})

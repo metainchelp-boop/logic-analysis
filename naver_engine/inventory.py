@@ -46,7 +46,13 @@ def catalog_status(store, now):
     return body, "accepted"
 
 
-def _matching(ctx, catalog, *, include_absent=False, candidate_counts=None):
+def automatic_evidence(store):
+    """관제 저장소의 숫자 근거만 읽는다. 구형 조회 어댑터는 엄격한 기본 규칙을 쓴다."""
+    read = getattr(store, "automatic_link_evidence", None)
+    return read() if callable(read) else {}
+
+
+def _matching(ctx, catalog, *, include_absent=False, candidate_counts=None, auto_evidence=None):
     current = {cid: {"customerId": cid, "adAccountNo": a["ad_account_no"], "adAccountName": a["account_name"]}
                for cid, a in ctx.accounts.items() if a["present"] == 1 or include_absent}
     # 전체 가망 × 계정의 이중 루프를 피한다. 번호 주장/사람 확인은 전부 유지하고,
@@ -102,7 +108,7 @@ def _matching(ctx, catalog, *, include_absent=False, candidate_counts=None):
     ids = [M.ErpCredential(r["possibility_id"], r["vendor"], r["customer_id_raw"],
                            ad_account_no_raw=r["ad_account_no_raw"]) for r in catalog["ids"]]
     decisions = [M.HumanDecision(d.possibility_id, d.customer_id, d.decision) for d in ctx.live_decisions]
-    result = M.match(people, ids, current, decisions, accounts_complete=True)
+    result = M.match(people, ids, current, decisions, accounts_complete=True, auto_evidence=auto_evidence)
     if candidate_counts is not None:
         paired_pids = {p.possibility_id for p in result.pairs}
         paired_cids = {p.customer_id for p in result.pairs}
@@ -222,7 +228,8 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
     match_ok = state == "accepted" and accounts_current
     if match_ok:
         try:
-            result, possible_accounts = _matching(ctx, catalog, candidate_counts=candidate_counts)
+            result, possible_accounts = _matching(ctx, catalog, candidate_counts=candidate_counts,
+                                                  auto_evidence=automatic_evidence(store))
             for p in result.pairs:
                 if p.customer_id in pairs:
                     ambiguous.add(p.customer_id)
@@ -295,15 +302,17 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
             continue
         if view == "balance_known" and not known:
             continue
-        owner = W._owner(ctx, owns[pid]) if pid is not None else None
-        actionable = match_ok and O.allows_raising(O.org_freshness(ctx.org.generated_dt,ctx.now)) and not uncertain \
-            and (ceo or pid in visible) and account["ad_account_no"] is not None
+        owner = W._owner(ctx, owns[pid]) if pid is not None and not uncertain else None
+        actionable = match_ok and O.allows_raising(O.org_freshness(ctx.org.generated_dt,ctx.now)) \
+            and (ceo or (pid in visible and not uncertain)) and account["ad_account_no"] is not None
+        attributable = company is not None and not uncertain
         # 원천 지표를 전산 계약/보고서에 자동 귀속하거나 이전 이력을 덮어쓰지 않는다.
         rows.append({**({"customer_id": cid} if _include_customer_ids else {}),
                      "ad_account_no": None if account["ad_account_no"] is None else str(account["ad_account_no"]),
                      "customer_tail": W.tail4(cid), "account_name": account["account_name"],
-                     "possibility_id": pid, "company_name": None if company is None else company["company_name"],
-                     "mapping": status, "workflow": stage, "erp_stage": None if company is None else company["stage"],
+                     "possibility_id": pid if attributable else None,
+                     "company_name": company["company_name"] if attributable else None,
+                     "mapping": status, "workflow": stage, "erp_stage": company["stage"] if attributable else None,
                      "owner": owner, "collection": check or {"status": "pending", "checked_at": None},
                      "ad_reason_count": structure.get(cid,{}).get("reason_count",0),
                      "structure_status": structure.get(cid,{}).get("status","pending"),
@@ -311,9 +320,9 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
                      "management": {"cadence":policy.get("cadence","blocked"),
                                     "reason":policy.get("policy_reason"),"stage_revision":policy.get("stage_revision"),
                                     "excluded":policy.get("excluded",False),
-                                    "can_manage":bool(actionable and pid is not None and policy.get("stage_revision")
+                                    "can_manage":bool(actionable and attributable and policy.get("stage_revision")
                                                       and not policy["stage_revision"].startswith("pending:")),
-                                    "can_collect":bool(actionable and policy.get("cadence") != "blocked")},
+                                    "can_collect":bool(actionable and policy.get("cadence") in ("daily", "weekly"))},
                      "detail_available": pid in ctx.prospects and ctx.prospects[pid]["present"] == 1 and not uncertain,
                      "reason": "SOURCE_UNAVAILABLE" if not match_ok else
                                ("MATCH_REVIEW" if uncertain else ("NO_ERP_MATCH" if company is None else None))})
@@ -380,8 +389,14 @@ def reason_page(ctx, store, scope, ad_account_no, selection="all", page=0):
     if len(targets) != 1:
         raise SC.ClientNotVisible()
     cid = targets[0]
+    if not callable(getattr(store, "structure_reason_page", None)):
+        raise S.StoreRefused("SOURCE_STALE")
+    if ceo and selection == "all":
+        # 대표의 현재 이관 원천 읽기는 회사 귀속/이름 후보 확정과 별개다.
+        # 담당별로 좁힌 선택과 직원은 아래의 현재 담당 검증을 통과해야 한다.
+        return store.structure_reason_page(cid, ctx.now, page=page)
     try:
-        result, possible = _matching(ctx, catalog)
+        result, possible = _matching(ctx, catalog, auto_evidence=automatic_evidence(store))
     except M.BadInput:
         raise S.StoreRefused("SOURCE_STALE") from None
     pairs = [pair for pair in result.pairs if pair.customer_id == cid]
@@ -393,7 +408,7 @@ def reason_page(ctx, store, scope, ad_account_no, selection="all", page=0):
                 or company["possibility_id"] not in visible:
             raise SC.ClientNotVisible()
     else:
-        # 대표도 모호한 전산 주장/이름 후보를 미매칭으로 간주하여 원천을 열지 않는다.
+        # 담당별/미배정 선택에서는 모호한 주장을 임의로 귀속하지 않는다.
         ambiguous = cid in possible or any(row.customer_id == cid for row in result.blocked)
         for cred in catalog["ids"]:
             if cred["vendor"] != M.VENDOR_NAVER:
@@ -404,6 +419,4 @@ def reason_page(ctx, store, scope, ad_account_no, selection="all", page=0):
                 and raw.isdigit() and int(raw) == int(ad_account_no))
         if ambiguous or not ceo or selection not in ("all", "unassigned"):
             raise SC.ClientNotVisible()
-    if not callable(getattr(store, "structure_reason_page", None)):
-        raise S.StoreRefused("SOURCE_STALE")
     return store.structure_reason_page(cid, ctx.now, page=page)

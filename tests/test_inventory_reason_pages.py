@@ -115,7 +115,7 @@ class ReasonPageTest(unittest.TestCase):
         with self.assertRaisesRegex(S.StoreRefused, "SOURCE_STALE"):
             I.reason_page(ctx, self.st, SC.scope_of(ctx.org, 100), str(ctx.accounts[TM.A]["ad_account_no"]))
 
-    def test_ceo_can_read_unmatched_but_even_ceo_cannot_read_ambiguous_claim(self):
+    def test_ceo_can_read_unmatched_and_ambiguous_raw_accounts_but_staff_cannot(self):
         self.st.structure = None
         self.st.catalog.update(total=0, items=[], ids=[])
         self.st.states[TM.A].update(possibility_id=None, stage_key=None)
@@ -128,9 +128,14 @@ class ReasonPageTest(unittest.TestCase):
         self.st.catalog["items"].append({**self.st.catalog["items"][0], "possibility_id": 12})
         self.st.catalog["ids"].append({**self.st.catalog["ids"][0], "possibility_id": 12})
         self.st.catalog["total"] = 2
+        self.st.structure = None
+        self.st.states[TM.A].update(possibility_id=None, stage_key=None)
         ctx = self.st.context()
+        self.assertEqual(I.reason_page(ctx, self.st, SC.scope_of(ctx.org, 0), number)["status"], "pending")
         with self.assertRaises(SC.ClientNotVisible):
-            I.reason_page(ctx, self.st, SC.scope_of(ctx.org, 0), number)
+            I.reason_page(ctx, self.st, SC.scope_of(ctx.org, 100), number)
+        with self.assertRaises(SC.ClientNotVisible):
+            I.reason_page(ctx, self.st, SC.scope_of(ctx.org, 0), number, selection="person:100")
 
     def test_page_bounds_do_not_enable_arbitrary_large_or_negative_reads(self):
         for page in (-1, True, "1", 2, 200, 10**20):

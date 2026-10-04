@@ -46,6 +46,7 @@ class WriterTest(unittest.TestCase):
             def collect(cid):
                 try:
                     self.assertTrue(proxy.inventory_account_valid(cid, snapshot, TM.T0))
+                    self.assertTrue(proxy.collection_account_ready(cid, TM.T0))
                     proxy.begin_inventory_check(cid, snapshot, TM.T0)
                     progress = {"customer_id": cid, "day": TM.T0.date().isoformat(), "campaign_ids": [],
                                 "fingerprint": hashlib.sha256(b"[]").hexdigest(), "next_index": 0, "batches": []}

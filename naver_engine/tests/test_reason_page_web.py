@@ -142,10 +142,14 @@ class ReasonPageWebTest(TW.WebBase):
             "checked_at": None, "status": "pending"}))
         self.assertEqual(self.reasons(viewer=100, cid=TM.C_), (404, WEB.NOT_VISIBLE))
 
-    def test_ambiguous_claim_is_hidden_even_from_ceo(self):
+    def test_ceo_can_read_ambiguous_raw_account_without_company_or_staff_attribution(self):
         self.add_unobserved_account(extra=((13, TM.C_), (14, TM.C_)))
-        self.assertEqual(self.reasons(viewer=0, cid=TM.C_), (404, WEB.NOT_VISIBLE))
+        self.assertEqual(self.reasons(viewer=0, cid=TM.C_), (200, {
+            "items": [], "total": 0, "page": 0, "page_size": 50, "next_page": None,
+            "checked_at": None, "status": "pending"}))
         self.assertEqual(self.reasons(viewer=100, cid=TM.C_), (404, WEB.NOT_VISIBLE))
+        self.assertEqual(self.reasons(viewer=0, cid=TM.C_, selection="person:100"), (404, WEB.NOT_VISIBLE))
+        self.assertEqual(len(self.naver.calls), self.source_calls)
 
     def test_verification_read_only_mode_allows_the_detail_get(self):
         self.app = self.make_app(owner_verification=True)

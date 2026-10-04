@@ -52,17 +52,18 @@
     var erpOrigin = '';
     var allowed = ['https://metainc.co.kr', 'http://metainc.co.kr', 'https://www.metainc.co.kr', 'http://www.metainc.co.kr'];
     try { erpOrigin = new URL(document.referrer).origin; } catch (_) {}
-    // 기존 차단 조건은 그대로 두고, 고정 코드만 앱에 전달한다(주소·요청값·예외 원문 없음).
+    // referrer는 보조 정보다. 비어 있으면 허용된 전산 출처에만 준비 메시지를 보내고
+    // 실제 응답의 origin/source/requestId와 PKCE로 검증한다. 임의 출처·내장 창은 계속 거절한다.
     if (ambiguous || !/^[A-Za-z0-9_-]{43}$/.test(requestId)) { fail('NV-E01'); return; }
     if (!parent) { fail('NV-E04'); return; }
     if (window.top !== window) { fail('NV-E05'); return; }
-    if (!document.referrer) { fail('NV-E02'); return; }
-    if (allowed.indexOf(erpOrigin) < 0) { fail('NV-E03'); return; }
+    if (document.referrer && allowed.indexOf(erpOrigin) < 0) { fail('NV-E03'); return; }
+    var targets = erpOrigin ? [erpOrigin] : allowed;
     function base64url(bytes) {
         return btoa(String.fromCharCode.apply(null, bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
     function receive(event) {
-        if (settled || !verifier || event.source !== parent || event.origin !== erpOrigin) return;
+        if (settled || !verifier || event.source !== parent || targets.indexOf(event.origin) < 0) return;
         var data = event.data;
         if (!data || data.type !== 'METAINC_SSO_CODE' || data.requestId !== requestId) return;
         if (typeof data.code !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(data.code)) { fail('NV-E01'); return; }
@@ -79,8 +80,10 @@
         window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)).then(function(hash) {
             if (settled) return;
             try {
-                parent.postMessage({ type: 'METAINC_SSO_READY', requestId: requestId,
-                    codeChallenge: base64url(new Uint8Array(hash)) }, erpOrigin);
+                targets.forEach(function(origin) {
+                    parent.postMessage({ type: 'METAINC_SSO_READY', requestId: requestId,
+                        codeChallenge: base64url(new Uint8Array(hash)) }, origin);
+                });
             } catch (_) { fail('NV-E09'); }
         }).catch(function() { fail('NV-E07'); });
     } catch (_) { fail('NV-E07'); }

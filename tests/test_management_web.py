@@ -241,14 +241,17 @@ class ManagementWebTest(unittest.TestCase):
         self.assertEqual(self.post("/reports/review", body=request)[0], 401)
         self.assertEqual(self.st.reviews, [])
 
-    def test_catalog_only_company_reports_remain_visible_but_hidden_stage_blocks_staff(self):
+    def test_catalog_reports_list_only_active_companies_without_deleting_history(self):
         self.st.prospects = lambda: []
         self.st.catalog["items"][0]["stage"] = "환불완료"
         self.st.reports = [dict(report_id=31, possibility_id=11, status="ready", review_status="needs_staff_review", payload={})]
         status, body = self.get("/reports")
         self.assertEqual(status, 200)
-        self.assertEqual([r["report_id"] for r in body["rows"]], [31])
+        self.assertEqual(body["rows"], [])
+        self.assertEqual([r["report_id"] for r in self.st.reports], [31])
         self.assertEqual(self.post("/reports/review", body={"report_id": 31, "decision": "held", "note": "이력 검토"})[0], 200)
+        self.st.catalog["items"][0]["stage"] = "진행중"
+        self.assertEqual([r["report_id"] for r in self.get("/reports")[1]["rows"]], [31])
         self.st.catalog["items"][0]["stage_hidden"] = True
         self.assertEqual(self.get("/reports")[1]["rows"], [])
         self.assertEqual(self.post("/reports/review", body={"report_id": 31, "decision": "held", "note": "이력 검토"})[0], 404)

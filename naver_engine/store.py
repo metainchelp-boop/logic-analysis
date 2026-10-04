@@ -583,7 +583,19 @@ _SCHEMA += (
 )
 
 # 새 파일/기존 schema10 모두 같은 추가형 경로로 이관한다. 사용자 원천은 덮지 않는다.
+_SCHEMA += (
+    """CREATE TABLE IF NOT EXISTS naver_auto_morning_progress (
+        customer_id INTEGER PRIMARY KEY, possibility_id INTEGER NOT NULL, day TEXT NOT NULL,
+        binding TEXT NOT NULL, campaign_fingerprint TEXT NOT NULL, generation INTEGER NOT NULL,
+        status TEXT NOT NULL, next_try_at TEXT NOT NULL, payload_bytes INTEGER NOT NULL DEFAULT 0)""",
+    """CREATE TABLE IF NOT EXISTS naver_auto_morning_chunk (
+        customer_id INTEGER NOT NULL, kind TEXT NOT NULL, slot INTEGER NOT NULL,
+        generation INTEGER NOT NULL, body TEXT, checksum TEXT, size INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (customer_id, kind, slot))""",
+)
+
 _REVISION_COLUMNS = {
+    "naver_auto_link_memory": (("auto_identity_fingerprint", "TEXT"),),
     "naver_auto_performance_job": (("generation", "TEXT NOT NULL DEFAULT ''"),
                                     ("source_wait_attempts", "INTEGER NOT NULL DEFAULT 0")),
     "naver_auto_daily_performance": (("source_generation", "TEXT NOT NULL DEFAULT ''"),
@@ -1399,14 +1411,21 @@ def _report_generate(store, now):
     store._not_future(now, "생성 시각")
     decisions = store.synchronize_management(now)
     confirmed = {d.customer_id: d.possibility_id for d in store.current_decisions() if d.decision == "confirmed"}
-    historical = set(store._conn.execute("""SELECT DISTINCT customer_id,possibility_id
-        FROM naver_auto_performance_job WHERE kind='daily' AND status='ok'"""))
     groups = {}
     for cid, value in decisions.items():
         pid, cadence = value["possibility_id"], value["decision"].cadence
-        if pid is not None and confirmed.get(cid) == pid and cadence != "blocked" and (
-                cadence == "daily" or (cid, pid) in historical):
+        stage = "".join((value.get("stage") or "").split())
+        # 고유 번호 자동 연결도 수집과 같은 귀속 판정을 사용한다. 사람의 승인 이력을 만들지는 않는다.
+        # 비관리 계정의 원장은 보존하지만 새 업무 보고서를 계속 만들지는 않는다.
+        if pid is not None and value["decision"].attributable and cadence == "daily" and stage in P.DAILY_STAGES:
             groups.setdefault(pid, []).append(cid)
+    boundaries = {(pid, cid): store._performance_attribution_start(cid, pid)
+                  for pid, cids in groups.items() for cid in cids}
+
+    def current_accounts(pid, period):
+        return {cid for cid in groups[pid] if boundaries[(pid, cid)] is None
+                or boundaries[(pid, cid)] <= period.end.isoformat()}
+
     today = now.astimezone(S.KST).date()
     periods = R.due_periods(now, (today.replace(day=1)-timedelta(days=1)).replace(day=1))
     issues = {row["possibility_id"] for row in store.issues(open_only=True)}
@@ -1425,6 +1444,12 @@ def _report_generate(store, now):
                     # 승인 기록은 별도 표에 있으므로 당시 승인과 현재 요구정책을 혼동하지 않는다.
                     connection.execute("""UPDATE naver_auto_report_dirty SET pending=1,updated_at=?
                         WHERE possibility_id=? AND period_key=? AND pending=0""", (at, pid, period.key))
+                expected_row = connection.execute("""SELECT expected_customers_json FROM naver_auto_report_validation
+                    WHERE possibility_id=? AND period_key=?""", (pid, period.key)).fetchone()
+                if expected_row and current_accounts(pid, period) - set(json.loads(expected_row[0])):
+                    # 새 연결의 실적이 아직 없어도 분모에서 빼서 완결로 보이지 않는다.
+                    connection.execute("""UPDATE naver_auto_report_dirty SET pending=1,updated_at=?
+                        WHERE possibility_id=? AND period_key=?""", (at, pid, period.key))
     # 한 업체의 주간·월간을 절단하지 않는다. 대기 업체는 오래된 순서로 계속 배출한다.
     dirty = S._rows(store._conn.execute("""SELECT possibility_id,period_key,updated_at
         FROM naver_auto_report_dirty WHERE pending=1 ORDER BY updated_at,possibility_id,period_key"""))
@@ -1434,6 +1459,9 @@ def _report_generate(store, now):
         if period.due_at > now:
             continue
         pid = item["possibility_id"]
+        if pid not in groups:
+            # 단계가 돌아오면 보충할 수 있게 dirty와 이전 판/실적은 그대로 둔다.
+            continue
         if pid not in batches and len(batches) >= 20:
             continue
         batches.setdefault(pid, []).append(period)
@@ -1448,7 +1476,8 @@ def _report_generate(store, now):
                 historical_ids = [row[0] for row in connection.execute("""SELECT DISTINCT customer_id
                     FROM naver_auto_daily_performance WHERE possibility_id=? AND day BETWEEN ? AND ?""",
                     (pid, period.start.isoformat(), period.end.isoformat()))]
-                expected = sorted(set(json.loads(state[0]) if state else groups.get(pid, [])) | set(historical_ids))
+                expected = sorted(set(json.loads(state[0]) if state else ()) | set(historical_ids)
+                                  | current_accounts(pid, period))
                 rows = store.daily_performance(expected, period.start, period.end, possibility_id=pid)
                 batch_rows.update({(row["customer_id"], row["day"]): row for row in rows})
                 previous = S._rows(connection.execute("""SELECT * FROM naver_auto_report_snapshot
@@ -1462,7 +1491,7 @@ def _report_generate(store, now):
                     required = period.due_at.replace(hour=0, minute=1)
                     decision = decisions.get(cid, {}).get("decision")
                     if decision is not None and decision.cadence == "weekly":
-                        # 비관리 보고서는 직전 일요일 대조를 재사용한다. 평일 회차를 요구하지 않는다.
+                        # 실관리 업체 보고서에 남아 있는 과거 비관리 계정분은 직전 일요일 대조를 재사용한다.
                         required -= timedelta(days=(required.weekday()+1) % 7)
                     required_after[str(cid)] = required.isoformat()
                 validation = _report_validation(store, pid, period, expected, rows, now,
@@ -1597,6 +1626,21 @@ class ManagedStorage:
         self._not_future(now, "정책 확인 시각")
         with self._tx() as c:
             for cid, row in decisions.items():
+                if row["source_current"]:
+                    evidence = row.get("_auto_identity")
+                    # 완전한 최신 원천에서 재검증에 실패한 근거만 무효화한다. 이력 행은 남긴다.
+                    c.execute("""UPDATE naver_auto_link_memory SET auto_identity_fingerprint=NULL
+                        WHERE customer_id=? AND link='auto' AND auto_identity_fingerprint IS NOT NULL
+                        AND (? IS NULL OR possibility_id<>?)""",
+                        (cid, evidence[0] if evidence else None, evidence[0] if evidence else None))
+                    if evidence:
+                        c.execute("""INSERT INTO naver_auto_link_memory
+                            (possibility_id, customer_id, link, first_matched_at, last_matched_at,
+                             auto_identity_fingerprint) VALUES (?, ?, 'auto', ?, ?, ?)
+                            ON CONFLICT (possibility_id, customer_id, link) DO UPDATE SET
+                            last_matched_at=excluded.last_matched_at,
+                            auto_identity_fingerprint=excluded.auto_identity_fingerprint""",
+                            (evidence[0], cid, at, at, evidence[1]))
                 if row["decision"].cadence == "blocked":
                     continue  # 불완전한 원천으로 기존 제외 이력을 무효화하지 않는다.
                 pid, stage = row["possibility_id"], row["stage_key"]
@@ -1648,6 +1692,141 @@ class ManagedStorage:
                 "matching_fingerprint": (self.decision_fingerprint() if matching_fingerprint is None
                                          else matching_fingerprint), "generation": P.generation_for(cycle)}
 
+    @staticmethod
+    def _collection_retry_ready(saved, at):
+        """일시 통신/과거 예산 중단은 시간당 한 번만 재개한다. 과거 원인을 재분류하지 않는다."""
+        if not saved:
+            return True
+        if saved["next_try_at"] > at:
+            return False
+        if saved["status"] == "limited" or (saved["status"] == "reading" and saved["attempts"] >= 4):
+            return saved["error_code"] in ("SERVER", "NETWORK", "RATE", "REQUEST_DEADLINE",
+                "REQUEST_CALL_CAP", "REQUEST_BUDGET") and at >= _kst_text(
+                datetime.fromisoformat(saved["checked_at"])+timedelta(hours=1), "자동 복구")
+        if saved["status"] in ("ok", "reauth_required", "superseded"):
+            return False
+        return saved["attempts"] < 4 or saved["status"] == "partial" or (
+            saved["status"] == "retry" and saved["error_code"] in ("REQUEST_DEADLINE", "REQUEST_CALL_CAP"))
+
+    def _collection_account_ready(self, customer_id, at):
+        """다른 작업 종류로 같은 계정의 인증/통신 대기를 우회하지 않는다."""
+        rows = []
+        for table in ("naver_auto_performance_job", "naver_auto_structure_job"):
+            row = self._conn.execute(f"""SELECT status,error_code,checked_at,next_try_at,attempts FROM {table}
+                WHERE customer_id=? AND (status='ok' OR error_code IN ('KEY_REJECTED','RATE','SERVER','NETWORK'))
+                ORDER BY checked_at DESC,rowid DESC LIMIT 1""", (customer_id,)).fetchone()
+            if row:
+                rows.append(dict(zip(("status","error_code","checked_at","next_try_at","attempts"),row)))
+        if not rows:
+            return True
+        latest = max(rows,key=lambda row:(row["checked_at"],row["status"] != "ok"))
+        if latest["status"] == "ok":
+            return True
+        if latest["error_code"] == "KEY_REJECTED":
+            return False
+        return self._collection_retry_ready(latest, at)
+
+    def collection_account_ready(self, customer_id, now):
+        """직렬 읽기 실행기용 공개 대기 검사. 키/이름/오류 원문을 반환하지 않는다."""
+        return self._collection_account_ready(_customer_id(customer_id, "계정"), _kst_text(now, "현재"))
+
+    def _morning_progress_binding(self, customer_id, possibility_id, day, now):
+        from . import management_store as MS, morning_progress as MP
+        customer_id = _customer_id(customer_id, "계정")
+        possibility_id = _pos_int(possibility_id, "가망 번호")
+        _kst_text(now, "진행 시각")
+        self._not_future(now, "진행 시각")
+        if type(day) is not date or day != now.astimezone(KST).date():
+            raise StoreRefused("진행 날짜가 현재와 다릅니다")
+        row = MS.snapshot(self, now).get(customer_id)
+        if row is None or row["possibility_id"] != possibility_id or row["decision"].cadence != "daily" \
+                or not self.inventory_account_valid(customer_id, row["snapshot_at"], now) \
+                or not self.collection_account_ready(customer_id, now):
+            raise StoreRefused("현재 상세점검 원천이 아닙니다")
+        # 단순 수신시각 변경은 무시한다. 현재 귀속/숫자 근거/단계 세대는 매 저장 때 재검증한다.
+        decisions = [(d.possibility_id, d.decision, d.decision_id) for d in self.current_decisions()
+                     if d.customer_id == customer_id]
+        return MP.digest(MP.packed([customer_id, possibility_id, day.isoformat(), row["stage_key"],
+                                   row["stage_revision"], row.get("_auto_identity"), sorted(decisions)]))
+
+    def morning_progress(self, customer_id, possibility_id, day, now):
+        binding = self._morning_progress_binding(customer_id, possibility_id, day, now)
+        rows = _rows(self._conn.execute("SELECT * FROM naver_auto_morning_progress WHERE customer_id=?", (customer_id,)))
+        if not rows or rows[0]["binding"] != binding or rows[0]["status"] not in ("reading", "blocked"):
+            return None
+        result = rows[0]
+        result["chunks"] = {(kind, slot): (body, checksum) for kind,slot,body,checksum in self._conn.execute(
+            """SELECT kind,slot,body,checksum FROM naver_auto_morning_chunk
+               WHERE customer_id=? AND generation=? AND body IS NOT NULL""", (customer_id,result["generation"]))}
+        return result
+
+    def begin_morning_progress(self, customer_id, possibility_id, day, campaign_fingerprint, now):
+        from . import morning_progress as MP
+        self._need_writer()
+        binding = self._morning_progress_binding(customer_id, possibility_id, day, now)
+        if not isinstance(campaign_fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", campaign_fingerprint):
+            raise StoreRefused("진행 지문 형식이 아닙니다")
+        previous = self.morning_progress(customer_id, possibility_id, day, now)
+        if previous is not None and previous["campaign_fingerprint"] == campaign_fingerprint:
+            if previous["status"] == "reading":
+                return previous
+            if _kst_text(now, "현재") < previous["next_try_at"]:
+                raise MP.ProgressLimit()
+        with self._tx() as c:
+            c.execute("""INSERT INTO naver_auto_morning_progress
+                (customer_id,possibility_id,day,binding,campaign_fingerprint,generation,status,next_try_at,payload_bytes)
+                VALUES (?,?,?,?,?,1,'reading',?,0) ON CONFLICT(customer_id) DO UPDATE SET
+                possibility_id=excluded.possibility_id,day=excluded.day,binding=excluded.binding,
+                campaign_fingerprint=excluded.campaign_fingerprint,generation=generation+1,
+                status='reading',next_try_at=excluded.next_try_at,payload_bytes=0""",
+                (customer_id,possibility_id,day.isoformat(),binding,campaign_fingerprint,_kst_text(now,"현재")))
+            c.execute("UPDATE naver_auto_morning_chunk SET body=NULL,checksum=NULL,size=0 WHERE customer_id=?", (customer_id,))
+        return self.morning_progress(customer_id, possibility_id, day, now)
+
+    def record_morning_progress(self, customer_id, generation, kind, slot, payload, now):
+        from . import morning_progress as MP
+        self._need_writer()
+        customer_id = _customer_id(customer_id, "계정")
+        generation = _pos_int(generation, "진행 세대")
+        _kst_text(now, "진행 시각")
+        self._not_future(now, "진행 시각")
+        body = MP.payload_body(kind, slot, payload)
+        size = len(body.encode("utf-8"))
+        with self._tx() as c:
+            rows = _rows(c.execute("SELECT * FROM naver_auto_morning_progress WHERE customer_id=?", (customer_id,)))
+            if not rows:
+                raise StoreRefused("진행 세대가 없습니다")
+            head = rows[0]
+            binding = self._morning_progress_binding(customer_id,head["possibility_id"],date.fromisoformat(head["day"]),now)
+            if head["binding"] != binding or head["generation"] != generation or head["status"] != "reading":
+                raise StoreRefused("진행 세대가 달라졌습니다")
+            old = c.execute("SELECT size FROM naver_auto_morning_chunk WHERE customer_id=? AND kind=? AND slot=?",
+                            (customer_id,kind,slot)).fetchone()
+            total = head["payload_bytes"] + size - (old[0] if old else 0)
+            if total > MP.MAX_BYTES:
+                raise MP.ProgressLimit()
+            c.execute("""INSERT INTO naver_auto_morning_chunk(customer_id,kind,slot,generation,body,checksum,size)
+                VALUES (?,?,?,?,?,?,?) ON CONFLICT(customer_id,kind,slot) DO UPDATE SET
+                generation=excluded.generation,body=excluded.body,checksum=excluded.checksum,size=excluded.size""",
+                (customer_id,kind,slot,generation,body,MP.digest(body),size))
+            c.execute("UPDATE naver_auto_morning_progress SET payload_bytes=? WHERE customer_id=?", (total,customer_id))
+
+    def finish_morning_progress(self, customer_id, generation, now, *, blocked=False):
+        self._need_writer()
+        customer_id = _customer_id(customer_id, "계정")
+        generation = _pos_int(generation, "진행 세대")
+        _kst_text(now, "진행 시각")
+        self._not_future(now, "진행 시각")
+        if type(blocked) is not bool:
+            raise StoreRefused("진행 대기 여부 형식이 아닙니다")
+        with self._tx() as c:
+            changed = c.execute("""UPDATE naver_auto_morning_progress SET status=?,next_try_at=?,payload_bytes=0
+                WHERE customer_id=? AND generation=?""", ("blocked" if blocked else "consumed",
+                _kst_text(now+timedelta(hours=1) if blocked else now,"진행 대기"),customer_id,generation)).rowcount
+            if changed:
+                c.execute("UPDATE naver_auto_morning_chunk SET body=NULL,checksum=NULL,size=0 WHERE customer_id=? AND generation=?",
+                          (customer_id,generation))
+
     def performance_work(self, now, limit=24):
         from . import store as S
         if type(limit) is not int or not 1 <= limit <= 24:
@@ -1676,8 +1855,7 @@ class ManagedStorage:
             saved = prior.get(job["job_key"])
             if saved and saved["stage_revision"] != job["stage_revision"]:
                 return None, True
-            if saved and (saved["status"] in ("ok", "limited", "reauth_required", "superseded")
-                          or saved["attempts"] >= 4 or saved["next_try_at"] > at):
+            if saved and not self._collection_retry_ready(saved, at):
                 return saved, False
             return saved, True
 
@@ -1752,8 +1930,7 @@ class ManagedStorage:
                 continue
             if covered(job) or (decision.cadence == "weekly" and any(f["kind"] == "reconcile" for f in fills)):
                 continue
-            if old and (old["status"] in ("limited", "reauth_required", "superseded")
-                        or old["attempts"] >= 4 or old["next_try_at"] > at):
+            if old and not recheck and not self._collection_retry_ready(old, at):
                 continue
             candidates.append((0 if decision.cadence == "daily" else 1,
                                "" if old is None else old["checked_at"], cid, job))
@@ -1778,11 +1955,11 @@ class ManagedStorage:
             saved = prior.get(manual["job_key"])
             if saved and saved["stage_revision"] != manual["stage_revision"]:
                 saved = None
-            if saved and (saved["status"] in ("ok","limited","reauth_required")
-                          or saved["attempts"] >= 4 or saved["next_try_at"] > at):
+            if saved and not self._collection_retry_ready(saved, at):
                 continue
             candidates.append((-1, "" if saved is None else saved["checked_at"], cid, manual))
         selected, used, manual_count = [], set(), 0
+        lane_counts, account_ready = [0, 0], {}
         daily_waiting = any(item[3]["kind"] == "daily" for item in candidates)
         for _, _, cid, job in sorted(candidates+backfill, key=lambda item: (*item[:3], item[3]["job_key"])):
             if job["kind"] in ("manual", "manual_period") and daily_waiting and manual_count >= 1:
@@ -1790,10 +1967,17 @@ class ManagedStorage:
             # 최초/보충을 각각 후보로 두되 실제 reader가 계정 중복 호출을 막는다.
             supplemental = job["kind"] not in ("daily", "weekly", "manual") \
                 or (job["kind"] == "daily" and job["cycle_day"] < str(day))
+            if lane_counts[supplemental] >= limit:
+                continue
+            if cid not in account_ready:
+                account_ready[cid] = self._collection_account_ready(cid, at)
+            if not account_ready[cid]:
+                continue
             lane = (cid, supplemental)
             if lane not in used:
                 selected.append(job)
                 used.add(lane)
+                lane_counts[supplemental] += 1
                 manual_count += job["kind"] in ("manual", "manual_period")
         primary = [j for j in selected if j["kind"] in ("daily", "weekly", "manual")
                    and not (j["kind"] == "daily" and j["cycle_day"] < str(day))]
@@ -1927,17 +2111,20 @@ class ManagedStorage:
         if not self.performance_account_valid(job, now):
             raise S.StoreRefused("수집 대상 또는 원천이 바뀌었습니다")
         at = S._kst_text(now, "시작 시각")
+        if not self._collection_account_ready(job["customer_id"], at):
+            raise S.StoreRefused("계정의 인증 또는 통신 재시도 대기 중입니다")
         self._not_future(now, "시작 시각")
         pid = self.management_states()[job["customer_id"]]["possibility_id"]
         with self._tx() as c:
-            old = c.execute("""SELECT status, next_try_at, attempts, stage_revision, possibility_id,generation FROM naver_auto_performance_job
+            old = c.execute("""SELECT status, next_try_at, attempts, stage_revision, possibility_id,generation,error_code,checked_at FROM naver_auto_performance_job
                 WHERE job_key=?""", (job["job_key"],)).fetchone()
             legacy = old is not None and old[3] == job["stage_revision"] and not old[5]
             changed = old is not None and (old[3] != job["stage_revision"] or (old[5] and old[5] != job["generation"]))
             recheck = old is not None and old[0] == "ok" and not changed and job["kind"] in ("daily", "backfill") \
                 and self._performance_conversion_due(job, pid, now)
-            if old and not changed and ((old[0] == "ok" and not recheck)
-                    or old[0] in ("limited", "reauth_required", "superseded") or old[1] > at or old[2] >= 4):
+            prior_retry = None if old is None else dict(zip(
+                ("status","next_try_at","attempts","stage_revision","possibility_id","generation","error_code","checked_at"), old))
+            if old and not changed and not recheck and not self._collection_retry_ready(prior_retry, at):
                 raise S.StoreRefused("다시 수집할 시각이 아닙니다")
             if legacy and not recheck:
                 from . import performance_reads as R
@@ -2110,6 +2297,10 @@ class ManagedStorage:
             if attempts >= 4 and status == "retry":
                 status = "limited"  # 중단 상태와 마지막 실제 실패 사유를 분리해 보존한다.
             delay = (2, 5, 15, 30)[max(0, min(attempts, 4)-1)] if status == "retry" else 0
+            if status == "retry" and code in ("REQUEST_DEADLINE", "REQUEST_CALL_CAP"):
+                delay = 0  # 이미 지난 실제 실패 대기를 내부 예산 양보 때문에 다시 시작하지 않는다.
+            if status == "limited" and code in ("SERVER", "NETWORK", "RATE", "REQUEST_DEADLINE", "REQUEST_CALL_CAP", "REQUEST_BUDGET"):
+                delay = 60
             waits = current[1]+(status == "source_wait")
             if status == "source_wait":
                 delay = (15, 30, 60)[min(waits-1, 2)]
@@ -2454,8 +2645,7 @@ class ManagedStorage:
             old = prior.get(job["job_key"])
             if old and old["stage_revision"] != job["stage_revision"]:
                 old = None
-            if old and (old["status"] in ("ok","limited","reauth_required")
-                        or old["attempts"] >= 4 or old["next_try_at"] > at):
+            if old and not self._collection_retry_ready(old, at):
                 return
             if job["kind"] == "weekly" and not P.is_due(decisions[job["customer_id"]]["decision"],day,
                     started_cycle=date.fromisoformat(job["cycle_day"]) if old else None):
@@ -2490,6 +2680,8 @@ class ManagedStorage:
         manual_selected = False
         has_daily = any(entry[0] == 0 for entry in candidates)
         for _,_,cid,job in sorted(candidates,key=lambda x:(x[0],x[1],x[2],x[3]["job_key"])):
+            if not self._collection_account_ready(cid, at):
+                continue
             if job["kind"] == "manual" and has_daily and manual_selected:
                 continue
             if cid not in used:
@@ -2511,10 +2703,14 @@ class ManagedStorage:
         if not self.structure_account_valid(job,now):
             raise StoreRefused("구조 원천이 바뀌었습니다")
         at = _kst_text(now,"구조 시작")
+        if not self._collection_account_ready(job["customer_id"], at):
+            raise StoreRefused("계정의 인증 또는 통신 재시도 대기 중입니다")
         with self._tx() as c:
-            old = c.execute("SELECT status,next_try_at,attempts,stage_revision FROM naver_auto_structure_job WHERE job_key=?",
+            old = c.execute("SELECT status,next_try_at,attempts,stage_revision,error_code,checked_at FROM naver_auto_structure_job WHERE job_key=?",
                             (job["job_key"],)).fetchone()
-            if old and old[3] == job["stage_revision"] and (old[0] in ("ok","limited","reauth_required") or old[1] > at or old[2]>=4):
+            prior_retry = None if old is None else dict(zip(
+                ("status","next_try_at","attempts","stage_revision","error_code","checked_at"), old))
+            if old and old[3] == job["stage_revision"] and not self._collection_retry_ready(prior_retry, at):
                 raise StoreRefused("구조를 다시 수집할 시각이 아닙니다")
             c.execute("""INSERT INTO naver_auto_structure_job
                 (job_key,customer_id,cycle_day,stage_revision,status,checked_at,next_try_at,attempts)
@@ -2597,6 +2793,10 @@ class ManagedStorage:
             if attempts>=4 and status=="retry":
                 status = "limited"  # 마지막 실제 실패 사유는 중단 상태와 별도로 보존한다.
             delay = (2,5,15,30)[max(0,min(attempts,4)-1)] if status=="retry" else 0
+            if status == "retry" and code in ("REQUEST_DEADLINE", "REQUEST_CALL_CAP"):
+                delay = 0
+            if status == "limited" and code in ("SERVER", "NETWORK", "RATE", "REQUEST_DEADLINE", "REQUEST_CALL_CAP", "REQUEST_BUDGET"):
+                delay = 60
             c.execute("""UPDATE naver_auto_structure_job SET status=?,checked_at=?,next_try_at=?,
                 attempts=?,error_code=?,reasons_json=? WHERE job_key=?""",
                 (status,_kst_text(now,"구조 확인"),_kst_text(now+timedelta(minutes=delay),"구조 대기"),
@@ -3534,6 +3734,16 @@ class Store(ManagedStorage):
             raise StoreRefused("짝 종류가 아닙니다")
         return self._matched(self._conn, link)
 
+    def automatic_link_evidence(self) -> dict:
+        """검증된 자동 연결 숫자 지문만 읽는다. 기존 NULL 이력은 근거로 승격하지 않는다."""
+        # 읽기 프로세스가 writer의 추가형 이관보다 먼저 시작해도 예전 엄격 규칙으로 읽는다.
+        if "auto_identity_fingerprint" not in {r[1] for r in self._conn.execute(
+                "PRAGMA table_info(naver_auto_link_memory)")}:
+            return {}
+        return {(int(pid), int(cid)): fingerprint for pid, cid, fingerprint in self._conn.execute(
+            """SELECT possibility_id, customer_id, auto_identity_fingerprint
+               FROM naver_auto_link_memory WHERE link='auto' AND auto_identity_fingerprint IS NOT NULL""")}
+
     def record_pairing_event(self, at: datetime, outcome: str, codes: Sequence[str]) -> int:
         """짝 맞추기 버림·실패를 코드만 남긴다(결과 줄 없음) → 회차 번호."""
         self._need_writer()
@@ -3789,7 +3999,7 @@ class Store(ManagedStorage):
                              yday_clk=None, campaigns: Optional[Sequence[Mapping]] = None,
                              stats_day: Optional[date] = None,
                              stats: Optional[Mapping[str, Mapping[str, Optional[float]]]] = None,
-                             provisional: bool = True) -> "IssueTally":
+                             provisional: bool = True, morning_generation: Optional[int] = None) -> "IssueTally":
         """아침 점검 계정 한 곳 — 계정 하루치 · (읽었으면) 캠페인 하루치 · 이슈를 **한 거래**로 적는다(S9).
 
         도중에 죽으면 아무것도 남지 않는다 — 계정 하루치만 「정상」으로 남고 이슈는 빠지는 일이 없게.
@@ -3844,6 +4054,13 @@ class Store(ManagedStorage):
             rid = vals[4]
             vals[1] = self._running_run_date(c, rid)
             today = date.fromisoformat(vals[1])
+            if morning_generation is not None:
+                generation = _pos_int(morning_generation, "진행 세대")
+                head = c.execute("""SELECT possibility_id,day,generation,status,binding
+                    FROM naver_auto_morning_progress WHERE customer_id=?""", (cid,)).fetchone()
+                binding = self._morning_progress_binding(cid,pid,today,checked_at)
+                if head is None or tuple(head) != (pid,vals[1],generation,"reading",binding):
+                    raise StoreRefused("진행 원천/세대가 달라졌습니다")
             self._write_account_day(c, vals)
             if camp_rows is not None:
                 self._write_campaign_rows(c, rid, cid, camp_rows)
@@ -3868,9 +4085,15 @@ class Store(ManagedStorage):
                         tally[ch.event] += 1
             except I.IssueRuleError as e:
                 raise StoreRefused(f"이슈 규칙이 받지 않습니다: {e.code}") from None
+            if morning_generation is not None:
+                # 원장·이슈와 같은 거래다. DATA_LATE 뒤 재시작도 낡은 완결 조각을 다시 쓰지 않는다.
+                c.execute("""UPDATE naver_auto_morning_progress SET status='consumed',payload_bytes=0,next_try_at=?
+                    WHERE customer_id=? AND generation=?""", (at,cid,morning_generation))
+                c.execute("""UPDATE naver_auto_morning_chunk SET body=NULL,checksum=NULL,size=0
+                    WHERE customer_id=? AND generation=?""", (cid,morning_generation))
         return IssueTally(dict(tally))
 
-    def close_unlinked_issues(self, run_id: int, pairing_id: int, at: datetime) -> "UnlinkCounts":
+    def close_unlinked_issues(self, run_id: int, pairing_id: int, at: datetime, *, account_monitoring=False) -> "UnlinkCounts":
         """짝이 거절·무효가 된 열린 이슈를 「연결 해제로 닫힘」으로(M5) — 이 회차 날짜에 받은 그 짝 맞추기 기준.
 
         그 회차에 점검할 짝(확인 · 자동) · 「오늘 없음」 · 「이관 빠짐」으로 남은 짝은 이어진 것으로 본다. 그 밖의 짝이라도
@@ -3881,19 +4104,34 @@ class Store(ManagedStorage):
         I = _issue_rules()
         t = _kst_text(at, "닫은 시각")
         self._not_future(at, "닫은 시각")
-        pnum = _pos_int(pairing_id, "짝 맞추기 번호")
+        if type(account_monitoring) is not bool:
+            raise StoreRefused("관제 여부는 참/거짓이어야 합니다")
+        protected = set()
+        if account_monitoring:
+            from . import management_store as MS, inventory as IC
+            policies = MS.snapshot(self, at)
+            _, catalog_state = IC.catalog_status(self, at)
+            if self.inventory_snapshot(at) is None or catalog_state != "accepted" \
+                    or any(not row["source_current"] for row in policies.values()):
+                return UnlinkCounts(0, 0, 0, False)  # 낡은 원천으로 연결 해제를 판정하지 않는다.
+            protected = {(row["possibility_id"],cid) for cid,row in policies.items()
+                         if row["matched"] and row["source_current"]}
+        pnum = 0 if account_monitoring and pairing_id is None else _pos_int(pairing_id, "짝 맞추기 번호")
         with self._tx() as c:
             rid = _pos_int(run_id, "회차 번호")
             run_day = self._running_run_date(c, rid)
             today = date.fromisoformat(run_day)
             prow = c.execute("SELECT outcome, at FROM naver_auto_pairing_run WHERE pairing_id = ?", (pnum,)).fetchone()
             pat = None if prow is None else _aware_time(prow[1])
-            if prow is None or prow[0] != SYNC_ACCEPTED or pat is None or pat.astimezone(KST).date() != today:
+            pairing_current = prow is not None and prow[0] == SYNC_ACCEPTED and pat is not None and pat.astimezone(KST).date() == today
+            if not pairing_current and not account_monitoring:
                 raise StoreRefused("이 회차 날짜에 받은 짝 맞추기가 아닙니다")
             linked = {(int(p), int(k)) for p, k in c.execute(
                 """SELECT possibility_id, customer_id FROM naver_auto_pairing_row
                    WHERE pairing_id = ? AND customer_id IS NOT NULL AND state IN (?, ?, ?, ?)""",
                 (pnum, PAIR_CONFIRMED, PAIR_AUTO, PAIR_MISSING, PAIR_BROKEN))}
+            if account_monitoring:
+                linked = protected | (linked if pairing_current else set())
             recent = set()
             for p, k, last in c.execute("""SELECT possibility_id, customer_id, MAX(last_matched_at)
                                            FROM naver_auto_link_memory GROUP BY possibility_id, customer_id"""):

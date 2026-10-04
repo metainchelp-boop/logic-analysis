@@ -1528,20 +1528,49 @@ class SyncGuardTest(unittest.TestCase):
 
     def test_shared_backend_modules_stay_pure(self):
         """엔진이 같은 프로세스에서 돌리는 backend/app/naver_auto 는 엔진 규칙을 따른다 — 쓸 수 있는 import 만(허용 목록)."""
-        allowed = {"__future__", "typing", "dataclasses", "datetime", "types", "re", "unicodedata", "math",
-                   "collections", "functools", "itertools", "enum"}
         self.assertTrue(self.SHARED)
         for p in self.SHARED:
-            tree = ast.parse(p.read_text(encoding="utf-8"))
-            for n, mod in _imports(tree):
-                if isinstance(n, ast.ImportFrom) and n.level:
-                    self.assertEqual(n.level, 1, f"{p.name}: {mod}")   # 같은 폴더만
-                    continue
-                self.assertIn(mod.split(".")[0], allowed, f"{p.name}: {mod}")
-            self.assertEqual(_escapes(tree), [], p.name)
-            for s in _folded(tree):
-                for bad in ("socket", "urllib", "sqlite3", "subprocess", "os.system"):
-                    self.assertNotEqual(s, bad, f"{p.name}: 글자로 {bad}")
+            self.assert_shared_module_pure(ast.parse(p.read_text(encoding="utf-8")), p.name)
+
+    def assert_shared_module_pure(self, tree, filename):
+        allowed = {"__future__", "typing", "dataclasses", "datetime", "types", "re", "unicodedata", "math",
+                   "collections", "functools", "itertools", "enum"}
+        # 자동 연결 숫자 지문만. json.load/dump·hashlib.file_digest 같은 IO는 허용하지 않는다.
+        pure_fingerprint = {"hashlib": {"sha256"}, "json": {"dumps"}} if filename == "matching.py" else {}
+        for n, mod in _imports(tree):
+            if isinstance(n, ast.ImportFrom) and n.level:
+                self.assertEqual(n.level, 1, f"{filename}: {mod}")   # 같은 폴더만
+                continue
+            if mod in pure_fingerprint:
+                self.assertIsInstance(n, ast.Import, f"{filename}: 직접 모듈 import만")
+                self.assertTrue(all(a.asname is None for a in n.names), f"{filename}: 지문 모듈 별칭 금지")
+                continue
+            self.assertIn(mod.split(".")[0], allowed, f"{filename}: {mod}")
+        parents = {id(child): parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Name) and n.id in pure_fingerprint:
+                parent = parents.get(id(n))
+                self.assertIsInstance(parent, ast.Attribute, f"{filename}: 지문 모듈 전달/재할당 금지")
+                self.assertIs(parent.value, n)
+                self.assertIn(parent.attr, pure_fingerprint[n.id], f"{filename}: 순수 지문 함수만")
+        self.assertEqual(_escapes(tree), [], filename)
+        for s in _folded(tree):
+            for bad in ("socket", "urllib", "sqlite3", "subprocess", "os.system"):
+                self.assertNotEqual(s, bad, f"{filename}: 글자로 {bad}")
+
+    def test_matching_fingerprint_exception_cannot_open_shared_io(self):
+        safe = 'import hashlib\nimport json\nx = hashlib.sha256(json.dumps([1]).encode()).hexdigest()\n'
+        self.assert_shared_module_pure(ast.parse(safe), "matching.py")
+        for filename, src in (("verdict.py", safe),
+                              ("matching.py", 'import json\njson.load(stream)\n'),
+                              ("matching.py", 'import json\njson.dump({}, stream)\n'),
+                              ("matching.py", 'import hashlib\nhashlib.file_digest(stream, "sha256")\n'),
+                              ("matching.py", 'from json import dumps\n'),
+                              ("matching.py", 'import hashlib as h\n'),
+                              ("matching.py", 'import json\nmodule = json\n'),
+                              ("matching.py", 'import os\n')):
+            with self.subTest(filename=filename, source=src), self.assertRaises(AssertionError):
+                self.assert_shared_module_pure(ast.parse(src), filename)
 
     def test_backend_app_package_is_empty(self):
         """엔진은 app 패키지를 import 한다 — app/__init__.py 에 코드가 생기면 엔진 안에서 돈다."""

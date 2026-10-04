@@ -115,6 +115,25 @@ test('이관 목록은 비즈머니 높은 순으로 정렬하고 동률·0·음
   assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
 });
 
+test('상세 점검 책갈피 상한·손상 사유는 오늘 계정만 쉽게 설명하고 과거 사유는 재표시하지 않는다', async () => {
+  const today = new Date(Date.now() + 9 * 3600000).toISOString().slice(0,10);
+  const client = {possibility_id:11,name:'합성 업체',stage:'진행중',managed:true,link:'listed',
+    verdict:{color:'white',white_reason:'partial'},days:[],issues:[],yday_spend:null,
+    accounts:[{tail:'1111',state:'auto',history:[{day:today,status:'partial',rules_not_run:[
+      ['D1','checkpoint-too-large'],['D2','checkpoint-too-large'],['D3','<img src=x>']]}]},
+      {tail:'2222',state:'auto',history:[{day:today,status:'partial',rules_not_run:[['D1','checkpoint-invalid']]}]},
+      {tail:'3333',state:'auto',history:[{day:'2000-01-01',status:'partial',rules_not_run:[['D1','checkpoint-too-large']]}]}]};
+  const run = launch({screen:'clients/11',respond:req => req.url.includes('/clients/11') ? client :
+    {rows:[],decisions:[],source_state:'accepted'}});
+  await flush();
+  const text = run.text('p-now');
+  assert.match(text,/1111.*광고 자료가 커서 상세 점검을 보류/);
+  assert.match(text,/2222.*읽던 위치의 기록을 확인할 수 없어 새로 점검/);
+  assert.equal((text.match(/광고 자료가 커서 상세 점검을 보류/g)||[]).length,1);
+  assert.doesNotMatch(text,/3333|<img/);
+  assert.equal(run.requests.filter(req => req.method !== 'GET').length,0);
+});
+
 test('현재 목록 합계는 검색과 서버 필터 이후의 잔액을 십진 합산한 뒤 한 번 절사한다', async () => {
   const rows = [fixture({account_name:'대상 하나', collection:{bizmoney:0.29}}),
     fixture({ad_account_no:'701',account_name:'대상 둘',collection:{bizmoney:0.71,stale:true}}),
@@ -451,6 +470,20 @@ test('주간 조회는 재시도와 이전 성공 기간·잔액 확인 시각�
   assert.doesNotMatch(text, /어제|충전/);
 });
 
+test('전산 미등록·비관리와 업체 확인 필요는 수집 실패와 다른 칸에 표시한다', async () => {
+  const run = launch({data:inventory([
+    fixture({mapping:'no_erp_record',company_name:null,possibility_id:null,management:{cadence:'weekly'},collection:{status:'ok'}}),
+    fixture({ad_account_no:'701',mapping:'unclassified',collection:{status:'failed'}})
+  ])});
+  await flush(); await showAccounts(run);
+  const rows = run.elements.get('inventoryRows').children;
+  assert.equal(rows[0].children[2].textContent, '전산 미등록 · 비관리');
+  assert.equal(rows[0].children[5].textContent.startsWith('수집 완료'), true);
+  assert.equal(rows[1].children[2].textContent, '업체 확인 필요');
+  assert.equal(rows[1].children[5].textContent.startsWith('수집 실패'), true);
+  assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
 test('비관리 잔액 변화는 이전 확인 시각과 비교하되 충전을 확정하지 않는다', async () => {
   const run = launch({data:inventory([fixture({management:{cadence:'weekly'},collection:{
     status:'ok',bizmoney:15000,bizmoney_at:'2026-10-04T09:00:00+09:00',
@@ -542,27 +575,22 @@ test('수집 실패 코드는 원인별 한국어 설명이며 옛 기록을 네
   });
 });
 
-test('허용된 관리 변경만 필수 사유와 단계 개정값을 보내며 중복 저장을 막는다', async () => {
-  let resolveWrite;
+test('직원 관제는 관리 상태만 표시하고 포함·제외·수동조회 업무 버튼을 만들지 않는다', async () => {
   const data = inventory([fixture({ management: { cadence: 'daily', stage_revision: 'r1', excluded: false, can_manage: true, can_collect: true } }),
     fixture({ ad_account_no: 701, management: { cadence: 'blocked', can_manage: false, can_collect: false } }),
     fixture({ ad_account_no: 702, management: { cadence: 'daily', can_manage: 'true', can_collect: 1 } })]);
-  const run = launch({ respond: req => req.method === 'GET' ? data : new Promise(resolve => { resolveWrite = resolve; }) });
+  const run = launch({ me: {scope:'MINE',owner_verification:true,verified_linking:true}, data });
   await flush();
   await showAccounts(run);
   const actions = run.buttons('inventoryRows');
-  assert.deepEqual(actions.map(x => x.textContent), ['관제 제외', '지금 조회', '기간 재확인']);
-  actions[0].dispatch('click');
+  assert.deepEqual(actions.map(x => x.textContent), []);
+  assert.match(run.text('inventoryRows'), /실관리 · 일일 점검.*자동 수집/);
   run.elements.get('managementSave').dispatch('click');
   assert.equal(run.requests.filter(r => r.method === 'POST').length, 0);
   run.elements.get('managementReason').value = '휴면 확인';
   run.elements.get('managementSave').dispatch('click');
-  run.elements.get('managementSave').dispatch('click');
   await flush();
-  assert.deepEqual(run.requests.filter(r => r.method === 'POST'), [{ url: '/api/naver-auto/management/update', method: 'POST',
-    body: { ad_account_no: '700', stage_revision: 'r1', included: false, reason: '휴면 확인' } }]);
-  resolveWrite({}); await flush();
-  assert.match(run.text('toast'), /관제 제외.*광고/);
+  assert.equal(run.requests.filter(r => r.method === 'POST').length, 0);
 });
 
 test('기간 재확인은 닫힌 날짜 최대 31일과 현재 계정 권한을 검사하고 한 번만 요청한다', async () => {
@@ -570,11 +598,16 @@ test('기간 재확인은 닫힌 날짜 최대 31일과 현재 계정 권한을 
   const data = inventory([fixture({ management: { cadence: 'daily', can_collect: true } }),
     fixture({ ad_account_no: '701', management: { cadence: 'daily', can_collect: false } }),
     fixture({ ad_account_no: '702', possibility_id: null, management: { cadence: 'daily', can_collect: true } })]);
-  const run = launch({ respond: request => request.method === 'GET' ? data : new Promise(resolve => { release = resolve; }) });
+  const run = launch({ me:{scope:'ALL',owner_verification:true,verified_linking:true},
+    respond: request => request.method === 'GET' ? data : new Promise(resolve => { release = resolve; }) });
   await flush();
   await showAccounts(run);
   const buttons = run.buttons('inventoryRows').filter(button => button.textContent === '기간 재확인');
   assert.equal(buttons.length, 1);
+  const recovery = tree(run.elements.get('inventoryRows')).find(el => el.tagName === 'DETAILS' && el.className === 'collection-recovery');
+  assert.ok(recovery);
+  assert.notEqual(recovery.getAttribute('open'), '');
+  assert.equal(run.buttons('inventoryRows').some(button => /관제 포함|관제 제외/.test(button.textContent)), false);
   buttons[0].dispatch('click');
   assert.match(run.text('periodDescription'), /합성 업체.*700/);
   const start = run.elements.get('periodStart'), end = run.elements.get('periodEnd'), save = run.elements.get('periodSave');
@@ -592,7 +625,8 @@ test('기간 재확인은 닫힌 날짜 최대 31일과 현재 계정 권한을 
 });
 
 test('범위가 바뀌면 기간 재확인 창과 이전 계정 버튼은 요청할 수 없다', async () => {
-  const run = launch({ data: inventory([fixture({ management: { cadence: 'weekly', can_collect: true } })]) });
+  const run = launch({ me:{scope:'ALL',owner_verification:true,verified_linking:true},
+    data: inventory([fixture({ management: { cadence: 'weekly', can_collect: true } })]) });
   await flush();
   await showAccounts(run);
   const button = run.buttons('inventoryRows').find(item => item.textContent === '기간 재확인');
@@ -640,7 +674,7 @@ test('보고서 정정판은 감소·명시적 0·대조 대기를 표시하고 
   assert.match(run.text('reportsRows'), /남은 계정×일 2/);
   assert.doesNotMatch(run.text('reportsRows'), /PRIVATE_FINGERPRINT/);
   assert.ok(!run.buttons('reportsRows').some(button => button.textContent === '검토 승인'));
-  assert.ok(run.buttons('reportsRows').some(button => button.textContent === '검토 보류'));
+  assert.ok(!run.buttons('reportsRows').some(button => button.textContent === '검토 보류'));
   assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
 });
 
@@ -674,7 +708,7 @@ test('이전 판은 요청할 때만 페이지별 조회하며 담당 범위가 
   assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
 });
 
-test('보고서 검토는 capability true와 필수 메모가 있어야 내부 승인만 저장한다', async () => {
+test('모니터링 보고서는 서버 검토 권한이 있어도 검토 상태만 읽고 승인·보류 입력을 만들지 않는다', async () => {
   const data = { rows: [
     { report_id: 9, status: 'ready', can_review: true, payload: {} },
     { report_id: 10, status: 'partial', can_review: false, payload: {} },
@@ -682,16 +716,14 @@ test('보고서 검토는 capability true와 필수 메모가 있어야 내부 �
   ] };
   const run = launch({ screen: 'reports', respond: req => req.method === 'GET' ? data : {} });
   await flush();
-  assert.deepEqual(run.buttons('reportsRows').map(x => x.textContent), ['검토 승인', '검토 보류']);
-  run.buttons('reportsRows')[0].dispatch('click');
+  assert.deepEqual(run.buttons('reportsRows').map(x => x.textContent), []);
   run.elements.get('reviewSave').dispatch('click');
   assert.equal(run.requests.filter(r => r.method === 'POST').length, 0);
   run.elements.get('reviewNote').value = '기간과 누락을 확인함';
   run.elements.get('reviewSave').dispatch('click');
   await flush();
-  assert.deepEqual(run.requests.filter(r => r.method === 'POST'), [{ url: '/api/naver-auto/reports/review', method: 'POST',
-    body: { report_id: 9, decision: 'approved', note: '기간과 누락을 확인함' } }]);
-  assert.match(run.text('toast'), /검토 승인.*전송하지 않았습니다/);
+  assert.equal(run.requests.filter(r => r.method === 'POST').length, 0);
+  assert.match(run.text('reportsRows'), /모니터링.*읽기 전용/);
 });
 
 test('보고서 페이지는 담당 범위 안에서 이동하고 누락 전체 수를 잘라 표시하지 않는다', async () => {
@@ -717,18 +749,17 @@ test('보고서 페이지는 담당 범위 안에서 이동하고 누락 전체 
   assert.equal(run.requests.filter(req => req.method !== 'GET').length, 0);
 });
 
-test('관리 모달·버튼과 조회 응답은 담당 범위를 바꾸면 이전 대상을 저장하지 못한다', async () => {
+test('관리 입력은 노출되지 않으며 범위 변경 뒤 늦은 조회 응답을 되살리지 않는다', async () => {
   const pending = [];
   const row = fixture({ management: { cadence: 'weekly', stage_revision: 'r1', can_manage: true, can_collect: true } });
   const run = launch({ respond: req => req.url.includes('selection=all') ? inventory([row]) : new Promise(resolve => pending.push(resolve)) });
   await flush();
   await showAccounts(run);
   const oldButtons = run.buttons('inventoryRows');
-  oldButtons[0].dispatch('click');
+  assert.deepEqual(oldButtons, []);
   run.elements.get('managementReason').value = '담당 확인';
   run.scope('person:2');
   run.elements.get('managementSave').dispatch('click');
-  oldButtons[1].dispatch('click');
   assert.equal(run.requests.filter(r => r.method === 'POST').length, 0);
   assert.doesNotMatch(run.text('inventoryRows'), /합성 계정/);
   run.scope('person:3');
@@ -738,14 +769,14 @@ test('관리 모달·버튼과 조회 응답은 담당 범위를 바꾸면 이�
   assert.doesNotMatch(run.text('inventoryRows'), /옛 담당 계정/);
 });
 
-test('보고서의 늦은 응답·기존 검토 모달은 범위 변경 뒤 복원되지 않는다', async () => {
+test('보고서의 늦은 응답은 범위 변경 뒤 복원되지 않으며 검토 입력은 동작하지 않는다', async () => {
   const pending = [];
   const data = { rows: [{ report_id: 1, company_name: '최초 보고서', can_review: true, status: 'ready', payload: {} }] };
   const run = launch({ screen: 'reports', respond: req => req.url.includes('selection=all') ? data : new Promise(resolve => pending.push(resolve)) });
   await flush();
-  const oldButton = run.buttons('reportsRows')[0]; oldButton.dispatch('click');
+  assert.deepEqual(run.buttons('reportsRows'), []);
   run.elements.get('reviewNote').value = '검토';
-  run.scope('person:2'); run.elements.get('reviewSave').dispatch('click'); oldButton.dispatch('click');
+  run.scope('person:2'); run.elements.get('reviewSave').dispatch('click');
   run.elements.get('reviewSave').dispatch('click');
   assert.equal(run.requests.filter(r => r.method === 'POST').length, 0);
   assert.equal(run.text('reportsRows'), '');

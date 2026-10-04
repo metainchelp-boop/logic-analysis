@@ -82,7 +82,7 @@ class RuntimeStatusTest(TestCase):
             self.assertTrue(entered.wait(3))
             running = task.runtime_status()
             self.assertEqual((running["state"], running["indicator"]), ("collecting", "green"))
-            self.assertLessEqual(running["valid_for_seconds"], 15)
+            self.assertLessEqual(running["valid_for_seconds"], 25)  # 계정 HTTP 20초 + 관측 유예 5초
             self.clock.advance(running["valid_for_seconds"] + 1)
             self.assertEqual(task.runtime_status()["state"], "stale")
             self.assertEqual(len(self.http.calls), 1)
@@ -158,8 +158,9 @@ class RuntimeStatusTest(TestCase):
         for name in ("org_current", "hold", "record_access", "access_log", "runs_on"):
             setattr(self.store, name, getattr(audit, name))
         self.store.last_sync = lambda kind: {"at": self.clock.now()}
-        for module, name in ((Y, "org_due"), (Y, "stages_due"), (L, "pairing_due"), (M, "morning_due")):
+        for module, name in ((Y, "org_due"), (Y, "stages_due"), (L, "pairing_due"), (M, "morning_due"), (M, "continuous_due")):
             self.context.enter_context(patch.object(module, name, return_value=False))
+        self.context.enter_context(patch("naver_runtime.scheduler._ManagedMorningStore", side_effect=lambda store,now:store))
         def failed_factory():
             raise RuntimeError("합성 수동 수집 실패")
         task = Scheduler(replace(enabled(), inventory_enabled=True), self.store,
@@ -284,13 +285,16 @@ class RuntimeStatusTest(TestCase):
                 self.assertEqual(task.runtime_status()["indicator"], "green")
 
     def test_outer_scheduler_failure_is_not_cleared_by_next_empty_tick(self):
+        from naver_engine import morning as M
         failures = [True]
-        def runs(day):
+        def due(store, now):
             if failures.pop() if failures else False:
                 raise RuntimeError("SECRET_MARKER")
-            return []
-        self.store.runs_on = runs
-        task = Scheduler(Config("/synthetic/db", "/synthetic/sock", inventory_enabled=True, backup_enabled=True),
+            return False
+        self.context.enter_context(patch.object(M,"continuous_due",side_effect=due))
+        self.context.enter_context(patch("naver_runtime.scheduler._ManagedMorningStore", side_effect=lambda store,now:store))
+        self.store.monitoring_readiness = lambda now: None
+        task = Scheduler(Config("/synthetic/db", "/synthetic/sock", inventory_enabled=True, morning_enabled=True),
             self.store, clock=self.clock.now, monotonic_clock=self.clock.monotonic,
             naver_factory=lambda: N.NaverReader(creds(), transport=self.http, clock=self.clock))
         with self.assertRaises(RuntimeError):

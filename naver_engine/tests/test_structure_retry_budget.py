@@ -108,6 +108,11 @@ class StructureRetryBudgetTests(unittest.TestCase):
         row = fixture.store.structure_checks([A], fixture.clock.now())[A]
         self.assertEqual((row["status"], row["error_code"]), ("limited", "REQUEST_BUDGET"))
         self.assertEqual(fixture.store.structure_work(fixture.clock.now()), [])
+        fixture.clock.advance(30*60)
+        self.assertEqual(len(fixture.store.structure_work(fixture.clock.now())), 1)
+        outcome, row = self.run_structure(fixture, per_account_calls=1)
+        self.assertEqual((outcome.counts, row["error_code"]), ({"limited":1}, "REQUEST_CALL_CAP"))
+        self.assertEqual(fixture.store.structure_work(fixture.clock.now()), [])
 
     def test_rate_keeps_precedence_over_later_server_abort(self):
         fixture = self.fixture()

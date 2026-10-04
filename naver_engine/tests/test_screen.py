@@ -2,7 +2,7 @@
 
 두 갈래.
 1. **글자 규칙**(언제나 돈다 · 네트워크 0) — 인라인 스크립트 0 · 인라인 손잡이(on…=) 0 · 인라인 스타일 속성 0 ·
-   HTML 로 끼워 넣기(innerHTML 등) 0 · 바깥 주소 0 · 오래 두는 저장소 0 · 토큰 이름 · 끝나기 10분 전 갱신 · 1시간 쉼 · sso 를 가장 먼저
+   HTML 로 끼워 넣기(innerHTML 등) 0 · 바깥 주소 0 · 오래 두는 저장소 0 · 토큰 이름 · 끝나기 10분 전 갱신 · 4시간 쉼 · sso 를 가장 먼저
    지움 · 화면 주소 목록이 ③ 입구(``naver_relay.PAGE_SCREENS``)와 같음 · 엔진 알림 링크(``alerts.LINK_*``)가 모두 화면으로 열림.
 2. **진짜 브라우저**(Chromium · Playwright · Node) — 앞 서버(화면 파일 = ③ 입구 규칙 · API = ③ 중계 ``naver_relay.relay``)
    → 진짜 엔진 화면 API(가짜 ① · 가짜 저장소) 를 띄우고 ``screen_browser.js`` 가 열고 누른다. 색·숫자·줄이 서버와 같은지,
@@ -97,9 +97,9 @@ class TextRulesTest(unittest.TestCase):
         self.assertNotIn("indexedDB", CODE)
         self.assertEqual(re.findall(r"var KEY = '([^']+)';", CODE), ["naverWatch.session"])
         self.assertNotIn("getItem('token')", CODE)
-        # 갱신은 토큰 끝 시각에서 센다(페이지를 연 때가 아니라 · 새로 고침해도) · 1시간 넘게 손대지 않으면 이 창의 로그인을 끝낸다
+        # 갱신은 토큰 끝 시각에서 센다. 모니터링용 무활동 4시간은 서버 12시간과 별도다.
         self.assertIn("var REFRESH_AHEAD_MS = 10 * 60 * 1000;", CODE)
-        self.assertIn("var IDLE_MS = 60 * 60 * 1000;", CODE)
+        self.assertIn("var IDLE_MS = 4 * 60 * 60 * 1000;", CODE)
         self.assertIn("state.timer = setInterval(tick, TICK_MS);", CODE)
         tick = CODE[CODE.index("function tick() {"):CODE.index("function scheduleRefresh")]
         self.assertIn("if (now - state.lastInput >= IDLE_MS) { lost('idle'); return; }", tick)

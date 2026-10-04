@@ -52,6 +52,9 @@ async function auditFluidScreens(page, cfg) {
     }
   }
   await page.locator('.top .menu [data-go="/naver/transfers"]').click();
+  const recovery = page.locator('#inventoryRows details.collection-recovery').first();
+  await recovery.locator('summary').waitFor();
+  if (!(await recovery.evaluate(element => element.open))) await recovery.locator('summary').click();
   const period = page.locator('#inventoryRows').getByRole('button', { name: '기간 재확인', exact: true }).first();
   await period.waitFor();
   for (const width of widths) {

@@ -137,6 +137,7 @@ class ViewSyncWebTest(unittest.TestCase):
 
     def test_token_refresh_keeps_login_generation_but_midnight_resets_cursor(self):
         self.now = RP.NOW.replace(hour=23, minute=55)
+        self.store.catalog["generated_at"] = self.now.isoformat()
         token = self.signer.issue(0, self.now)
         first = self.get("view_sync=1", token=token)[1]
         self.now += timedelta(minutes=1)

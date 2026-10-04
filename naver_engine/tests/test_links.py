@@ -833,7 +833,8 @@ class PairLinksTest(Base):
         self.assertEqual(cols, ["pairing_id", "possibility_id", "customer_id", "state", "code", "same_name",
                                 "claimed_elsewhere", "decision_id", "link"])
         cols = [r[1] for r in self.st._conn.execute("PRAGMA table_info(naver_auto_link_memory)")]
-        self.assertEqual(cols, ["possibility_id", "customer_id", "link", "first_matched_at", "last_matched_at"])
+        self.assertEqual(cols, ["possibility_id", "customer_id", "link", "first_matched_at", "last_matched_at",
+                                "auto_identity_fingerprint"])
 
 
 class TransferLostTest(Base):

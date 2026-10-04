@@ -30,7 +30,7 @@ const cfg = JSON.parse(process.argv[2]);
     await page.waitForSelector('#s-watch.on #kpis .kpi');
     await page.waitForSelector('#issues .iss');
     assert.equal(await page.isVisible('#verificationNotice'), true);
-    assert.ok((await page.textContent('#verificationNotice')).includes('미점검은 정상 판정이 아닙니다'));
+    assert.ok((await page.textContent('#verificationNotice')).includes('자료 미확인은 0이나 정상으로 표시하지 않습니다'));
     assert.equal(await page.locator('#issues .iss .act button').count(), 0);
     const read = path => page.evaluate(async path => {
       const session = JSON.parse(sessionStorage.getItem('naverWatch.session'));

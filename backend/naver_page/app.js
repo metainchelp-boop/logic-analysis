@@ -6,7 +6,7 @@
  * - 자체 토큰은 sessionStorage 의 「naverWatch.session」 — ③ 광고센터 로그인 토큰(브라우저 오래 두는 저장소의 「token」)과
  *   다른 이름·다른 곳.
  *   ③ 토큰은 읽지도 보내지도 않는다. 토큰(1시간)이 끝나기 10분 전에 /session/refresh(1분마다 살핌 · 토큰 끝 시각에서 센다 ·
- *   새로 고침해도 어긋나지 않게). 1시간 넘게 손대지 않으면 이 창의 로그인을 끝낸다(여럿이 쓰는 PC).
+ *   새로 고침해도 어긋나지 않게). 모니터링 중 4시간 넘게 손대지 않으면 이 창의 로그인을 끝낸다.
  * - 화면 글자는 textContent 로만 넣는다. 관제 안 이동과 ID 누락 업체의 공식 전산 입력 창만 허용한다.
  */
 (function () {
@@ -16,7 +16,7 @@
   var KEY = 'naverWatch.session';
   var TICK_MS = 60 * 1000;                  // 1분마다 세션을 살핀다
   var REFRESH_AHEAD_MS = 10 * 60 * 1000;    // 토큰이 끝나기 10분 전에 갱신 — 페이지를 연 때가 아니라 토큰 끝 시각에서
-  var IDLE_MS = 60 * 60 * 1000;             // 1시간 넘게 손대지 않으면 이 창의 로그인을 끝낸다(서버 12시간과 별도)
+  var IDLE_MS = 4 * 60 * 60 * 1000;         // 모니터링용 무활동 4시간(서버 12시간·권한 재검증과 별도)
   var END_WARN_MS = 15 * 60 * 1000;         // 로그인 뒤 12시간이 끝나기 15분 전에 한 번 알린다
   var SCREEN = /^\/naver\/(?:(dashboard|issues|system|unlinked|ended|links|settings|automation|reports|transfers)|clients\/([1-9][0-9]{0,17}))?$/;
 
@@ -24,7 +24,7 @@
     session: null, me: null, selection: 'all', filter: 'need', q: '', board: null, links: null, ended: null,
     client: null, clientId: null, ctab: 'now', spane: 'th', settings: null, health: null, bell: null,
     linksOpen: false, endedOpen: false, doneOpen: false, upOpen: false, gen: 0, timer: null, focus: null,
-    lastInput: Date.now(), refreshing: false, retryAt: 0, retryN: 0, warned: false, bellGen: 0,
+    lastInput: Date.now(), refreshing: false, retryAt: 0, refreshRetryTimer: null, warned: false, bellGen: 0,
     filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
     inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current', inventoryPanel: 'coverage',
     coverageQ: '', dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null, screen: null
@@ -416,6 +416,7 @@
   }
   function dropSession() {
     state.session = null;
+    clearTimeout(state.refreshRetryTimer); state.refreshRetryTimer = null;
     stopRuntime();
     state.upOpen = false; upContext = null;
     $('upToggle').textContent = '펼치기'; $('upToggle').setAttribute('aria-expanded', 'false');
@@ -485,7 +486,7 @@
     var T = {
       login: ['🔒', '전산에서 들어와 주세요', '네이버 관제는 전산(메타아이앤씨) 「광고 스튜디오 › 네이버 관제(읽기 전용)」 단추로 들어옵니다. 이 주소를 바로 열면 로그인할 수 없습니다.'],
       ended: ['⏱', '다시 들어와 주세요', '로그인이 끝났습니다(로그인 뒤 12시간이 지났거나 서버가 끝냄). 전산 「광고 스튜디오 › 네이버 관제(읽기 전용)」 단추로 다시 들어와 주세요.'],
-      idle: ['⏱', '오래 쉬어 로그인을 끝냈습니다 — 다시 들어와 주세요', '1시간 넘게 손대지 않아 이 창의 로그인을 끝냈습니다(여럿이 쓰는 PC 에서 다른 사람이 이어 쓰지 않게). 전산 「광고 스튜디오 › 네이버 관제(읽기 전용)」 단추로 다시 들어와 주세요.'],
+      idle: ['⏱', '오래 쉬어 로그인을 끝냈습니다 — 다시 들어와 주세요', '4시간 넘게 손대지 않아 이 창의 로그인을 끝냈습니다(다른 사람이 이어 쓰지 않게). 전산 「광고 스튜디오 › 네이버 관제(읽기 전용)」 단추로 다시 들어와 주세요.'],
       rejected: ['🔒', '전산 로그인을 확인하지 못했습니다', '전산에서 로그아웃됐거나 로그인이 끝났을 수 있습니다. 전산에 다시 로그인한 뒤 「광고 스튜디오 › 네이버 관제(읽기 전용)」 단추로 들어와 주세요.'],
       noscope: ['🙅', '관제 대상이 아닙니다', '조직 자료에 재직 중으로 있는 직원만 볼 수 있습니다. 전산 조직 정보가 맞는지 관리자에게 알려 주세요.'],
       busy: ['⏳', '잠시 뒤 다시 들어와 주세요', '들어오기 시도가 몰렸습니다. 1분쯤 뒤 전산에서 다시 들어와 주세요.'],
@@ -522,10 +523,12 @@
   }
   function refresh() {
     if (!state.session || state.refreshing) return Promise.resolve();
+    var refreshingSession = state.session;
+    clearTimeout(state.refreshRetryTimer); state.refreshRetryTimer = null;
     state.refreshing = true;
     return api('POST', '/session/refresh').then(function (j) {
       state.refreshing = false;
-      state.retryN = 0;
+      if (state.session !== refreshingSession) return;
       state.retryAt = 0;
       var scopeChanged = state.session && state.session.narrowed !== !!j.narrowed;
       saveSession(j);
@@ -542,8 +545,11 @@
     }, function (e) {
       state.refreshing = false;
       if (e && e.status === 401) return;   // lost() 가 처리
-      state.retryN = Math.min(state.retryN + 1, 5);   // 잠깐 막힘(503 · 네트워크) — 1 · 2 · 4 · 8 · 16분 뒤 다시
-      state.retryAt = Date.now() + Math.pow(2, state.retryN - 1) * 60 * 1000;
+      if (state.session !== refreshingSession) return;
+      // 갱신 실패는 최대 1분 뒤 재확인한다. 남은 수명이 짧으면 그 안에서 한 번 더 시도한다.
+      var delay = Math.min(TICK_MS, Math.max(1000, (refreshingSession.exp - Date.now()) / 2));
+      state.retryAt = Date.now() + delay;
+      state.refreshRetryTimer = setTimeout(tick, delay);
     });
   }
   /* 1분마다 — 오래 쉬었으면 끝내고 · 토큰이 끝났으면 끝내고 · 끝나기 10분 전이면 갱신 · 12시간 끝 15분 전에 한 번 알림 */
@@ -850,7 +856,7 @@
       state.focus = null;
     });
   }
-  var INVENTORY_MAPPING = { matched: '전산 업체 매칭', no_erp_record: '전산 내에 등록된 업체 정보 없음', unclassified: '미분류 · 확인 필요' };
+  var INVENTORY_MAPPING = { matched: '전산 업체 매칭', no_erp_record: '전산 미등록 · 비관리', unclassified: '업체 확인 필요' };
   function setInventoryPanel(panel) {
     if (state.inventoryPanel !== panel) {
       state.inventoryPanel = panel;
@@ -890,8 +896,8 @@
     var cards = [
       ['total', '이관 광고 계정', s ? num(s.current_total) : '—', '현재 이관 목록 · 빠짐 계정 제외', 'all', 'current'],
       ['matched', '매칭 완료', ready ? num(counts.matched) : '—', '전산 업체와 연결됨', 'matched', 'current'],
-      ['unknown', '업체 미확인', ready ? num(counts.no_erp_record) : '—', '연결 근거 없음 · 미등록 확정 아님', 'no_erp_record', 'current'],
-      ['unclassified', '미분류', ready ? num(counts.unclassified) : '—', '중복 후보·번호·원천 확인 필요', 'unclassified', 'current'],
+      ['unknown', '전산 미등록 · 비관리', ready ? num(counts.no_erp_record) : '—', '현재 전산 목록에 연결 업체 없음 · 비관리 모니터링', 'no_erp_record', 'current'],
+      ['unclassified', '업체 확인 필요', ready ? num(counts.unclassified) : '—', '후보·충돌·번호·원천 확인 필요 · 수집 결과와 별개', 'unclassified', 'current'],
       ['lost', '이관 빠짐', s && s.lost_count !== null ? num(s.lost_count) : '—', '2일·20시간 이상 부재 · 현재 총수와 별도', 'all', 'lost'],
       ['balance', '확인된 잔액 합계', won(money.known_sum), s ?
         (money.total_count === 0 && ready ? '대상 계정 없음' : '확인 ' + num(money.known_count) + ' / ' + num(money.total_count) + '계정 · 미확인 ' +
@@ -962,7 +968,7 @@
     renderInventoryBalance(data, rows);
     $('inventoryCount').textContent = (data.view === 'lost' ? '이관 빠짐 ' + num(rows.length) + '계정 · 현재 이관 ' + num(data.total) :
       num(rows.length) + ' / ' + num(data.total)) + '계정 · 매칭 ' +
-      num(data.counts.matched) + ' · 업체 미확인 ' + num(data.counts.no_erp_record) + ' · 미분류 ' + num(data.counts.unclassified);
+      num(data.counts.matched) + ' · 전산 미등록·비관리 ' + num(data.counts.no_erp_record) + ' · 업체 확인 필요 ' + num(data.counts.unclassified);
     $('inventorySource').textContent = '이관 목록 ' + (mdhm(data.accounts_at) || '수신 전') + ' · 전산 전체 목록 ' +
       (mdhm(data.catalog_at) || '수신 전') + (data.catalog_status !== 'accepted' || !data.accounts_current || data.matching_ready === false ?
       ' · 원본 확인 필요: 미등록 판정 및 직원 연결 표시를 보류합니다.' : ' · 목록 새로고침은 저장된 최신 결과를 다시 표시합니다.');
@@ -1041,7 +1047,7 @@
               h('span', { class: 'w' }, '비교 기준 ' + datedTime(c.previous_bizmoney_at)),
               h('span', { class: 'w' }, '잔액 변화만으로 충전을 확정하지 않습니다.')) : null),
         h('td', null, { daily: '실관리 · 일일 점검', weekly: '비관리 · 일요일 7일 점검', blocked: '관리 판단 보류' }[m.cadence] || '관리 정보 확인 전',
-          m.excluded === true ? h('span', { class: 'w' }, '수동 제외됨') : null,
+          m.excluded === true ? h('span', { class: 'w' }, '이전 수동 제외 기록 · 현재 수집 주기와 별도') : null,
           m.reason ? h('span', { class: 'w' }, managementReason(m.reason)) : null,
           managementActions(r)));
       });
@@ -1132,18 +1138,10 @@
   function managementActions(row) {
     var m = row.management || {}, actions = [];
     var fresh = function () { return rowCurrent('transfers', row); };
-    if (managementCapability('/management/update', { ad_account_no: row.ad_account_no, stage_revision: m.stage_revision })) {
-      actions.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) {
-        if (!fresh()) return;
-        managementEdit = { row: row, inventory: state.inventory, gen: state.gen, included: m.cadence !== 'daily' };
-        $('managementTitle').textContent = managementEdit.included ? '관제 포함' : '관제 제외';
-        $('managementDescription').textContent = (row.company_name || row.account_name || '이 계정') + ' · 광고 계정 ID ' + row.ad_account_no;
-        $('managementReason').value = '';
-        $('managementSave').textContent = managementEdit.included ? '관제 포함 저장' : '관제 제외 저장';
-        openModal('m-management', ev.currentTarget); $('managementReason').focus();
-      } }, m.cadence === 'daily' ? '관제 제외' : '관제 포함'));
-    }
-    if (managementCapability('/management/collect', { ad_account_no: row.ad_account_no })) {
+    var automatic = h('p', { class: 'w' }, m.cadence === 'blocked' ?
+      '자동 수집 보류 · 표시된 권한·원천 사유를 확인해 주세요.' : '자동 수집 대상입니다. 직원이 수집 버튼을 누를 필요는 없습니다.');
+    // 관제에서는 관리 정책을 편집하지 않는다. 기존 수동 읽기는 대표 복구용으로만 접어 둔다.
+    if (fullCollectionAllowed() && managementCapability('/management/collect', { ad_account_no: row.ad_account_no })) {
       actions.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) {
         if (!fresh() || !managementCapability('/management/collect', { ad_account_no: row.ad_account_no })) return;
         once('management-collect:' + row.ad_account_no, ev.currentTarget, function () {
@@ -1167,7 +1165,8 @@
         } }, '기간 재확인'));
       }
     }
-    return actions.length ? h('div', { class: 'account-actions' }, actions) : h('span', { class: 'w' }, '이 범위에서는 조회·변경할 수 없습니다');
+    return actions.length ? h('div', null, automatic, h('details', { class: 'collection-recovery' },
+      h('summary', null, '대표 복구용 조회 · 필요할 때만 펼치기'), h('div', { class: 'account-actions' }, actions))) : automatic;
   }
   function saveManagement() {
     var edit = managementEdit;
@@ -1391,21 +1390,7 @@
       (!row.validation || row.validation.status === 'complete'));
   }
   function reportActions(row) {
-    var buttons = [['approved', '검토 승인'], ['held', '검토 보류']].filter(function (action) {
-      return reportCapability('/reports/review', { report_id: row.report_id, decision: action[0] });
-    }).map(function (action) {
-      return h('button', { type: 'button', class: 'btn sm', onclick: function (ev) {
-        if (!rowCurrent('reports', row)) return;
-        reportEdit = { row: row, reports: state.reports, gen: state.gen, decision: action[0], label: action[1] };
-        $('reviewTitle').textContent = action[1];
-        var p = row.payload && row.payload.period || {};
-        $('reviewDescription').textContent = (row.company_name || '업체 이름 미확인') + ' · ' + periodText(p.start, p.end);
-        $('reviewNote').value = ''; $('reviewSave').textContent = action[1] + ' 저장';
-        openModal('m-report-review', ev.currentTarget); $('reviewNote').focus();
-      } }, action[1]);
-    });
-    return buttons.length ? h('div', { class: 'report-actions' }, buttons) :
-      h('p', { class: 'blocked-note' }, row.status !== 'ready' ? '집계 완료 전에는 승인할 수 없습니다. 수집 상태·누락을 확인해 주세요.' : '현재 담당 권한·자료 상태에서는 검토를 저장할 수 없습니다.');
+    return h('p', { class: 'blocked-note' }, '모니터링 보고서는 읽기 전용입니다. 집계·누락·기존 검토 기록을 확인할 수 있으며 여기서 승인하거나 업무를 처리하지 않습니다.');
   }
   function saveReportReview() {
     var edit = reportEdit;
@@ -1734,7 +1719,7 @@
                 'ambiguous-space': '번호를 가를 수 없음', 'claimed-by-several': '여러 광고주에 같은 번호',
                 'confirmed-elsewhere': '다른 광고주에 확인된 계정', 'name-points-elsewhere': '계정 이름이 다른 광고주를 가리킴' };
   var CONFIRM_BLOCK = {
-    'ended-over-14-days': '계약 종료 후 14일이 지나 연결을 확정할 수 없습니다. 전산 계약 종료일·진행 상태를 확인하고, 실제 계약 내용이 잘못된 경우 정정 후 동기화해 주세요.',
+    'ended-over-14-days': '연결 판정 자료가 이전 기준입니다. 새로고침해 최신 연결 상태를 확인해 주세요. 계약 종료 후 경과일만으로 연결을 제외하지 않습니다.',
     'ended-end-date-unknown': '계약만료 업체의 종료일을 확인할 수 없습니다. 전산 계약 종료일을 확인한 뒤 동기화해 주세요.',
     'contract-end-unreadable': '계약 종료일 자료를 읽지 못해 확정을 보류합니다. 전산 계약 자료와 동기화 상태를 확인해 주세요.',
     'contract-stage-conflict': '계약 진행 단계 자료가 서로 달라 확정을 보류합니다. 전산 계약 상태를 확인한 뒤 동기화해 주세요.',
@@ -1749,7 +1734,7 @@
     'accounts-stale': '이관 계정 목록이 오래되어 확정을 보류합니다. 계정 목록 동기화 후 새로고침해 주세요.',
     'pair-source-changed': '짝 맞추기 이후 원천 자료가 바뀌었습니다. 최신 원천으로 짝 맞추기가 완료된 뒤 새로고침해 주세요.',
     'org-stale': '조직 자료가 오래되어 확정을 보류합니다. 담당자·조직 동기화 후 새로고침해 주세요.',
-    'stage-not-monitored': '현재 진행 단계는 연결 확정 대상이 아닙니다. 전산의 실제 계약·진행 상태를 확인해 주세요.',
+    'stage-not-monitored': '연결 판정 자료가 이전 기준입니다. 새로고침해 최신 연결 상태를 확인해 주세요. 전산 업무 단계만으로 연결을 제외하지 않습니다.',
     'stage-time-unknown': '진행 단계 자료의 기준 시각을 확인할 수 없습니다. 전산 동기화 상태를 확인해 주세요.',
     'stage-stale': '진행 단계 자료가 오래되어 확정을 보류합니다. 전산 동기화 후 새로고침해 주세요.',
     'stage-time-in-future': '진행 단계 자료의 기준 시각이 맞지 않습니다. 관리자가 원천 시각·동기화 상태를 확인해야 합니다.',
@@ -2012,7 +1997,7 @@
                  h('td', { class: 'num' }, r.end_date ? md(r.end_date) : '모름'),
                  h('td', { class: 'num' }, typeof r.days_since_end === 'number' ? r.days_since_end + '일' : '—'),
                  h('td', null, r.still_linked ? h('span', { class: 'pill p-amber' }, '이관 남음 — 네이버에서 해제 권장') : h('span', { class: 'pill p-gray' }, '해제됨')),
-                 h('td', null, r.checks_stopped ? '점검 멈춤' : '점검 중(끝난 지 14일 안)'));
+                 h('td', null, r.checks_stopped ? '기존 계약 점검 멈춤 · 이관 계정 주간 관찰은 별도' : '기존 계약 점검 중(종료 14일 내) · 이관 계정 수집과 별도'));
       }) : h('tr', null, h('td', { colspan: 6, class: 'empty' }, '계약 끝난 광고주가 없습니다.')))));
     put(box, h('p', { class: 'hint pad' }, '계약이 끝날 때까지 쌓아 둔 기록과 하루 한 번 받는 대행 연결 목록에서 본 이관 여부뿐입니다(그 광고주 계정에 따로 들어가지 않음). 재계약되면 저절로 다시 매일 점검 대상이 됩니다.'), tbl);
     box.hidden = !state.endedOpen;
@@ -2074,7 +2059,7 @@
         REL[c.relation] ? h('span', { class: 'pill p-blue' }, REL[c.relation]) : null);
     renderNow();
     renderHist();
-    put($('p-rep'), h('div', { class: 'auto-soon' }, h('b', null, '4차에 엽니다.'), ' 이 광고주의 주간·월간 보고서가 여기에 쌓입니다. 「계정 확인 전」이면 만들지 않습니다.'));
+    put($('p-rep'), h('div', { class: 'auto-soon' }, h('b', null, '상단 「보고서」에서 확인해 주세요.'), ' 현재 관리 중이며 정확히 매칭된 업체의 보고서를 자동 생성합니다. 이 화면에서는 승인·게시·전송하지 않습니다.'));
     renderConn();
     setCtab(state.ctab);
   }
@@ -2090,6 +2075,25 @@
   }
   /* 타일 · 14일 막대는 서버가 센 값 그대로(모든 계정을 읽었을 때만 합 · 일부만 읽은 날은 흐리게) — 화면이 계정별 기록을
      다시 더하지 않는다(검토 client-tiles-summed-in-browser) */
+  function checkpointNotes(accounts) {
+    var today = kstDay(), notes = [], labels = {
+      'checkpoint-too-large': '광고 자료가 커서 상세 점검을 보류했습니다. 시스템이 다시 확인하며, 아직 정상으로 판정하지 않았습니다.',
+      'checkpoint-invalid': '읽던 위치의 기록을 확인할 수 없어 새로 점검합니다. 아직 정상으로 판정하지 않았습니다.'
+    };
+    (accounts || []).forEach(function (account) {
+      var seen = {};
+      (account.history || []).forEach(function (day) {
+        if (day.day !== today || day.status !== 'partial') return;
+        (day.rules_not_run || []).forEach(function (rule) {
+          var code = Array.isArray(rule) && rule[1];
+          if (!Object.prototype.hasOwnProperty.call(labels, code) || seen[code]) return;
+          seen[code] = true;
+          notes.push('계정 •••• ' + (account.tail || '') + ' · ' + labels[code]);
+        });
+      });
+    });
+    return notes;
+  }
   function renderNow() {
     var c = state.client;
     var days = c.days || [];
@@ -2101,6 +2105,7 @@
       out.push(h('div', { class: 'note ' + (c.link === 'broken' ? 'bad' : 'warn') }, '오늘 점검에서 모든 계정의 숫자를 읽지 못했습니다' +
         (c.verdict.color === 'white' ? '(' + statusText(c.verdict) + ')' : '') + ' — 일부만 더한 값은 보이지 않습니다. 「연결」 칸에서 이관 상태를 봅니다.'));
     }
+    checkpointNotes(c.accounts).forEach(function (note) { out.push(h('div', { class: 'note warn' }, note)); });
     if (c.accounts && c.accounts.length) {
       out.push(h('div', { class: 'tiles' },
         tile('어제 광고비', won(c.yday_spend), '오늘 점검 기준'), tile('노출', num(c.yday_imp), '어제'),
@@ -2119,7 +2124,7 @@
       if (any) out.push(bars);
     }
     put($('p-now'), h('div', { class: 'card' }, out),
-        h('div', { class: 'card flat' }, h('div', { class: 'kh' }, h('h2', null, '열린 이슈'), h('span', { class: 'n' }, '여기서 바로 👀 · ✅ · 🙈')),
+        h('div', { class: 'card flat' }, h('div', { class: 'kh' }, h('h2', null, '열린 이슈'), h('span', { class: 'n' }, '자동 점검에서 감지한 이상 현황')),
           openOf(c).length ? openOf(c).map(function (i) { return issueRow(i, 'client'); }) : h('div', { class: 'empty' }, '열린 이슈가 없습니다.')));
   }
   function openOf(c) { return (c.issues || []).filter(function (i) { return i.state_now === 'new' || i.state_now === 'ack'; }); }
@@ -2175,7 +2180,7 @@
     var dec = (state.links.decisions || []).filter(function (d) { return d.possibility_id === pid; });
     var list = rows.map(function (r) { return linkRow(r, 'client'); }).concat(dec.map(function (d) { return decisionRow(d, 'client'); }));
     put(box, h('div', { class: 'kh' }, h('h2', null, '🔗 이 광고주 짝 확인'), h('span', { class: 'n' }, readOnly() ?
-      '연결 확정 뒤에도 광고 변경·자동입찰·보고서 전송은 켜지지 않습니다' : '「이 계정 맞음」을 누르면 자동화·광고주 보고서가 켜질 수 있습니다')),
+      '연결 확정 뒤에도 광고 변경·자동입찰·보고서 전송은 켜지지 않습니다' : '연결 확인은 실적의 업체 귀속을 확인하는 절차이며 광고 변경·자동입찰·보고서 전송을 켜지 않습니다')),
         list.length ? list : h('div', { class: 'empty' }, '확인할 짝이 없습니다.'));
   }
 

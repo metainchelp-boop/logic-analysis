@@ -69,12 +69,12 @@ def classify(*, stage: str | None, stage_revision: str | None, matched: bool,
     if not matched:
         return CollectionDecision("weekly", "UNMATCHED_ACCOUNT", False)
     key = "".join(stage.split()) if isinstance(stage, str) else ""
-    if not key or not stage_revision:
+    if not key:
+        return CollectionDecision("weekly", "UNKNOWN_STAGE", False)
+    if not stage_revision:
         return CollectionDecision("blocked", "UNKNOWN_STAGE", False)
-    if excluded_revision == stage_revision:
-        return CollectionDecision("weekly", "MANUAL_EXCLUSION", True)
-    if included_revision == stage_revision:
-        return CollectionDecision("daily", "MANUAL_INCLUSION", True)
+    # 과거 수동 포함·제외는 감사 이력으로만 남긴다. 관제 자동 수집 주기는
+    # 사람이 바꾸지 않으며 현재 실관리 4단계/그 밖의 단계로만 결정한다.
     if key in DAILY_STAGES:
         return CollectionDecision("daily", "MANAGED_STAGE", True)
     return CollectionDecision("weekly", "NONMANAGED_STAGE", True)

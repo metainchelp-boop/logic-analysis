@@ -36,6 +36,7 @@ class _ManagedBoundary(S.ManagedStorage):
         self.now = now
         self._conn = self
         self.jobs, self.requests, self.events, self.daily_rows = [], [], [], []
+        self.structure_jobs = []
         self.progress = None
         self.catalog_state = "accepted"
         self.catalog = {"generated_at": now.isoformat(), "total": 1, "complete": True,
@@ -47,6 +48,18 @@ class _ManagedBoundary(S.ManagedStorage):
                              "included_revision": None, "possibility_id": 11, "stage_key": "진행중"}}
 
     def execute(self, sql, args=()):
+        # 공유 계정 대기 조회는 전체 작업 행이 아니라 정해진 5열의 최신 한 행이다.
+        if " ".join(sql.split()).startswith("SELECT status,error_code,checked_at,next_try_at,attempts FROM "):
+            source = self.structure_jobs if "naver_auto_structure_job" in sql else self.jobs
+            eligible = [(index,row) for index,row in enumerate(source)
+                        if row["customer_id"] == args[0] and (row["status"] == "ok"
+                        or row.get("error_code") in ("KEY_REJECTED","RATE","SERVER","NETWORK"))]
+            if not eligible:
+                return _Rows([])
+            _, row = max(eligible,key=lambda entry:(entry[1]["checked_at"],entry[0]))
+            return _Rows([{"status":row["status"],"error_code":row.get("error_code"),
+                           "checked_at":row["checked_at"],"next_try_at":row.get("next_try_at",row["checked_at"]),
+                           "attempts":row.get("attempts",0)}])
         if "naver_auto_performance_job" in sql:
             return _Rows(self.jobs)
         if "naver_auto_manual_read" in sql:
@@ -124,6 +137,17 @@ class ManagedStorageBoundaryTest(unittest.TestCase):
     def setUp(self):
         self.now = datetime(2026, 10, 5, 10, tzinfo=S.KST)
         self.st = _ManagedBoundary(self.now)
+
+    def test_account_guard_fixture_projects_latest_matching_customer_in_both_tables(self):
+        at = self.now.isoformat()
+        self.st.jobs = [{"customer_id":TM.A,"status":"reauth_required","error_code":"KEY_REJECTED",
+                         "checked_at":at,"next_try_at":at,"attempts":1},
+                        {"customer_id":TM.B,"status":"ok","checked_at":at}]
+        self.assertFalse(self.st.collection_account_ready(TM.A,self.now))
+        self.assertTrue(self.st.collection_account_ready(TM.B,self.now))
+        self.st.structure_jobs = [{"customer_id":TM.A,"status":"ok",
+                                  "checked_at":(self.now+timedelta(seconds=1)).isoformat()}]
+        self.assertTrue(self.st.collection_account_ready(TM.A,self.now+timedelta(seconds=1)))
 
     def test_two_unstarted_backfills_choose_one_account_without_comparing_dicts(self):
         job = self.st.performance_work(self.now, 1)[0]
@@ -393,7 +417,8 @@ class ManagedStorageTest(TM.Base):
         self.st.synchronize_management(self.fc.now())
         first = self.st.management_states()[TM.A]["stage_revision"]
         self.st.record_management_override(TM.A, first, False, 0, self.fc.now(), "대표 확인")
-        self.assertFalse(self.st.performance_work(self.fc.now(), 24))
+        self.assertEqual(self.st.performance_work(self.fc.now(), 24)[0]["kind"], "daily")
+        self.assertEqual(self.st.management_states()[TM.A]["excluded_revision"], first)
         self.fc.advance(1)
         self.managed("사후 관리")
         self.assertEqual(self.st.performance_work(self.fc.now(), 24)[0]["kind"], "daily")
@@ -524,11 +549,14 @@ class ManagedStorageTest(TM.Base):
         self.assertFalse(result["published"])
         self.assertEqual(self.report()["review_status"], "approved")
 
-    def test_refunded_stage_still_allows_report_for_earlier_saved_management_period(self):
+    def test_refunded_stage_preserves_existing_report_without_generating_new_ones(self):
         self.confirmed_periods()
+        self.st.generate_reports(self.fc.now())
+        previous = self.report()
         self.fc.advance(1)
         self.managed("환불 완료")
-        self.st.generate_reports(self.fc.now())
+        self.assertEqual(self.st.generate_reports(self.fc.now())["generated"], 0)
+        self.assertEqual(self.report()["report_id"], previous["report_id"])
         self.assertEqual(self.report()["status"], "ready")
         self.assertEqual(self.report()["payload"]["totals"]["spend"], 30000)
 

@@ -436,12 +436,29 @@ def _check_fields(fields: Sequence[str], allowed=F.STAT_FIELDS_SUMMARY) -> Tuple
     return out
 
 
+class RequestPacer:
+    """직렬 실행기의 reader 교체 사이에도 유지하는 내부 공유 호출 간격.
+
+    네이버 공식 상한이 아니라 현재 서버의 안전 예산이다. 같은 단조 시계 영역을
+    사용하는 직렬 reader만 공유한다. HTTP 재시도/429 휴지는 별도로 유지한다.
+    """
+    def __init__(self):
+        self.last_sent = None
+
+    def pace(self, clock, sleep):
+        gap = 1.0 / CALLS_PER_SEC
+        now = clock.monotonic()
+        if self.last_sent is not None and now-self.last_sent < gap:
+            sleep(gap-(now-self.last_sent))
+        self.last_sent = clock.monotonic()
+
+
 # ── 관문 ─────────────────────────────────────────────────────────────
 class NaverReader:
     """대행사 키로 네이버를 **읽기만** 한다. 회차(점검 한 번)마다 하나 만든다 — 호출 수·멈춤 횟수를 센다."""
 
     def __init__(self, credentials: ManagerCredentials, *, transport=None, clock=None, rng=None,
-                 max_calls: int = DEFAULT_MAX_CALLS) -> None:
+                 max_calls: int = DEFAULT_MAX_CALLS, pacer=None) -> None:
         if not isinstance(credentials, ManagerCredentials):
             raise TypeError("대행사 키가 아닙니다")
         self._cred = credentials
@@ -454,6 +471,7 @@ class NaverReader:
         self.pauses = 0
         self._rate_limited = False
         self._last_sent: Optional[float] = None
+        self._pacer = pacer if pacer is not None else RequestPacer()
         self._rate_hits: collections.deque = collections.deque()
         self._request_limits = []
 
@@ -473,6 +491,13 @@ class NaverReader:
     # 손잡이
     def manager_handle(self) -> H.ManagerHandle:
         return H.issue_manager_handle(self._cred.customer_id, self._clock.now())
+
+    def share_pacing(self, pacer):
+        """첫 HTTP 전 실행기의 공유 간격을 연결한다. 이미 읽은 객체는 재연결하지 않는다."""
+        if not isinstance(pacer, RequestPacer) or (self.calls and self._pacer is not pacer):
+            raise ValueError("읽기 시작 후에는 공유 간격을 바꿀 수 없습니다")
+        self._pacer = pacer
+        return self
 
     @contextmanager
     def bounded_requests(self, *, max_calls: int, max_seconds: float):
@@ -515,9 +540,9 @@ class NaverReader:
         if self.calls >= self._max_calls:
             raise RunAbort("call-cap", code="REQUEST_CALL_CAP")
         self._remaining(request=True)
-        self._pace()
         if type(ah) is H.InventoryHandle:
             H.require_inventory(ah, self._clock.now())
+        self._pace()
         # 원천/권한 재검증도 회차 시간을 쓴다. 검증 전의 남은 시간으로
         # HTTP를 보내면 이미 마감된 회차에서 요청하거나 타임아웃을 넘긴다.
         timeout = self._remaining(request=True)
@@ -547,10 +572,7 @@ class NaverReader:
             raise NaverApiError(KIND_OTHER, path_shape(path), None, None, customer_id, type(e).__name__) from None
 
     def _pace(self) -> None:
-        gap = 1.0 / CALLS_PER_SEC
-        now = self._clock.monotonic()
-        if self._last_sent is not None and now - self._last_sent < gap:
-            self._sleep(gap - (now - self._last_sent))
+        self._pacer.pace(self._clock, self._sleep)
         self._last_sent = self._clock.monotonic()
 
     def _note_rate(self) -> None:

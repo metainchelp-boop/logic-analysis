@@ -22,6 +22,7 @@
 5. 그 계정을 사람이 다른 가망의 짝으로 이미 확인했으면 멈춘다 · 사람이 「아님」이라 한 조합은 다시 올리지 않는다.
 6. **이름이 어긋나지 않는다** — ① 상호와 네이버 계정 이름을 ① 과 같은 규칙(``looseName``)으로 정리해
    「같음 · 한쪽이 다른 쪽을 품음 · 모름(너무 짧음)」이면 통과. 「다름」이면 멈춘다.
+   관제 경로에서만 검증·저장한 숫자 근거가 현재와 같으면 이름 변경 후에도 기존 자동 짝을 유지한다.
    계정 이름이 **다른 가망의 상호와 같으면**(이 가망과는 같지 않고) 멈춘다.
 
 이름 정리는 ① ``ProspectMatchKeys.normalizeName`` · ``looseName`` 과 같은 규칙이다 — ① 자바 코드를 그대로 돌린 정답표
@@ -33,6 +34,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -184,6 +187,7 @@ class Pair:
     customer_id: int = field(repr=False)
     link: str = LINK_AUTO
     name_relation: str = REL_UNKNOWN
+    auto_identity_fingerprint: Optional[str] = field(default=None, repr=False, compare=False, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -247,14 +251,27 @@ def _cid_like(v, what: str) -> int:
 
 def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential],
           accounts: Mapping[int, Mapping], decisions: Iterable[HumanDecision] = (),
-          *, accounts_complete: bool, previous_ad_accounts: Optional[Mapping[int, int]] = None) -> PairingResult:
+          *, accounts_complete: bool, previous_ad_accounts: Optional[Mapping[int, int]] = None,
+          auto_evidence: Optional[Mapping[Tuple[int, int], str]] = None) -> PairingResult:
     """한 번에 전부 맞춘다. ``accounts`` = 읽기 관문의 ``ChildAccounts.accounts``(고객 번호 → 남길 칸).
 
     ``accounts_complete=True`` 는 관문이 **모든 관리계정의 모든 쪽을 받았을 때만** 넘긴다(반박 H1).
     ``previous_ad_accounts`` 는 현재 목록에서 빠진 계정의 옛 대응이며 이관 빠짐 표시에만 쓴다.
+    ``auto_evidence`` 는 관제 저장소가 검증 후 남긴 숫자 근거다. 기본값은 기존 이름 검사를 유지한다.
+    근거가 같아도 현재 이관·번호 유일성·사람 거절·다른 업체를 가리키는 이름 검사는 생략하지 않는다.
     """
     if accounts_complete is not True:
         raise IncompleteAccounts("대행 연결 목록을 전부 받았을 때만 짝을 맞춘다")
+    if auto_evidence is not None:
+        if not isinstance(auto_evidence, Mapping):
+            raise BadInput("자동 연결 근거 모양이 아님")
+        for key, value in auto_evidence.items():
+            if not isinstance(key, tuple) or len(key) != 2:
+                raise BadInput("자동 연결 근거 열쇠 모양이 아님")
+            _pid(key[0])
+            _cid(key[1])
+            if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value):
+                raise BadInput("자동 연결 근거 지문 모양이 아님")
 
     # 가망
     names: Dict[int, Optional[str]] = {}
@@ -343,6 +360,7 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
     seen = set()
     all_claims = set()                       # 관리 대상 밖·보류 행의 주장도 지우지 않는다
     held_claims = set()
+    identity_claims = {}
     for c in credentials:
         if not isinstance(c, ErpCredential):
             raise BadInput("자격 행 모양이 아님")
@@ -352,6 +370,7 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
             continue
         explicit = c.ad_account_no_raw is not None and c.ad_account_no_raw != ""
         cid, why = parse_customer_id(c.customer_id_raw)
+        input_cid, ad_no = cid, None
         if cid is not None:
             # 구 입력칸에서 번호 종류가 모호하면 양쪽 계정을 모두 보호한다.
             if cid in cids:
@@ -398,6 +417,7 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
             else:
                 blocked.append(Blocked(pid, why))
             continue
+        identity_claims.setdefault((pid, cid), set()).add(json.dumps([input_cid, ad_no], separators=(",", ":")))
         if (pid, cid, explicit) not in seen:
             seen.add((pid, cid, explicit))
             claims.append((pid, cid, explicit))
@@ -429,14 +449,18 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
             blocked.append(Blocked(pid, B_CONFIRMED_ELSEWHERE, cid))
             continue
         rel = name_relation(names[pid], acc_name[cid], AUTO_CONTAIN_MIN)
-        if rel == REL_DIFFERENT:
+        numeric_identity = ["auto-identity-v1", pid, cid, accounts[cid]["adAccountNo"],
+                            sorted(identity_claims[(pid, cid)])]
+        fingerprint = hashlib.sha256(json.dumps(numeric_identity, separators=(",", ":")).encode()).hexdigest()
+        retained = auto_evidence is not None and auto_evidence.get((pid, cid)) == fingerprint
+        if rel == REL_DIFFERENT and not retained:
             blocked.append(Blocked(pid, B_NAME_DIFFERENT, cid))
             continue
         ak = loose_name(acc_name[cid])
         if rel != REL_SAME and ak is not None and prospects_by_loose.get(ak, set()) - {pid}:
             blocked.append(Blocked(pid, B_NAME_ELSEWHERE, cid))
             continue
-        pairs.append(Pair(pid, cid, LINK_AUTO, rel))
+        pairs.append(Pair(pid, cid, LINK_AUTO, rel, auto_identity_fingerprint=fingerprint))
         paired.setdefault(pid, set()).add(cid)
         paired_cids.add(cid)
 

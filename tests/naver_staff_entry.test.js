@@ -52,11 +52,17 @@ function launch(options = {}) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(match => [match[1], new Element()]));
   const events = new Map();
   const timers = new Map();
+  const intervals = new Map();
   const storage = new Map(Object.entries(options.storage || {}));
   const requests = [];
   const messages = [];
   const trace = [];
   let timerId = 0;
+  let now = Date.now();
+  class ClockDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
+  }
   const location = new URL(options.url || `https://watch.invalid/naver/reports?sso_start=${requestId}`);
   const parent = {
     postMessage(data, origin) {
@@ -93,17 +99,17 @@ function launch(options = {}) {
     addEventListener() {}
   };
   const context = vm.createContext({
-    window, document, location, history, URL, URLSearchParams, TextEncoder, Uint8Array, AbortController, performance,
+    window, document, location, history, URL, URLSearchParams, TextEncoder, Uint8Array, AbortController, performance, Date: ClockDate,
     btoa: text => Buffer.from(text, 'binary').toString('base64'),
     sessionStorage: {
       getItem: key => storage.get(key) || null,
       setItem: (key, value) => storage.set(key, value),
       removeItem: key => storage.delete(key)
     },
-    setTimeout: (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; },
+    setTimeout: (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay, next: now + delay }); return id; },
     clearTimeout: id => timers.delete(id),
-    setInterval: () => ++timerId,
-    clearInterval() {},
+    setInterval: (fn, delay) => { const id = ++timerId; intervals.set(id, { fn, delay, next: now + delay }); return id; },
+    clearInterval: id => intervals.delete(id),
     fetch: async (url, init) => {
       trace.push('fetch');
       requests.push({ url, init });
@@ -116,6 +122,8 @@ function launch(options = {}) {
       const response = runtime ? { status:200, body:{runtime:{state:'unavailable', indicator:'red',
         reason_code:'UNAVAILABLE', verified_at:null, valid_for_seconds:0, retry_at:null}} } : url.endsWith('/session') ? (options.session || {
         status: 200, body: { token: 'synthetic-session-token', expires_in: 3600 }
+      }) : url.endsWith('/session/refresh') ? (options.refresh ? options.refresh() : {
+        status: 200, body: { token: 'synthetic-refreshed-token', expires_in: 3600 }
       }) : url.includes('/reports?') ? { status: 200, body: { selection: 'all', rows: [], page: 0, total: 0, next_page: null } } :
         (options.me || { status: 200, body: { scope: 'MINE', name: '합성 직원' } });
       return { status: response.status, ok: response.status >= 200 && response.status < 300,
@@ -126,6 +134,22 @@ function launch(options = {}) {
   vm.runInContext(app, context, { filename: 'app.js' });
   return {
     window, location, storage, requests, messages, trace, elements, events, timers,
+    advance: async milliseconds => {
+      const end = now + milliseconds;
+      while (intervals.size || timers.size) {
+        const next = Math.min(...[...intervals.values(), ...timers.values()].map(timer => timer.next));
+        if (next > end) break;
+        now = next;
+        for (const timer of [...intervals.values()]) {
+          if (timer.next === next) { timer.next += timer.delay; timer.fn(); }
+        }
+        for (const [id, timer] of [...timers]) {
+          if (timer.next === next) { timers.delete(id); timer.fn(); }
+        }
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      now = end;
+    },
     text: () => ['b-t', 'b-p'].map(id => elements.get(id).textContent).join('\n'),
     message: overrides => {
       const receive = events.get('message');
@@ -187,14 +211,18 @@ test('암호화가 끝나지 않으면 대기 제한 시간에 실패하며 무�
   assert.match(await blocked(run), /진단 코드: NV-E06/);
 });
 
-test('출처 정보 누락은 서버 장애가 아닌 전산 진입 안내와 고정 코드로 표시한다', async () => {
+test('referrer가 없어도 허용된 전산 창의 출처·요청·PKCE 확인 뒤 로그인한다', async () => {
   const run = launch({ referrer: '' });
-  const text = await blocked(run);
-  assert.match(text, /진단 코드: NV-E02/);
-  assert.match(text, /출처 정보/);
-  assert.match(text, /광고 스튜디오 › 네이버 관제/);
-  assert.doesNotMatch(text, /지금 관제에 닿지 않습니다/);
-  assert.equal(run.requests.length, 0);
+  await until(() => run.messages.length === 4);
+  assert.deepEqual(run.messages.map(message => message.origin), [
+    'https://metainc.co.kr', 'http://metainc.co.kr', 'https://www.metainc.co.kr', 'http://www.metainc.co.kr'
+  ]);
+  run.message();
+  await until(() => run.elements.get('s-reports').classList.contains('on'));
+  const payload = JSON.parse(run.requests[0].init.body);
+  const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(payload.codeVerifier));
+  assert.equal(Buffer.from(digest).toString('base64url'), run.messages[0].data.codeChallenge);
+  assert.equal(run.requests.filter(request => request.url === '/api/naver-auto/session').length, 1);
   assert.equal(run.window.opener, null);
 });
 
@@ -206,7 +234,9 @@ test('수신부 실패 사유를 구분해 안내하되 모든 경우 인증 교
     ['허용하지 않은 출처', { referrer: `https://untrusted.invalid/${secretMarker}` }, 'NV-E03'],
     ['해석할 수 없는 출처', { referrer: secretMarker }, 'NV-E03'],
     ['새 창 연결 없음', { opener: false }, 'NV-E04'],
+    ['referrer와 새 창 연결 모두 없음', { referrer: '', opener: false }, 'NV-E04'],
     ['내장 창', { iframe: true }, 'NV-E05'],
+    ['referrer 없는 내장 창', { referrer: '', iframe: true }, 'NV-E05'],
     ['응답 만료', {}, 'NV-E06', async run => { await until(() => run.messages.length); run.timeout(); }],
     ['암호화 기능 없음', { crypto: {} }, 'NV-E07'],
     ['암호화 실패', { crypto: { getRandomValues: array => array.fill(1), subtle: {
@@ -312,6 +342,7 @@ test('허용 출처의 정상 로그인은 실제 PKCE와 한 번의 교환을 �
 test('출처·보낸 창·요청 번호가 다른 메시지는 무시하고 기존 1분 제한 뒤 차단한다', async t => {
   const forgeries = [
     ['다른 출처', { origin: 'https://untrusted.invalid' }],
+    ['허용 목록이어도 기존 referrer와 다른 출처', { origin: 'https://www.metainc.co.kr' }],
     ['다른 창', { source: {} }],
     ['다른 요청', { data: { type: 'METAINC_SSO_CODE', requestId: 'X'.repeat(43), code } }],
     ['다른 유형', { data: { type: 'OTHER', requestId, code } }]
@@ -332,6 +363,23 @@ test('출처·보낸 창·요청 번호가 다른 메시지는 무시하고 기�
   }
 });
 
+test('referrer 없이도 위조 출처·다른 창·다른 요청은 인증 교환에 도달하지 않는다', async t => {
+  for (const overrides of [
+    {origin:'null'}, {origin:'https://metainc.co.kr.untrusted.invalid'}, {source:{}},
+    {data:{type:'METAINC_SSO_CODE',requestId:'X'.repeat(43),code}}
+  ]) {
+    await t.test(JSON.stringify(overrides), async () => {
+      const run = launch({referrer:''});
+      await until(() => run.messages.length === 4);
+      run.message(overrides);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(run.requests.length, 0);
+      run.timeout();
+      assert.match(await blocked(run), /NV-E06/);
+    });
+  }
+});
+
 test('새 진입 실패는 이 창의 이전 세션을 지우고 직접 주소·구형 토큰은 허용하지 않는다', async t => {
   for (const query of ['', '?sso=' + secretMarker, `?sso_start=${requestId}&sso=${secretMarker}`]) {
     await t.test(query || '직접 주소', async () => {
@@ -341,10 +389,10 @@ test('새 진입 실패는 이 창의 이전 세션을 지우고 직접 주소·
       assert.equal(run.location.search, '');
     });
   }
-  const run = launch({ referrer: '', storage: {
+  const run = launch({ referrer: 'https://untrusted.invalid', storage: {
     'naverWatch.session': JSON.stringify({ token: 'synthetic-old-token', exp: Date.now() + 3600000 })
   } });
-  assert.match(await blocked(run), /NV-E02/);
+  assert.match(await blocked(run), /NV-E03/);
   assert.equal(run.storage.size, 0);
   assert.equal(run.requests.length, 0);
 });
@@ -360,4 +408,42 @@ test('저장 세션의 조직 자료 오류에도 진단을 표시하고 401 세
       assert.equal(run.storage.size, status === 401 ? 0 : 1);
     });
   }
+});
+
+test('모니터링 세션은 무활동 4시간 전까지 갱신하고 4시간에는 종료한다', async () => {
+  const run = launch();
+  await until(() => run.messages.length);
+  run.message();
+  await until(() => run.elements.get('s-reports').classList.contains('on'));
+  await run.advance(239 * 60000);
+  assert.equal(run.elements.get('s-reports').classList.contains('on'), true);
+  assert.ok(run.storage.has('naverWatch.session'));
+  await run.advance(60000);
+  assert.match(await blocked(run), /오래 쉬어/);
+  assert.equal(run.storage.size, 0);
+});
+
+test('갱신이 반복 실패해도 1분마다 다시 확인하여 토큰 만료 전에 복구한다', async () => {
+  let calls = 0;
+  const run = launch({ refresh: () => ++calls <= 5 ? { status: 503, body: { error: 'engine-timeout' } } :
+    { status: 200, body: { token: 'synthetic-recovered-token', expires_in: 3600 } } });
+  await until(() => run.messages.length);
+  run.message();
+  await until(() => run.elements.get('s-reports').classList.contains('on'));
+  await run.advance(56 * 60000);
+  assert.equal(calls, 6);
+  assert.equal(JSON.parse(run.storage.get('naverWatch.session')).token, 'synthetic-recovered-token');
+  await run.advance(5 * 60000);
+  assert.equal(run.elements.get('s-reports').classList.contains('on'), true);
+});
+
+test('갱신 인증 거절은 계속 재시도하지 않고 세션을 종료한다', async () => {
+  let calls = 0;
+  const run = launch({refresh: () => {calls++; return {status:401,body:{error:'token-expired'}};}});
+  await until(() => run.messages.length); run.message();
+  await until(() => run.elements.get('s-reports').classList.contains('on'));
+  await run.advance(55 * 60000);
+  assert.equal(calls, 1);
+  assert.equal(run.storage.size, 0);
+  assert.match(await blocked(run), /다시 들어와 주세요/);
 });

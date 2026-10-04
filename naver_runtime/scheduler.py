@@ -15,15 +15,17 @@ log = logging.getLogger("naver_runtime.scheduler")
 
 class _ManagedMorningStore:
     """자동 아침 상세 점검도 실관리 대상만 읽게 한다. 이관 부재 판정은 유지한다."""
-    def __init__(self, store, now):
+    def __init__(self, store, now, exclude_customers=()):
         self.store = store
-        self.daily = {cid for cid,row in MS.snapshot(store,now).items() if row["decision"].cadence == "daily"}
+        self.excluded = frozenset(exclude_customers)
+        self.policies = MS.snapshot(store,now)
+        self.daily = {cid for cid,row in self.policies.items() if row["decision"].cadence == "daily"}
         # 동적 메서드 노출 없이 아침 읽기/판정에서 사용하는 공개 계약만 전달한다.
         self.account_day_marks_on = store.account_day_marks_on
+        self.accounts = store.accounts
         self.account_days_on = store.account_days_on
         self.accounts_read_at = store.accounts_read_at
         self.begin_run = store.begin_run
-        self.close_unlinked_issues = store.close_unlinked_issues
         self.decision_fingerprint = store.decision_fingerprint
         self.finish_run = store.finish_run
         self.issues = store.issues
@@ -35,9 +37,52 @@ class _ManagedMorningStore:
         self.runs_on = store.runs_on
         self.stage_as_of = store.stage_as_of
 
+    def morning_progress(self, *args):
+        return self.store.morning_progress(*args)
+
+    def begin_morning_progress(self, *args):
+        return self.store.begin_morning_progress(*args)
+
+    def record_morning_progress(self, *args):
+        return self.store.record_morning_progress(*args)
+
+    def finish_morning_progress(self, *args, **kwargs):
+        return self.store.finish_morning_progress(*args, **kwargs)
+
     def pairing_rows(self, pairing_id):
-        return [r for r in self.store.pairing_rows(pairing_id)
-                if r.get("customer_id") in self.daily or r["state"] in (S.PAIR_BROKEN,S.PAIR_MISSING)]
+        # 구형 14일 eligibility 때문에 짝 목록에서 빠진 현재 관리계정도 원천으로 구성한다.
+        confirmed = {(d.possibility_id,d.customer_id) for d in self.store.current_decisions() if d.decision == "confirmed"}
+        rows = [{"customer_id":cid,"possibility_id":row["possibility_id"],
+                 "state":S.PAIR_CONFIRMED if (row["possibility_id"],cid) in confirmed else S.PAIR_AUTO,
+                 "code":None,"link":None} for cid,row in self.policies.items()
+                if cid in self.daily and cid not in self.excluded]
+        present = {r["customer_id"] for r in self.store.accounts() if r["present"] == 1}
+        if pairing_id is not None:
+            rows.extend(r for r in self.store.pairing_rows(pairing_id)
+                        if r["state"] in (S.PAIR_BROKEN,S.PAIR_MISSING) and r.get("customer_id") not in present)
+        return rows
+
+    def monitoring_readiness(self, now):
+        _, state = IC.catalog_status(self.store, now)
+        if self.store.inventory_snapshot(now) is None:
+            return M.Readiness((M.CODE_ACCOUNTS_STEP_PENDING,))
+        if state != "accepted" or any(not row["source_current"] for row in self.policies.values()):
+            return M.Readiness((M.CODE_PAIRING_STALE,))
+        pairing = self.store.last_pairing(S.SYNC_ACCEPTED)
+        return M.Readiness((), None if pairing is None else pairing["pairing_id"])
+
+    def close_unlinked_issues(self, run_id, pairing_id, at):
+        return self.store.close_unlinked_issues(run_id, pairing_id, at, account_monitoring=True)
+
+    def monitoring_context(self, customer_id, possibility_id, now):
+        row = MS.snapshot(self.store, now).get(customer_id)
+        if not row or row["decision"].cadence != "daily" or row["possibility_id"] != possibility_id:
+            return None
+        if not self.store.inventory_account_valid(customer_id, row["snapshot_at"], now):
+            return None
+        if not self.store.collection_account_ready(customer_id, now):
+            return None
+        return dict(row, stage_as_of=datetime.fromisoformat(self.store.account_catalog()["generated_at"]))
 
 
 class Scheduler:
@@ -59,6 +104,9 @@ class Scheduler:
         self._next_steps = {}
         self._inventory_ready_at = 0.0
         self._naver_rate_ready_at = 0.0
+        self._naver_pacer = N.RequestPacer()
+        self._morning_retry_at = {}
+        self._inventory_customers = frozenset()
         self.last_tick = None
         self.last_errors = ()
         self._collection_lock = threading.Lock()
@@ -67,6 +115,12 @@ class Scheduler:
 
     def runtime_status(self):
         return self._runtime.snapshot()
+
+    def _reader(self, factory=None):
+        reader = (factory or self.naver_factory)()
+        if isinstance(reader, N.NaverReader):
+            reader.share_pacing(self._naver_pacer)
+        return reader
 
     @staticmethod
     def _runtime_problem(name, result):
@@ -146,7 +200,14 @@ class Scheduler:
                 result = CR.refused("REQUEST_EXPIRED")
             else:
                 code = CR.request_limit(self.store, self.clock(), exclude_id=request_id)
-                result = CR.refused(code) if code else CR.collect(self.store, actor, self.collection_factory())
+                if code:
+                    result = CR.refused(code)
+                else:
+                    options = dict(self.collection_factory())
+                    factory = options.get("naver_factory")
+                    if factory:
+                        options["naver_factory"] = lambda: self._reader(factory)
+                    result = CR.collect(self.store, actor, options)
         except N.RunAbort:
             result = {"status": "failed", "codes": ["COLLECTION_DEADLINE"]}
         except Exception:
@@ -178,7 +239,7 @@ class Scheduler:
         interval = 30 if name == "inventory" else 60
         due = last + interval if last is not None else now
         if name == "inventory":
-            due = max(due, self._inventory_ready_at)
+            due = self._inventory_ready_at
         if name in ("accounts", "inventory", "morning"):
             due = max(due, self._naver_rate_ready_at)
         self._next_steps[name] = due
@@ -186,6 +247,9 @@ class Scheduler:
             return
         self._last[name] = now
         self._next_steps[name] = now + interval
+        if name == "inventory":
+            # 일이 없거나 예외인 회차만 짧게 쉰다. HTTP 작업이 있으면 _inventory가 즉시 이어준다.
+            self._inventory_ready_at = now + interval
         self._runtime.begin_step(name)
         try:
             result = action()
@@ -230,6 +294,7 @@ class Scheduler:
             self._cycle_verified = False
             self._errors = []
             self._next_steps = {}
+            self._inventory_customers = frozenset()
             if self._run_collection():
                 # 준비 조회를 다시 반복하지 않는다. 다음 일반 예약 회차는 원래 주기로 판정한다.
                 self.last_tick = self.clock()
@@ -239,7 +304,7 @@ class Scheduler:
             c, st = self.config, self.store
             if c.sync_enabled:
                 if Y.org_due(st, self.clock()) or (c.inventory_enabled and self._midnight_source_due(S.SYNC_ORG)):
-                    self._step("org", lambda: Y.sync_org(self.erp_factory(), st, self.clock()))
+                    self._step("org", lambda: Y.sync_org(self.erp_factory(), st, self.clock(), account_monitoring=c.inventory_enabled))
                 if Y.stages_due(st, self.clock()) or (c.inventory_enabled and self._midnight_source_due(S.SYNC_STAGES)):
                     self._step("stages", lambda: Y.sync_stages(self.erp_factory(), st, self.clock()))
             if c.links_enabled or c.inventory_enabled:
@@ -256,16 +321,17 @@ class Scheduler:
             if c.morning_enabled:
                 now = self.clock().astimezone(S.KST)
                 if M.CHECK_START <= now.time().replace(tzinfo=None) < M.CHECK_DEADLINE:
-                    self._step("readiness", lambda: M.readiness(st, self.clock()))
-                if M.morning_due(st, self.clock()):
+                    self._step("readiness", lambda: _ManagedMorningStore(st, self.clock()).monitoring_readiness(self.clock())
+                               if c.inventory_enabled else M.readiness(st, self.clock()))
+                due = M.continuous_due(_ManagedMorningStore(st, self.clock()), self.clock()) \
+                    if c.inventory_enabled else M.morning_due(st, self.clock())
+                if due:
                     self._step("morning", self._morning)
             # 긴 암호화/전송 때문에 시스템 알림과 아침 심박이 밀리지 않도록 먼저 처리한다.
             if c.alerts_enabled:
                 self._step("alerts", lambda: self._alerts(), note=False)
             if c.backup_enabled:
-                now = self.clock()
-                if any(r["status"] in (S.RUN_DONE, S.RUN_FAILED) for r in st.runs_on(now.astimezone(S.KST).date())):
-                    self._step("backup", lambda: self._backup(), note=False)
+                self._step("backup", lambda: self._backup(), note=False)
             if c.metrics_enabled:
                 # 공유 성과 재수집/재전송은 아침 심박·백업 뒤에 제한된 회차로 수행한다.
                 self._step("metrics", lambda: self._metrics(), note=False)
@@ -302,23 +368,28 @@ class Scheduler:
         return at is None or at < start or at > now
 
     def _accounts(self):
-        reader = self.naver_factory()
+        reader = self._reader()
         try:
             return L.sync_accounts(reader, self.store, self.clock())
         finally:
             self._hold_naver_rate(reader)
 
     def _morning(self):
-        reader = self.naver_factory()
+        reader = self._reader()
         try:
             if not self.config.inventory_enabled:
                 return M.run_morning(reader, self.store, self.clock, th=self.store.thresholds())
             # 기존 경보/준비검사는 유지하되 상세 점검이 다음 성과 회차를 장시간 막지 않는다.
             with reader.bounded_requests(max_calls=24, max_seconds=30):
-                return M.run_morning(reader,
-                    _ManagedMorningStore(self.store, self.clock()) if self.config.inventory_enabled else self.store,
-                    self.clock, th=self.store.thresholds())
+                excluded = self._inventory_customers | {cid for cid,at in self._morning_retry_at.items()
+                                                        if at > self._monotonic()}
+                return M.run_continuous(reader, _ManagedMorningStore(self.store, self.clock(), excluded),
+                                        self.clock, th=self.store.thresholds())
         finally:
+            if self.config.inventory_enabled:
+                # 미완료 첫 계정만 매분 반복해 꼬리를 굶기지 않는다. 완료 계정은 날짜 원장이 제외한다.
+                self._morning_retry_at = {cid:at for cid,at in self._morning_retry_at.items() if at > self._monotonic()}
+                self._morning_retry_at.update({cid:self._monotonic()+120 for cid in reader.called_customers})
             self._hold_naver_rate(reader)
 
     def _backup(self):
@@ -331,27 +402,28 @@ class Scheduler:
         return result
 
     def _inventory(self):
-        reader = self.naver_factory()
+        reader = self._reader()
         # 전일·일요일·수동·보고기간 보충이 한 대기열과 같은 호출 예산을 공유한다.
         started = reader._clock.monotonic()
         before = reader.calls
         structure = None
         try:
-            with reader.bounded_requests(max_calls=24, max_seconds=30):
-                result = PR.run_performance(reader, self.store, self.clock, max_calls=18, max_seconds=20)
+            with reader.bounded_requests(max_calls=24, max_seconds=40):
+                result = PR.run_performance(reader, self.store, self.clock, max_calls=18, max_seconds=30)
                 calls_left = 24-(reader.calls-before)
-                seconds_left = 30-(reader._clock.monotonic()-started)
+                seconds_left = min(20, 40-(reader._clock.monotonic()-started))
                 if calls_left>0 and seconds_left>0 and not reader.rate_limited \
                         and result.code not in ("NOT_READY","SOURCE_CHANGED"):
-                    # 실적 단계에서 읽은 계정은 다음 회차에 구조를 읽는다. 계정당 8건·10초도 합산 제한이다.
+                    # 실적 단계에서 읽은 계정은 다음 회차에 구조를 읽는다. 계정당 8건·20초도 합산 제한이다.
                     structure = SR.run_structure(reader,self.store,self.clock,max_calls=min(6,calls_left),max_seconds=seconds_left,
                                                  exclude_customers=reader.called_customers)
                     # 기존 health/성과 반환은 유지하고 구조 원천 차단만 가동 표시에 관찰한다.
                     self._runtime.finish_step("structure", self._runtime_problem("structure", structure))
         finally:
+            self._inventory_customers = reader.called_customers
             if reader.calls > before:
-                # 새 reader의 호출이 이전 회차 후반과 같은 연속 30초 창에 겹치지 않는다.
-                self._inventory_ready_at = max(self._inventory_ready_at, self._monotonic() + 30)
+                # 호출 간격은 공유 pacer가 보장한다. 완료 후 고정 30초 공백은 두지 않는다.
+                self._inventory_ready_at = self._monotonic()
                 self._next_steps["inventory"] = self._inventory_ready_at
             self._hold_naver_rate(reader)
         # 개별 계정의 실패·재시도는 원장 경고로 남고, 원천 무효만 서비스 실패이다.

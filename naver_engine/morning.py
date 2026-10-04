@@ -64,6 +64,8 @@ from . import links as L
 from . import naver_read as N
 from . import store as S
 from . import sync as Y
+from . import management as MP
+from . import morning_progress as CP
 
 CHECK_START = time(6, 30)            # 설계 §매일 아침 점검 — 06:30 시작
 CHECK_DEADLINE = time(8, 0)          # 08:00 전 끝(② 08:00·08:30 작업과 같은 서버·같은 주소 — 겹치지 않게)
@@ -273,6 +275,25 @@ def morning_due(store: S.Store, now: datetime) -> bool:
     return True
 
 
+def continuous_due(store: S.Store, now: datetime) -> bool:
+    """자동 수집의 미완료 점검은 08시/3회에서 끊지 않는다. 실제 회차 실패 대기는 유지한다."""
+    today = _need_time(now).astimezone(S.KST).date()
+    start = datetime.combine(today, MP.COLLECTION_START, tzinfo=S.KST)
+    if now < start:
+        return False
+    ready = store.monitoring_readiness(now)
+    if not ready.ready:
+        return False
+    runs = _runs_today(store, today)
+    stale = set(store.my_running_runs())
+    if any(r["status"] == S.RUN_RUNNING and r["run_id"] not in stale for r in runs):
+        return False
+    if any(r["status"] == S.RUN_FAILED and r.get("finished_at") and
+           now-Y._aware(r["finished_at"]) < RETRY_AFTER for r in runs):
+        return False
+    return not runs or bool(_unfinished(store, ready.pairing_id, today, runs))
+
+
 # ── 네이버 응답 → 점검 입력 ──────────────────────────────────────────
 def _campaign_infos(raw: Sequence[Mapping], cid: int) -> Optional[Tuple[C.CampaignInfo, ...]]:
     """캠페인 목록 → 점검 입력. 모양을 모르면 None(모르는 모양을 켜짐·꺼짐으로 짐작하지 않는다)."""
@@ -344,7 +365,7 @@ class _Reads:
     shape_unknown: bool = False
 
 
-def _gate(clock: Callable[[], datetime], deadline: datetime) -> None:
+def _check_deadline(clock: Callable[[], datetime], deadline: datetime) -> None:
     if _need_time(clock()) >= deadline:
         raise _PastDeadline()
 
@@ -354,10 +375,10 @@ def _naver_kind(e: N.NaverApiError) -> str:
 
 
 def read_account(reader: N.NaverReader, ah, cid: int, today: date, clock: Callable[[], datetime],
-                 deadline: datetime) -> _Reads:
+                 deadline: datetime, *, progress=None) -> _Reads:
     """계정 한 곳을 읽는다 — 호출마다 마감을 본다(넘으면 ``_PastDeadline`` — 이 계정은 적지 않는다)."""
     r = _Reads()
-    _gate(clock, deadline)
+    _check_deadline(clock, deadline)
     try:
         raw = reader.get_campaigns(ah)
     except N.NaverApiError as e:
@@ -369,20 +390,26 @@ def read_account(reader: N.NaverReader, ah, cid: int, today: date, clock: Callab
         r.campaigns_error, r.shape_unknown = N.KIND_BAD_RESPONSE, True
         return r
     r.campaigns_raw, r.campaigns = raw, infos
-    _gate(clock, deadline)
+    _check_deadline(clock, deadline)
     try:
         r.bizmoney = reader.get_bizmoney(ah)
     except N.NaverApiError as e:
         r.bizmoney_error = _naver_kind(e)
         r.shape_unknown = r.shape_unknown or e.kind in (N.KIND_BAD_RESPONSE, N.KIND_MISMATCH)
+        if progress:
+            progress.discard()
+            progress = None  # 실제 실패가 섞인 회차는 내부 예산 재개 근거로 남기지 않는다.
     since, until, want = window(today)
     series: Dict[str, Dict[date, Dict[str, Optional[float]]]] = {}
-    if not infos:
+    if not infos and progress is None:
         r.series, r.through = series, until      # 캠페인이 없으면 쓴 돈도 없다(읽을 통계 없음 — 늦을 것도 없다)
         return r
     zero = {d: {f: 0 for f in STAT_FIELDS} for d in want}
     try:
-        _gate(clock, deadline)
+        _check_deadline(clock, deadline)
+        if progress is not None:
+            r.series, r.through = CP.read_stats(reader, ah, infos, today, clock, deadline, progress)
+            return r
         summ = reader.get_stats_summary(ah, [c.campaign_id for c in infos], since, until, fields=STAT_FIELDS)
         cycles = [summ.cycle_base_tm]
         for c in infos:
@@ -393,7 +420,7 @@ def read_account(reader: N.NaverReader, ah, cid: int, today: date, clock: Callab
             if row is not None and all(_known(row.get(f)) and row.get(f) == 0 for f in STAT_FIELDS):
                 series[c.campaign_id] = {d: dict(v) for d, v in zero.items()}   # 기간 합계가 정확히 0 — 날마다 0
                 continue
-            _gate(clock, deadline)
+            _check_deadline(clock, deadline)
             daily = reader.get_stats_daily(ah, c.campaign_id, since, until, fields=STAT_FIELDS)
             cycles.append(daily.cycle_base_tm)
             series[c.campaign_id] = reconcile(daily.days, row, want)
@@ -549,12 +576,24 @@ def run_requested(reader: N.NaverReader, store: S.Store, clock: Callable[[], dat
     return _run(reader, store, clock, now, today, limit, th, switches, _enabled(switches))
 
 
-def _run(reader, store, clock, now, today, deadline, th, switches, enabled):
+def run_continuous(reader, store, clock, *, th=DEFAULTS, switches=None):
+    """직렬 scheduler가 작은 HTTP 예산 안에서 미완료 계정만 이어서 점검한다."""
+    now = _need_time(clock())
+    L._need_fresh_naver(reader)
+    today = now.astimezone(S.KST).date()
+    start = datetime.combine(today, MP.COLLECTION_START, tzinfo=S.KST)
+    if now < start:
+        return _refused((CODE_TOO_EARLY,))
+    deadline = min(now+timedelta(seconds=30), datetime.combine(today+timedelta(days=1), time.min, tzinfo=S.KST))
+    return _run(reader, store, clock, now, today, deadline, th, switches, _enabled(switches), continuous=True)
+
+
+def _run(reader, store, clock, now, today, deadline, th, switches, enabled, *, continuous=False):
     pre: List[str] = []
     for rid in store.my_running_runs():   # 앞 회차가 죽으면서 닫지도 못함 — 한 번에 하나만 돌므로 지금 닫는다
         store.finish_run(rid, S.RUN_FAILED, now, error_kind=CODE_RUN_ORPHANED)
         pre.append(CODE_RUN_ORPHANED)
-    ready = readiness(store, now)
+    ready = store.monitoring_readiness(now) if continuous else readiness(store, now)
     if not ready.ready:
         return _refused(pre + list(ready.codes))
     runs = _runs_today(store, today)
@@ -562,7 +601,7 @@ def _run(reader, store, clock, now, today, deadline, th, switches, enabled):
         return _refused(pre + [CODE_RUN_RUNNING])
     if any(r["status"] == S.RUN_DONE for r in runs) and not _unfinished(store, ready.pairing_id, today, runs):
         return _refused(pre + [CODE_DONE_TODAY])
-    if len(runs) >= MAX_RUNS_PER_DAY:
+    if not continuous and len(runs) >= MAX_RUNS_PER_DAY:
         return _refused(pre + [CODE_RUNS_EXHAUSTED])
     redo = _redo_statuses(runs)
     try:
@@ -574,7 +613,7 @@ def _run(reader, store, clock, now, today, deadline, th, switches, enabled):
     tally: Counter = Counter()
     try:
         status, err = _body(reader, store, clock, run_id, ready.pairing_id, today, deadline, th, switches, enabled,
-                            redo, codes, counts, tally)
+                            redo, codes, counts, tally, continuous=continuous)
     except BaseException as e:
         kind = CODE_UNEXPECTED if not isinstance(e, S.StoreError) else "STORE_ERROR"
         try:
@@ -607,7 +646,7 @@ def _record(store: S.Store, run_id: int, row: dict, clock, counts: Counter, tall
 
 def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: date, deadline: datetime,
           th: Thresholds, switches, enabled: Tuple[str, ...], redo: frozenset, codes: List[str], counts: Counter,
-          tally: Counter) -> Tuple[str, Optional[str]]:
+          tally: Counter, *, continuous=False) -> Tuple[str, Optional[str]]:
     relevant, dups, per_cid = _pair_rows(store, pairing_id)
     if dups:
         codes.append(CODE_PAIR_DUPLICATE)
@@ -650,16 +689,33 @@ def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: da
     for i, r in enumerate(todo):
         if _need_time(clock()) >= deadline:
             counts["deadline_left"] += len(todo) - i
-            codes.append(CODE_DEADLINE_CUT)
+            codes.append("BUDGET_YIELD" if continuous else CODE_DEADLINE_CUT)
             break
         cid, pid = r["customer_id"], r["possibility_id"]
         p = prospects.get(pid)
-        end = None if p is None or p["latest_end_date"] is None else date.fromisoformat(p["latest_end_date"])
+        check_stage_at = stage_at
+        validate_monitoring = None
+        progress = None
         try:
-            if p is None or p["present"] != 1 or p["stage_conflict"] or p["end_unreadable"]:
-                raise H.NotEligible("prospect-not-managed")
-            ah = H.issue_check_handle(customer_id=cid, possibility_id=pid, link_state=r["state"], stage=p["stage_key"],
-                                      stage_as_of=stage_at, latest_end_date=end, now=_need_time(clock()))
+            if continuous:
+                current = store.monitoring_context(cid, pid, _need_time(clock()))
+                if current is None:
+                    codes.append(CODE_HANDLE_INVALID)
+                    counts["handle_invalid"] += 1
+                    continue
+                p, check_stage_at = current, current["stage_as_of"]
+                def validate_monitoring(customer, snapshot, at):
+                    latest = store.monitoring_context(customer, pid, at)
+                    return latest is not None and latest["snapshot_at"] == snapshot \
+                        and latest["stage_revision"] == current["stage_revision"]
+                ah = H.issue_inventory_handle(customer_id=cid, snapshot_at=current["snapshot_at"],
+                    now=_need_time(clock()), validate=validate_monitoring)
+            else:
+                end = None if p is None or p["latest_end_date"] is None else date.fromisoformat(p["latest_end_date"])
+                if p is None or p["present"] != 1 or p["stage_conflict"] or p["end_unreadable"]:
+                    raise H.NotEligible("prospect-not-managed")
+                ah = H.issue_check_handle(customer_id=cid, possibility_id=pid, link_state=r["state"], stage=p["stage_key"],
+                                          stage_as_of=stage_at, latest_end_date=end, now=_need_time(clock()))
         except H.NotEligible as e:
             status = V.CHECK_SYSTEM_GAP if e.reason in SYSTEM_GAP_REASONS else V.CHECK_NOT_ELIGIBLE
             if status == V.CHECK_SYSTEM_GAP:
@@ -668,24 +724,58 @@ def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: da
                     rules_run=(I.RULE_LINK,), rules_not_run=[(x, e.reason) for x in enabled])
             continue
         try:
-            reads = read_account(reader, ah, cid, today, clock, deadline)
+            if continuous:
+                progress = CP.Progress(store, cid, pid, today, clock)
+            reads = read_account(reader, ah, cid, today, clock, deadline, progress=progress)
+            if progress and (reads.campaigns_error or reads.bizmoney_error or reads.stats_error):
+                progress.discard()
             if _need_time(clock()) >= deadline:   # 마지막 읽기가 마감을 넘겨 끝났다 — 모두 되거나 모두 안 된 것
                 raise _PastDeadline()
             acc, day = account_input(cid, reads, today, th)
-            report = C.run_checks(acc, C.StageInfo(p["stage_key"], stage_at), _need_time(clock()), th, switches)
+            if validate_monitoring and not validate_monitoring(cid, current["snapshot_at"], _need_time(clock())):
+                raise H.HandleInvalid("monitoring-source-changed")
+            report = C.run_checks(acc, C.StageInfo(p["stage_key"], check_stage_at), _need_time(clock()), th, switches)
         except _PastDeadline:
             counts["deadline_left"] += len(todo) - i
-            codes.append(CODE_DEADLINE_CUT)
+            codes.append("BUDGET_YIELD" if continuous else CODE_DEADLINE_CUT)
             break
-        except N.RunAbort:
+        except N.RunAbort as exc:
+            if continuous and exc.cause_code is None and exc.code in ("REQUEST_DEADLINE", "REQUEST_CALL_CAP"):
+                codes.append("BUDGET_YIELD")
+                counts["abort_left"] += len(todo)-i
+                return S.RUN_DONE, None
+            if progress:
+                progress.discard()
             codes.append(CODE_RUN_ABORT)
             counts["abort_left"] += len(todo) - i
             return S.RUN_FAILED, CODE_RUN_ABORT
-        except H.HandleInvalid:
+        except (H.HandleInvalid, H.NotEligible):
+            if progress:
+                progress.discard()
             codes.append(CODE_HANDLE_INVALID)
             counts["handle_invalid"] += 1
             continue
+        except CP.ProgressLimit:
+            if progress:
+                progress.discard(blocked=True)
+            codes.append("CHECKPOINT_TOO_LARGE")
+            counts["checkpoint_limited"] += 1
+            _record(store,run_id,r,clock,counts,tally,codes,link=r["state"],status=V.CHECK_PARTIAL,
+                    rules_run=(),rules_not_run=[(x,"checkpoint-too-large") for x in enabled])
+            continue
+        except CP.ProgressCorrupt:
+            if progress:
+                progress.discard()
+            codes.append("CHECKPOINT_INVALID")
+            counts["checkpoint_invalid"] += 1
+            _record(store,run_id,r,clock,counts,tally,codes,link=r["state"],status=V.CHECK_PARTIAL,
+                    rules_run=(),rules_not_run=[(x,"checkpoint-invalid") for x in enabled])
+            continue
+        except S.StoreError:
+            raise
         except Exception:   # 계정 한 곳의 뜻밖의 오류(이상한 응답 등) — 그 계정만 적지 않는다(⚪ 점검 안 됨) · 경보
+            if progress:
+                progress.discard()
             codes.append(CODE_ACCOUNT_ERROR)
             counts["account_error"] += 1
             continue
@@ -704,6 +794,8 @@ def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: da
         if reads.campaigns_raw is not None:
             extra = dict(campaigns=reads.campaigns_raw, stats_day=window(today)[1],
                          stats=yesterday_stats(reads, today), provisional=True)
+        if progress and reads.series is not None and not (reads.campaigns_error or reads.bizmoney_error or reads.stats_error):
+            extra["morning_generation"] = progress.generation
         _record(store, run_id, r, clock, counts, tally, codes, link=r["state"], status=report.status,
                 rules_run=tuple(report.rules_run) + (I.RULE_LINK,), rules_not_run=report.rules_not_run,
                 findings=report.findings, data_late=day.get("data_late"), bizmoney=day.get("bizmoney"),

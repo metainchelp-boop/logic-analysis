@@ -87,7 +87,7 @@ class ManagementStoreTest(unittest.TestCase):
                 self.assertFalse(rows[cid]["decision"].attributable)
                 self.assertIsNone(rows[cid]["possibility_id"])
 
-    def test_hidden_or_unconfirmed_matched_stage_blocks_automatic_collection(self):
+    def test_hidden_or_unconfirmed_stage_collects_weekly_without_company_attribution(self):
         self.save([self.company(11, TM.A, stage_hidden=True),
                    self.company(12, TM.B, stage=None, stage_known=False)],
                   [E.NaverIdRow(11, M.VENDOR_NAVER, str(TM.A)),
@@ -95,8 +95,14 @@ class ManagementStoreTest(unittest.TestCase):
         rows = self.snapshot()
         for cid in (TM.A, TM.B):
             with self.subTest(cid=cid):
-                self.assertEqual(rows[cid]["decision"].cadence, "blocked")
-                self.assertEqual(rows[cid]["decision"].reason, "UNKNOWN_STAGE")
+                self.assertEqual(rows[cid]["decision"].cadence, "weekly")
+                self.assertFalse(rows[cid]["decision"].attributable)
+                self.assertIsNone(rows[cid]["possibility_id"])
+                self.assertFalse(rows[cid]["matched"])
+                with self.assertRaises(SC.ClientNotVisible):
+                    MS.require_action(self.st, self.fc.now(), 100, cid, allow_unmatched=True)
+                self.assertIsNone(MS.require_action(self.st, self.fc.now(), 0, cid,
+                                                   allow_unmatched=True)["possibility_id"])
 
     def test_org_missing_or_stale_blocks_collection_even_with_fresh_account_and_catalog(self):
         self.save([self.company(11, TM.A)], [E.NaverIdRow(11, M.VENDOR_NAVER, str(TM.A))])
@@ -113,7 +119,8 @@ class ManagementStoreTest(unittest.TestCase):
                              excluded_revision="stage-7")}
         row = self.snapshot(states)[TM.A]
         self.assertEqual(row["stage_revision"], "stage-7")
-        self.assertEqual(row["decision"].reason, "MANUAL_EXCLUSION")
+        self.assertEqual(row["decision"].reason, "MANAGED_STAGE")
+        self.assertEqual(row["excluded_revision"], "stage-7")
         self.st.catalog["items"][0]["stage"] = "사후 관리"
         changed = self.snapshot(states)[TM.A]
         self.assertEqual(changed["decision"].cadence, "daily")
@@ -154,12 +161,13 @@ class ManagementStoreTest(unittest.TestCase):
         with self.assertRaises(SC.ActionNotAllowed):
             MS.require_action(self.st, self.fc.now(), 0, TM.A, allow_unmatched=True)
 
-    def test_stored_inclusion_promotes_nonmanagement_but_does_not_survive_reassignment(self):
+    def test_stored_inclusion_is_history_only_and_does_not_promote_nonmanagement(self):
         self.save([self.company(11, TM.A, "환불완료")], [E.NaverIdRow(11, M.VENDOR_NAVER, str(TM.A))])
         self.st.states = {TM.A: dict(stage_key="환불완료", possibility_id=11, stage_revision="rev-2",
                                      included_revision="rev-2", excluded_revision=None)}
         row = MS.snapshot(self.st, self.fc.now())[TM.A]
-        self.assertEqual(row["decision"].reason, "MANUAL_INCLUSION")
+        self.assertEqual(row["decision"].reason, "NONMANAGED_STAGE")
+        self.assertEqual(row["decision"].cadence, "weekly")
         self.assertEqual(row["included_revision"], "rev-2")
         self.save([self.company(12, TM.A, "환불완료")], [E.NaverIdRow(12, M.VENDOR_NAVER, str(TM.A))])
         moved = MS.snapshot(self.st, self.fc.now())[TM.A]

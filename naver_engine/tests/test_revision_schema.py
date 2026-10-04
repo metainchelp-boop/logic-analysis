@@ -6,6 +6,7 @@ import unittest
 from naver_engine import store as S
 
 EXPECTED_COLUMNS = {
+    'naver_auto_link_memory': (('auto_identity_fingerprint', 'TEXT'),),
     'naver_auto_performance_job': (('generation', "TEXT NOT NULL DEFAULT ''"), ('source_wait_attempts', 'INTEGER NOT NULL DEFAULT 0')),
     'naver_auto_daily_performance': (('source_generation', "TEXT NOT NULL DEFAULT ''"), ('source_revision', 'INTEGER NOT NULL DEFAULT 1')),
     'naver_auto_manual_read': (('period_start', 'TEXT'), ('period_end', 'TEXT'), ('possibility_id', 'INTEGER'), ('request_kind', "TEXT NOT NULL DEFAULT 'manual'")),
@@ -47,6 +48,12 @@ class RevisionSchemaTest(unittest.TestCase):
         self.assertFalse(any(sql.startswith('ALTER') for sql in sql_strings(without_approved_additions(ast.parse(text)))))
         for changed in (text.replace(' ADD COLUMN ', ' DROP COLUMN '),
                         text.replace('(\"generation\",', '(\"not_approved\",'),
+                        text.replace('(\"auto_identity_fingerprint\", \"TEXT\")',
+                                     '(\"not_approved_fingerprint\", \"TEXT\")'),
+                        text.replace('(\"auto_identity_fingerprint\", \"TEXT\")',
+                                     '(\"auto_identity_fingerprint\", \"INTEGER\")'),
+                        text.replace('(\"auto_identity_fingerprint\", \"TEXT\")',
+                                     '(\"auto_identity_fingerprint\", \"TEXT NOT NULL\")'),
                         text.replace('for table, additions in _REVISION_COLUMNS.items():', 'for table, additions in unknown.items():')):
             self.assertNotEqual(changed, text)
             with self.assertRaises(AssertionError):

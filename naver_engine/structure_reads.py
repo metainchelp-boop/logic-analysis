@@ -287,7 +287,7 @@ def run_structure(reader, store, clock, *, limit=24, max_calls=6, max_seconds=10
                 store.begin_structure_check(job, clock())
                 handle = H.issue_inventory_handle(customer_id=job["customer_id"], snapshot_at=job["snapshot_at"],
                     now=clock(), validate=lambda cid, snapshot, at: store.structure_account_valid(job, at))
-                with reader.bounded_requests(max_calls=per_account_calls, max_seconds=min(10, max_seconds-elapsed)):
+                with reader.bounded_requests(max_calls=per_account_calls, max_seconds=min(20, max_seconds-elapsed)):
                     _read(reader, handle, job, values, store, clock)
                     reader.check_budget()
             except N.NaverApiError as exc:

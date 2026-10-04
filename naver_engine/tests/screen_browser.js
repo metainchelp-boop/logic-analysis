@@ -201,7 +201,7 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await ctx.close();
     }
 
-    // ── 1시간 넘게 손대지 않으면 이 창의 로그인을 끝낸다(검토 idle-refresh-forever) ──
+    // ── 모니터링용 무활동 4시간 전에는 유지하고 4시간 뒤에는 끝낸다 ──
     {
       const { ctx, log } = await newCtx(browser);
       const p = await page(ctx, log);
@@ -217,9 +217,11 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await p.waitForTimeout(200);
       await p.clock.runFor(35 * 60 * 1000);
       ok('쉼: 손댄 뒤 1시간이 안 되면 들어와 있다', await p.isVisible('#s-watch.on'));
-      await p.clock.runFor(30 * 60 * 1000);
+      await p.clock.runFor(180 * 60 * 1000);
+      ok('쉼: 무활동 4시간 전에는 모니터링을 유지한다', await p.isVisible('#s-watch.on'));
+      await p.clock.runFor(5 * 60 * 1000);
       await p.waitForSelector('#s-blocked.on');
-      ok('쉼: 1시간 넘게 손대지 않으면 「오래 쉬어 로그인을 끝냈습니다」', (await p.textContent('#b-t')).includes('오래 쉬어'));
+      ok('쉼: 4시간 넘게 손대지 않으면 「오래 쉬어 로그인을 끝냈습니다」', (await p.textContent('#b-t')).includes('오래 쉬어'));
       ok('쉼: 토큰을 지운다', (await p.evaluate(() => sessionStorage.getItem('naverWatch.session'))) === null);
       await hygiene('쉼', p, log, url);
       await ctx.close();
@@ -504,8 +506,12 @@ async function hygiene(tag, p, log, firstNavUrl) {
       const fakeClient = {
         possibility_id: 901, name: '예시가', stage: '진행중', managed: true, today: '2026-09-29', latest_end_date: null, relation: 'all',
         owner: { name: '담당가', team_name: '팀가' }, verdict: { color: 'white', needs_attention: true, reasons: [], white_reason: 'partial' },
-        accounts: [{ tail: '1234', account_name: null, link: 'confirmed', state: 'confirmed', history: [{ day: '2026-09-29', status: 'ok', yday_spend: 999999 }] },
-                   { tail: '5678', account_name: null, link: 'confirmed', state: 'confirmed', history: [] }],
+        accounts: [{ tail: '1234', account_name: null, link: 'confirmed', state: 'confirmed', history: [{
+          day: new Date(Date.now() + 9 * 3600000).toISOString().slice(0,10), status: 'partial', yday_spend: 999999,
+          rules_not_run: [['D1','checkpoint-too-large'],['D2','checkpoint-too-large']] }] },
+                   { tail: '5678', account_name: null, link: 'confirmed', state: 'confirmed', history: [{
+          day: new Date(Date.now() + 9 * 3600000).toISOString().slice(0,10), status:'partial',
+          rules_not_run:[['D1','checkpoint-invalid']] }] }],
         issues: [], link: 'listed', unlinked: false, account_unconfirmed: false,
         yday_spend: null, bizmoney: 5000, yday_imp: null, yday_clk: 3,
         days: [{ day: '2026-09-28', yday_spend: 100, complete: false }, { day: '2026-09-29', yday_spend: 200, complete: true }],
@@ -548,6 +554,11 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await p.waitForFunction(() => document.getElementById('c-name').textContent === '예시가');
       const tiles = await p.$$eval('#p-now .tile .v', (els) => els.map((e) => e.textContent));
       ok('가짜 값: 광고주 한 장 타일 = 서버 값(모르면 — · 0원으로 채우지 않음)', JSON.stringify(tiles) === JSON.stringify(['—', '—', '3', '5,000원']), tiles);
+      const checkpointText = await p.textContent('#p-now');
+      ok('가짜 값: 큰 자료·이어읽기 기록 문제를 계정별 쉬운 말로 표시',
+        /1234.*광고 자료가 커서 상세 점검을 보류/.test(checkpointText) &&
+        /5678.*읽던 위치의 기록을 확인할 수 없어 새로 점검/.test(checkpointText) &&
+        (checkpointText.match(/광고 자료가 커서 상세 점검을 보류/g)||[]).length === 1, checkpointText);
       const bars = await p.$$eval('#p-now .sbars i', (els) => els.map((e) => e.className));
       ok('가짜 값: 14일 막대 = 서버 날짜별 합(일부만 읽은 날은 흐리게)', JSON.stringify(bars) === JSON.stringify(['part', '']), bars);
       await ctx.close();
