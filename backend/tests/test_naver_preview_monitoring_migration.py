@@ -1,4 +1,4 @@
-"""Exact monitoring schema11 delta and synthetic ledger/rollback checks; no network."""
+"""Existing monitoring schema11 must survive the report JSON upgrade; no network."""
 import hashlib
 from contextlib import closing
 import sqlite3
@@ -32,10 +32,10 @@ def monitoring_source(before):
 
 
 class MonitoringMigrationContractTest(unittest.TestCase):
-    def test_only_exact_nullable_column_and_two_progress_tables_are_accepted(self):
+    def test_report_upgrade_preserves_the_existing_nullable_column_and_progress_tables(self):
         code = legacy.load('naver_preview_code_upgrade')
         before = legacy.StoreScopeTest.SOURCE
-        after = monitoring_source(before)
+        after = before + b'\n# report JSON only\n'
         with patch.object(code, 'STORE_SHA256', {
                 'old': hashlib.sha256(before).hexdigest(), 'target': hashlib.sha256(after).hexdigest()}):
             code.migration_contract(before, after)
@@ -43,8 +43,8 @@ class MonitoringMigrationContractTest(unittest.TestCase):
     def test_repinning_cannot_authorize_any_other_schema_change(self):
         code = legacy.load('naver_preview_code_upgrade')
         before = legacy.StoreScopeTest.SOURCE
-        approved = monitoring_source(before)
-        for after in (before, approved.replace(b"'TEXT'),)", b"'TEXT NOT NULL'),)"),
+        approved = before + b'\n# report JSON only\n'
+        for after in (legacy.StoreScopeTest.HISTORICAL_SOURCE, approved.replace(b"'TEXT'),)", b"'TEXT NOT NULL'),)"),
                       approved.replace(b'body TEXT, checksum', b'body BLOB, checksum'),
                       approved.replace(b'payload_bytes INTEGER NOT NULL DEFAULT 0', b'payload_bytes INTEGER DEFAULT 0'),
                       approved.replace(b'if column not in columns:', b'if column in columns:'),
@@ -56,12 +56,14 @@ class MonitoringMigrationContractTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'CODE_SCHEMA_CHANGED'):
                     code.migration_contract(before, after)
 
-    def test_same_version_without_actual_additions_is_not_a_running_target(self):
+    def test_same_version_without_existing_progress_tables_is_not_a_running_target(self):
         code = legacy.load('naver_preview_code_upgrade')
         fixture = legacy.DatabaseRollbackTest()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         code.DATA = fixture.data
+        with closing(sqlite3.connect(fixture.db)) as connection, connection:
+            connection.execute('DROP TABLE naver_auto_morning_chunk')
         with self.assertRaisesRegex(ValueError, 'DB_TARGET_SCHEMA'):
             code.verify_database_schema(code.TARGET_COMMIT, fixture.release, fixture.upgrade)
 
@@ -71,7 +73,9 @@ class MonitoringMigrationContractTest(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         with closing(sqlite3.connect(fixture.db)) as connection, connection:
             connection.executescript("""
-                INSERT INTO naver_auto_link_memory VALUES (11,12345,'auto','first','last');
+                INSERT INTO naver_auto_link_memory
+                    (possibility_id,customer_id,link,first_matched_at,last_matched_at)
+                    VALUES (11,12345,'auto','first','last');
                 INSERT INTO naver_auto_link_decision
                     (possibility_id,customer_id,decision,decided_by,decided_at)
                     VALUES (11,12345,'rejected',7,'prior-decision');
@@ -115,11 +119,13 @@ class MonitoringMigrationContractTest(unittest.TestCase):
                 VALUES (12,23456,'auto','old-writer-first','old-writer-last')""")
             self.assertEqual(connection.execute('PRAGMA integrity_check').fetchall(), [('ok',)])
 
-    def test_target_shaped_schema11_cannot_be_saved_as_the_old_rollback_database(self):
+    def test_incomplete_existing_schema11_cannot_be_saved_as_the_old_rollback_database(self):
         fixture = legacy.DatabaseRollbackTest()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         fixture.mutate_schema11()
+        with closing(sqlite3.connect(fixture.db)) as connection, connection:
+            connection.execute('DROP TABLE naver_auto_morning_progress')
         before = fixture.db.read_bytes()
         with self.assertRaisesRegex(ValueError, 'DB_OLD_SCHEMA'):
             fixture.code.db_snapshot(fixture.identity, fixture.release, fixture.upgrade)

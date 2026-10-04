@@ -6,17 +6,14 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from test_naver_preview_code_upgrade import load
+from test_naver_preview_code_upgrade import load, StoreScopeTest
 
 
 class SameSchemaContractTest(unittest.TestCase):
-    def test_repinned_method_change_cannot_omit_the_required_monitoring_migration(self):
+    def test_repinned_method_change_cannot_remove_the_existing_monitoring_schema(self):
         code = load('naver_preview_code_upgrade')
-        contract = json.loads((Path(__file__).with_name('fixtures') / 'naver_schema10_11_contract.json').read_text())['new_observed_unsealed']
-        source = ('SCHEMA_VERSION=11\n_SCHEMA=' + repr(tuple(contract['sql'])) + '\n' +
-                  '_REVISION_COLUMNS=' + repr(contract['revision_columns']) + '\n' +
-                  contract['migrate'] + '\ndef reviewed_method():\n    return 1\n').encode()
-        target = source.replace(b'return 1', b'return 2')
+        source = StoreScopeTest.SOURCE + b'\ndef reviewed_method():\n    return 1\n'
+        target = source.replace(b'return 1', b'return 2').replace(b'naver_auto_morning_chunk',b'unreviewed_chunk')
         with tempfile.TemporaryDirectory() as directory:
             old, new = (Path(directory).resolve() / name for name in ('old', 'new'))
             for root, body in ((old, source), (new, target)):

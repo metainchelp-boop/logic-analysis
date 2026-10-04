@@ -36,7 +36,15 @@ def sealed_code():
     module.TARGET_COMMIT = 'b'*40
     module.TARGET_SOURCE_SHA256 = 'd'*64
     module.STORE_SHA256['target'] = 'e'*64
+    module.REPORT_ASSETS = {route:(len(route.encode()),hashlib.sha256(route.encode()).hexdigest(),mime)
+                           for route,(_,_,mime) in module.REPORT_ASSETS.items()}
     return module
+
+
+def asset_response(code, route):
+    if route in code.REPORT_ASSETS:
+        return 200, {'content-type':code.REPORT_ASSETS[route][2], 'cache-control':'no-store',
+                     'x-content-type-options':'nosniff','referrer-policy':'no-referrer'}, route.encode()
 
 
 class ContractTest(unittest.TestCase):
@@ -162,6 +170,8 @@ class ContractTest(unittest.TestCase):
         code = sealed_code()
         release = Mock()
         def read(path, route, method='GET'):
+            if asset_response(code,route):
+                return asset_response(code,route)
             if route == '/_engine/health':
                 return 200, {}, b'{}'
             if route in ('/naver/', '/naver/dashboard'):
@@ -196,6 +206,8 @@ class ContractTest(unittest.TestCase):
             with self.subTest(source=source, confirm=confirm):
                 release = Mock()
                 def read(path, route, method='GET'):
+                    if asset_response(code,route):
+                        return asset_response(code,route)
                     if route == '/_engine/health':
                         return 200, {}, b'{}'
                     if route in ('/naver/', '/naver/dashboard'):
@@ -217,6 +229,8 @@ class ContractTest(unittest.TestCase):
     def test_target_probe_rejects_each_wrong_route_status_and_health_contract(self):
         code = sealed_code()
         routes = {'/me':401, '/dashboard':401, '/collection/status':401, '/links/confirm':401,
+                  '/reports/accounts?selection=all&kind=weekly&page=0':401,
+                  '/reports/detail?report_id=1&account_key=company':401,
                   '/reports':401, '/management/update':401, '/management/collect':401, '/reports/review':401,
                   '/reports/history?possibility_id=1&limit=20':401,
                   '/accounts/reasons?ad_account_no=1&page=0&selection=all':401,
@@ -290,46 +304,46 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, '1b790b864ce27766251a205259fa6a332f60f72b')
-        self.assertEqual(module.TARGET_COMMIT, '0a302856c6177c4f53145abaf9ed31b6a39654f3')
+        self.assertEqual(module.OLD_COMMIT, '0a302856c6177c4f53145abaf9ed31b6a39654f3')
+        self.assertEqual(module.TARGET_COMMIT, 'a38c53775c112cdf5db420f979093d6bee9e5376')
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         'ea7d119e539745cf5b9e183a669a64592d179ca5d205ece75b6af8b3368f0533')
-        self.assertEqual(module.TARGET_SOURCE_SHA256, '5c50a4d9197d93c2fe8ac3fb561795739dbc0aaf94f38c21ffdfd240a31057f8')
+                         '5c50a4d9197d93c2fe8ac3fb561795739dbc0aaf94f38c21ffdfd240a31057f8')
+        self.assertEqual(module.TARGET_SOURCE_SHA256, 'dc442fa19e4809b290124e8a72fa3243d911957176ba6988269ec27ef736302a')
         self.assertEqual(module.STORE_SHA256, {
-            'old':'d33bc6315eac7b020f17ffc87a19c920a1a307b3bf9799f921759cb60a1c3e2e',
-            'target':'18488100b2ea88fa243ebe64082d4c29b19264080d5684b4231bb0f7ffff1cc8'})
+            'old':'18488100b2ea88fa243ebe64082d4c29b19264080d5684b4231bb0f7ffff1cc8',
+            'target':'272e8993981823f65fde01b194eeedfb4deaf7c1942f980ff13e5645809752bb'})
         contract = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         # This historical migration fixture remains the original schema-11 release.
         self.assertEqual(contract['new_observed_unsealed']['sha256'],
                          '66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89')
         # Exact git archive delta: top-level tests, docs and seal tooling are not bundled.
         self.assertEqual(module.CODE_PATHS, {
-            'backend/app/naver_auto/matching.py', 'backend/app/naver_auto/org_snapshot.py',
-            'backend/naver_page/app.js', 'backend/naver_page/index.html', 'backend/naver_page/sso-bootstrap.js',
-            'naver_engine/backup.py', 'naver_engine/catalog_links.py', 'naver_engine/inventory.py',
-            'naver_engine/management.py', 'naver_engine/management_store.py', 'naver_engine/morning.py',
-            'naver_engine/morning_progress.py', 'naver_engine/naver_read.py', 'naver_engine/performance_reads.py',
-            'naver_engine/store.py', 'naver_engine/structure_reads.py', 'naver_engine/sync.py', 'naver_engine/web.py',
-            'naver_runtime/collection_requests.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py'})
+            'backend/app/naver_relay.py', 'backend/naver_page/app.css', 'backend/naver_page/app.js',
+            'backend/naver_page/index.html', 'backend/naver_page/report-pdf.js', 'backend/naver_page/report-ui.js',
+            'backend/naver_page/vendor/report-pdf/Apache-2.0.txt',
+            'backend/naver_page/vendor/report-pdf/NanumGothic-OFL.txt',
+            'backend/naver_page/vendor/report-pdf/NanumGothic-Regular.ttf.gz',
+            'backend/naver_page/vendor/report-pdf/THIRD-PARTY-NOTICES.txt',
+            'backend/naver_page/vendor/report-pdf/fontkit-1.1.1.umd.min.js',
+            'backend/naver_page/vendor/report-pdf/fontkit-LICENSE.txt',
+            'backend/naver_page/vendor/report-pdf/js-sha256-LICENSE.txt',
+            'backend/naver_page/vendor/report-pdf/manifest.json',
+            'backend/naver_page/vendor/report-pdf/pako-LICENSE.txt',
+            'backend/naver_page/vendor/report-pdf/pdf-lib-1.17.1.min.js',
+            'backend/naver_page/vendor/report-pdf/pdf-lib-LICENSE.txt',
+            'backend/naver_page/vendor/report-pdf/sha256-1.0.0.min.js',
+            'backend/naver_page/vendor/report-pdf/standard-fonts-LICENSE.txt',
+            'backend/naver_page/vendor/report-pdf/upng-LICENSE.txt',
+            'naver_engine/report_views.py', 'naver_engine/reporting.py', 'naver_engine/store.py',
+            'naver_engine/view_sync.py', 'naver_engine/web.py'})
         self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/catalog_links_screen_browser.js', 'naver_engine/tests/fluid_screen_audit.js',
-            'naver_engine/tests/inventory_screen_browser.js', 'naver_engine/tests/management_screen_browser.js',
-            'naver_engine/tests/owner_screen_browser.js', 'naver_engine/tests/screen_browser.js',
-            'naver_engine/tests/test_account_catalog.py', 'naver_engine/tests/test_auto_identity_memory.py',
-            'naver_engine/tests/test_backup.py', 'naver_engine/tests/test_catalog_links.py',
-            'naver_engine/tests/test_catalog_links_screen.py', 'naver_engine/tests/test_links.py',
-            'naver_engine/tests/test_managed_storage.py', 'naver_engine/tests/test_monitoring_identity_policy.py',
-            'naver_engine/tests/test_morning_continuous.py', 'naver_engine/tests/test_morning_progress.py',
-            'naver_engine/tests/test_owner_screen_copy.py', 'naver_engine/tests/test_performance_budget_wait.py',
-            'naver_engine/tests/test_performance_retry_cause.py', 'naver_engine/tests/test_reason_page_web.py',
-            'naver_engine/tests/test_report_paging.py', 'naver_engine/tests/test_report_revisions.py',
-            'naver_engine/tests/test_revision_schema.py', 'naver_engine/tests/test_screen.py',
-            'naver_engine/tests/test_sso_monitor_browser.py', 'naver_engine/tests/test_structure_retry_budget.py',
-            'naver_engine/tests/test_sync.py', 'naver_engine/tests/test_view_sync_web.py',
-            'naver_engine/tests/verified_collection_browser.js', 'naver_runtime/tests/test_auto_identity_proxy.py',
-            'naver_runtime/tests/test_collection_load.py', 'naver_runtime/tests/test_morning_progress_proxy.py',
-            'naver_runtime/tests/test_runtime_status.py', 'naver_runtime/tests/test_scheduler.py',
-            'naver_runtime/tests/test_scheduler_cadence.py', 'naver_runtime/tests/test_writer.py'})
+            'naver_engine/tests/fluid_screen_audit.js', 'naver_engine/tests/management_screen_browser.js',
+            'naver_engine/tests/report_pdf.test.js', 'naver_engine/tests/report_ui_model_test.js',
+            'naver_engine/tests/test_managed_storage.py', 'naver_engine/tests/test_report_accounts_web.py',
+            'naver_engine/tests/test_report_details.py', 'naver_engine/tests/test_report_pdf.py',
+            'naver_engine/tests/test_report_ui.py', 'naver_engine/tests/test_revalidation_collection.py',
+            'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_view_delta_screen.py',
+            'naver_engine/tests/view_delta_screen_browser.js'})
 
     def scenario(self, failure=None, mode='apply'):
         code = sealed_code()
@@ -392,6 +406,7 @@ class ContractTest(unittest.TestCase):
                     item=tarfile.TarInfo(name);item.size=len(body);item.mode=0o644
                     stream.addfile(item,io.BytesIO(body))
             release.validate_payload=lambda *args:(archive.getvalue(),previous_payload(*args)[1])
+            release.decode_payload=lambda raw,commit,digest:release.validate_payload(json.loads(raw),commit,digest)
             def extract(source, path):
                 path.mkdir()
                 for name, body in infrastructure.items():
@@ -436,6 +451,8 @@ class ContractTest(unittest.TestCase):
                     return json.dumps(row).encode()
                 return result
             def request_api_by_code(path,route,method='GET'):
+                if asset_response(code,route):
+                    return asset_response(code,route)
                 if route == '/naver/dashboard':
                     return 200, {'referrer-policy':'no-referrer','cache-control':'no-store'}, b'id="s-dashboard"'
                 if method=='POST':
@@ -605,7 +622,7 @@ class ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_monitoring_release_allows_only_exact_code_and_test_paths(self):
+    def test_report_release_allows_only_exact_code_and_test_paths(self):
         module=sealed_code()
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -616,24 +633,20 @@ class ContractTest(unittest.TestCase):
                 for name in approved:
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
             # Exact new runtime modules and bundled tests in this reviewed archive.
-            for name in ('naver_engine/morning_progress.py',
-                         'naver_engine/tests/test_auto_identity_memory.py',
-                         'naver_engine/tests/test_monitoring_identity_policy.py',
-                         'naver_engine/tests/test_morning_continuous.py',
-                         'naver_engine/tests/test_morning_progress.py',
-                         'naver_engine/tests/test_sso_monitor_browser.py',
-                         'naver_runtime/tests/test_auto_identity_proxy.py',
-                         'naver_runtime/tests/test_collection_load.py',
-                         'naver_runtime/tests/test_morning_progress_proxy.py'):
+            for name in ('naver_engine/report_views.py', 'backend/naver_page/report-ui.js',
+                         'backend/naver_page/report-pdf.js', 'naver_engine/tests/report_pdf.test.js',
+                         'naver_engine/tests/report_ui_model_test.js',
+                         'naver_engine/tests/test_report_accounts_web.py', 'naver_engine/tests/test_report_details.py',
+                         'naver_engine/tests/test_report_pdf.py', 'naver_engine/tests/test_report_ui.py'):
                 (old/name).unlink()
             for name in approved:
-                (new/name).write_bytes(b'approved monitoring delta')
+                (new/name).write_bytes(b'approved report delta')
             module.compatible_code_scope(old,new,upgrade)
             for name in ('naver_runtime/bootstrap.py','naver_engine/inventory_reads.py',
                          'naver_runtime/runtime_status.py','naver_engine/runtime_view.py',
                          'backend/app/naver_entry.py',
                          'naver_runtime/scheduler_extra.py','naver_engine/unreviewed_view_sync.py',
-                         'naver_engine/view_sync.py','naver_engine/web_extra.py',
+                         'naver_engine/morning_progress.py','naver_engine/web_extra.py',
                          'backend/app/naver_auto/scope.py',
                          'naver_engine/catalog_links_extra.py',
                          'naver_engine/credentials.py','naver_engine/session.py',
@@ -644,7 +657,7 @@ class ContractTest(unittest.TestCase):
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)
                 forbidden.unlink()
-            added=new/'naver_engine/tests/test_sso_monitor_browser.py'
+            added=new/'naver_engine/tests/test_report_ui.py'
             added.unlink();added.symlink_to(new/'backend/naver_page/app.js')
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
                 module.compatible_code_scope(old,new,upgrade)
@@ -660,7 +673,7 @@ class ContractTest(unittest.TestCase):
                 (root/'naver_engine/web.py').write_bytes(b'unchanged web')
                 (root/'naver_engine/credentials.py').write_bytes(b'unchanged credentials')
             (new/'naver_engine/tests').mkdir()
-            (new/'naver_engine/tests/test_sso_monitor_browser.py').write_bytes(b'approved browser wrapper')
+            (new/'naver_engine/tests/test_report_ui.py').write_bytes(b'approved browser wrapper')
             module.compatible_code_scope(old,new,upgrade)
             adjacent=new/'naver_engine/view_sync_extra.py'
             adjacent.write_bytes(b'not approved')
@@ -677,7 +690,7 @@ class ContractTest(unittest.TestCase):
                 module.compatible_code_scope(old,new,upgrade)
 
     def test_target_view_release_rejects_previous_archive_before_prepare_actions(self):
-        module=load('naver_preview_code_upgrade')
+        module=sealed_code()
         release=load('naver_preview_release')
         package=dict(baseline=module.EXPECTED_BASELINE, source_commit=module.TARGET_COMMIT,
                      ciphertext_sha256='c'*64, source_tar_gz_sha256=module.OLD_SOURCE_SHA256,
@@ -887,6 +900,9 @@ class StoreScopeTest(unittest.TestCase):
     TARGET_SOURCE = SOURCE.replace(b'_REVISION_COLUMNS={',
         b"_REVISION_COLUMNS={'naver_auto_link_memory': (('auto_identity_fingerprint', 'TEXT'),), ") + \
         b'\n_SCHEMA += '+repr(MONITORING_SQL).encode()+b'\n'
+    HISTORICAL_SOURCE = SOURCE
+    SOURCE = TARGET_SOURCE
+    TARGET_SOURCE = SOURCE + b'\n# Report v2 stores JSON in the same schema.\n'
 
     def setUp(self):
         self.code = sealed_code()
@@ -1193,12 +1209,17 @@ class DatabaseRollbackTest(unittest.TestCase):
         (self.root/'receipts').mkdir(mode=0o700)
         self.db=self.data/'engine.db'
         with closing(sqlite3.connect(self.db)) as connection, connection:
-            self.initialize_schema(connection, 11)
+            self.initialize_schema(connection, 11, monitoring=True)
             connection.executescript("CREATE TABLE business (id INTEGER PRIMARY KEY,value TEXT);"
                 "INSERT INTO business VALUES (1,'preserved');")
             connection.execute("""INSERT INTO naver_auto_monthly_check
                 (customer_id,period_start,period_end,snapshot_at,checked_at,status,spend,next_try_at)
                 VALUES (1,'2026-10-01','2026-10-01','synthetic','synthetic','ok',100,'synthetic')""")
+            connection.execute("INSERT INTO naver_auto_morning_progress VALUES (2,12,'day','binding','campaign',4,'reading','later',2)")
+            connection.execute("INSERT INTO naver_auto_morning_chunk VALUES (2,'campaigns',0,4,'{}','prior-checksum',2)")
+            connection.execute("""INSERT INTO naver_auto_report_snapshot
+                (possibility_id,period_key,revision_fingerprint,generated_at,status,review_status,payload_json)
+                VALUES (11,'prior-period','prior-fingerprint','prior-time','partial','pending','{"spend":37.5}')""")
             self.old_schema = connection.execute('SELECT type,name,sql FROM sqlite_master ORDER BY type,name').fetchall()
         self.db.chmod(0o600)
         self.code=sealed_code()
@@ -1234,6 +1255,9 @@ class DatabaseRollbackTest(unittest.TestCase):
                 VALUES (1,11,'2026-10-03','binding','campaign',1,'reading','later',2)""")
             connection.execute("INSERT INTO naver_auto_morning_chunk VALUES (1,'campaigns',0,1,'{}','checksum',2)")
             connection.execute("UPDATE business SET value='new-schema-write'")
+            connection.execute("""INSERT INTO naver_auto_report_snapshot
+                (possibility_id,period_key,revision_fingerprint,generated_at,status,review_status,payload_json)
+                VALUES (11,'prior-period','new-fingerprint','new-time','partial','pending','{"format_version":2}')""")
 
     def test_historical_schema10_initializer_still_cannot_open_the_schema11_snapshot(self):
         self.mutate_schema11()
@@ -1272,7 +1296,9 @@ class DatabaseRollbackTest(unittest.TestCase):
             self.assertEqual(connection.execute('SELECT type,name,sql FROM sqlite_master ORDER BY type,name').fetchall(),self.old_schema)
             self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='naver_auto_report_dirty'").fetchall(),[('naver_auto_report_dirty',)])
             self.assertEqual(connection.execute('SELECT customer_id,actor FROM naver_auto_manual_read').fetchall(),[])
-            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name LIKE 'naver_auto_morning_%'").fetchall(),[])
+            self.assertEqual(connection.execute('SELECT customer_id,generation,status FROM naver_auto_morning_progress').fetchall(),[(2,4,'reading')])
+            self.assertEqual(connection.execute('SELECT customer_id,body,checksum FROM naver_auto_morning_chunk').fetchall(),[(2,'{}','prior-checksum')])
+            self.assertEqual(connection.execute('SELECT report_id,payload_json FROM naver_auto_report_snapshot').fetchall(),[(1,'{"spend":37.5}')])
             self.assertEqual(connection.execute('PRAGMA integrity_check').fetchall(),[('ok',)])
         # Failed DB and sidecars stay on the same filesystem as the restored live DB.
         quarantine=self.data/('.account-failed-db-'+self.identity)
@@ -1283,8 +1309,10 @@ class DatabaseRollbackTest(unittest.TestCase):
             self.assertEqual(failed.execute('SELECT spend FROM naver_auto_monthly_check').fetchone(),(100,))
             self.assertEqual(failed.execute('SELECT customer_id,actor FROM naver_auto_manual_read').fetchone(),(1,0))
             self.assertEqual(failed.execute('SELECT value FROM business').fetchone(),('new-schema-write',))
-            self.assertEqual(failed.execute('SELECT generation,status FROM naver_auto_morning_progress').fetchone(),(1,'reading'))
-            self.assertEqual(failed.execute('SELECT body FROM naver_auto_morning_chunk').fetchone(),('{}',))
+            self.assertEqual(failed.execute('SELECT generation,status FROM naver_auto_morning_progress WHERE customer_id=1').fetchone(),(1,'reading'))
+            self.assertEqual(failed.execute('SELECT body FROM naver_auto_morning_chunk WHERE customer_id=1').fetchone(),('{}',))
+            self.assertEqual(failed.execute('SELECT report_id,payload_json FROM naver_auto_report_snapshot ORDER BY report_id').fetchall(),
+                             [(1,'{"spend":37.5}'),(2,'{"format_version":2}')])
         self.code.verify_database_schema(self.code.OLD_COMMIT,self.release,self.upgrade)
         self.assertTrue(path.is_file())
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),digest)

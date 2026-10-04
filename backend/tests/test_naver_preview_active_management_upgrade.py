@@ -6,11 +6,11 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from test_naver_preview_code_upgrade import load, StoreScopeTest
+from test_naver_preview_code_upgrade import load, sealed_code, asset_response, StoreScopeTest
 
 
 class SameSchemaContractTest(unittest.TestCase):
-    def test_actual_schema11_sql_and_initializer_accept_only_reviewed_monitoring_additions(self):
+    def test_actual_schema11_sql_and_initializer_keep_existing_monitoring_additions(self):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         code = load('naver_preview_code_upgrade')
         code.TARGET_COMMIT = 'b'*40
@@ -24,6 +24,8 @@ class SameSchemaContractTest(unittest.TestCase):
         sources['target'] = sources['target'].replace(b'_REVISION_COLUMNS={',
             b"_REVISION_COLUMNS={'naver_auto_link_memory': (('auto_identity_fingerprint', 'TEXT'),), ") + \
             b'\n_SCHEMA += '+repr(StoreScopeTest.MONITORING_SQL).encode()+b'\n'
+        sources['old'] = sources['target']
+        sources['target'] += b'\n# report JSON only\n'
         with tempfile.TemporaryDirectory() as directory:
             old, new = (Path(directory).resolve()/part for part in ('old', 'new'))
             for path, role in ((old, 'old'), (new, 'target')):
@@ -83,13 +85,14 @@ class SameSchemaContractTest(unittest.TestCase):
             self.assertNotEqual(code.schema_contract(StoreScopeTest.SOURCE), code.schema_contract(changed))
 
     def test_both_pinned_management_posts_require_401_and_old_ad_writes_stay_403(self):
-        code = load('naver_preview_code_upgrade')
-        code.TARGET_COMMIT = 'b'*40
+        code = sealed_code()
         new_posts = ('/management/update', '/management/collect', '/reports/review')
         for source in (code.OLD_COMMIT, code.TARGET_COMMIT):
             calls = []
             def request(socket, route, method='GET'):
                 calls.append((route, method))
+                if asset_response(code,route):
+                    return asset_response(code,route)
                 if route == '/_engine/health':
                     return 200, {}, b'{}'
                 if route in ('/naver/', '/naver/dashboard'):

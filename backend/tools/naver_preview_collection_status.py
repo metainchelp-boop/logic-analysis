@@ -12,7 +12,9 @@ CATALOG_LINKS_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
 DAILY_LIMITED_COMMIT = '01344b145d0b679a6ee730d7fa4b5990278dd654'
 RUNTIME_STATUS_COMMIT = '1b790b864ce27766251a205259fa6a332f60f72b'
 MONITORING_COMMIT = '0a302856c6177c4f53145abaf9ed31b6a39654f3'
-DAILY_LIMITED_COMMITS = frozenset((DAILY_LIMITED_COMMIT, RUNTIME_STATUS_COMMIT, MONITORING_COMMIT))
+REPORTS_COMMIT = 'a38c53775c112cdf5db420f979093d6bee9e5376'
+MONITORING_COMMITS = frozenset((MONITORING_COMMIT, REPORTS_COMMIT))
+DAILY_LIMITED_COMMITS = frozenset((DAILY_LIMITED_COMMIT, RUNTIME_STATUS_COMMIT)) | MONITORING_COMMITS
 CATALOG_LINKS_COMMITS = DAILY_LIMITED_COMMITS | frozenset((CATALOG_LINKS_COMMIT,))
 PROJECTION_SOURCE = r'''
 STAGES = frozenset(('진행중', '전략관리', '사후관리', '홀딩중', '재계약진행중', '환불중', '계약만료'))
@@ -464,10 +466,75 @@ def collect_morning_progress(connection, today):
                                            states=states,current_chunks=chunks), today)
 
 
+def reports_projection(value):
+    if not isinstance(value, dict) or set(value) != {'weekly','monthly'}:
+        raise ValueError('COLLECTION_REPORTS')
+    result = {}
+    for kind, row in value.items():
+        if (not isinstance(row, dict) or set(row) != {'period_key','latest_company_reports','versions','latest_generated_at'}
+                or not isinstance(row['versions'], dict) or set(row['versions']) != {'v1','v2','unknown'}):
+            raise ValueError('COLLECTION_REPORTS')
+        total = number(row['latest_company_reports'])
+        versions = {key:number(n) for key,n in row['versions'].items()}
+        latest = stamp(row['latest_generated_at'])
+        key = row['period_key']
+        if sum(versions.values()) != total or (total == 0) != (key is None and latest is None):
+            raise ValueError('COLLECTION_REPORTS')
+        if total:
+            if (latest is None or not isinstance(key, str) or not re.fullmatch(
+                    kind+r':[0-9]{4}-[0-9]{2}-[0-9]{2}:[0-9]{4}-[0-9]{2}-[0-9]{2}', key)):
+                raise ValueError('COLLECTION_REPORTS')
+            try:
+                start, end = [date.fromisoformat(part) for part in key.split(':')[1:]]
+                valid = (start.weekday() == 0 and end-start == timedelta(days=6)) if kind == 'weekly' else (
+                    start.day == 1 and (start.year,start.month) == (end.year,end.month) and
+                    (end+timedelta(days=1)).day == 1)
+                if not valid:
+                    raise ValueError()
+            except (ValueError, OverflowError):
+                raise ValueError('COLLECTION_REPORTS') from None
+        result[kind] = dict(row, latest_company_reports=total, versions=versions, latest_generated_at=latest)
+    return result
+
+
+def collect_reports(connection):
+    """주·월별 최신 저장 기간의 업체별 최신 판만 센다. 내용·식별자는 내보내지 않는다."""
+    result = {}
+    for kind in ('weekly','monthly'):
+        key = connection.execute('SELECT MAX(period_key) FROM naver_auto_report_snapshot WHERE period_key LIKE ?',
+                                 (kind+':%',)).fetchone()[0]
+        row = dict(period_key=key,latest_company_reports=0,versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None)
+        if key is not None:
+            rows = connection.execute("""WITH latest AS (
+                SELECT MAX(report_id) AS report_id FROM naver_auto_report_snapshot
+                WHERE period_key=? GROUP BY possibility_id)
+                SELECT CASE WHEN json_valid(r.payload_json) THEN
+                    CASE WHEN json_type(r.payload_json)='object' THEN
+                        CASE WHEN json_type(r.payload_json,'$.format_version') IS NULL THEN 'v1'
+                             WHEN json_type(r.payload_json,'$.format_version')='integer' AND
+                                  json_extract(r.payload_json,'$.format_version')=1 THEN 'v1'
+                             WHEN json_type(r.payload_json,'$.format_version')='integer' AND
+                                  json_extract(r.payload_json,'$.format_version')=2 THEN 'v2'
+                             ELSE 'unknown' END
+                        ELSE 'unknown' END ELSE 'unknown' END AS version,
+                    COUNT(*),MAX(r.generated_at)
+                FROM naver_auto_report_snapshot r JOIN latest l ON l.report_id=r.report_id GROUP BY 1""", (key,))
+            for version, count, latest in rows:
+                row['versions'][version] = number(count)
+                row['latest_company_reports'] += count
+                checked = stamp(latest)
+                if checked is None:
+                    raise ValueError('COLLECTION_REPORTS')
+                if row['latest_generated_at'] is None or checked > row['latest_generated_at']:
+                    row['latest_generated_at'] = checked
+        result[kind] = row
+    return reports_projection(result)
+
+
 def project(value):
     fields = {'today', 'prospects', 'pairing', 'latest_run', 'today_checks', 'bootstrap'}
     if (not isinstance(value, dict) or not fields <= set(value)
-            or set(value) - fields - {'management','catalog_links','daily_limited','managed_catalog_links','morning_progress'}):
+            or set(value) - fields - {'management','catalog_links','daily_limited','managed_catalog_links','morning_progress','reports'}):
         raise ValueError('COLLECTION_FIELDS')
     today = value['today']
     if not isinstance(today, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', today):
@@ -508,6 +575,8 @@ def project(value):
         result['managed_catalog_links'] = catalog_link_projection(value['managed_catalog_links'])
     if 'morning_progress' in value:
         result['morning_progress'] = morning_progress_projection(value['morning_progress'], today)
+    if 'reports' in value:
+        result['reports'] = reports_projection(value['reports'])
     return result
 
 
@@ -550,7 +619,7 @@ def validate_package(package):
             raise ValueError('PACKAGE_SHAPE')
 
 
-def script(*, catalog_links=False, daily_limited=False, morning_progress=False):
+def script(*, catalog_links=False, daily_limited=False, morning_progress=False, reports=False):
     parts = ['import json,os,sys,stat,re,time\nfrom pathlib import Path\nfrom datetime import date,datetime,timedelta,timezone\n', PROJECTION_SOURCE]
     parts.append("""
 try:
@@ -574,6 +643,8 @@ try:
             result['managed_catalog_links']=collect_catalog_links(reader,now,managed_only=True)
         if MORNING_PROGRESS_DIAGNOSTIC:
             result['morning_progress']=collect_morning_progress(reader._conn,now.date().isoformat())
+        if REPORTS_DIAGNOSTIC:
+            result['reports']=collect_reports(reader._conn)
     finally:
         try:
             reader._conn.execute('ROLLBACK')
@@ -584,7 +655,7 @@ try:
 except Exception:
     sys.exit(1)
 """.replace('CATALOG_LINK_DIAGNOSTIC', repr(catalog_links)).replace('DAILY_LIMITED_DIAGNOSTIC', repr(daily_limited))
-       .replace('MORNING_PROGRESS_DIAGNOSTIC', repr(morning_progress)))
+       .replace('MORNING_PROGRESS_DIAGNOSTIC', repr(morning_progress)).replace('REPORTS_DIAGNOSTIC', repr(reports)))
     return '\n'.join(parts).encode()
 
 
@@ -694,7 +765,8 @@ def run(package, host, release):
     raw = release.command(['docker', 'exec', '-i', '--user', '10001:10001', identity,
                            'python', '-I', '-B', '-'], data=script(catalog_links=commit in CATALOG_LINKS_COMMITS,
                             daily_limited=commit in DAILY_LIMITED_COMMITS,
-                            morning_progress=commit == MONITORING_COMMIT), timeout=30)
+                            morning_progress=commit in MONITORING_COMMITS,
+                            reports=commit in MONITORING_COMMITS), timeout=30)
     if len(raw) > 32768:
         raise ValueError('STATUS_SIZE')
     values = project(json.loads(raw, object_pairs_hook=release.unique))
@@ -704,8 +776,10 @@ def run(package, host, release):
         raise ValueError('COLLECTION_LIMITED_FIELDS')
     if ('managed_catalog_links' in values) != (commit in DAILY_LIMITED_COMMITS):
         raise ValueError('CATALOG_LINK_FIELDS')
-    if ('morning_progress' in values) != (commit == MONITORING_COMMIT):
+    if ('morning_progress' in values) != (commit in MONITORING_COMMITS):
         raise ValueError('COLLECTION_MORNING_FIELDS')
+    if ('reports' in values) != (commit in MONITORING_COMMITS):
+        raise ValueError('COLLECTION_REPORTS')
     lifecycle = lifecycle_status(release)
     version = compose_version(release)
     engine_state = {'started_at': docker_stamp(before.get('started')),

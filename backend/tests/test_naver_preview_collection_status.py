@@ -21,17 +21,23 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
-    def test_catalog_diagnostics_accept_only_four_reviewed_product_commits(self):
+    def test_catalog_diagnostics_accept_only_five_reviewed_product_commits(self):
         self.assertEqual(M.CATALOG_LINKS_COMMITS, frozenset({
             '6e4b035901027fef29266de218bfb0594227a3fe',
             '01344b145d0b679a6ee730d7fa4b5990278dd654',
             '1b790b864ce27766251a205259fa6a332f60f72b',
-            '0a302856c6177c4f53145abaf9ed31b6a39654f3'}))
+            '0a302856c6177c4f53145abaf9ed31b6a39654f3',
+            'a38c53775c112cdf5db420f979093d6bee9e5376'}))
         self.assertEqual(M.DAILY_LIMITED_COMMIT, '01344b145d0b679a6ee730d7fa4b5990278dd654')
         self.assertEqual(M.DAILY_LIMITED_COMMITS, frozenset({
             '01344b145d0b679a6ee730d7fa4b5990278dd654',
             '1b790b864ce27766251a205259fa6a332f60f72b',
-            '0a302856c6177c4f53145abaf9ed31b6a39654f3'}))
+            '0a302856c6177c4f53145abaf9ed31b6a39654f3',
+            'a38c53775c112cdf5db420f979093d6bee9e5376'}))
+        self.assertEqual(M.REPORTS_COMMIT, 'a38c53775c112cdf5db420f979093d6bee9e5376')
+        self.assertEqual(M.MONITORING_COMMITS, frozenset({
+            '0a302856c6177c4f53145abaf9ed31b6a39654f3',
+            'a38c53775c112cdf5db420f979093d6bee9e5376'}))
 
     def test_daily_limited_uses_schema11_reader_and_separates_current_targets_from_old_jobs(self):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
@@ -149,6 +155,81 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(result, {'auto':1,'name_different':3,'can_confirm':4,'rejected':{}})
         self.assertNotIn('PRIVATE', json.dumps(result))
 
+    def test_latest_report_versions_use_only_latest_company_editions_under_reader_authorizer(self):
+        fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
+        db = sqlite3.connect(':memory:', isolation_level=None)
+        self.addCleanup(db.close)
+        for sql in fixture['new_observed_unsealed']['sql']:
+            db.execute(sql)
+        week = 'weekly:2026-10-05:2026-10-11'
+        month = 'monthly:2026-09-01:2026-09-30'
+        at = '2026-10-12T10:00:00+09:00'
+        cases = [(1,1,week,'PRIVATE-BROKEN-OLD'), (2,1,week,'{"format_version":2,"spend":987654321}'),
+                 (3,2,week,'{"PRIVATE":"name"}'), (4,3,week,'PRIVATE-BROKEN'),
+                 (5,4,week,'{"format_version":"2"}'), (6,5,week,'[]'),
+                 (7,6,week,'{"format_version":1}'), (8,7,week,'{"format_version":1.0}'),
+                 (9,8,week,'{"format_version":null}'), (10,9,week,'{"format_version":true}'),
+                 (11,1,month,'{"format_version":2}'),
+                 (100,1,'weekly:2026-09-28:2026-10-04','PRIVATE-OLDER-PERIOD'),
+                 (101,1,'monthly:2026-08-01:2026-08-31','PRIVATE-OLDER-PERIOD')]
+        for rid,pid,period,payload in cases:
+            generated = ('2030-01-01T10:00:00+09:00' if rid in (1,100,101) else
+                         '2026-10-12T12:00:00+09:00' if rid == 2 else at)
+            db.execute('''INSERT INTO naver_auto_report_snapshot
+                (report_id,possibility_id,period_key,revision_fingerprint,generated_at,status,review_status,payload_json)
+                VALUES(?,?,?,'PRIVATE-FINGERPRINT',?,'ready','ready',?)''', (rid,pid,period,generated,payload))
+        baseline = db.total_changes
+        scope = dict(_A=sqlite3)
+        exec(fixture['new_observed_unsealed']['authorizer'], scope)
+        db.set_authorizer(scope['_authorizer'](scope['PHASE_READ']))
+        db.execute('BEGIN')
+        result = M.collect_reports(db)
+        db.execute('ROLLBACK')
+        self.assertEqual(result, {
+            'weekly':dict(period_key=week,latest_company_reports=9,
+                          versions=dict(v1=2,v2=1,unknown=6),latest_generated_at='2026-10-12T12:00:00+09:00'),
+            'monthly':dict(period_key=month,latest_company_reports=1,
+                           versions=dict(v1=0,v2=1,unknown=0),latest_generated_at=at)})
+        self.assertEqual(M.reports_projection(result), result)
+        self.assertEqual(db.total_changes, baseline)
+        for private in ('PRIVATE','987654321','possibility_id','report_id','spend','payload'):
+            self.assertNotIn(private, json.dumps(result))
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute('DELETE FROM naver_auto_report_snapshot')
+        reader_authorizer = scope['_authorizer'](scope['PHASE_READ'])
+        db.set_authorizer(lambda action,arg1,arg2,*rest: sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_FUNCTION and arg2 == 'json_valid'
+            else reader_authorizer(action,arg1,arg2,*rest))
+        with self.assertRaises(sqlite3.DatabaseError):
+            M.collect_reports(db)
+
+    def test_reports_projection_bounds_empty_periods_and_query_failures_are_not_zero_counts(self):
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        with self.assertRaises(sqlite3.OperationalError):
+            M.collect_reports(db)
+        empty = {kind:dict(period_key=None,latest_company_reports=0,versions=dict(v1=0,v2=0,unknown=0),
+                          latest_generated_at=None) for kind in ('weekly','monthly')}
+        self.assertEqual(M.reports_projection(empty), empty)
+        for mutate in (lambda v:v.update(customer_id=987654321),
+                       lambda v:v['weekly'].update(payload='PRIVATE'),
+                       lambda v:v['weekly'].update(latest_company_reports=True),
+                       lambda v:v['weekly']['versions'].update(v1=-1),
+                       lambda v:v['weekly']['versions'].update(other=0),
+                       lambda v:v['weekly'].update(period_key='PRIVATE'),
+                       lambda v:v['weekly'].update(latest_generated_at='PRIVATE')):
+            changed=json.loads(json.dumps(empty)); mutate(changed)
+            with self.subTest(value=changed), self.assertRaises(ValueError) as caught:
+                M.reports_projection(changed)
+            self.assertNotIn('PRIVATE',str(caught.exception))
+        for key in ('weekly:2026-10-06:2026-10-12','weekly:2026-10-05:2026-10-10',
+                    'weekly:2026-99-01:2026-99-07','weekly:2026-10-05:2026-10-11:PRIVATE'):
+            changed=json.loads(json.dumps(empty))
+            changed['weekly'].update(period_key=key,latest_company_reports=1,versions=dict(v1=0,v2=1,unknown=0),
+                                     latest_generated_at='2026-10-12T10:00:00+09:00')
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError,'^COLLECTION_REPORTS$'):
+                M.reports_projection(changed)
+
     def test_morning_progress_counts_only_today_and_live_current_generation_without_identities(self):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         db = sqlite3.connect(':memory:')
@@ -244,13 +325,15 @@ class CollectionTest(unittest.TestCase):
                 patch.dict(os.environ, {}), patch.object(os,'geteuid',return_value=10001), \
                 patch.object(Path,'resolve',resolve), patch.object(os,'open',side_effect=FileNotFoundError), \
                 contextlib.redirect_stdout(output):
-            exec(compile(M.script(catalog_links=True,daily_limited=True,morning_progress=True),'<complete-status-script>','exec'), {})
+            exec(compile(M.script(catalog_links=True,daily_limited=True,morning_progress=True,reports=True),'<complete-status-script>','exec'), {})
         result = M.project(json.loads(output.getvalue()))
         self.assertEqual(result['catalog_links']['can_confirm'], 4)
         self.assertEqual(result['managed_catalog_links']['can_confirm'], 4)
         self.assertEqual(result['daily_limited']['current_daily_targets'], 1)
         self.assertEqual(result['morning_progress'], dict(day=result['today'],
             scope='today_current_generation_not_run_completion',states={},current_chunks={}))
+        self.assertEqual(result['reports'], {kind:dict(period_key=None,latest_company_reports=0,
+            versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None) for kind in ('weekly','monthly')})
         self.assertEqual(db.total_changes, before)
         self.assertFalse(db.in_transaction)
         reader.close.assert_called_once()
@@ -507,7 +590,8 @@ class CollectionTest(unittest.TestCase):
     def test_run_reviewed_releases_require_new_aggregates_and_unknown_commit_gets_neither(self):
         for commit in ('01344b145d0b679a6ee730d7fa4b5990278dd654',
                        '1b790b864ce27766251a205259fa6a332f60f72b',
-                       '0a302856c6177c4f53145abaf9ed31b6a39654f3'):
+                       '0a302856c6177c4f53145abaf9ed31b6a39654f3',
+                       'a38c53775c112cdf5db420f979093d6bee9e5376'):
             with self.subTest(commit=commit):
                 self.check_run_diagnostics(commit, {
                     'daily_limited':dict(cycle_day='2026-10-01',jobs=0,current_daily_targets=1,
@@ -538,10 +622,13 @@ class CollectionTest(unittest.TestCase):
             values.update(extra or {})
             morning = dict(day=values['today'],scope='today_current_generation_not_run_completion',
                            states={},current_chunks={})
-            if commit == M.MONITORING_COMMIT:
+            if commit in M.MONITORING_COMMITS:
                 values['morning_progress'] = morning
+                values['reports'] = {kind:dict(period_key=None,latest_company_reports=0,
+                    versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None) for kind in ('weekly','monthly')}
             failures = [None,'image','mount','rootfs','output','restart','unexpected_daily']
-            failures.append('morning_missing' if commit == M.MONITORING_COMMIT else 'unexpected_morning')
+            failures.append('morning_missing' if commit in M.MONITORING_COMMITS else 'unexpected_morning')
+            failures.append('reports_missing' if commit in M.MONITORING_COMMITS else 'unexpected_reports')
             if 'catalog_links' in values:
                 failures.append('catalog_missing')
             if extra:
@@ -574,7 +661,7 @@ class CollectionTest(unittest.TestCase):
                         ast.parse(kwargs['data'])
                         self.assertEqual(kwargs['data'].decode().count('if True:'),
                             int(commit in M.CATALOG_LINKS_COMMITS)+int(commit in M.DAILY_LIMITED_COMMITS)
-                            +int(commit == M.MONITORING_COMMIT))
+                            +2*int(commit in M.MONITORING_COMMITS))
                         self.assertEqual(args, ['docker','exec','-i','--user','10001:10001',cid,'python','-I','-B','-'])
                         if failure == 'catalog_missing':
                             return json.dumps({key:value for key,value in values.items() if key != 'catalog_links'}).encode()
@@ -586,6 +673,12 @@ class CollectionTest(unittest.TestCase):
                             return json.dumps({key:value for key,value in values.items() if key != 'morning_progress'}).encode()
                         if failure == 'unexpected_morning':
                             return json.dumps(dict(values,morning_progress=morning)).encode()
+                        if failure == 'reports_missing':
+                            return json.dumps({key:value for key,value in values.items() if key != 'reports'}).encode()
+                        if failure == 'unexpected_reports':
+                            return json.dumps(dict(values,reports={kind:dict(period_key=None,latest_company_reports=0,
+                                versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None)
+                                for kind in ('weekly','monthly')})).encode()
                         return json.dumps(dict(values, secret='SECRET') if failure=='output' else values).encode()
                     self.fail('unexpected command')
                 release.command.side_effect = command

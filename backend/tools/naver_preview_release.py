@@ -1,8 +1,4 @@
-"""Install only the approved, separately encrypted Naver preview release.
-
-Ciphertext/source hashes come from the authenticated build receipt, not the envelope.
-No existing application, environment or database is replaced by preparation.
-"""
+"""Prepare an approved encrypted release; receipt-pinned hashes, existing runtime untouched."""
 import base64
 import hashlib
 import io
@@ -17,6 +13,7 @@ import stat
 import subprocess
 import tarfile
 import time
+import zlib
 
 ROOT = Path('/srv/metainc/ad-deploy-staging')
 SECRET_ROOT = Path('/etc/metainc/naver-engine')
@@ -36,7 +33,7 @@ def sha(body):
 
 
 def build_failure_code(args, result):
-    """Classify only our exact image build; diagnostics stay in memory, never in errors."""
+    """Exact build only; no raw diagnostics."""
     if (not isinstance(args, (list, tuple)) or len(args) != 9
             or not all(isinstance(arg, str) for arg in args)
             or list(args[:3]) != ['docker', 'build', '--label']):
@@ -65,7 +62,7 @@ def build_failure_code(args, result):
 
 
 def compose_failure_code(args, result):
-    """Recognize only pinned preparation probes; never expose Compose output."""
+    """Pinned probes; no raw output."""
     if not isinstance(args, (list, tuple)) or not all(isinstance(arg, str) for arg in args):
         return 'COMMAND_FAILED'
     matched = False
@@ -128,6 +125,30 @@ def unique(pairs):
             raise ValueError('DUPLICATE_FIELD')
         result[key] = value
     return result
+
+
+def decode_payload(plain, commit, source_hash):
+    """Bounded decode; payload policy unchanged."""
+    magic = b'NAVER-PREVIEW-PAYLOAD-GZIP-1\n'
+    maximum = 3*1024*1024
+    if not isinstance(plain, bytes) or not 0 < len(plain) <= maximum:
+        raise ValueError('PLAINTEXT_SIZE')
+    if plain.startswith(magic):
+        if len(plain) >= 2*1024*1024-4096:
+            raise ValueError('PAYLOAD_WIRE_SIZE')
+        try:
+            decoder = zlib.decompressobj(16+zlib.MAX_WBITS)
+            raw = decoder.decompress(plain[len(magic):], maximum+1)
+        except zlib.error:
+            raise ValueError('PAYLOAD_COMPRESSION') from None
+        if len(raw) > maximum or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+            raise ValueError('PAYLOAD_COMPRESSION')
+        plain = raw
+    try:
+        payload = json.loads(plain, object_pairs_hook=unique)
+    except (ValueError, UnicodeError):
+        raise ValueError('PAYLOAD_JSON') from None
+    return validate_payload(payload, commit, source_hash)
 
 
 def validate_payload(payload, commit, source_hash):
@@ -343,6 +364,12 @@ def compose(release,name):
 
 
 def unix_request(path, route, method='GET'):
+    assets = {'/naver/report-ui.js', '/naver/report-pdf.js'} | {
+        '/naver/vendor/report-pdf/'+name for name in (
+            'NanumGothic-Regular.ttf.gz', 'pdf-lib-1.17.1.min.js',
+            'fontkit-1.1.1.umd.min.js', 'sha256-1.0.0.min.js')}
+    maximum = (1024*1024 if method == 'GET' and path == '/run/metainc/naver-relay/relay.sock'
+               and route in assets else 65536)
     conn=http.client.HTTPConnection('localhost',timeout=5)
     conn.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
     conn.sock.settimeout(5)
@@ -351,8 +378,8 @@ def unix_request(path, route, method='GET'):
         conn.request(method,route,headers={'Host':'dashboard.metainc.co.kr','Origin':'https://dashboard.metainc.co.kr',
                                          'X-Real-IP':'127.0.0.1'})
         response=conn.getresponse()
-        body=response.read(65537)
-        if len(body)>65536:
+        body=response.read(maximum+1)
+        if len(body)>maximum:
             raise ValueError('PROBE_RESPONSE_SIZE')
         return response.status,dict(response.getheaders()),body
     finally:
