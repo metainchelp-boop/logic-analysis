@@ -18,6 +18,7 @@ BASIC_FIELDS = ("imp", "clk", "spend")
 CONVERSION_FIELDS = ("conversions", "conversion_value")
 OUTPUT_FIELDS = {"imp": "impressions", "clk": "clicks", "spend": "spend",
                  "conversions": "conversions", "conversion_value": "conversion_value"}
+FORMAT_VERSION = 2
 
 
 class ReportInvalid(ValueError):
@@ -182,6 +183,9 @@ def revision_metadata(previous, current, previous_report_id=None):
             "metric_deltas": {key: totals[key]-old_totals[key] if previous is not None and
                               totals[key] is not None and old_totals.get(key) is not None else None for key in totals},
             "changed_days": changed_days,
+            "comparison_changed": previous is not None and (
+                (previous.get("details", {}).get("comparison") or {}).get("_data_fingerprint") !=
+                (current.get("details", {}).get("comparison") or {}).get("_data_fingerprint")),
             "completeness_changed": previous is not None and (previous.get("missing") != current["missing"] or
                                                               previous.get("ready") != current["ready"])}
 
@@ -262,3 +266,178 @@ def aggregate(report_period, expected_customers, daily_rows, now, *, has_open_is
                        "cpc": _ratio(totals["spend"], totals["clicks"]),
                        "roas": _ratio(roas_value, roas_spend, 100), "roas_account_days": len(roas),
                        "roas_spend": roas_spend, "roas_conversion_value": roas_value}}
+
+
+def public_payload(value):
+    """중첩된 계정·원천 근거도 공개 응답에서 빠지게 한다."""
+    if isinstance(value, Mapping):
+        return {key: public_payload(item) for key, item in value.items() if not str(key).startswith("_")}
+    if isinstance(value, (list, tuple)):
+        return [public_payload(item) for item in value]
+    return value
+
+
+def _detail_ratios(report, rows, now):
+    paired = [row for row in rows if _collected(row, row["day"], now) is not None
+              and row.get("basic_complete") is True and row.get("conversion_complete") is True
+              and all(_number(row.get(key)) for key in OUTPUT_FIELDS)]
+    conversions = _sum(row["conversions"] for row in paired) if paired else None
+    clicks = _sum(row["clk"] for row in paired) if paired else None
+    spend = _sum(row["spend"] for row in paired) if paired else None
+    report["ratios"].update(cvr=_ratio(conversions, clicks, 100), cpa=_ratio(spend, conversions))
+
+
+def _daily_details(report_period, expected, rows, now):
+    result = []
+    for offset in range((report_period.end-report_period.start).days+1):
+        day = (report_period.start+timedelta(days=offset)).isoformat()
+        verified = [row for (cid, when), row in rows.items() if when == day and _collected(row, day, now) is not None]
+        basic = [row for row in verified if row.get("basic_complete") is True
+                 and all(_number(row.get(key)) for key in BASIC_FIELDS)]
+        conversion = [row for row in verified if row.get("conversion_complete") is True
+                      and all(_number(row.get(key)) for key in CONVERSION_FIELDS)]
+        paired = [row for row in basic if row.get("conversion_complete") is True
+                  and all(_number(row.get(key)) for key in CONVERSION_FIELDS)]
+        totals = {OUTPUT_FIELDS[key]: _sum(row[key] for row in basic) if basic else None for key in BASIC_FIELDS}
+        totals.update({key: _sum(row[key] for row in conversion) if conversion else None for key in CONVERSION_FIELDS})
+        roas_spend = _sum(row["spend"] for row in paired) if paired else None
+        roas_value = _sum(row["conversion_value"] for row in paired) if paired else None
+        complete = bool(expected) and len(basic) == len(conversion) == len(expected)
+        item = {"day": day, "totals": totals,
+                "status": "ready" if complete else "partial" if basic or conversion else "collecting",
+                "coverage": {"accounts": len(expected), "expected_account_days": len(expected),
+                             "basic_complete_account_days": len(basic), "conversion_complete_account_days": len(conversion),
+                             "basic_complete": bool(expected) and len(basic) == len(expected),
+                             "conversion_complete": bool(expected) and len(conversion) == len(expected)},
+                "ratios": {"ctr": _ratio(totals["clicks"], totals["impressions"], 100),
+                           "cpc": _ratio(totals["spend"], totals["clicks"]),
+                           "roas": _ratio(roas_value, roas_spend, 100), "roas_account_days": len(paired),
+                           "roas_spend": roas_spend, "roas_conversion_value": roas_value}}
+        _detail_ratios(item, verified, now)
+        result.append(item)
+    return result
+
+
+def previous_period(report_period):
+    return period(report_period.kind, report_period.start-timedelta(days=1))
+
+
+def _comparison(current, previous, same_scope):
+    scope_known = bool(current["coverage"]["accounts"] and previous["coverage"]["accounts"])
+    def completeness(group):
+        return "scope_changed" if scope_known and not same_scope else "ready" if (
+            current["coverage"][group+"_complete"] and previous["coverage"][group+"_complete"]
+        ) else "insufficient_data"
+    basic, conversion = completeness("basic"), completeness("conversion")
+    status = "scope_changed" if scope_known and not same_scope else "ready" if basic == conversion == "ready" else (
+        "partial" if "ready" in (basic, conversion) else "insufficient_data")
+    changes = {}
+    for key in (*current["totals"], "ctr", "cpc", "roas", "cvr", "cpa"):
+        percentage_points = key in ("ctr", "roas", "cvr")
+        unit = "percentage_points" if percentage_points else "currency" if key in (
+            "spend", "conversion_value", "cpc", "cpa") else "count"
+        check = conversion if key in CONVERSION_FIELDS else basic
+        if key in ("roas", "cvr", "cpa") and basic != "ready":
+            check = basic
+        elif key in ("roas", "cvr", "cpa"):
+            check = conversion
+        values = "totals" if key in current["totals"] else "ratios"
+        before, after = previous[values].get(key), current[values].get(key)
+        change = {"absolute": None, "percent": None, "unit": unit, "status": check}
+        if check == "ready":
+            if before is None or after is None:
+                change["status"] = "zero_denominator"
+            else:
+                change["absolute"] = float(Decimal(str(after))-Decimal(str(before)))
+                if not percentage_points:
+                    if before == 0:
+                        change["status"] = "zero_denominator"
+                    else:
+                        value = change["absolute"]/before*100
+                        if math.isfinite(value):
+                            change["percent"] = value
+                        else:
+                            change["status"] = "zero_denominator"
+        changes[key] = change
+    return {"period": previous["period"], "status": status, "basic_status": basic,
+            "conversion_status": conversion, "totals": previous["totals"], "ratios": previous["ratios"],
+            "coverage": previous["coverage"], "changes": changes, "reference": None}
+
+
+def _briefing(report):
+    def number(value, *, money=False):
+        return "미확인" if value is None else format(int(value), ",") if money else format(value, ",.2f").rstrip("0").rstrip(".")
+    totals, coverage = report["totals"], report["coverage"]
+    basic = ("기본 성과 완결 자료" if coverage["basic_complete"] else "확인된 기본 성과 일부")
+    first = (f"{basic} 기준 광고비 {number(totals['spend'], money=True)}원, "
+             f"노출 {number(totals['impressions'])}회, 클릭 {number(totals['clicks'])}회입니다.")
+    change = report["details"]["comparison"]["changes"]["spend"]
+    if change["status"] == "ready":
+        second = f"직전 기간 대비 광고비 증감은 {int(change['absolute']):+,}원({change['percent']:+.2f}%)입니다."
+    else:
+        reason = {"scope_changed": "비교 범위 변경", "zero_denominator": "산출 불가"}.get(
+            change["status"], "비교 자료 부족")
+        second = f"직전 기간 광고비 증감은 {reason} 상태입니다."
+    if coverage["conversion_complete"]:
+        third = f"전환 {number(totals['conversions'])}건, 전환매출 {number(totals['conversion_value'], money=True)}원입니다. "
+        if coverage["basic_complete"] and report["ratios"]["roas"] is not None:
+            third += f"광고비 대비 전환매출은 {number(report['ratios']['roas'])}%입니다."
+        else:
+            third += "기본 성과 부족 또는 광고비 분모 0으로 광고비 대비 전환매출을 확정하지 않았습니다."
+    else:
+        third = "전환 성과가 완결되지 않아 전환매출과 광고비 대비 전환매출을 확정하지 않았습니다."
+    return [first, second, third]
+
+
+def _source_manifest(rows):
+    keys = ("customer_id", "day", "source_revision", "source_generation", "source_at", "checked_at", "campaign_fingerprint")
+    return [{key: row.get(key) for key in keys} for _, row in sorted(rows.items())]
+
+
+def _snapshot_scope(report_period, expected, source, now, previous_expected, previous_source, has_open_issues):
+    report = aggregate(report_period, expected, source, now, has_open_issues=has_open_issues)
+    prior_period = previous_period(report_period)
+    previous = aggregate(prior_period, previous_expected, previous_source, now)
+    expected, previous_expected = tuple(sorted(expected)), tuple(sorted(previous_expected))
+    rows = _rows_by_day(source, set(expected), report_period)
+    old_rows = _rows_by_day(previous_source, set(previous_expected), prior_period)
+    _detail_ratios(report, list(rows.values()), now)
+    _detail_ratios(previous, list(old_rows.values()), now)
+    revisions = [[cid, day, row.get("source_revision", 0)] for (cid, day), row in sorted(rows.items())]
+    old_revisions = [[cid, day, row.get("source_revision", 0)] for (cid, day), row in sorted(old_rows.items())]
+    def data_fingerprint(target, accounts, source_rows, versions):
+        return hashlib.sha256(json.dumps([_fingerprint(target, accounts, source_rows, now, False), versions],
+                                         separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    report.update(format_version=FORMAT_VERSION, _expected_customers=list(expected),
+                  _source_manifest=_source_manifest(rows),
+                  _data_fingerprint=data_fingerprint(report_period, expected, rows, revisions))
+    comparison = _comparison(report, previous, expected == previous_expected)
+    comparison["daily"] = _daily_details(prior_period, previous_expected, old_rows, now)
+    comparison["_expected_customers"] = list(previous_expected)
+    comparison["_source_manifest"] = _source_manifest(old_rows)
+    comparison["_data_fingerprint"] = data_fingerprint(prior_period, previous_expected, old_rows, old_revisions)
+    report["details"] = {"status": "available", "daily": _daily_details(report_period, expected, rows, now),
+                         "comparison": comparison, "management_records": [], "next_actions": []}
+    report["details"]["briefing"] = _briefing(report)
+    report["revision_fingerprint"] = hashlib.sha256(json.dumps([
+        FORMAT_VERSION, report["revision_fingerprint"], report["_data_fingerprint"], comparison["_data_fingerprint"]
+    ], separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    return report
+
+
+def snapshot(report_period, expected_customers, daily_rows, now, *, has_open_issues=False,
+             previous_customers=(), previous_rows=()):
+    """불변 저장판용 계정별·합산·직전기간 상세. 원천 식별자는 private 영역에만 둔다."""
+    now = _now(now)
+    expected, source = tuple(expected_customers), list(daily_rows)
+    previous_expected, previous_source = tuple(previous_customers), list(previous_rows)
+    report = _snapshot_scope(report_period, expected, source, now, previous_expected, previous_source, has_open_issues)
+    expected, previous_expected = tuple(sorted(expected)), tuple(sorted(previous_expected))
+    report["_account_reports"] = {}
+    for cid in expected:
+        account_rows = [row for row in source if row.get("customer_id") == cid]
+        prior_rows = [row for row in previous_source if row.get("customer_id") == cid]
+        prior_scope = (cid,) if cid in previous_expected else ()
+        report["_account_reports"][str(cid)] = _snapshot_scope(
+            report_period, (cid,), account_rows, now, prior_scope, prior_rows, has_open_issues)
+    return report

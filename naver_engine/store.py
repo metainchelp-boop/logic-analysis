@@ -1404,6 +1404,15 @@ def _report_public_validation(value):
     return {key: item for key, item in value.items() if not key.startswith("_")}
 
 
+def _report_mark_dirty(connection, pid, key, at):
+    period = _report_period(key)
+    next_period = R.period(period.kind, period.end+timedelta(days=1))
+    for target in (key, next_period.key):
+        connection.execute("""INSERT INTO naver_auto_report_dirty(possibility_id,period_key,updated_at,pending)
+            VALUES(?,?,?,1) ON CONFLICT(possibility_id,period_key) DO UPDATE SET
+            updated_at=excluded.updated_at,pending=1""", (pid, target, at))
+
+
 def _report_generate(store, now):
     from . import store as S
     store._need_writer()
@@ -1432,15 +1441,23 @@ def _report_generate(store, now):
     # 초판 및 최근 보고서의 검토정책 변화만 등록한다. 원천 정정은 수집 거래의 dirty가 담당한다.
     with store._tx() as connection:
         for pid in groups:
+            legacy_periods = connection.execute("""SELECT r.period_key FROM naver_auto_report_snapshot r
+                WHERE r.possibility_id=? AND COALESCE(json_extract(r.payload_json,'$.format_version'),1)<?
+                AND r.report_id=(SELECT MAX(n.report_id) FROM naver_auto_report_snapshot n
+                    WHERE n.possibility_id=r.possibility_id AND n.period_key=r.period_key)""", (pid, R.FORMAT_VERSION))
+            for legacy in legacy_periods:
+                connection.execute("""INSERT INTO naver_auto_report_dirty(possibility_id,period_key,updated_at,pending)
+                    VALUES(?,?,?,1) ON CONFLICT(possibility_id,period_key) DO UPDATE SET pending=1,updated_at=excluded.updated_at""",
+                    (pid, legacy[0], at))
             for period in periods:
                 connection.execute("""INSERT INTO naver_auto_report_dirty
                     (possibility_id,period_key,updated_at,pending) VALUES(?,?,?,1)
                     ON CONFLICT(possibility_id,period_key) DO NOTHING""", (pid, period.key, at))
-                latest = connection.execute("""SELECT review_status FROM naver_auto_report_snapshot
+                latest = connection.execute("""SELECT review_status,payload_json FROM naver_auto_report_snapshot
                     WHERE possibility_id=? AND period_key=? ORDER BY report_id DESC LIMIT 1""",
                     (pid, period.key)).fetchone()
                 required = "needs_staff_review" if period.kind == "monthly" or pid in issues else "not_required"
-                if latest and latest[0] != required:
+                if latest and (latest[0] != required or json.loads(latest[1]).get("format_version", 1) < R.FORMAT_VERSION):
                     # 승인 기록은 별도 표에 있으므로 당시 승인과 현재 요구정책을 혼동하지 않는다.
                     connection.execute("""UPDATE naver_auto_report_dirty SET pending=1,updated_at=?
                         WHERE possibility_id=? AND period_key=? AND pending=0""", (at, pid, period.key))
@@ -1450,6 +1467,17 @@ def _report_generate(store, now):
                     # 새 연결의 실적이 아직 없어도 분모에서 빼서 완결로 보이지 않는다.
                     connection.execute("""UPDATE naver_auto_report_dirty SET pending=1,updated_at=?
                         WHERE possibility_id=? AND period_key=?""", (at, pid, period.key))
+        # 구형 writer가 남긴 dirty도 그 기간을 비교하는 기존 다음 판으로 전달한다.
+        # 한 단계만 확장하며 숫자·원천 지문이 같으면 실제 새 판은 만들지 않는다.
+        waiting = S._rows(connection.execute("SELECT possibility_id,period_key,updated_at FROM naver_auto_report_dirty WHERE pending=1"))
+        for item in waiting:
+            changed = _report_period(item["period_key"])
+            following = R.period(changed.kind, changed.end+timedelta(days=1))
+            if connection.execute("""SELECT 1 FROM naver_auto_report_snapshot
+                WHERE possibility_id=? AND period_key=? LIMIT 1""", (item["possibility_id"], following.key)).fetchone():
+                connection.execute("""INSERT INTO naver_auto_report_dirty(possibility_id,period_key,updated_at,pending)
+                    VALUES(?,?,?,1) ON CONFLICT(possibility_id,period_key) DO UPDATE SET pending=1,updated_at=excluded.updated_at""",
+                    (item["possibility_id"], following.key, item["updated_at"]))
     # 한 업체의 주간·월간을 절단하지 않는다. 대기 업체는 오래된 순서로 계속 배출한다.
     dirty = S._rows(store._conn.execute("""SELECT possibility_id,period_key,updated_at
         FROM naver_auto_report_dirty WHERE pending=1 ORDER BY updated_at,possibility_id,period_key"""))
@@ -1469,20 +1497,35 @@ def _report_generate(store, now):
     for pid, targets in batches.items():
         with store._tx() as connection:
             prepared, batch_rows = [], {}
-            for period in targets:
+            def source_scope(period):
+                saved = connection.execute("""SELECT expected_customers_json FROM naver_auto_report_validation
+                    WHERE possibility_id=? AND period_key=?""", (pid, period.key)).fetchone()
+                historical = [row[0] for row in connection.execute("""SELECT DISTINCT customer_id
+                    FROM naver_auto_daily_performance WHERE possibility_id=? AND day BETWEEN ? AND ?""",
+                    (pid, period.start.isoformat(), period.end.isoformat()))]
+                return sorted(set(json.loads(saved[0]) if saved else ()) | set(historical) | current_accounts(pid, period))
+
+            for period in sorted(targets, key=lambda value: (value.due_at, value.key)):
                 state = connection.execute("""SELECT expected_customers_json,payload_json
                     FROM naver_auto_report_validation WHERE possibility_id=? AND period_key=?""",
                     (pid, period.key)).fetchone()
-                historical_ids = [row[0] for row in connection.execute("""SELECT DISTINCT customer_id
-                    FROM naver_auto_daily_performance WHERE possibility_id=? AND day BETWEEN ? AND ?""",
-                    (pid, period.start.isoformat(), period.end.isoformat()))]
-                expected = sorted(set(json.loads(state[0]) if state else ()) | set(historical_ids)
-                                  | current_accounts(pid, period))
+                expected = source_scope(period)
                 rows = store.daily_performance(expected, period.start, period.end, possibility_id=pid)
+                prior_period = R.previous_period(period)
+                prior_expected = source_scope(prior_period)
+                prior_rows = store.daily_performance(prior_expected, prior_period.start, prior_period.end, possibility_id=pid)
                 batch_rows.update({(row["customer_id"], row["day"]): row for row in rows})
                 previous = S._rows(connection.execute("""SELECT * FROM naver_auto_report_snapshot
                     WHERE possibility_id=? AND period_key=? ORDER BY report_id DESC LIMIT 1""", (pid, period.key)))
-                report = R.aggregate(period, expected, rows, now, has_open_issues=pid in issues)
+                report = R.snapshot(period, expected, rows, now, has_open_issues=pid in issues,
+                                    previous_customers=prior_expected, previous_rows=prior_rows)
+                if previous and json.loads(previous[0]["payload_json"]).get("format_version", 1) < R.FORMAT_VERSION \
+                        and not (report["coverage"]["basic_complete_account_days"] or
+                                 report["coverage"]["conversion_complete_account_days"]):
+                    # 입증할 원천이 없는 옛 판은 미보관 표시로 남긴다. 빈 새 판으로 대체하지 않는다.
+                    connection.execute("""UPDATE naver_auto_report_dirty SET pending=0
+                        WHERE possibility_id=? AND period_key=?""", (pid, period.key))
+                    continue
                 prepared.append((period, expected, rows, previous[0] if len(previous) > 0 else None, report, state))
             source = _report_source_fingerprint(list(batch_rows.values()))
             for period, expected, rows, previous, report, state in prepared:
@@ -1507,6 +1550,31 @@ def _report_generate(store, now):
                     report.update(revision_no=revision,
                                   change_summary=R.revision_metadata(old_payload, report, previous["report_id"] if previous is not None else None),
                                   validation=_report_public_validation(validation))
+                    prior_snapshot = connection.execute("""SELECT report_id,payload_json FROM naver_auto_report_snapshot
+                        WHERE possibility_id=? AND period_key=? ORDER BY report_id DESC LIMIT 1""",
+                        (pid, R.previous_period(period).key)).fetchone()
+                    prior_payload = json.loads(prior_snapshot[1]) if prior_snapshot else None
+
+                    def reference_for(payload, prior):
+                        comparison = payload["details"]["comparison"]
+                        if prior and prior.get("_data_fingerprint") == comparison["_data_fingerprint"]:
+                            comparison["reference"] = {"report_id": prior_snapshot[0],
+                                "revision_no": prior.get("revision_no"), "period_key": prior["period_key"]}
+
+                    reference_for(report, prior_payload)
+                    for cid, account in report["_account_reports"].items():
+                        account_rows = [row for row in rows if row["customer_id"] == int(cid)]
+                        account_validation = _report_validation(store, pid, period, [int(cid)], account_rows, now,
+                                                               required_after={cid: required_after[cid]})
+                        old_account = (old_payload or {}).get("_account_reports", {}).get(cid)
+                        account.update(revision_no=revision,
+                            change_summary=R.revision_metadata(old_account, account, previous["report_id"] if previous else None),
+                            validation=_report_public_validation(account_validation))
+                        reference_for(account, (prior_payload or {}).get("_account_reports", {}).get(cid))
+                    if old_payload is not None and old_payload.get("format_version", 1) < R.FORMAT_VERSION:
+                        report["details"]["status"] = "reconstructed"
+                        for account in report["_account_reports"].values():
+                            account["details"]["status"] = "reconstructed"
                     connection.execute("""INSERT INTO naver_auto_report_snapshot
                         (possibility_id,period_key,revision_fingerprint,generated_at,status,review_status,payload_json)
                         VALUES(?,?,?,?,?,?,?)""", (pid, period.key, report["revision_fingerprint"], at,
@@ -1540,8 +1608,8 @@ def _report_present(store, rows, *, current=False):
     from . import store as S
     output = []
     for row in rows:
-        payload = json.loads(row.pop("payload_json"))
-        row["payload"] = {key: value for key, value in payload.items() if not key.startswith("_")}
+        payload = _report_stored_payload(row.pop("payload_json"))
+        row["payload"] = R.public_payload(payload)
         row["revision_no"] = payload.get("revision_no") or store._conn.execute("""SELECT COUNT(*)
             FROM naver_auto_report_snapshot WHERE possibility_id=? AND period_key=? AND report_id<=?""",
             (row["possibility_id"], row["period_key"], row["report_id"])).fetchone()[0]
@@ -1573,6 +1641,34 @@ def _report_present(store, rows, *, current=False):
         row["payload"]["validation"] = row["validation"]
         output.append(row)
     return output
+
+
+def _report_stored_payload(raw):
+    payload = json.loads(raw)
+    if payload.get("format_version", 1) < R.FORMAT_VERSION:
+        # 옛 판에 현재 원천을 덧붙이지 않는다. 미보관이라는 표시만 추가한다.
+        payload["format_version"] = 1
+        payload["details"] = {"status": "legacy_unavailable", "daily": [], "comparison": None,
+                              "briefing": [], "management_records": [], "next_actions": []}
+    return payload
+
+
+def _report_snapshot_detail(store, report_id):
+    """내부 조회 계약. 호출자가 현재 회사·계정 권한을 검증한 뒤 공개화한다."""
+    _pos_int(report_id, "보고서")
+    with _report_read_snapshot(store):
+        rows = _rows(store._conn.execute("SELECT * FROM naver_auto_report_snapshot WHERE report_id=?", (report_id,)))
+        if not rows:
+            return None
+        row = rows[0]
+        payload = _report_stored_payload(row.pop("payload_json"))
+        row["payload"] = payload
+        row["revision_no"] = payload.get("revision_no") or store._conn.execute("""SELECT COUNT(*)
+            FROM naver_auto_report_snapshot WHERE possibility_id=? AND period_key=? AND report_id<=?""",
+            (row["possibility_id"], row["period_key"], report_id)).fetchone()[0]
+        row["change_summary"] = payload.get("change_summary")
+        row["validation"] = payload.get("validation", {"status": "pending", "last_checked_at": None})
+        return row
 
 
 def _report_snapshots(store):
@@ -2182,9 +2278,7 @@ class ManagedStorage:
             if pid is not None:
                 touched.update((pid, R.period(kind, day).key) for kind in ("weekly", "monthly"))
         for pid, key in touched:
-            connection.execute("""INSERT INTO naver_auto_report_dirty(possibility_id,period_key,updated_at,pending)
-                VALUES(?,?,?,1) ON CONFLICT(possibility_id,period_key) DO UPDATE SET
-                updated_at=excluded.updated_at,pending=1""", (pid,key,at))
+            _report_mark_dirty(connection, pid, key, at)
 
     def performance_progress(self, job):
         from . import performance_reads as R
@@ -2585,6 +2679,9 @@ class ManagedStorage:
 
     def report_snapshots(self):
         return _report_snapshots(self)
+
+    def report_snapshot_detail(self, report_id):
+        return _report_snapshot_detail(self, report_id)
 
     def report_history(self, possibility_id, actor, now, *, period_key=None, before_report_id=None, limit=20):
         return _report_history(self, possibility_id, actor, now, period_key=period_key,

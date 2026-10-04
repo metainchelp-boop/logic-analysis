@@ -47,7 +47,7 @@ const cfg=JSON.parse(process.argv[2]);
     assert.equal(writes.filter(p=>p.endsWith('/management/collect')).length,1);
     await page.getByRole('button',{name:'📄 보고서',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('#reportsSchedule').textContent.includes('매월 3일'));
-    assert.match(await page.textContent('#reportsRows'),/생성된 보고서가 없습니다/);
+    assert.match(await page.textContent('#reportsRows'),/아직 생성되지 않음|연결된 실관리 광고 계정이 없습니다/);
     if(cfg.shots)await page.screenshot({path:path.join(cfg.shots,'실관리-보고서-대기.png'),fullPage:true});
     const beforeAuditWrites=writes.length;
     await auditFluidScreens(page,cfg);

@@ -117,7 +117,7 @@
   }
 
   // 업체 자료는 이 창의 제한된 메모리에만 둔다. 커서는 권한이 아니며 재진입은 매번 서버 확인 뒤 연다.
-  var VIEW_FIELDS = { watch: ['possibility_id'], transfers: ['ad_account_no'], reports: ['possibility_id', 'period_key'], dashboard: null };
+  var VIEW_FIELDS = { watch: ['possibility_id'], transfers: ['ad_account_no'], reports: ['possibility_id', 'account_key'], dashboard: null };
   var VIEW_STATUS = { watch: 'watchSync', transfers: 'inventorySync', reports: 'reportsSync', dashboard: 'dashboardSync' };
   var viewCache = new Map(), viewRequests = {}, viewShown = {}, viewChecked = {}, viewLegacy = {}, viewContext = null, viewEpoch = 0, upContext = null;
   var VIEW_CACHE_COUNT = 8, VIEW_CACHE_BYTES = 4 * 1024 * 1024, VIEW_CACHE_AGE = 10 * 60 * 1000;
@@ -160,6 +160,7 @@
   }
   function gateView(name) { var el = $('s-' + name); if (el && VIEW_STATUS[name]) el.classList.add('view-unverified'); }
   function purgeViews() {
+    if (reportUI) reportUI.reset();
     viewEpoch++; viewCache.clear(); viewRequests = {}; viewShown = {}; viewChecked = {}; viewLegacy = {};
     state.gen++; state.inventoryGen++; state.reportsGen++; state.linksGen++; state.bellGen++;
     state.board = null; state.dashboard = null; state.inventory = null; state.reports = null; state.loadedDay = null;
@@ -243,13 +244,13 @@
   function fetchView(name, path, apply) {
     var context = syncContext(), key = context + '|' + path, gen = state.gen, epoch = viewEpoch, day = kstDay();
     var pending = viewRequests[name];
-    if (pending && pending.key === key && pending.gen === gen) return pending.promise;
+    if (pending && pending.key === key && pending.gen === gen) { pending.apply = apply; return pending.promise; }
     var prior = viewCache.get(key);
     if (prior && Date.now() - prior.saved > VIEW_CACHE_AGE) { viewCache.delete(key); prior = null; }
     var visible = viewShown[name] === key && !$('s-' + name).classList.contains('view-unverified');
     var checked = prior ? prior.checked : visible ? viewChecked[name] : null;
     if (!visible) gateView(name);
-    var request = { key: key, gen: gen }, base = prior;
+    var request = { key: key, gen: gen, apply: apply }, base = prior;
     viewRequests[name] = request;
     function fresh() { return epoch === viewEpoch && gen === state.gen && state.screen === name &&
       viewRequests[name] === request && !!state.me && !!state.session && document.visibilityState !== 'hidden'; }
@@ -281,7 +282,7 @@
     request.promise = read(prior && prior.cursor, viewLegacy[name] === true, false).then(function (entry) {
       if (!entry || !fresh()) return;
       cacheView(key, entry);
-      apply(entry.data);
+      request.apply(entry.data);
       viewShown[name] = key;
       viewChecked[name] = entry.checked;
       $('s-' + name).classList.remove('view-unverified');
@@ -1261,32 +1262,20 @@
           } }, '짝 확인 열기') : null));
     }) : h('tr', null, h('td', { colspan: 4, class: 'empty' }, ready ? (items.length ? '검색 조건에 맞는 실관리 업체가 없습니다.' : '현재 담당 범위에 실관리 업체가 없습니다.') : message || '최신 자료를 확인하기 전에는 연결 완료로 판단하지 않습니다.')));
   }
-  // 보고서는 서버 집계·완결 여부를 그대로 표시한다. 검토는 게시·전송이 아니다.
-  function loadReports(page) {
-    page = typeof page === 'number' && page >= 0 ? page : state.reports && state.reports.page || 0;
-    var sel = state.selection;
-    closeModals();
-    return fetchView('reports', '/reports?selection=' + encodeURIComponent(sel) + (page ? '&page=' + page : ''), function (data) {
-      var unchanged = state.reports === data;
-      state.reports = data;
-      state.loadedDay = kstDay();
-      if (unchanged) return;
-      var schedule = data.schedule || {};
-      $('reportsSchedule').textContent = '주간 ' + (schedule.weekly || '예약 미확인') + ' · 월간 ' + (schedule.monthly || '예약 미확인') +
-        ' · ' + (schedule.timezone || '시간대 미확인');
-      var rows = data.rows || [];
-      $('reportsStatus').textContent = '보고서 ' + num(typeof data.total === 'number' ? data.total : rows.length) + '건 · ' + num(page + 1) + '페이지 · 누락 자료는 0으로 채우지 않습니다 · 게시·전송 기능 없음';
-      var validKeys = rowMap(rows, VIEW_FIELDS.reports), nodes = retainedNodes($('reportsRows'));
-      reconcileNodes($('reportsRows'), rows.length ? rows.map(function (row) {
-        return retainedNode(nodes, validKeys ? rowKey(row, VIEW_FIELDS.reports) : null, row, function () { return reportCard(row); });
-      }) : [h('div', { class: 'card empty' }, '현재 담당 범위에 생성된 보고서가 없습니다. 확정 계정·수집 기간과 예약 시각을 확인해 주세요.')]);
-      function turnPage(target) {
-        if (state.screen === 'reports' && sel === state.selection && state.reports === data) loadReports(target);
-      }
-      put($('reportsPages'), page > 0 ? h('button', { type: 'button', class: 'btn', onclick: function () { turnPage(page - 1); } }, '이전 보고서') : null,
-        typeof data.next_page === 'number' ? h('button', { type: 'button', class: 'btn', onclick: function () { turnPage(data.next_page); } }, '다음 보고서') : null);
-    });
+  // 보고서 상세와 PDF는 같은 불변 판을 읽는다. 업무 쓰기나 네이버 재수집을 하지 않는다.
+  var reportUI = null;
+  function reportsUI() {
+    if (!reportUI) reportUI = window.NaverReports.create({h:h,put:put,$:$,num:num,won:won,periodText:periodText,datedTime:datedTime,
+      api:api,fetchList:function (path,apply) { return fetchView('reports',path,apply); },
+      onList:function (data) { state.reports = data; state.loadedDay = kstDay(); },
+      selection:function () { return state.selection; },context:function () { return viewEpoch + '|' + state.gen + '|' + state.selection; },
+      active:function () { return !!state.me && !!state.session && state.screen === 'reports' && document.visibilityState !== 'hidden'; },
+      onDetailVerified:function (data) { $('s-reports').classList.remove('view-unverified'); viewStatus('reports','current',data.checked_at); },
+      denied:viewDenied,purge:function (error) { purgeViews(); viewStatus('reports','error',null,error); },
+      go:go,toast:toast,validation:reportValidation,changes:reportChanges});
+    return reportUI;
   }
+  function loadReports(page) { closeModals(); return reportsUI().load(typeof page === 'number' ? page : undefined); }
   function reportMetric(label, value) { return h('div', null, h('dt', null, label), h('dd', { class: 'num' }, value)); }
   function reportValidation(row) {
     var v = row.validation || {};
@@ -2059,7 +2048,11 @@
         REL[c.relation] ? h('span', { class: 'pill p-blue' }, REL[c.relation]) : null);
     renderNow();
     renderHist();
-    put($('p-rep'), h('div', { class: 'auto-soon' }, h('b', null, '상단 「보고서」에서 확인해 주세요.'), ' 현재 관리 중이며 정확히 매칭된 업체의 보고서를 자동 생성합니다. 이 화면에서는 승인·게시·전송하지 않습니다.'));
+    put($('p-rep'), h('div', { class: 'auto-soon' }, h('b', null, '이 업체의 주간·월간 보고서'),
+      ' 현재 실관리 단계의 연결된 광고 계정을 확인할 수 있습니다. ',
+      h('button', { type: 'button', class: 'btn', onclick: function () {
+        reportsUI().company(Number(state.clientId)); go('/naver/reports');
+      } }, '이 업체 보고서 보기')));
     renderConn();
     setCtab(state.ctab);
   }

@@ -51,6 +51,7 @@ from . import dashboard as DASH
 from . import management_store as MS
 from . import management as MG
 from . import reporting as R
+from . import report_views as REPORTS
 from . import view_sync as VS
 from . import runtime_view as RV
 
@@ -60,7 +61,7 @@ PREFIX = "/api/naver-auto"
 GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일은 나가는 요청을 만들지 않는다)
 # 제한판은 새 경로가 추가돼도 자동으로 열지 않는다. 로그인/갱신은 기술 쓰기만 허용한다.
 _VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/accounts/reasons", "/dashboard", "/links/pending", "/ended", "/unlinked",
-                               "/bell", "/settings", "/health", "/reports", "/reports/history"})
+                               "/bell", "/settings", "/health", "/reports", "/reports/history", "/reports/accounts", "/reports/detail"})
 _VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
 _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/request"),
                                 (GET, "/collection/status"), (POST, "/management/update"),
@@ -350,7 +351,7 @@ class App:
         now = self._now()
         if not route.auth:
             return route.handler(self, req, None, now, environ=environ, **m.groupdict())
-        if view_sync:
+        if view_sync or sub in {"/reports/accounts", "/reports/detail"}:
             with ExitStack() as snapshot:
                 v = self._viewer(environ, now, snapshot=snapshot)
                 status, payload = route.handler(self, req, v, now, **m.groupdict())
@@ -358,7 +359,7 @@ class App:
                     "narrowed": v.claims.narrowed, "scope": SC.view_cache_identity(v.org, v.scope),
                     "path": sub, "query": query, "date": now.astimezone(KST).date()})
             # 읽기 거래를 닫은 뒤 메모리 캐시만 비교한다. 전송까지 WAL 읽기를 붙잡지 않는다.
-            if status == 200:
+            if view_sync and status == 200:
                 payload = self._view_sync.respond(sub, payload, context=context, view_cursor=view_cursor, now=now)
             return status, payload
         v = self._viewer(environ, now)
@@ -690,16 +691,33 @@ class App:
                     "schedule": {"timezone": "Asia/Seoul", "weekly": "월요일 10:00",
                                                   "monthly": "매월 3일 10:00"}}
 
+    def _h_report_accounts(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        ctx, owns, _names, _current = self._report_context(v, now)
+        try:
+            return 200, REPORTS.accounts(ctx, v.store, v.scope, owns, req.query)
+        except REPORTS.QueryInvalid:
+            raise HttpError(400, "bad-query") from None
+        except REPORTS.SourceUnavailable:
+            raise HttpError(503, "source-stale") from None
+
+    def _h_report_detail(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        ctx, owns, _names, _current = self._report_context(v, now)
+        try:
+            return 200, {**REPORTS.detail(ctx, v.store, v.scope, owns, req.query), "checked_at": now.isoformat()}
+        except REPORTS.QueryInvalid:
+            raise HttpError(400, "bad-query") from None
+        except REPORTS.SourceUnavailable:
+            raise HttpError(503, "source-stale") from None
+
     def _public_report(self, report, v, ctx, owns, names, catalog_current):
         pid, own = report["possibility_id"], owns[report["possibility_id"]]
-        payload = {key: value for key, value in report["payload"].items()
-                   if not key.startswith("_") and key not in {"source_account_ids", "expected_customers_json"}}
+        payload = REPORTS.public_payload(report["payload"])
         missing = payload.get("missing")
         if isinstance(missing, list):
             payload.update(missing=missing[:100], missing_count=len(missing), missing_truncated=len(missing)>100)
-        public = {key: report[key] for key in ("report_id", "possibility_id", "period_key", "revision_fingerprint",
+        public = REPORTS.public_payload({key: report[key] for key in ("report_id", "possibility_id", "period_key", "revision_fingerprint",
                   "generated_at", "status", "review_status", "review", "revision_no", "change_summary", "validation")
-                  if key in report}
+                  if key in report})
         validation = report.get("validation", {})
         return {**public, "payload": payload, "company_name": names[pid], "owner": W._owner(ctx, own),
                 "can_review": catalog_current and report["status"] == "ready" and validation.get("status") == "complete"
@@ -1155,6 +1173,8 @@ ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a i
     (POST, r"/management/update", App._h_management_update, True),
     (POST, r"/management/collect", App._h_management_collect, True),
     (GET, r"/reports", App._h_reports, True),
+    (GET, r"/reports/accounts", App._h_report_accounts, True),
+    (GET, r"/reports/detail", App._h_report_detail, True),
     (GET, r"/reports/history", App._h_report_history, True),
     (POST, r"/reports/review", App._h_report_review, True),
     (GET, r"/clients/(?P<pid>[0-9]{1,18})", App._h_client, True),

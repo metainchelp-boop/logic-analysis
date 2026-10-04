@@ -88,7 +88,10 @@ RESPONSE_HEADERS: Tuple[Tuple[str, str], ...] = (
 # 화면(/naver/) — S13 이 파일을 둔다. 여기서는 어떤 파일을 어떤 머리로 내주는지만 정한다.
 PAGE_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
               ".css": "text/css; charset=utf-8", ".png": "image/png", ".svg": "image/svg+xml",
-              ".woff2": "font/woff2", ".ico": "image/x-icon"}
+              ".woff2": "font/woff2", ".gz": "application/gzip", ".ico": "image/x-icon"}
+REPORT_PDF_ASSETS = frozenset({"vendor/report-pdf/pdf-lib-1.17.1.min.js",
+    "vendor/report-pdf/fontkit-1.1.1.umd.min.js", "vendor/report-pdf/NanumGothic-Regular.ttf.gz",
+    "vendor/report-pdf/sha256-1.0.0.min.js"})
 _PAGE = re.compile(r"(?:[A-Za-z0-9_-]{1,64}/){0,3}[A-Za-z0-9_-]{1,64}(?:\.[a-z0-9]{1,5})")
 # 화면 주소(S13) — 이 이름만 화면 첫 파일(index.html)을 준다: 엔진 알림 링크(``alerts.LINK_*`` · 🔔 · 비서방 본문)와 화면 안
 # 이동이 쓰는 주소. 그 밖의 확장자 없는 이름은 종전대로 404(시험). 화면 파일은 모두 절대 경로(/naver/app.js)라 어느 화면
@@ -474,7 +477,9 @@ def page_file(root: pathlib.Path, rest: str) -> Optional[pathlib.Path]:
     """/naver/ 아래 파일 — 정한 확장자 · 정한 글자만 · 폴더 밖(링크 포함)으로 못 나간다. 없으면 None."""
     if rest in ("", "index.html") or (isinstance(rest, str) and PAGE_SCREENS.fullmatch(rest)):
         rest = "index.html"
-    elif not isinstance(rest, str) or not _PAGE.fullmatch(rest):
+    elif not isinstance(rest, str) or (not _PAGE.fullmatch(rest) and rest not in REPORT_PDF_ASSETS):
+        return None
+    if pathlib.PurePosixPath(rest).suffix == ".gz" and rest not in REPORT_PDF_ASSETS:
         return None
     if pathlib.PurePosixPath(rest).suffix not in PAGE_TYPES:
         return None
@@ -486,6 +491,8 @@ def page_file(root: pathlib.Path, rest: str) -> Optional[pathlib.Path]:
     if base not in p.parents or not p.is_file():
         return None
     if p.suffix not in PAGE_TYPES:          # 폴더 안 링크가 다른 종류(.py·.env)를 가리키면 — 요청 이름만 보면 통과한다
+        return None
+    if p.suffix == ".gz" and p.relative_to(base).as_posix() not in REPORT_PDF_ASSETS:
         return None
     return p
 

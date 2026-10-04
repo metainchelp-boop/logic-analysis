@@ -633,6 +633,22 @@ class PageFileTest(unittest.TestCase):
             self.assertIsNone(R.page_file(self.root, rest), rest)
         self.assertIsNone(R.page_file(self.tmp / "none", ""))
 
+    def test_report_pdf_assets_only_allow_the_pinned_font_and_versioned_scripts(self):
+        for name in R.REPORT_PDF_ASSETS:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"synthetic asset")
+            self.assertEqual(R.page_file(self.root, name), path.resolve())
+        font = R.page_file(self.root, "vendor/report-pdf/NanumGothic-Regular.ttf.gz")
+        self.assertEqual(R.page_type(font), "application/gzip")
+        (self.root / "assets" / "other.ttf").write_bytes(b"private font")
+        (self.root / "assets" / "other.gz").write_bytes(b"private archive")
+        (self.root / "alias.ttf").symlink_to(font)
+        (self.root / "alias.gz").symlink_to(font)
+        for name in ("assets/other.ttf", "assets/other.gz", "alias.ttf", "alias.gz", "vendor/report-pdf/../report-pdf/NanumGothic-Regular.ttf.gz",
+                     "vendor/report-pdf/pdf-lib-1.17.2.min.js", "vendor/report-pdf/NanumGothic-Regular.ttf.map"):
+            self.assertIsNone(R.page_file(self.root, name), name)
+
     def test_screen_paths(self):
         """화면 주소(S13) — 정해진 이름만 index.html · 비슷한 이름·빗금·대문자·0번·긴 번호는 종전대로 404."""
         index = (self.root / "index.html").resolve()

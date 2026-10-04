@@ -9,6 +9,8 @@
 <title>네이버 관제</title>
 <link rel="icon" href="/naver/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/naver/app.css">
+<script src="/naver/report-ui.js" defer></script>
+<script src="/naver/report-pdf.js" defer></script>
 <script src="/naver/app.js" defer></script>
 </head>
 <body>
@@ -164,12 +166,15 @@
   <!-- 📄 보고서 -->
   <section class="screen" id="s-reports" aria-labelledby="t-reports">
     <p class="view-sync" id="reportsSync" role="status" aria-live="polite"></p>
-    <div class="report-heading"><div><h1 class="pt" id="t-reports">📄 보고서 · 모니터링</h1>
-      <p class="ps">현재 관리 중인 업체의 확정 계정에 대한 주간·월간 실적입니다. 네이버 원천 실적일·수집 시각·완결 상태와 기존 검토 기록을 읽기 전용으로 확인합니다. 원천 변경 시 정정되며 여기서 승인·게시·전송하지 않습니다.</p></div>
+    <div class="report-heading"><div><h1 class="pt" id="t-reports">📄 광고 성과 보고서</h1>
+      <p class="ps">관리 중인 광고 계정을 찾아 주간·월간 성과를 확인하고 PDF로 내려받으세요. 계정별 보기가 기본이며 업체 전체 합산도 선택할 수 있습니다.</p></div>
       <button type="button" class="btn sm" id="reportsReload">보고서 새로고침</button></div>
-    <div class="card report-source"><p id="reportsSchedule"></p><p id="reportsStatus" role="status" aria-live="polite"></p></div>
+    <div id="reportFilters" class="card nr-filters"></div>
+    <div class="card report-source" id="reportsSource"><p id="reportsSchedule"></p><p id="reportsStatus" role="status" aria-live="polite"></p></div>
+    <div id="reportUnlinked"></div>
     <div id="reportsRows"></div>
     <div id="reportsPages" class="account-actions" aria-label="보고서 페이지"></div>
+    <div id="reportDetail" hidden aria-live="polite"></div>
   </section>
 
   <!-- 📋 이관 현황 -->

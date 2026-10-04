@@ -251,11 +251,11 @@ const cfg = JSON.parse(process.argv[2]);
       '검색도 변하지 않은 같은 필터 재확인은 기존 행 노드를 보존해야 합니다');
     checks.push('same-inventory-card-clears-search-and-restores-rows', 'same-inventory-card-preserves-unchanged-row');
 
-    const reportsFirst = page.waitForResponse(response => response.url().includes('/reports?'));
+    const reportsFirst = page.waitForResponse(response => response.url().includes('/reports/accounts?'));
     await page.click('[data-go="/naver/reports"]'); await settled('current', page, 'reports');
     const reportFull = await reportsFirst;
     await page.evaluate(() => { window.__reportRow = document.querySelector('#reportsRows [data-report]'); });
-    const reportsSecond = page.waitForResponse(response => response.url().includes('/reports?'));
+    const reportsSecond = page.waitForResponse(response => response.url().includes('/reports/accounts?'));
     await page.click('#reportsReload'); await settled('current', page, 'reports');
     const reportSame = await reportsSecond;
     assert.equal((await reportSame.json()).mode, 'unchanged');
@@ -263,22 +263,23 @@ const cfg = JSON.parse(process.argv[2]);
     measurements.push({view: 'reports', full_bytes: (await reportFull.body()).length,
       unchanged_bytes: (await reportSame.body()).length});
     await control('report-correct');
-    const revised = page.waitForResponse(response => response.url().includes('/reports?'));
+    const revised = page.waitForResponse(response => response.url().includes('/reports/accounts?'));
     await page.click('#reportsReload'); await settled('current', page, 'reports');
     const reportDelta = await (await revised).json();
     assert.equal(reportDelta.mode, 'delta');
     assert.equal(reportDelta.rows.upsert.length, 1);
-    assert.equal(await page.locator('#reportsRows [data-report="21"]').count(), 0);
+    assert.equal(await page.locator('#reportsRows [data-report="1"]').count(), 0);
     assert.equal(await page.locator('#reportsRows [data-report="1000"]').count(), 1);
-    assert.equal(await page.locator('#reportsRows > [data-report]').count(), 20);
-    await page.locator('#reportsPages button', {hasText: '다음 보고서'}).click();
-    await settled('current', page, 'reports');
-    assert.match(await page.locator('#reportsStatus').innerText(), /2페이지/);
+    assert.equal(await page.locator('#reportsRows [data-account-key]').count(), 2);
+    assert.equal(await page.locator('#reportsRows button:disabled').count(), 1, '보고서 없는 관리 계정도 남긴다');
     await control('reports-shrink');
     await page.click('#reportsReload'); await settled('current', page, 'reports');
-    assert.match(await page.locator('#reportsStatus').innerText(), /1건.*1페이지/);
-    assert.equal(await page.locator('#reportsRows > [data-report]').count(), 1);
-    checks.push('actual-report-identity', 'report-revision-replaces-period', 'report-missing-page-first-page-recovery');
+    assert.match(await page.locator('#reportsStatus').innerText(), /관리 중인 광고 계정 2개/);
+    assert.equal(await page.locator('#reportsRows [data-report="1"]').count(), 1);
+    const monthlyReply = page.waitForResponse(response => response.url().includes('/reports/accounts?'));
+    await page.click('#reportMonthly'); await (await monthlyReply).finished(); await settled('current', page, 'reports');
+    assert.equal(await page.locator('#reportsRows button:disabled').count(), 2);
+    checks.push('actual-report-identity', 'report-revision-replaces-period', 'account-without-report-kept', 'monthly-filter');
 
     // 실제 직원 세션의 조직 stale 오류: fallback 없이 모든 이전 범위 자료를 지운다.
     const staffCtx = await browser.newContext({locale: 'ko-KR', timezoneId: 'Asia/Seoul'});

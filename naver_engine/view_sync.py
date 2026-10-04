@@ -8,9 +8,10 @@ from collections import OrderedDict
 from datetime import date, datetime
 
 
-PATHS = frozenset({"/accounts", "/board", "/dashboard", "/reports"})
+PATHS = frozenset({"/accounts", "/board", "/dashboard", "/reports", "/reports/accounts"})
 KEY_FIELDS = {"/accounts": ("ad_account_no",), "/board": ("possibility_id",),
-              "/reports": ("possibility_id", "period_key")}
+              "/reports": ("possibility_id", "period_key"),
+              "/reports/accounts": ("possibility_id", "account_key")}
 RESPONSE_MAX_BYTES = 4 * 1024 * 1024
 
 

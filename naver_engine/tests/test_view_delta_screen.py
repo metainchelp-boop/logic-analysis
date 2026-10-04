@@ -181,7 +181,7 @@ class ViewDeltaScreenTest(TS.BrowserTest):
                 conn.execute("UPDATE naver_auto_inventory_check SET bizmoney=54321 WHERE customer_id=?", (TM.A,))
         elif operation == "report-correct":
             with self.st._tx() as conn:
-                row = conn.execute("SELECT payload_json FROM naver_auto_report_snapshot WHERE report_id=21").fetchone()
+                row = conn.execute("SELECT payload_json FROM naver_auto_report_snapshot WHERE report_id=1").fetchone()
                 payload = json.loads(row[0])
                 payload["totals"]["spend"] = 9999
                 payload["revision_no"] = 2
@@ -189,7 +189,7 @@ class ViewDeltaScreenTest(TS.BrowserTest):
                     (report_id,possibility_id,period_key,revision_fingerprint,generated_at,status,review_status,
                      payload_json)
                     SELECT 1000,possibility_id,period_key,?,generated_at,status,review_status,?
-                    FROM naver_auto_report_snapshot WHERE report_id=21""",
+                    FROM naver_auto_report_snapshot WHERE report_id=1""",
                     ("f" * 64, json.dumps(payload, ensure_ascii=False)))
         else:
             # 원천 시각을 유지해 행 추가/삭제 외에 짝 판정이 함께 바뀌지 않게 한다.

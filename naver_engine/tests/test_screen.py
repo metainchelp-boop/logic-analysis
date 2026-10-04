@@ -55,8 +55,8 @@ CSS_CODE = re.sub(r"/\*.*?\*/", "", CSS, flags=re.S)
 class TextRulesTest(unittest.TestCase):
     def test_no_inline_script_or_handlers_or_styles(self):
         scripts = re.findall(r"<script\b([^>]*)>(.*?)</script>", HTML, flags=re.S | re.I)
-        self.assertEqual(len(scripts), 2)
-        for (attrs, body), name in zip(scripts, ('sso-bootstrap.js', 'app.js')):
+        self.assertEqual(len(scripts), 4)
+        for (attrs, body), name in zip(scripts, ('sso-bootstrap.js', 'report-ui.js', 'report-pdf.js', 'app.js')):
             self.assertEqual(body.strip(), "")
             self.assertIn('src="/naver/' + name + '"', attrs)
         self.assertNotRegex(HTML, r"\son[a-z]+\s*=", "인라인 손잡이(onclick= …)")
