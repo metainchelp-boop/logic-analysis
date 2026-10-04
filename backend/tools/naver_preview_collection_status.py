@@ -37,6 +37,8 @@ LIMITED_MAX_GROUPS = 100
 LINK_REFUSALS = frozenset('scope_denied selection_denied permission_denied company_or_account_unavailable '
     'other_claim existing_decision legacy_stage_conflict legacy_end_unreadable stage-not-monitored '
     'stage-time-unknown stage-stale stage-time-in-future end-date-invalid ended-end-date-unknown ended-over-14-days'.split())
+MORNING_STATES = frozenset(('reading', 'blocked', 'consumed'))
+MORNING_KINDS = frozenset(('daily', 'summary'))
 
 
 def bootstrap_empty(state):
@@ -301,7 +303,20 @@ def catalog_link_counts(context, rules, *, managed_stages=None):
             own, company, account = ctx.owns.get(pid), context.companies.get(pid), ctx.accounts.get(cid)
             legacy = ctx.prospects.get(pid)
             reason = None
-            if scope.kind not in (rules.SC.ALL, rules.SC.MINE):
+            if callable(getattr(rules, 'block_reason', None)):
+                # New products own the identity policy. Do not replay removed handle/stage gates.
+                native = rules.block_reason(context, row)
+                reasons = {'confirmation-not-permitted': 'scope_denied' if scope.kind not in
+                           (rules.SC.ALL, rules.SC.MINE) else 'selection_denied' if pid not in
+                           context.visible_ids else 'permission_denied',
+                           'company-stage-unavailable':'company_or_account_unavailable',
+                           'company-unavailable':'company_or_account_unavailable',
+                           'account-unavailable':'company_or_account_unavailable',
+                           'account-claimed-elsewhere':'other_claim', 'pair-already-decided':'existing_decision',
+                           'contract-stage-conflict':'legacy_stage_conflict',
+                           'contract-end-unreadable':'legacy_end_unreadable'}
+                reason = reasons.get(native, native)
+            elif scope.kind not in (rules.SC.ALL, rules.SC.MINE):
                 reason = 'scope_denied'
             elif pid not in context.visible_ids:
                 reason = 'selection_denied'
@@ -414,10 +429,45 @@ def collect_daily_limited(connection, today, decisions):
             for (code,attempts,current),count in sorted(groups.items())]}, today)
 
 
+def morning_progress_projection(value, today):
+    if (not isinstance(value, dict) or set(value) != {'day','scope','states','current_chunks'}
+            or value['day'] != today or value['scope'] != 'today_current_generation_not_run_completion'
+            or not isinstance(value['states'], dict) or set(value['states']) - (MORNING_STATES | {UNKNOWN})):
+        raise ValueError('COLLECTION_MORNING')
+    states = {}
+    for state, row in value['states'].items():
+        if not isinstance(row, dict) or set(row) != {'accounts','payload_bytes'}:
+            raise ValueError('COLLECTION_MORNING')
+        states[state] = dict(accounts=number(row['accounts']),payload_bytes=number(row['payload_bytes']))
+    return dict(value, states=states, current_chunks=counts(value['current_chunks'], MORNING_KINDS))
+
+
+def collect_morning_progress(connection, today):
+    schema = connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone()
+    if schema is None or schema[0] != '11':
+        raise ValueError('COLLECTION_MORNING_SCHEMA')
+    states = {}
+    for state, accounts, size, invalid in connection.execute(
+            "SELECT CASE WHEN status IN ('reading','blocked','consumed') THEN status ELSE 'UNRECOGNIZED' END,"
+            "COUNT(*),SUM(payload_bytes),SUM(CASE WHEN typeof(payload_bytes)!='integer' OR payload_bytes<0 "
+            "THEN 1 ELSE 0 END) FROM naver_auto_morning_progress WHERE day=? GROUP BY 1", (today,)):
+        if invalid:
+            raise ValueError('COLLECTION_MORNING_BYTES')
+        states[state] = dict(accounts=number(accounts),payload_bytes=number(size))
+    # Stored checkpoints only: neither eligibility nor completed accounts are inferred from these states.
+    chunks = dict(connection.execute(
+        "SELECT CASE WHEN c.kind IN ('daily','summary') THEN c.kind ELSE 'UNRECOGNIZED' END,COUNT(*) "
+        "FROM naver_auto_morning_chunk c JOIN naver_auto_morning_progress p "
+        "ON p.customer_id=c.customer_id AND p.generation=c.generation "
+        "WHERE p.day=? AND c.body IS NOT NULL GROUP BY 1", (today,)))
+    return morning_progress_projection(dict(day=today,scope='today_current_generation_not_run_completion',
+                                           states=states,current_chunks=chunks), today)
+
+
 def project(value):
     fields = {'today', 'prospects', 'pairing', 'latest_run', 'today_checks', 'bootstrap'}
     if (not isinstance(value, dict) or not fields <= set(value)
-            or set(value) - fields - {'management','catalog_links','daily_limited','managed_catalog_links'}):
+            or set(value) - fields - {'management','catalog_links','daily_limited','managed_catalog_links','morning_progress'}):
         raise ValueError('COLLECTION_FIELDS')
     today = value['today']
     if not isinstance(today, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', today):
@@ -456,6 +506,8 @@ def project(value):
         result['daily_limited'] = daily_limited_projection(value['daily_limited'], today)
     if 'managed_catalog_links' in value:
         result['managed_catalog_links'] = catalog_link_projection(value['managed_catalog_links'])
+    if 'morning_progress' in value:
+        result['morning_progress'] = morning_progress_projection(value['morning_progress'], today)
     return result
 
 
@@ -498,7 +550,7 @@ def validate_package(package):
             raise ValueError('PACKAGE_SHAPE')
 
 
-def script(*, catalog_links=False, daily_limited=False):
+def script(*, catalog_links=False, daily_limited=False, morning_progress=False):
     parts = ['import json,os,sys,stat,re,time\nfrom pathlib import Path\nfrom datetime import date,datetime,timedelta,timezone\n', PROJECTION_SOURCE]
     parts.append("""
 try:
@@ -520,6 +572,8 @@ try:
             from naver_engine import management_store as MS
             result['daily_limited']=collect_daily_limited(reader._conn,now.date().isoformat(),MS.snapshot(reader,now))
             result['managed_catalog_links']=collect_catalog_links(reader,now,managed_only=True)
+        if MORNING_PROGRESS_DIAGNOSTIC:
+            result['morning_progress']=collect_morning_progress(reader._conn,now.date().isoformat())
     finally:
         try:
             reader._conn.execute('ROLLBACK')
@@ -529,7 +583,8 @@ try:
     print(json.dumps(result,sort_keys=True))
 except Exception:
     sys.exit(1)
-""".replace('CATALOG_LINK_DIAGNOSTIC', repr(catalog_links)).replace('DAILY_LIMITED_DIAGNOSTIC', repr(daily_limited)))
+""".replace('CATALOG_LINK_DIAGNOSTIC', repr(catalog_links)).replace('DAILY_LIMITED_DIAGNOSTIC', repr(daily_limited))
+       .replace('MORNING_PROGRESS_DIAGNOSTIC', repr(morning_progress)))
     return '\n'.join(parts).encode()
 
 
@@ -638,7 +693,8 @@ def run(package, host, release):
     STAGE = 'read_only_status'
     raw = release.command(['docker', 'exec', '-i', '--user', '10001:10001', identity,
                            'python', '-I', '-B', '-'], data=script(catalog_links=commit in CATALOG_LINKS_COMMITS,
-                            daily_limited=commit in DAILY_LIMITED_COMMITS), timeout=30)
+                            daily_limited=commit in DAILY_LIMITED_COMMITS,
+                            morning_progress=commit == MONITORING_COMMIT), timeout=30)
     if len(raw) > 32768:
         raise ValueError('STATUS_SIZE')
     values = project(json.loads(raw, object_pairs_hook=release.unique))
@@ -648,6 +704,8 @@ def run(package, host, release):
         raise ValueError('COLLECTION_LIMITED_FIELDS')
     if ('managed_catalog_links' in values) != (commit in DAILY_LIMITED_COMMITS):
         raise ValueError('CATALOG_LINK_FIELDS')
+    if ('morning_progress' in values) != (commit == MONITORING_COMMIT):
+        raise ValueError('COLLECTION_MORNING_FIELDS')
     lifecycle = lifecycle_status(release)
     version = compose_version(release)
     engine_state = {'started_at': docker_stamp(before.get('started')),

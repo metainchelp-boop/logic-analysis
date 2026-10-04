@@ -2,9 +2,12 @@
 import importlib.util
 import ast
 import hashlib
+import contextlib
+import io
 import json
 import os
 import sqlite3
+import sys
 import tempfile
 import types
 from pathlib import Path
@@ -128,6 +131,147 @@ class CollectionTest(unittest.TestCase):
         context.source_state='stale'
         with self.assertRaisesRegex(ValueError, '^CATALOG_LINK_SOURCE$'):
             M.catalog_link_counts(context, rules)
+
+    def monitoring_catalog_fixture(self):
+        context, rules = self.catalog_fixture()
+        del rules.H  # Removed from the deployed product; diagnostics cannot call it.
+        scope = dict(SC=rules.SC, W=rules.W,
+                     S=types.SimpleNamespace(PAIR_AUTO='auto',PAIR_BLOCKED='blocked',PAIR_CANDIDATE='candidate'),
+                     M=types.SimpleNamespace(B_NAME_DIFFERENT='name-different'))
+        path = Path(__file__).with_name('fixtures')/'naver_monitoring_catalog_policy.py'
+        exec(compile(path.read_text(), '<pinned-monitoring-policy>', 'exec'), scope)
+        rules.allowed, rules.block_reason = scope['allowed'], scope['block_reason']
+        return context, rules
+
+    def test_actual_monitoring_policy_without_removed_handles_ignores_legacy_contract_gates(self):
+        context, rules = self.monitoring_catalog_fixture()
+        result = M.catalog_link_counts(context, rules)
+        self.assertEqual(result, {'auto':1,'name_different':3,'can_confirm':4,'rejected':{}})
+        self.assertNotIn('PRIVATE', json.dumps(result))
+
+    def test_morning_progress_counts_only_today_and_live_current_generation_without_identities(self):
+        fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        for sql in fixture['new_observed_unsealed']['sql']:
+            db.execute(sql)
+        db.executescript((Path(__file__).with_name('fixtures')/'naver_monitoring_progress.sql').read_text())
+        db.execute("INSERT INTO naver_auto_meta VALUES ('schema_version','11')")
+        for cid, day, status, size in ((1,'2026-10-04','reading',30),(2,'2026-10-04','blocked',0),
+                (3,'2026-10-04','consumed',0),(4,'2026-10-03','reading',100),
+                (5,'2026-10-04','PRIVATE_STATUS',7),(6,'2026-10-04','PRIVATE_OTHER',8)):
+            db.execute("INSERT INTO naver_auto_morning_progress VALUES(?,987654321,?,'PRIVATE_BINDING',"
+                       "'PRIVATE_FINGERPRINT',2,?,'PRIVATE_TIME',?)", (cid,day,status,size))
+        for cid, kind, slot, generation, body in ((1,'daily',1,2,'PRIVATE_BODY'),
+                (1,'daily',2,1,'OLD_BODY'),(1,'daily',3,2,None),(1,'summary',0,2,'PRIVATE_BODY'),
+                (4,'daily',1,2,'OTHER_DAY'),(99,'daily',1,2,'ORPHAN'),
+                (5,'PRIVATE_KIND',1,2,'PRIVATE_BODY'),(6,'PRIVATE_OTHER',1,2,'PRIVATE_BODY')):
+            db.execute("INSERT INTO naver_auto_morning_chunk VALUES(?,?,?,?,?,'PRIVATE_CHECKSUM',10)",
+                       (cid,kind,slot,generation,body))
+        db.commit()
+        before = db.total_changes
+        scope = dict(_A=sqlite3)
+        exec(fixture['new_observed_unsealed']['authorizer'], scope)
+        db.set_authorizer(scope['_authorizer'](scope['PHASE_READ']))
+        result = M.collect_morning_progress(db, '2026-10-04')
+        self.assertEqual(result, dict(day='2026-10-04',
+            scope='today_current_generation_not_run_completion',
+            states={'reading':dict(accounts=1,payload_bytes=30),'blocked':dict(accounts=1,payload_bytes=0),
+                    'consumed':dict(accounts=1,payload_bytes=0),'UNRECOGNIZED':dict(accounts=2,payload_bytes=15)},
+            current_chunks={'daily':1,'summary':1,'UNRECOGNIZED':2}))
+        self.assertEqual(M.morning_progress_projection(result,'2026-10-04'), result)
+        self.assertEqual(db.total_changes, before)
+        for private in ('PRIVATE','OLD_BODY','ORPHAN','987654321','customer_id','possibility_id','binding','fingerprint'):
+            self.assertNotIn(private, json.dumps(result))
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute("UPDATE naver_auto_morning_progress SET payload_bytes=0")
+        db.set_authorizer(None)
+        db.execute("UPDATE naver_auto_meta SET value='10'")
+        with self.assertRaisesRegex(ValueError, '^COLLECTION_MORNING_SCHEMA$'):
+            M.collect_morning_progress(db, '2026-10-04')
+        db.execute("UPDATE naver_auto_meta SET value='11'")
+        db.execute("UPDATE naver_auto_morning_progress SET payload_bytes=-1 WHERE customer_id=5")
+        with self.assertRaisesRegex(ValueError, '^COLLECTION_MORNING_BYTES$'):
+            M.collect_morning_progress(db, '2026-10-04')
+
+    def test_morning_projection_rejects_leaks_bad_numbers_and_completion_claims(self):
+        value = dict(day='2026-10-04',scope='today_current_generation_not_run_completion',
+                     states={'reading':dict(accounts=1,payload_bytes=30)},current_chunks={'daily':1})
+        for mutate in (lambda v:v.update(customer_id=987654321),lambda v:v.update(day='2026-10-03'),
+                lambda v:v.update(scope='completed_accounts'),lambda v:v['states'].update(PRIVATE={}),
+                lambda v:v['states']['reading'].update(accounts=True),
+                lambda v:v['states']['reading'].update(payload_bytes=-1),
+                lambda v:v['states']['reading'].update(payload_bytes=2**63),
+                lambda v:v['states']['reading'].update(body='PRIVATE'),
+                lambda v:v['current_chunks'].update(PRIVATE=1),lambda v:v['current_chunks'].update(daily=False)):
+            changed=json.loads(json.dumps(value)); mutate(changed)
+            with self.subTest(value=changed), self.assertRaises(ValueError) as caught:
+                M.morning_progress_projection(changed,'2026-10-04')
+            self.assertNotIn('PRIVATE',str(caught.exception))
+
+    def test_complete_emitted_script_executes_policy_and_sql_under_the_actual_reader_authorizer(self):
+        fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
+        db = sqlite3.connect(':memory:', isolation_level=None)
+        self.addCleanup(db.close)
+        for sql in fixture['new_observed_unsealed']['sql']:
+            db.execute(sql)
+        db.executescript((Path(__file__).with_name('fixtures')/'naver_monitoring_progress.sql').read_text())
+        db.execute("INSERT INTO naver_auto_meta VALUES ('schema_version','11')")
+        scope = dict(_A=sqlite3)
+        exec(fixture['new_observed_unsealed']['authorizer'], scope)
+        db.set_authorizer(scope['_authorizer'](scope['PHASE_READ']))
+        before = db.total_changes
+        context, rules = self.monitoring_catalog_fixture()
+        rules.W.load_org = lambda store: context.ctx.org
+        rules.SC.scope_of = lambda org, actor: context.scope
+        rules.load = lambda *args, **kwargs: context
+        reader = types.SimpleNamespace(_conn=db, meta=lambda key:'11', close=Mock())
+        engine = types.ModuleType('naver_engine')
+        engine.store = types.SimpleNamespace(open_reader=lambda path:reader)
+        engine.catalog_links = rules
+        engine.management = types.SimpleNamespace(DAILY_STAGES=frozenset(('진행중','전략관리','사후관리','재계약진행중')))
+        engine.management_store = types.SimpleNamespace(snapshot=lambda *args: {
+            1:dict(source_current=True, decision=types.SimpleNamespace(cadence='daily'),
+                   stage_revision='synthetic',possibility_id=11)})
+        output = io.StringIO()
+        original_resolve = Path.resolve
+        def resolve(path, *args, **kwargs):
+            # The synthetic request is absent; macOS maps /var to /private/var unlike the deployment host.
+            if str(path) == '/var/lib/naver-engine/bootstrap-request.json':
+                return path
+            return original_resolve(path, *args, **kwargs)
+        with patch.dict(sys.modules, {'naver_engine':engine}), patch.object(sys,'path',list(sys.path)), \
+                patch.dict(os.environ, {}), patch.object(os,'geteuid',return_value=10001), \
+                patch.object(Path,'resolve',resolve), patch.object(os,'open',side_effect=FileNotFoundError), \
+                contextlib.redirect_stdout(output):
+            exec(compile(M.script(catalog_links=True,daily_limited=True,morning_progress=True),'<complete-status-script>','exec'), {})
+        result = M.project(json.loads(output.getvalue()))
+        self.assertEqual(result['catalog_links']['can_confirm'], 4)
+        self.assertEqual(result['managed_catalog_links']['can_confirm'], 4)
+        self.assertEqual(result['daily_limited']['current_daily_targets'], 1)
+        self.assertEqual(result['morning_progress'], dict(day=result['today'],
+            scope='today_current_generation_not_run_completion',states={},current_chunks={}))
+        self.assertEqual(db.total_changes, before)
+        self.assertFalse(db.in_transaction)
+        reader.close.assert_called_once()
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute("UPDATE naver_auto_meta SET value='12'")
+        self.assertNotIn('PRIVATE', output.getvalue())
+
+    def test_native_policy_refusals_are_bounded_and_allowed_must_still_agree(self):
+        context, rules = self.monitoring_catalog_fixture()
+        context.visible_ids = frozenset({1})
+        for native, projected in (('account-claimed-elsewhere','other_claim'),
+                                  ('pair-already-decided','existing_decision'),
+                                  ('contract-end-unreadable','legacy_end_unreadable')):
+            rules.block_reason = lambda *args, reason=native: reason
+            rules.allowed = lambda *args: False
+            self.assertEqual(M.catalog_link_counts(context,rules)['rejected'], {projected:1})
+        for reason, allowed in (('PRIVATE_REASON',False),(None,False),('account-unavailable',True)):
+            rules.block_reason = lambda *args, reason=reason: reason
+            rules.allowed = lambda *args, value=allowed: value
+            with self.assertRaisesRegex(ValueError, '^CATALOG_LINK_RULE_MISMATCH$'):
+                M.catalog_link_counts(context,rules)
 
     def test_managed_catalog_counts_use_current_four_stages_without_changing_all_counts(self):
         context, rules = self.catalog_fixture()
@@ -392,7 +536,12 @@ class CollectionTest(unittest.TestCase):
             if commit not in M.CATALOG_LINKS_COMMITS:
                 values.pop('catalog_links')
             values.update(extra or {})
+            morning = dict(day=values['today'],scope='today_current_generation_not_run_completion',
+                           states={},current_chunks={})
+            if commit == M.MONITORING_COMMIT:
+                values['morning_progress'] = morning
             failures = [None,'image','mount','rootfs','output','restart','unexpected_daily']
+            failures.append('morning_missing' if commit == M.MONITORING_COMMIT else 'unexpected_morning')
             if 'catalog_links' in values:
                 failures.append('catalog_missing')
             if extra:
@@ -424,7 +573,8 @@ class CollectionTest(unittest.TestCase):
                     if args[1] == 'exec':
                         ast.parse(kwargs['data'])
                         self.assertEqual(kwargs['data'].decode().count('if True:'),
-                            int(commit in M.CATALOG_LINKS_COMMITS)+int(commit in M.DAILY_LIMITED_COMMITS))
+                            int(commit in M.CATALOG_LINKS_COMMITS)+int(commit in M.DAILY_LIMITED_COMMITS)
+                            +int(commit == M.MONITORING_COMMIT))
                         self.assertEqual(args, ['docker','exec','-i','--user','10001:10001',cid,'python','-I','-B','-'])
                         if failure == 'catalog_missing':
                             return json.dumps({key:value for key,value in values.items() if key != 'catalog_links'}).encode()
@@ -432,6 +582,10 @@ class CollectionTest(unittest.TestCase):
                             return json.dumps({key:value for key,value in values.items() if key != failure[:-8]}).encode()
                         if failure == 'unexpected_daily':
                             return json.dumps(dict(values,daily_limited={'PRIVATE':'PRIVATE'})).encode()
+                        if failure == 'morning_missing':
+                            return json.dumps({key:value for key,value in values.items() if key != 'morning_progress'}).encode()
+                        if failure == 'unexpected_morning':
+                            return json.dumps(dict(values,morning_progress=morning)).encode()
                         return json.dumps(dict(values, secret='SECRET') if failure=='output' else values).encode()
                     self.fail('unexpected command')
                 release.command.side_effect = command
