@@ -46,6 +46,8 @@ const cfg = JSON.parse(process.argv[2]);
     await page.locator('#drawer .bitem').first().click();
     await page.waitForSelector('#s-watch.on #kpis .kpi');
     assert.deepEqual(await read('/bell'), bellBefore);
+    await page.click('[data-go="/naver/transfers"]');   // 짝 확인은 이관 현황 안(개편 2026-10-06)
+    await page.waitForSelector('#s-transfers.on #linksToggle');
     await page.click('#linksToggle');
     await page.waitForSelector('#linksBody:not([hidden]) > *');
     assert.equal(await page.locator('#linksBody .act button').count(), 0);

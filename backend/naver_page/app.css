@@ -487,3 +487,11 @@ tr.grp.team td{background:#e9eef8}
   .watch-heading{flex-wrap:wrap}
 }
 @media (max-width:480px){.memo-in{width:100%}}
+
+/* ── 관제 개편 4단계(대표 결정 2026-10-06) — 🔗 짝 확인은 이관 현황 · 📦 는 「계약만료」 바로 보기 · 복구 조회는 설정 › 시스템 ── */
+#linksCard>#confirmAuto,#linksCard>#linksShowAll{margin:6px 14px 4px}
+#linksCard>#linksFilter:not(:empty){padding:4px 14px 0;font-size:12.5px}
+.ps.quick{margin:2px 0 10px}
+.ps.quick .link{color:var(--erp-blue-deep);border-bottom-color:var(--erp-blue-deep)}
+#sp-sys>#collectionControls{margin-bottom:12px}
+#linksBody>.sub,#linksBody>.note{margin:8px 14px 4px;font-size:12.5px}

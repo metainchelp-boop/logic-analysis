@@ -325,6 +325,11 @@ test('업체 제한 일괄확정은 50건 뒤 최신 ref로 남은 최초 동의
   run.elements.get('confirmAuto').dispatch('click');
   run.elements.get('confirmAuto').dispatch('click');
   await flush();
+  assert.equal(run.requests.filter(request => request.method === 'POST').length, 0, '확인창의 「확정」 전에는 보내지 않는다(D5)');
+  assert.match(run.text('ca-sub'), /53곳/);
+  run.elements.get('ca-ok').dispatch('click');
+  run.elements.get('ca-ok').dispatch('click');
+  await flush();
   const posts = run.requests.filter(request => request.method === 'POST');
   assert.equal(posts.length, 2);
   assert.equal(posts[0].body.refs.length, 50);
@@ -346,7 +351,7 @@ test('일괄확정 중 남은 pair·권한·원천이 바뀌거나 pair 키가 �
       return linkResponse(pending(writes ? [fresh] : original, [],
         {source_state:writes && change === 'source' ? 'stale' : 'accepted'}), request);
     }});
-    await flush(); run.elements.get('confirmAuto').dispatch('click'); await flush();
+    await flush(); run.elements.get('confirmAuto').dispatch('click'); run.elements.get('ca-ok').dispatch('click'); await flush();
     assert.equal(run.requests.filter(request => request.method === 'POST').length, 1, change);
     assert.match(run.text('toast'), /50곳 확정 후 중단.*최신 목록/);
   }
@@ -357,7 +362,7 @@ test('선택 업체의 일괄·개별 확정은 상단 담당 범위를 같은 �
     respond:request => linkResponse(pending([linkFixture(),linkFixture({possibility_id:2,ref:'other-ref'})]), request)});
   await flush(); run.scope('me'); await flush();
   assert.ok(run.requests.some(request => request.url === '/api/naver-auto/links/pending?selection=me'));
-  run.elements.get('confirmAuto').dispatch('click'); await flush();
+  run.elements.get('confirmAuto').dispatch('click'); run.elements.get('ca-ok').dispatch('click'); await flush();
   assert.deepEqual(run.requests.filter(request => request.method === 'POST').map(request => request.body),
     [{refs:['synthetic-ref-1'],selection:'me'}]);
   run.buttons('linksBody').find(button => button.textContent === '이 계정 맞음').dispatch('click'); await flush();
@@ -406,12 +411,77 @@ test('일괄확정 재조회 중 페이지가 바뀌면 다음 묶음과 늦은 
     if (request.url.includes('/accounts?')) return inventory();
     return linkResponse(pending(rows),request);
   }});
-  await flush(); run.elements.get('confirmAuto').dispatch('click'); await flush();
-  run.navigate('transfers'); await flush();
+  await flush(); run.elements.get('confirmAuto').dispatch('click'); run.elements.get('ca-ok').dispatch('click'); await flush();
+  run.navigate(''); await flush();   // 짝 확인은 이관 현황 안 — 다른 페이지 = 관제 첫 화면
   release(pending([Object.assign({},rows[50],{ref:'fresh-50'})])); await flush();
   assert.equal(writes,1);
   assert.equal(run.text('linksBody'),'');
   assert.doesNotMatch(run.text('toast'),/확정/);
+});
+
+test('일괄 확정 확인창은 취소하면 보내지 않고, 창을 연 뒤 범위가 바뀌면 확정하지 않는다(D5)', async () => {
+  const run = launch({screen:'links',me:{scope:'ALL',owner_verification:true,verified_linking:true},
+    respond:request => linkResponse(pending([linkFixture()]),request)});
+  await flush();
+  assert.equal(run.elements.get('s-transfers').classList.contains('on'), true, '/naver/links 는 이관 현황 화면');
+  run.elements.get('confirmAuto').dispatch('click');
+  assert.equal(run.elements.get('m-confirm-auto').classList.contains('on'), true);
+  assert.match(run.text('ca-sub'), /1곳을 한 번에/);
+  run.elements.get('m-confirm-auto').dispatch('click', {target: run.elements.get('m-confirm-auto')});
+  run.elements.get('ca-ok').dispatch('click'); await flush();
+  assert.equal(run.requests.filter(request => request.method === 'POST').length, 0, '닫은 창의 확정은 보내지 않는다');
+  run.elements.get('confirmAuto').dispatch('click');
+  run.scope('me'); await flush();
+  run.elements.get('ca-ok').dispatch('click'); await flush();
+  assert.equal(run.requests.filter(request => request.method === 'POST').length, 0, '범위가 바뀐 뒤의 확정은 보내지 않는다');
+  // 화면 이동 없이 창을 연 동안 짝 목록이 새로 오면(한 줄 확정 뒤 다시 받음 · 늦은 응답) 일괄 확정은 보내지 않는다
+  const moved = launch({screen:'links',me:{scope:'ALL',owner_verification:true,verified_linking:true},
+    respond:request => request.method === 'POST' ? {decided:1} :
+      linkResponse(pending([linkFixture(), linkFixture({ref:'second-ref',pair_key:'pair-2',possibility_id:2,name:'다른 업체'})]),request)});
+  await flush();
+  moved.elements.get('confirmAuto').dispatch('click');
+  moved.buttons('linksBody').find(button => button.textContent === '이 계정 맞음').dispatch('click'); await flush();
+  moved.elements.get('ca-ok').dispatch('click'); await flush();
+  assert.equal(moved.requests.filter(request => request.method === 'POST').length, 1, '한 줄 확정만 보내고 일괄 확정은 보내지 않는다');
+  assert.match(moved.text('toast'), /짝 목록이 바뀌었습니다/);
+});
+
+test('실사용 판의 짝 판단 「거두기」는 대표에게만 보이고 사유를 실어 보낸다(D5)', async () => {
+  const decisions = [{decision_id: 7, possibility_id: 1, name: '목표 업체', decision: 'confirmed', tail: '1234', decided_by: '직원가', decided_at: '2026-10-02T09:00:00+09:00', detail_available: false}];
+  for (const [scope, visible] of [['ALL', true], ['MINE', false]]) {
+    const run = launch({screen:'links',me:{scope,owner_verification:true,verified_linking:true,owner_actions:true},
+      respond:request => request.method === 'POST' ? {revoked: 7} : linkResponse(pending([], decisions), request)});
+    await flush();
+    const revoke = run.buttons('linksBody').filter(button => button.textContent === '거두기');
+    assert.equal(revoke.length, visible ? 1 : 0, scope);
+    if (!visible) continue;
+    revoke[0].dispatch('click');
+    run.elements.get('mr-ok').dispatch('click'); await flush();
+    assert.equal(run.requests.filter(request => request.method === 'POST').length, 0, '사유가 없으면 보내지 않는다');
+    revoke[0].dispatch('click');
+    run.elements.get('mr-why').value = '광고주 계정이 바뀜';
+    run.elements.get('mr-ok').dispatch('click'); await flush();
+    assert.deepEqual(run.requests.filter(request => request.method === 'POST').map(request => [request.url, request.body]),
+      [['/api/naver-auto/links/revoke', {decision_id: 7, reason: '광고주 계정이 바뀜'}]]);
+  }
+  const ro = launch({screen:'links',me:{scope:'ALL',owner_verification:true,verified_linking:true},
+    respond:request => linkResponse(pending([], decisions), request)});
+  await flush();
+  assert.equal(ro.buttons('linksBody').filter(button => button.textContent === '거두기').length, 0, '손길이 닫힌 판은 대표도 거두기 없음');
+});
+
+test('옛 📦 주소는 이관 현황 「계약만료」 거르기로, 바로 보기 단추도 같은 거르기로 연다(D9)', async () => {
+  const run = launch({screen:'ended'});
+  await flush();
+  assert.equal(run.elements.get('s-transfers').classList.contains('on'), true);
+  assert.equal(run.elements.get('inventoryCard').hidden, false);
+  assert.equal(run.elements.get('inventoryWorkflow').value, '계약만료');
+  assert.ok(run.requests.some(request => request.url.includes('/accounts?') &&
+    request.url.includes('workflow=' + encodeURIComponent('계약만료')) && request.url.includes('view=current')));
+  assert.ok(!run.requests.some(request => request.url.includes('/ended')), '옛 📦 목록 경로는 부르지 않는다');
+  run.elements.get('inventoryWorkflow').value = 'all'; run.elements.get('inventoryWorkflow').dispatch('change'); await flush();
+  run.elements.get('inventoryEnded').dispatch('click'); await flush();
+  assert.equal(run.elements.get('inventoryWorkflow').value, '계약만료');
 });
 
 test('잘못된 업체 제한 주소는 전체 업체 자동확정으로 확대되지 않는다', async () => {

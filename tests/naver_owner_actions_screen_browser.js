@@ -68,11 +68,22 @@ async function enter(browser, code) {
     await page.waitForFunction(() => !document.querySelector('#drawer.on'));
     assert.equal((await ceo.call('GET', '/bell')).body.unread, unreadBefore - 1);
 
+    await page.click('[data-go="/naver/transfers"]');   // 짝 확인은 이관 현황 안(개편 2026-10-06)
+    await page.waitForSelector('#s-transfers.on #linksToggle');
     await page.click('#linksToggle');
     await page.waitForSelector('#linksBody:not([hidden]) > *');
-    for (const text of ['아님', '거두기', '캠페인 이름 보기']) {
+    for (const text of ['아님', '캠페인 이름 보기']) {
       assert.equal(await page.locator('#linksBody button', { hasText: text }).count(), 0, text);
     }
+    // 거두기는 대표에게 보이고(D5) 사유 없이는 보내지 않는다 — 판단은 바꾸지 않고 창만 닫는다
+    const revokeButtons = page.locator('#linksBody button', { hasText: '거두기' });
+    assert.ok(await revokeButtons.count() >= 1, '대표는 사람 판단을 거둘 수 있다');
+    await revokeButtons.first().click();
+    await page.waitForSelector('#m-revoke.on #mr-ok');
+    await page.click('#mr-ok');
+    await page.waitForFunction(() => document.querySelector('#toast').textContent.includes('사유'));
+    await page.click('#m-revoke.on [data-close]');
+    assert.ok(!ceo.writes.some(path => path.endsWith('/links/revoke')), '사유 없는 거두기는 보내지 않는다');
 
     await page.click('#menuSettings');
     await page.waitForSelector('#s-settings.on #sp-th table');
@@ -117,6 +128,11 @@ async function enter(browser, code) {
     assert.equal(await page.locator('#issues .iss[data-issue="' + cfg.yellow + '"]').count(), 0, '남의 담당 이슈는 보이지 않는다');
     const denied = await staff.call('POST', '/settings/thresholds', { changes: { zero_spend_days: 5 } });
     assert.deepEqual([denied.status, denied.body.error], [403, 'ceo-only']);
+    await page.click('[data-go="/naver/transfers"]');
+    await page.waitForSelector('#s-transfers.on #linksToggle');
+    await page.click('#linksToggle');
+    await page.waitForSelector('#linksBody:not([hidden]) > *');
+    assert.equal(await page.locator('#linksBody button', { hasText: '거두기' }).count(), 0, '직원 화면에는 거두기가 없다');
     const revokeDenied = await staff.call('POST', '/links/revoke', { decision_id: 1, reason: '틀림' });
     assert.deepEqual([revokeDenied.status, revokeDenied.body.error], [403, 'ceo-only'], '거두기는 대표만');
     assert.deepEqual(staff.external, []); assert.deepEqual(staff.errors, []);
