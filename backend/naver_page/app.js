@@ -684,10 +684,12 @@
       : '광고 변경·자동입찰·외부 전송·업무 처리 기능은 열지 않습니다.';
     $('collectionControls').hidden = !fullCollectionAllowed();
     $('bellAll').hidden = readOnly() && !ownerActions();
-    var kind = { ALL: '대표', TEAM: '팀장', MINE: '담당자' }[me.scope] || '';
+    // 대표 = 전체(위 고르기 칸으로 좁힘) · 그 밖(관리부서) = 늘 본인 담당 — 서버 scope.py 판정을 그대로 말한다
+    var kind = me.scope === 'ALL' ? '대표' : '관리부서';
     var mine = (me.people || []).filter(function (p) { return p.idx === me.idx; })[0];
-    put($('me'), h('b', null, me.name || ''), ' · ' + kind + (me.narrowed ? ' (내 담당만 보기)' : ''),
-      mine ? ' · ' + num(mine.account_count) + '계정' : '');
+    put($('me'), h('b', null, me.name || ''), ' · ' + kind, mine ? ' · ' + num(mine.account_count) + '계정' : '');
+    $('scopePill').textContent = '범위 · 내 담당';
+    $('scopePill').hidden = me.scope === 'ALL';
     $('menuSettings').hidden = !(me.scope === 'ALL' || me.scope === 'TEAM');
     var sel = $('scope');
     if (me.scope === 'ALL') {
