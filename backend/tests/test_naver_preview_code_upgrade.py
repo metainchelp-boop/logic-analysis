@@ -690,6 +690,35 @@ class ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
+    def test_sealed_source_may_drop_test_folders_but_nothing_else(self):
+        module=sealed_code()
+        upgrade=Mock()
+        upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
+        with tempfile.TemporaryDirectory() as folder:
+            old=Path(folder).resolve()/'old';new=Path(folder).resolve()/'new'
+            for root in (old,new):
+                (root/'naver_engine').mkdir(parents=True)
+                (root/'naver_engine/web.py').write_bytes(b'unchanged web')
+            # The deployed tree still carries test folders; the new seal leaves them out.
+            for name in ('naver_engine/tests/test_store_shm_lock.py','naver_engine/tests/owner_screen_browser.js',
+                         'naver_runtime/tests/test_bootstrap.py'):
+                path=old/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old test')
+            module.compatible_code_scope(old,new,upgrade)
+            # A look-alike outside the two test folders is still a removed source file.
+            for name in ('naver_engine/tests_helper.py','tests/test_naver_owner_actions.py','naver_engine/web.py'):
+                with self.subTest(path=name):
+                    path=old/name;path.parent.mkdir(parents=True,exist_ok=True)
+                    if not path.exists():
+                        path.write_bytes(b'old source')
+                    if (new/name).exists():
+                        (new/name).unlink()
+                    with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
+                        module.compatible_code_scope(old,new,upgrade)
+                    if name=='naver_engine/web.py':
+                        (new/name).write_bytes(b'unchanged web')
+                    else:
+                        path.unlink()
+
     def test_owner_actions_release_allows_only_exact_code_and_test_paths(self):
         module=sealed_code()
         upgrade=Mock()
@@ -982,13 +1011,13 @@ class ContractTest(unittest.TestCase):
                 return scope['bundle']
             self.assertEqual(decode(encoded),prepare)
             packed=gzip.compress(json.dumps(prepare).encode())
-            for bad in (packed[:-1], packed+b'tail', packed+packed, gzip.compress(b' '*131073), b'bad'):
+            for bad in (packed[:-1], packed+b'tail', packed+packed, gzip.compress(b' '*180001), b'bad'):
                 with self.assertRaises((AssertionError,ValueError,zlib.error)):
                     decode('prepare-gzip-v1:'+base64.b64encode(bad).decode())
             with self.assertRaises(AssertionError):
                 decode('prepare-gzip-v1:'+'A'*65536)
         with self.assertRaisesRegex(ValueError,'PREPARE_BUNDLE_SIZE'):
-            encode({'source':'x'*131072})
+            encode({'source':'x'*180000})
         with self.assertRaisesRegex(ValueError,'PREPARE_WIRE_SIZE'):
             encode({'source':random.Random(0).randbytes(60000).hex()})
 

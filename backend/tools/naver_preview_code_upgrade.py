@@ -24,6 +24,9 @@ STORE_SHA256 = dict.fromkeys(('old','target'), '31be2c8ed8d8a3d321f0fb93b08b105c
 CODE_PATHS = {'naver_engine/web.py', 'naver_runtime/__main__.py',
               'backend/naver_page/app.js', 'backend/naver_page/index.html'}
 TEST_PATHS = {'naver_engine/tests/owner_screen_browser.js', 'naver_engine/tests/test_owner_screen_copy.py'}
+# The seal no longer ships test folders (ad-dashboard tools/naver-preview-seal.py SOURCE_EXCLUDED_PATHS);
+# old deployed trees still carry them. Tests never run on the server, so only these may disappear.
+REMOVABLE_SOURCE_PREFIXES = ('naver_engine/tests/', 'naver_runtime/tests/')
 # Target: 401 without a token; old: 403.
 OWNER_ACTION_ROUTES = ('/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all',
     '/settings/thresholds', *('/holds/'+k+'/confirm' for k in ('org', 'stages', 'accounts')))
@@ -436,7 +439,7 @@ def compatible_code_scope(old, new, upgrade):
         upgrade.read_file(path, maximum=1024*1024, minimum=0))
         return files
     before, after = inventory(old), inventory(new)
-    if before.keys() - after.keys():
+    if any(not name.startswith(REMOVABLE_SOURCE_PREFIXES) for name in before.keys() - after.keys()):
         raise ValueError('CODE_SOURCE_REMOVED')
     for name, value in after.items():
         if name in before and before[name][0] != value[0]:

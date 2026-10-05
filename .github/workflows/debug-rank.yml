@@ -287,7 +287,7 @@ jobs:
               if operation=='preview-code-prepare':
                   bundle['code_source']=pathlib.Path('backend/tools/naver_preview_code_upgrade.py').read_text()
               raw=json.dumps(bundle).encode()
-              if len(raw)>131072:
+              if len(raw)>180000:
                   raise ValueError('PREPARE_BUNDLE_SIZE')
               encoded='prepare-gzip-v1:'+base64.b64encode(gzip.compress(raw,mtime=0)).decode()
               if len(encoded)>65536:
@@ -317,8 +317,8 @@ jobs:
                 wire=os.environ['PREVIEW_RELEASE_B64']
                 assert wire.startswith('prepare-gzip-v1:') and len(wire)<=65536
                 decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
-                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),131073)
-                assert len(raw)<=131072 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),180001)
+                assert len(raw)<=180000 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
                 bundle=json.loads(raw)
                 os.environ.clear(); os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 host=types.ModuleType('approved_host'); exec(bundle['host_source'],host.__dict__)
@@ -381,8 +381,8 @@ jobs:
                 wire=os.environ['PREVIEW_RELEASE_B64']
                 assert wire.startswith('prepare-gzip-v1:') and len(wire)<=65536
                 decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
-                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),131073)
-                assert len(raw)<=131072 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),180001)
+                assert len(raw)<=180000 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
                 bundle=json.loads(raw)
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 host=types.ModuleType('approved_host');exec(bundle['host_source'],host.__dict__)
