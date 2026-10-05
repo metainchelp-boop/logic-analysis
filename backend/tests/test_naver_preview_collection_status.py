@@ -127,7 +127,7 @@ class CollectionTest(unittest.TestCase):
                 self.assertNotIn('collection', result)
 
     def test_diagnostic_labels_use_only_sqlite_primary_codes_and_never_exception_text(self):
-        for code, label in ((5,'SQLITE_BUSY'),(261,'SQLITE_BUSY'),(9,'SQLITE_INTERRUPT'),
+        for code, label in ((5,'SQLITE_BUSY'),(261,'SQLITE_BUSY'),(9,'SQLITE_INTERRUPT'),(15,'SQLITE_PROTOCOL'),
                             (23,'SQLITE_AUTH'),(26,'SQLITE_NOTADB'),(999,'UNRECOGNIZED'),
                             (None,'UNRECOGNIZED'),(True,'UNRECOGNIZED')):
             error = sqlite3.OperationalError('PRIVATE SQL account=987654321 /private/path')
@@ -171,23 +171,27 @@ class CollectionTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '^COLLECTION_DIAGNOSTIC$'):
                 M.diagnostic_projection(value)
 
-    def test_catalog_diagnostics_accept_only_five_reviewed_product_commits(self):
+    def test_catalog_diagnostics_accept_only_six_reviewed_product_commits(self):
         self.assertEqual(M.CATALOG_LINKS_COMMITS, frozenset({
             '6e4b035901027fef29266de218bfb0594227a3fe',
             '01344b145d0b679a6ee730d7fa4b5990278dd654',
             '1b790b864ce27766251a205259fa6a332f60f72b',
             '0a302856c6177c4f53145abaf9ed31b6a39654f3',
-            'a38c53775c112cdf5db420f979093d6bee9e5376'}))
+            'a38c53775c112cdf5db420f979093d6bee9e5376',
+            'c21f5f05f610abf89df0c24e85c00b1bec23d01c'}))
         self.assertEqual(M.DAILY_LIMITED_COMMIT, '01344b145d0b679a6ee730d7fa4b5990278dd654')
         self.assertEqual(M.DAILY_LIMITED_COMMITS, frozenset({
             '01344b145d0b679a6ee730d7fa4b5990278dd654',
             '1b790b864ce27766251a205259fa6a332f60f72b',
             '0a302856c6177c4f53145abaf9ed31b6a39654f3',
-            'a38c53775c112cdf5db420f979093d6bee9e5376'}))
+            'a38c53775c112cdf5db420f979093d6bee9e5376',
+            'c21f5f05f610abf89df0c24e85c00b1bec23d01c'}))
         self.assertEqual(M.REPORTS_COMMIT, 'a38c53775c112cdf5db420f979093d6bee9e5376')
+        self.assertEqual(M.SHM_LOCK_FIX_COMMIT, 'c21f5f05f610abf89df0c24e85c00b1bec23d01c')
         self.assertEqual(M.MONITORING_COMMITS, frozenset({
             '0a302856c6177c4f53145abaf9ed31b6a39654f3',
-            'a38c53775c112cdf5db420f979093d6bee9e5376'}))
+            'a38c53775c112cdf5db420f979093d6bee9e5376',
+            'c21f5f05f610abf89df0c24e85c00b1bec23d01c'}))
 
     def test_daily_limited_uses_schema11_reader_and_separates_current_targets_from_old_jobs(self):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
@@ -765,9 +769,11 @@ class CollectionTest(unittest.TestCase):
         release.command.assert_not_called()
 
     def test_run_reviewed_releases_require_new_aggregates_and_unknown_commit_gets_neither(self):
+        # c21f5f0 live reads stay allowed (a38c537 does not).
         for commit in ('01344b145d0b679a6ee730d7fa4b5990278dd654',
                        '1b790b864ce27766251a205259fa6a332f60f72b',
-                       '0a302856c6177c4f53145abaf9ed31b6a39654f3'):
+                       '0a302856c6177c4f53145abaf9ed31b6a39654f3',
+                       'c21f5f05f610abf89df0c24e85c00b1bec23d01c'):
             with self.subTest(commit=commit):
                 self.check_run_diagnostics(commit, {
                     'daily_limited':dict(cycle_day='2026-10-01',jobs=0,current_daily_targets=1,

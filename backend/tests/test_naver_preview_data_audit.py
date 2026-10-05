@@ -8,6 +8,7 @@ import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import unittest
+from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location('data_audit', Path(__file__).parents[1]/'tools/naver_preview_data_audit.py')
 M = importlib.util.module_from_spec(SPEC)
@@ -115,6 +116,24 @@ class AuditTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             M.validate_package({'baseline': 'a'*64, 'source_commit': 'b'*40,
                                 'source_tar_gz_sha256': 'c'*64, 'database': '/legacy'})
+
+    def test_shm_lock_defect_release_refuses_before_host_access_and_fixed_release_continues(self):
+        # a38c537: live engine-DB reads are suspended (incident 2026-10-05).
+        package = {'baseline': 'a'*64, 'source_commit': 'a38c53775c112cdf5db420f979093d6bee9e5376',
+                   'source_tar_gz_sha256': 'c'*64}
+        host, release = Mock(), Mock()
+        with self.assertRaisesRegex(ValueError, '^LIVE_READER_SUSPENDED$'):
+            M.run(package, host, release)
+        self.assertEqual(host.mock_calls, [])
+        self.assertEqual(release.mock_calls, [])
+        # The fixed release passes this gate and reaches the existing identity gates unchanged.
+        fixed = dict(package, source_commit='c21f5f05f610abf89df0c24e85c00b1bec23d01c')
+        host.baseline.return_value = 'f'*64
+        with patch.object(M.os, 'geteuid', return_value=0):
+            with self.assertRaisesRegex(ValueError, '^HOST_BASELINE$'):
+                M.run(fixed, host, release)
+        host.baseline.assert_called_once_with()
+        self.assertEqual(release.mock_calls, [])
 
 
 if __name__ == '__main__':

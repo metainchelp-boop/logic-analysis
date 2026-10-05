@@ -94,8 +94,8 @@ class LinkAuditTest(unittest.TestCase):
 
 
 class ControllerTest(unittest.TestCase):
-    def scenario(self, *, failure=None):
-        package = {'baseline': 'a'*64, 'source_commit': 'b'*40, 'source_tar_gz_sha256': 'c'*64}
+    def scenario(self, *, failure=None, commit='b'*40):
+        package = {'baseline': 'a'*64, 'source_commit': commit, 'source_tar_gz_sha256': 'c'*64}
         cid, image = 'd'*64, 'sha256:'+'e'*64
         values = dict(raw=M.summarize_wire(200,b'{"status":200,"result":{"items":[]}}'),
                       reader={'state':'ok','parsed_rows':0,'error_code':None},coverage=None,
@@ -170,6 +170,20 @@ class ControllerTest(unittest.TestCase):
                 self.assertIsInstance(result, Exception)
                 if failure in ('receipt','image','container','mount','rootfs'):
                     self.assertFalse(any(args[1]=='exec' for args,kw in calls))
+
+    def test_shm_lock_defect_release_refuses_before_host_access_and_fixed_release_reads(self):
+        # a38c537: live engine-DB reads are suspended (incident 2026-10-05).
+        package = dict(baseline='a'*64,source_commit='a38c53775c112cdf5db420f979093d6bee9e5376',
+                       source_tar_gz_sha256='c'*64)
+        host, release = Mock(), Mock()
+        with self.assertRaisesRegex(ValueError, '^LIVE_READER_SUSPENDED$'):
+            M.run(package, host, release)
+        self.assertEqual(host.mock_calls, [])
+        self.assertEqual(release.mock_calls, [])
+        result, calls = self.scenario(commit='c21f5f05f610abf89df0c24e85c00b1bec23d01c')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['source_commit'], 'c21f5f05f610abf89df0c24e85c00b1bec23d01c')
+        self.assertEqual(sum(args[1]=='exec' for args,kw in calls), 1)
 
 
 if __name__ == '__main__':

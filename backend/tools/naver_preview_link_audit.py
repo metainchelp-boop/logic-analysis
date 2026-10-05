@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 
 STAGE = 'input'
+# Incident 2026-10-05: no live engine-DB reads while this engine release runs.
+LIVE_READER_SUSPENDED_COMMITS = frozenset(('a38c53775c112cdf5db420f979093d6bee9e5376',))
 PROJECTION_SOURCE = r'''
 URL = 'http://api.metainc.co.kr/api/ad-sync/naver-customer-ids'
 FIELDS = ('possibility_id', 'vendor', 'customer_id')
@@ -223,6 +225,8 @@ def run(package, host, release):
     global STAGE
     STAGE = 'preflight'
     validate_package(package)
+    if package['source_commit'] in LIVE_READER_SUSPENDED_COMMITS:
+        raise ValueError('LIVE_READER_SUSPENDED')
     if os.geteuid() != 0 or host.baseline() != package['baseline']:
         raise ValueError('HOST_BASELINE')
     commit = package['source_commit']

@@ -61,6 +61,10 @@ class ReportDiagnoseTest(unittest.TestCase):
             with closing(sqlite3.connect(folder/'engine.db')) as writer:
                 legacy.DatabaseRollbackTest().initialize_schema(writer, 11, monitoring=True)
             package = {'operation_id':'c33d41529d064cf68226e114707a3f8a','release':{'fixture':True}}
+            # This diagnosis stays pinned to the failed report rollout (0a30285 -> a38c537).
+            self.code.OLD_COMMIT = self.diag.REPORT_OLD
+            self.code.TARGET_COMMIT = self.diag.REPORT_TARGET
+            self.code.TARGET_SOURCE_SHA256 = self.diag.REPORT_SOURCE_SHA256
             self.code.validate_package = Mock(return_value=package['release'])
             self.code.current_state = Mock(return_value=('old-verified',))
             release = SimpleNamespace(trusted_dir=Mock(),command=Mock(side_effect=AssertionError('No command')))
@@ -125,11 +129,19 @@ class ReportDiagnoseTest(unittest.TestCase):
                 self.diag.run(dict(good,**change),Mock(),release,Mock(),Mock(),self.code)
             release.assert_not_called()
             release.command.assert_not_called()
-        for name in ('TARGET_COMMIT','OLD_COMMIT','TARGET_SOURCE_SHA256'):
-            with patch.object(self.code,name,'0'*64),patch.object(self.code,'current_state') as state:
+        report_pins = dict(TARGET_COMMIT=self.diag.REPORT_TARGET, OLD_COMMIT=self.diag.REPORT_OLD,
+                           TARGET_SOURCE_SHA256=self.diag.REPORT_SOURCE_SHA256)
+        for name in report_pins:
+            with patch.multiple(self.code,**dict(report_pins,**{name:'0'*64})),\
+                    patch.object(self.code,'current_state') as state:
                 with self.assertRaisesRegex(ValueError,'DIAG_SOURCE'):
                     self.diag.run(good,Mock(),Mock(),Mock(),Mock(),self.code)
                 state.assert_not_called()
+        # The current SHM-lock release pins never reopen this historical report diagnosis.
+        with patch.object(self.code,'current_state') as state:
+            with self.assertRaisesRegex(ValueError,'DIAG_SOURCE'):
+                self.diag.run(good,Mock(),Mock(),Mock(),Mock(),self.code)
+            state.assert_not_called()
 
 
 if __name__ == '__main__':

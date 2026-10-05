@@ -6,6 +6,8 @@ import re
 from datetime import datetime
 
 STAGE = 'input'
+# Incident 2026-10-05: no live engine-DB reads while this engine release runs.
+LIVE_READER_SUSPENDED_COMMITS = frozenset(('a38c53775c112cdf5db420f979093d6bee9e5376',))
 PROJECTION_SOURCE = r'''
 KINDS = ('org', 'stages', 'accounts', 'pairing')
 NETWORK_CODES = 'network other status too-large not-json bad-shape call-cap deadline duplicate KEY_REJECTED RATE SERVER BAD_REQUEST NOT_FOUND NETWORK BAD_RESPONSE MISMATCH OTHER'.split()
@@ -106,6 +108,8 @@ def run(package, host, release):
     global STAGE
     STAGE = 'preflight'
     validate_package(package)
+    if package['source_commit'] in LIVE_READER_SUSPENDED_COMMITS:
+        raise ValueError('LIVE_READER_SUSPENDED')
     if os.geteuid() != 0 or host.baseline() != package['baseline']:
         raise ValueError('HOST_BASELINE')
     commit = package['source_commit']

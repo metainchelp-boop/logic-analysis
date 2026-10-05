@@ -10,7 +10,7 @@ class SQLiteLabelsTest(unittest.TestCase):
         for number, label in ((5, 'SQLITE_BUSY'), (261, 'SQLITE_BUSY'), (6, 'SQLITE_LOCKED'),
                               (8, 'SQLITE_READONLY'), (14, 'SQLITE_CANTOPEN'),
                               (11, 'SQLITE_CORRUPT'), (26, 'SQLITE_NOTADB'),
-                              (10, 'SQLITE_IOERR'), (1, 'SQLITE_ERROR')):
+                              (10, 'SQLITE_IOERR'), (1, 'SQLITE_ERROR'), (15, 'SQLITE_PROTOCOL')):
             error = sqlite3.OperationalError('secret-value must not appear')
             error.sqlite_errorcode = number
             self.assertEqual(code._error_labels(error),
@@ -32,7 +32,8 @@ class SQLiteLabelsTest(unittest.TestCase):
                 ('unable to open database file', 'SQLITE_CANTOPEN'),
                 ('database disk image is malformed', 'SQLITE_CORRUPT'),
                 ('file is not a database', 'SQLITE_NOTADB'),
-                ('disk I/O error', 'SQLITE_IOERR')):
+                ('disk I/O error', 'SQLITE_IOERR'),
+                ('locking protocol', 'SQLITE_PROTOCOL')):
             error = sqlite3.OperationalError(message)
             self.assertFalse(hasattr(error, 'sqlite_errorcode'))
             self.assertEqual(code.failure_report(error)['error_code'], label)

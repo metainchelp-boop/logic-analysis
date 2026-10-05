@@ -266,7 +266,7 @@ def report_schema_copy(folder,files,upgrade,code):
         except sqlite3.Error as error:
             labels={1:'SQLITE_ERROR',5:'SQLITE_BUSY',6:'SQLITE_LOCKED',8:'SQLITE_READONLY',
                 9:'SQLITE_INTERRUPT',10:'SQLITE_IOERR',11:'SQLITE_CORRUPT',14:'SQLITE_CANTOPEN',
-                17:'SQLITE_SCHEMA',23:'SQLITE_AUTH',26:'SQLITE_NOTADB'}
+                15:'SQLITE_PROTOCOL',17:'SQLITE_SCHEMA',23:'SQLITE_AUTH',26:'SQLITE_NOTADB'}
             value=getattr(error,'sqlite_errorcode',None)
             primary=value&255 if type(value) is int else None
             primary=primary if primary in labels else None

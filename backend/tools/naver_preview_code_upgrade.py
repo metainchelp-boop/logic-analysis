@@ -1,4 +1,4 @@
-"""Schema11 report release; paired DB rollback."""
+"""Schema11 SHM-lock fix release; paired DB rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -12,24 +12,16 @@ import stat
 import sqlite3
 from types import SimpleNamespace
 import uuid
-OLD_COMMIT = '0a302856c6177c4f53145abaf9ed31b6a39654f3'
-TARGET_COMMIT = 'a38c53775c112cdf5db420f979093d6bee9e5376'
+OLD_COMMIT = 'a38c53775c112cdf5db420f979093d6bee9e5376'
+TARGET_COMMIT = 'c21f5f05f610abf89df0c24e85c00b1bec23d01c'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = '5c50a4d9197d93c2fe8ac3fb561795739dbc0aaf94f38c21ffdfd240a31057f8'
-TARGET_SOURCE_SHA256 = 'dc442fa19e4809b290124e8a72fa3243d911957176ba6988269ec27ef736302a'
-STORE_SHA256 = {'old':'18488100b2ea88fa243ebe64082d4c29b19264080d5684b4231bb0f7ffff1cc8',
-        'target':'272e8993981823f65fde01b194eeedfb4deaf7c1942f980ff13e5645809752bb'}
-CODE_PATHS = {'backend/app/naver_relay.py'} | {'backend/naver_page/'+name for name in
-    'app.css app.js index.html report-pdf.js report-ui.js'.split()} | {
-    'naver_engine/'+name for name in 'report_views.py reporting.py store.py view_sync.py web.py'.split()
-} | {'backend/naver_page/vendor/report-pdf/'+name for name in (
-    'Apache-2.0.txt NanumGothic-OFL.txt NanumGothic-Regular.ttf.gz THIRD-PARTY-NOTICES.txt '
-    'fontkit-1.1.1.umd.min.js fontkit-LICENSE.txt js-sha256-LICENSE.txt manifest.json pako-LICENSE.txt '
-    'pdf-lib-1.17.1.min.js pdf-lib-LICENSE.txt sha256-1.0.0.min.js standard-fonts-LICENSE.txt upng-LICENSE.txt').split()}
-TEST_PATHS = {'naver_engine/tests/'+name for name in (
-    'fluid_screen_audit.js management_screen_browser.js report_pdf.test.js report_ui_model_test.js '
-    'test_managed_storage.py test_report_accounts_web.py test_report_details.py test_report_pdf.py test_report_ui.py '
-    'test_revalidation_collection.py test_screen.py test_view_delta_screen.py view_delta_screen_browser.js').split()}
+OLD_SOURCE_SHA256 = 'dc442fa19e4809b290124e8a72fa3243d911957176ba6988269ec27ef736302a'
+# Seal receipt value only; this non-hex placeholder refuses prepare/apply.
+TARGET_SOURCE_SHA256 = 'PENDING_SEAL'
+STORE_SHA256 = {'old':'272e8993981823f65fde01b194eeedfb4deaf7c1942f980ff13e5645809752bb',
+        'target':'31be2c8ed8d8a3d321f0fb93b08b105cf7a1d8b47dc8d5e55cc2f84910ea767e'}
+CODE_PATHS = {'naver_engine/store.py'}
+TEST_PATHS = {'naver_engine/tests/test_store_shm_lock.py'}
 REPORT_ASSETS = {
     '/naver/'+name:(size,digest,'application/gzip' if name.endswith('.gz') else 'text/javascript; charset=utf-8')
     for name,size,digest in (
@@ -50,12 +42,12 @@ FAILURE_OPERATIONS = frozenset('none package current_state target_manifest compa
     'warm_wait warm_logs warm_result warm_cleanup_find warm_cleanup_identity warm_cleanup_remove '
     'warm_cleanup_absence warm_config warm_store_open warm_schema warm_org_sync warm_org_contract warm_accounts_sync '
     'warm_catalog_sync warm_summary daemon_reload verify_running post_state write_started_receipt restore_database '
-    'old_manifest rollback_state'.split()) | frozenset(prefix+'_'+name for prefix in
+    'old_manifest rollback_schema rollback_state'.split()) | frozenset(prefix+'_'+name for prefix in
         ('stop','stop_check','recreate','replace_unit','start','restore_unit') for name in ('engine','relay'))
 FAILURE_KINDS = frozenset('ValueError RuntimeError TimeoutError TimeoutExpired CalledProcessError OSError '
     'PermissionError FileNotFoundError BlockingIOError JSONDecodeError OperationalError IntegrityError '
     'TypeError KeyError AttributeError AssertionError ImportError ModuleNotFoundError ConfigError StoreRefused'.split())
-SQL_ERRORS={n:'SQLITE_'+s for n,s in zip((1,5,6,8,10,11,14,26),'ERROR BUSY LOCKED READONLY IOERR CORRUPT CANTOPEN NOTADB'.split())}
+SQL_ERRORS={n:'SQLITE_'+s for n,s in zip((1,5,6,8,10,11,14,15,26),'ERROR BUSY LOCKED READONLY IOERR CORRUPT CANTOPEN PROTOCOL NOTADB'.split())}
 FAILURE_CODES = frozenset(SQL_ERRORS.values()) | frozenset('CODE_TARGET_NOT_PINNED CODE_PACKAGE CODE_TARGET CODE_BASELINE CODE_APPLY_FIELDS '
     'CODE_OPERATION_ID CODE_ALREADY_ATTEMPTED CODE_POST_STATE CODE_TARGET_SOURCE_CHANGED CODE_FAILED_ROLLED_BACK_DB_PRESERVED '
     'CODE_ROLLBACK_FAILED HOST_BASELINE OLD_BASELINE OLD_SOURCE_CHANGED OLD_UNIT_CHANGED OLD_UNIT_NOT_ENABLED '
@@ -74,8 +66,8 @@ def _error_labels(error):
     code = error.args[0] if len(error.args) == 1 and isinstance(error.args[0], str) else None
     if isinstance(error,sqlite3.Error):
         fallback=dict(zip(('database is locked|database table is locked|attempt to write a readonly database|'
-        'unable to open database file|database disk image is malformed|file is not a database|disk I/O error').split('|'),
-        (5,6,8,14,11,26,10)))
+        'unable to open database file|database disk image is malformed|file is not a database|disk I/O error|'
+        'locking protocol').split('|'),(5,6,8,14,11,26,10,15)))
         code=SQL_ERRORS.get(getattr(error,'sqlite_errorcode',fallback.get(code,0))&255)
     return {'error_kind':kind if kind in FAILURE_KINDS else 'OtherError',
         'error_code':code if code in FAILURE_CODES else 'UNRECOGNIZED'}
@@ -502,7 +494,9 @@ def verify_running(path, receipt, release, lifecycle, upgrade):
     if source not in (OLD_COMMIT, TARGET_COMMIT) or path.name != 'naver-' + source:
         raise ValueError('CODE_PROBE_SOURCE')
     probe(release, source, upgrade)
-    verify_database_schema(source, release, upgrade)
+    if source == TARGET_COMMIT:
+        # Old release: no DB read while it runs; rollback checks the DB before start.
+        verify_database_schema(source, release, upgrade)
     lifecycle._snapshot(release, path, receipt['images'])
     for unit in (lifecycle.TUNNEL, *lifecycle.UNITS):
         if lifecycle._state(release, unit, 'ActiveState') != 'active':
@@ -723,6 +717,10 @@ def apply(package, host, release, lifecycle, upgrade):
         if not failed:
             OPERATION = 'daemon_reload'
             attempt(release.command, ['/usr/bin/systemctl','daemon-reload'])
+        if not failed:
+            # Writers proven stopped: the rollback's only DB read.
+            OPERATION = 'rollback_schema'
+            attempt(verify_database_schema, OLD_COMMIT, release, upgrade)
         if not failed:
             for unit in lifecycle.UNITS:
                 OPERATION = 'start_'+('engine' if unit == lifecycle.UNITS[0] else 'relay')

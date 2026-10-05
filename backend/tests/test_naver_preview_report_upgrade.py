@@ -74,11 +74,13 @@ class ReportUpgradeTest(unittest.TestCase):
 
     def test_pending_linux_digest_refuses_before_prepare_actions(self):
         code = legacy.load('naver_preview_code_upgrade')
-        self.assertEqual(code.OLD_COMMIT, '0a302856c6177c4f53145abaf9ed31b6a39654f3')
-        self.assertEqual(code.TARGET_COMMIT, 'a38c53775c112cdf5db420f979093d6bee9e5376')
-        with patch.object(code, 'TARGET_SOURCE_SHA256', None):
-            with self.assertRaisesRegex(ValueError, 'CODE_TARGET_NOT_PINNED'):
-                code.prepare({}, None, None, None, None)
+        # The report release (a38c537) is now the old side of the SHM-lock fix release.
+        self.assertEqual(code.OLD_COMMIT, 'a38c53775c112cdf5db420f979093d6bee9e5376')
+        self.assertEqual(code.TARGET_COMMIT, 'c21f5f05f610abf89df0c24e85c00b1bec23d01c')
+        for pending in (None, 'PENDING_SEAL'):
+            with self.subTest(pending=pending), patch.object(code, 'TARGET_SOURCE_SHA256', pending):
+                with self.assertRaisesRegex(ValueError, 'CODE_TARGET_NOT_PINNED'):
+                    code.prepare({}, None, None, None, None)
 
     def test_both_images_require_the_existing_monitoring_shape_and_keep_rows(self):
         code = legacy.load('naver_preview_code_upgrade')

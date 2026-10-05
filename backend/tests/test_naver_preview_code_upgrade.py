@@ -304,48 +304,42 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, '0a302856c6177c4f53145abaf9ed31b6a39654f3')
-        self.assertEqual(module.TARGET_COMMIT, 'a38c53775c112cdf5db420f979093d6bee9e5376')
+        self.assertEqual(module.OLD_COMMIT, 'a38c53775c112cdf5db420f979093d6bee9e5376')
+        self.assertEqual(module.TARGET_COMMIT, 'c21f5f05f610abf89df0c24e85c00b1bec23d01c')
+        # The previous target archive (sealed for a38c537) is now the pinned old archive.
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         '5c50a4d9197d93c2fe8ac3fb561795739dbc0aaf94f38c21ffdfd240a31057f8')
-        self.assertEqual(module.TARGET_SOURCE_SHA256, 'dc442fa19e4809b290124e8a72fa3243d911957176ba6988269ec27ef736302a')
+                         'dc442fa19e4809b290124e8a72fa3243d911957176ba6988269ec27ef736302a')
+        # Filled only from the c21f5f0 seal receipt; until then prepare/apply must refuse.
+        self.assertEqual(module.TARGET_SOURCE_SHA256, 'PENDING_SEAL')
         self.assertEqual(module.STORE_SHA256, {
-            'old':'18488100b2ea88fa243ebe64082d4c29b19264080d5684b4231bb0f7ffff1cc8',
-            'target':'272e8993981823f65fde01b194eeedfb4deaf7c1942f980ff13e5645809752bb'})
+            'old':'272e8993981823f65fde01b194eeedfb4deaf7c1942f980ff13e5645809752bb',
+            'target':'31be2c8ed8d8a3d321f0fb93b08b105cf7a1d8b47dc8d5e55cc2f84910ea767e'})
         contract = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         # This historical migration fixture remains the original schema-11 release.
         self.assertEqual(contract['new_observed_unsealed']['sha256'],
                          '66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89')
-        # Exact git archive delta: top-level tests, docs and seal tooling are not bundled.
-        self.assertEqual(module.CODE_PATHS, {
-            'backend/app/naver_relay.py', 'backend/naver_page/app.css', 'backend/naver_page/app.js',
-            'backend/naver_page/index.html', 'backend/naver_page/report-pdf.js', 'backend/naver_page/report-ui.js',
-            'backend/naver_page/vendor/report-pdf/Apache-2.0.txt',
-            'backend/naver_page/vendor/report-pdf/NanumGothic-OFL.txt',
-            'backend/naver_page/vendor/report-pdf/NanumGothic-Regular.ttf.gz',
-            'backend/naver_page/vendor/report-pdf/THIRD-PARTY-NOTICES.txt',
-            'backend/naver_page/vendor/report-pdf/fontkit-1.1.1.umd.min.js',
-            'backend/naver_page/vendor/report-pdf/fontkit-LICENSE.txt',
-            'backend/naver_page/vendor/report-pdf/js-sha256-LICENSE.txt',
-            'backend/naver_page/vendor/report-pdf/manifest.json',
-            'backend/naver_page/vendor/report-pdf/pako-LICENSE.txt',
-            'backend/naver_page/vendor/report-pdf/pdf-lib-1.17.1.min.js',
-            'backend/naver_page/vendor/report-pdf/pdf-lib-LICENSE.txt',
-            'backend/naver_page/vendor/report-pdf/sha256-1.0.0.min.js',
-            'backend/naver_page/vendor/report-pdf/standard-fonts-LICENSE.txt',
-            'backend/naver_page/vendor/report-pdf/upng-LICENSE.txt',
-            'naver_engine/report_views.py', 'naver_engine/reporting.py', 'naver_engine/store.py',
-            'naver_engine/view_sync.py', 'naver_engine/web.py'})
-        self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/fluid_screen_audit.js', 'naver_engine/tests/management_screen_browser.js',
-            'naver_engine/tests/report_pdf.test.js', 'naver_engine/tests/report_ui_model_test.js',
-            'naver_engine/tests/test_managed_storage.py', 'naver_engine/tests/test_report_accounts_web.py',
-            'naver_engine/tests/test_report_details.py', 'naver_engine/tests/test_report_pdf.py',
-            'naver_engine/tests/test_report_ui.py', 'naver_engine/tests/test_revalidation_collection.py',
-            'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_view_delta_screen.py',
-            'naver_engine/tests/view_delta_screen_browser.js'})
+        # Exact git archive delta a38c537..c21f5f0: tools/ (seal tooling) is not bundled.
+        self.assertEqual(module.CODE_PATHS, {'naver_engine/store.py'})
+        self.assertEqual(module.TEST_PATHS, {'naver_engine/tests/test_store_shm_lock.py'})
 
-    def scenario(self, failure=None, mode='apply', *, code_only=False):
+    def test_pending_seal_placeholder_refuses_prepare_and_apply_before_any_action(self):
+        module = load('naver_preview_code_upgrade')
+        self.assertEqual(module.TARGET_SOURCE_SHA256, 'PENDING_SEAL')
+        release = load('naver_preview_release')
+        package = dict(baseline=module.EXPECTED_BASELINE, source_commit=module.TARGET_COMMIT,
+                       ciphertext_sha256='c'*64, source_tar_gz_sha256='d'*64,
+                       run_id='123456', operation='code-prepare')
+        with self.assertRaisesRegex(ValueError, '^CODE_TARGET_NOT_PINNED$'):
+            module.validate_package(package, release)
+        host, lifecycle, upgrade = Mock(), Mock(), Mock()
+        with self.assertRaisesRegex(ValueError, '^CODE_TARGET_NOT_PINNED$'):
+            module.prepare(package, host, release, lifecycle, upgrade)
+        with self.assertRaisesRegex(ValueError, '^CODE_TARGET_NOT_PINNED$'):
+            module.apply({'release': package, 'operation_id': 'e'*32}, host, release, lifecycle, upgrade)
+        for adapter in (host, lifecycle, upgrade):
+            self.assertEqual(adapter.mock_calls, [])
+
+    def scenario(self, failure=None, mode='apply', *, code_only=False, log_database=False):
         code = sealed_code()
         policy = load('naver_preview_code_only') if code_only else None
         fixture = load('naver_preview_upgrade')
@@ -515,6 +509,13 @@ class ContractTest(unittest.TestCase):
                 patch.object(code, 'warm_sources', side_effect=(ValueError('WARM_FAILED') if failure=='warm'
                              else RuntimeError('WARM_CLEANUP_FAILED') if failure=='warm_cleanup' else None),
                              return_value={'ok':True, 'org_fresh':True, 'schema':11, 'catalog_total':2, 'management_count':1}) as warm:
+            if log_database:
+                # Record each direct DB read in the same ordered command log as systemctl.
+                def database_read(source, rel, upg):
+                    rel.command(['verify-database-schema', source])
+                    if log_database == 'refuse_old' and source == code.OLD_COMMIT:
+                        raise ValueError('DB_OLD_SCHEMA')
+                verify_database.side_effect = database_read
             if code_only:
                 policy.REVIEWED_TRANSITION = (
                     code.OLD_COMMIT, code.TARGET_COMMIT, code.OLD_SOURCE_SHA256, code.TARGET_SOURCE_SHA256,
@@ -619,13 +620,13 @@ class ContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             old=Path(folder).resolve()/'old';new=Path(folder).resolve()/'new'
             for root in (old,new):
-                (root/'backend/naver_page').mkdir(parents=True)
-                (root/'backend/naver_page/app.js').write_bytes(b'old')
-                (root/'backend/naver_page/unreviewed.js').write_bytes(b'unchanged')
-            (new/'backend/naver_page/app.js').write_bytes(b'new')
-            added=new/'backend/naver_page/app.js';added.write_bytes(b'approved')
+                (root/'naver_engine').mkdir(parents=True)
+                (root/'naver_engine/store.py').write_bytes(b'old')
+                (root/'naver_engine/unreviewed.py').write_bytes(b'unchanged')
+            (new/'naver_engine/store.py').write_bytes(b'new')
+            added=new/'naver_engine/store.py';added.write_bytes(b'approved')
             module.compatible_code_scope(old,new,upgrade)
-            forbidden=new/'backend/naver_page/unreviewed.js';forbidden.write_bytes(b'changed')
+            forbidden=new/'naver_engine/unreviewed.py';forbidden.write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                 module.compatible_code_scope(old,new,upgrade)
             forbidden.write_bytes(b'unchanged')
@@ -641,7 +642,7 @@ class ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_report_release_allows_only_exact_code_and_test_paths(self):
+    def test_shm_lock_release_allows_only_exact_code_and_test_paths(self):
         module=sealed_code()
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -651,17 +652,16 @@ class ContractTest(unittest.TestCase):
             for root in (old,new):
                 for name in approved:
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
-            # Exact new runtime modules and bundled tests in this reviewed archive.
-            for name in ('naver_engine/report_views.py', 'backend/naver_page/report-ui.js',
-                         'backend/naver_page/report-pdf.js', 'naver_engine/tests/report_pdf.test.js',
-                         'naver_engine/tests/report_ui_model_test.js',
-                         'naver_engine/tests/test_report_accounts_web.py', 'naver_engine/tests/test_report_details.py',
-                         'naver_engine/tests/test_report_pdf.py', 'naver_engine/tests/test_report_ui.py'):
-                (old/name).unlink()
+            # The reviewed archive changes store.py and adds exactly one bundled test.
+            (old/'naver_engine/tests/test_store_shm_lock.py').unlink()
             for name in approved:
-                (new/name).write_bytes(b'approved report delta')
+                (new/name).write_bytes(b'approved shm lock delta')
             module.compatible_code_scope(old,new,upgrade)
-            for name in ('naver_runtime/bootstrap.py','naver_engine/inventory_reads.py',
+            # Paths approved for the previous (report) release are not approved for this one.
+            for name in ('naver_engine/web.py','naver_engine/reporting.py','naver_engine/report_views.py',
+                         'backend/naver_page/app.js','backend/naver_page/report-ui.js',
+                         'naver_engine/tests/test_report_ui.py',
+                         'naver_runtime/bootstrap.py','naver_engine/inventory_reads.py',
                          'naver_runtime/runtime_status.py','naver_engine/runtime_view.py',
                          'backend/app/naver_entry.py',
                          'naver_runtime/scheduler_extra.py','naver_engine/unreviewed_view_sync.py',
@@ -676,8 +676,8 @@ class ContractTest(unittest.TestCase):
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)
                 forbidden.unlink()
-            added=new/'naver_engine/tests/test_report_ui.py'
-            added.unlink();added.symlink_to(new/'backend/naver_page/app.js')
+            added=new/'naver_engine/tests/test_store_shm_lock.py'
+            added.unlink();added.symlink_to(new/'naver_engine/store.py')
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
                 module.compatible_code_scope(old,new,upgrade)
 
@@ -692,7 +692,7 @@ class ContractTest(unittest.TestCase):
                 (root/'naver_engine/web.py').write_bytes(b'unchanged web')
                 (root/'naver_engine/credentials.py').write_bytes(b'unchanged credentials')
             (new/'naver_engine/tests').mkdir()
-            (new/'naver_engine/tests/test_report_ui.py').write_bytes(b'approved browser wrapper')
+            (new/'naver_engine/tests/test_store_shm_lock.py').write_bytes(b'approved lock regression test')
             module.compatible_code_scope(old,new,upgrade)
             adjacent=new/'naver_engine/view_sync_extra.py'
             adjacent.write_bytes(b'not approved')
@@ -731,6 +731,49 @@ class ContractTest(unittest.TestCase):
                 old=sealed_code().OLD_COMMIT
                 self.assertEqual(state,{'engine':old,'relay':old})
                 self.assertFalse(any(path.name=='bootstrap-request.json' for path,_ in writes))
+
+    def test_database_is_read_only_while_writers_are_stopped_or_the_fixed_target_runs(self):
+        # The old release (a38c537) must not be read while it runs.
+        old,target=sealed_code().OLD_COMMIT,'b'*40
+        def positions(commands):
+            reads=[(i,args[1]) for i,args in enumerate(commands) if args[:1]==['verify-database-schema']]
+            starts=[i for i,args in enumerate(commands) if args[:2]==['/usr/bin/systemctl','start']]
+            stops=[i for i,args in enumerate(commands) if args[:2]==['/usr/bin/systemctl','stop']]
+            return reads,starts,stops
+        result,commands,_,_,state=self.scenario('replay',log_database=True)
+        self.assertIsInstance(result,dict,str(result))
+        self.assertTrue(result['ok'])
+        reads,starts,_=positions(commands)
+        # Forward: only the fixed target engine is running when the host opens the DB.
+        self.assertEqual([source for _,source in reads],[target])
+        self.assertEqual(len(starts),2)
+        self.assertGreater(reads[0][0],max(starts))
+        for reason in ('stop','warm','recreate','start','probe'):
+            with self.subTest(reason=reason):
+                result,commands,_,restored,state=self.scenario(reason,log_database=True)
+                self.assertEqual(str(result),'CODE_FAILED_ROLLED_BACK_DB_PRESERVED')
+                self.assertTrue(restored)
+                self.assertEqual(state,{'engine':old,'relay':old})
+                reads,starts,stops=positions(commands)
+                # Rollback: one old-schema read, after every writer stop and before both old starts.
+                self.assertEqual([source for _,source in reads],[old])
+                read=reads[0][0]
+                self.assertEqual(len([i for i in starts if i>read]),2)
+                earlier=[i for i in starts if i<read]
+                if earlier:
+                    self.assertGreater(max(i for i in stops if i<read),max(earlier))
+
+    def test_rollback_schema_failure_never_starts_the_old_release(self):
+        old=sealed_code().OLD_COMMIT
+        result,commands,_,_,_=self.scenario('probe',log_database='refuse_old')
+        self.assertEqual(str(result),'CODE_ROLLBACK_FAILED')
+        details=result.failure_details
+        self.assertEqual((details['rollback_operation'],details['rollback_error_code']),
+                         ('rollback_schema','DB_OLD_SCHEMA'))
+        read=commands.index(['verify-database-schema',old])
+        self.assertFalse(any(args[:2]==['/usr/bin/systemctl','start'] for args in commands[read+1:]))
+        self.assertEqual(commands[-2:],[['/usr/bin/systemctl','stop','metainc-naver-relay.service'],
+                                        ['/usr/bin/systemctl','stop','metainc-naver-engine.service']])
 
     def test_partial_recreation_requires_both_mixed_source_proofs_before_old_recreation(self):
         result,commands,_,_,_=self.scenario('recreate')
@@ -796,6 +839,20 @@ class ContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'OLD_NOT_READY'):
             code.verify_running(Path('/naver-'+code.OLD_COMMIT),
                                 {'source_commit':code.OLD_COMMIT},release,life,upgrade)
+
+    def test_running_verification_opens_database_only_for_the_fixed_target(self):
+        code=sealed_code()
+        release,life,upgrade=Mock(),Mock(),Mock()
+        life.TUNNEL,life.UNITS='tunnel',('engine','relay')
+        life._state.side_effect=lambda release,unit,name:'enabled' if name=='UnitFileState' else 'active'
+        with patch.object(code,'probe') as probe,patch.object(code,'verify_database_schema') as database:
+            code.verify_running(Path('/naver-'+code.OLD_COMMIT),
+                                {'source_commit':code.OLD_COMMIT,'images':{}},release,life,upgrade)
+            database.assert_not_called()
+            code.verify_running(Path('/naver-'+code.TARGET_COMMIT),
+                                {'source_commit':code.TARGET_COMMIT,'images':{}},release,life,upgrade)
+            database.assert_called_once_with(code.TARGET_COMMIT,release,upgrade)
+        self.assertEqual(probe.call_count,2)
 
     def test_changed_bootstrap_is_never_repaired_and_leaves_services_stopped(self):
         result,commands,writes,_,_=self.scenario('bootstrap_changed')
