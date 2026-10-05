@@ -121,7 +121,7 @@ class SealTest(unittest.TestCase):
         self.assertEqual({p.name for p in self.output.iterdir()}, {"runtime-secrets.cms", "receipt.json"})
 
     def test_compressed_approved_source_roundtrip_preserves_schema_one_and_source_bytes(self):
-        commit = "c21f5f05f610abf89df0c24e85c00b1bec23d01c"
+        commit = "8dd4292d82f5f98e7b4afa44a2a66b6770eaa505"
         source = b"synthetic-approved-source"
         with patch.object(P, "OPENSSL", OPENSSL):
             receipt = P.seal_bundle(self.env, self.cert, self.output, source_commit=commit,
@@ -334,7 +334,7 @@ class SealTest(unittest.TestCase):
              contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             self.assertEqual(P.main(), 0)
         receipt = json.loads(stdout.getvalue())
-        self.assertEqual(receipt["source_commit"], "c21f5f05f610abf89df0c24e85c00b1bec23d01c")
+        self.assertEqual(receipt["source_commit"], "8dd4292d82f5f98e7b4afa44a2a66b6770eaa505")
         self.assertEqual(receipt["source_tar_gz_sha256"], hashlib.sha256(b"APPROVED_SOURCE").hexdigest())
         self.assertEqual(stderr.getvalue(), "")
         self.assertTrue(self.decrypted_wire().startswith(b"NAVER-PREVIEW-PAYLOAD-GZIP-1\n"))
