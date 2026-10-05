@@ -177,18 +177,23 @@ class SealTest(unittest.TestCase):
         # Conservative size-only bound over credentials accepted by runtime_files:
         # real env max 2670 bytes; certificate/key <=4096 as incompressible printable text,
         # which overstates PEM entropy. The ECDSA host line is fixed by validation: a P-256
-        # key blob with trailing data is refused, so the accepted line is exactly 179 bytes.
+        # key blob with trailing data is refused. The canonical line is 179 bytes and the
+        # non-strict base64 decoder also accepts one redundant '=', so the accepted max is 180.
         self.assertEqual(len(payload["files"][0]["content"]), 2670)
         host = payload["files"][3]["content"]
         self.assertEqual(len(host), 179)
         prefix, blob = host.rstrip("\n").rsplit(" ", 1)
         padded = prefix + " " + base64.b64encode(base64.b64decode(blob) + b"\x00" * 3000).decode() + "\n"
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValueError):
             P.runtime_files({**env, "NAVER_BACKUP_KNOWN_HOSTS": padded})
+        longest = host.rstrip("\n") + "=\n"
+        self.assertEqual(len(P.runtime_files({**env, "NAVER_BACKUP_KNOWN_HOSTS": longest})[3]["content"]), 180)
+        with self.assertRaises(ValueError):
+            P.runtime_files({**env, "NAVER_BACKUP_KNOWN_HOSTS": host.rstrip("\n") + "==\n"})
         for row in payload["files"][1:3]:
             row["content"] = text(4096)
-        payload["files"][3]["content"] = text(len(host))
-        self.assertEqual(sum(len(row["content"]) for row in payload["files"]), 11041)
+        payload["files"][3]["content"] = text(180)
+        self.assertEqual(sum(len(row["content"]) for row in payload["files"]), 11042)
         bounded = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("ascii")
         self.assertLessEqual(len(bounded), P.MAX_PAYLOAD)
         self.assertLess(len(P.PAYLOAD_GZIP_MAGIC + gzip.compress(bounded, mtime=0)), P.MAX_BUNDLE - 4096)
