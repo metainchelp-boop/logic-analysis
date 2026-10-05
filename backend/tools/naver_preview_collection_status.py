@@ -653,9 +653,13 @@ def collect(store, today):
 exec(compile(PROJECTION_SOURCE, '<collection-projection>', 'exec'))
 
 def validate_package(package):
-    if not isinstance(package, dict) or set(package) != {'baseline', 'source_commit', 'source_tar_gz_sha256'}:
+    required = {'baseline', 'source_commit', 'source_tar_gz_sha256'}
+    if (not isinstance(package, dict) or set(package) not in (required,required|{'passive_runtime_only'})
+            or ('passive_runtime_only' in package and package['passive_runtime_only'] is not True)):
         raise ValueError('PACKAGE_FIELDS')
     for key, value in package.items():
+        if key == 'passive_runtime_only':
+            continue
         if not isinstance(value, str) or not re.fullmatch('[0-9a-f]{40}' if key == 'source_commit' else '[0-9a-f]{64}', value):
             raise ValueError('PACKAGE_SHAPE')
 
@@ -942,10 +946,34 @@ def recent_runtime_logs(identity):
                 sources_may_overlap_do_not_sum=True,sources=results)
 
 
+def storage_metadata(root=Path('/var/lib/metainc/naver-engine')):
+    """stat only: do not open SQLite, WAL, SHM or any file content."""
+    try:
+        if not stat.S_ISDIR(root.lstat().st_mode):
+            raise ValueError('STORAGE_DIRECTORY')
+        fs = os.statvfs(root)
+        files = {}
+        for label,suffix in (('database',''),('wal','-wal'),('shared_memory','-shm')):
+            try:
+                info = (root/('engine.db'+suffix)).lstat()
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError('STORAGE_FILE_TYPE')
+                files[label] = dict(available=True,bytes=number(info.st_size),
+                    modified_at=datetime.fromtimestamp(info.st_mtime,timezone.utc).isoformat())
+            except (ValueError,OSError):
+                files[label] = dict(available=False)
+        return dict(available=True,free_bytes=number(fs.f_bavail*fs.f_frsize),files=files,
+                    file_contents_read=False)
+    except (ValueError,OSError):
+        return dict(available=False,file_contents_read=False)
+
+
 def run(package, host, release):
     global STAGE
     STAGE = 'preflight'
     validate_package(package)
+    passive = package.get('passive_runtime_only') is True
+    package = {key:value for key,value in package.items() if key!='passive_runtime_only'}
     if os.geteuid() != 0 or host.baseline() != package['baseline']:
         raise ValueError('HOST_BASELINE')
     commit = package['source_commit']
@@ -981,7 +1009,7 @@ def run(package, host, release):
     before = container()
     if (any(before.get(key) != value for key, value in {'id': identity, 'image': expected_image,
             'user': '10001:10001', 'project': 'naver-engine', 'service': 'naver-engine'}.items())
-            or before.get('running') is not True or before.get('readonly') is not True):
+            or (not passive and before.get('running') is not True) or before.get('readonly') is not True):
         raise ValueError('PREVIEW_CONTAINER_CHANGED')
     data = before.get('data')
     if (not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict)
@@ -989,11 +1017,6 @@ def run(package, host, release):
                 'Destination': '/var/lib/naver-engine', 'Source': '/var/lib/metainc/naver-engine'}.items())):
         raise ValueError('PREVIEW_DATA_MOUNT')
     STAGE = 'read_only_status'
-    captured = capture_process(['docker', 'exec', '-i', '--user', '10001:10001', identity,
-                           'python', '-I', '-B', '-'], data=script(catalog_links=commit in CATALOG_LINKS_COMMITS,
-                            daily_limited=commit in DAILY_LIMITED_COMMITS,
-                            morning_progress=commit in MONITORING_COMMITS,
-                            reports=commit in MONITORING_COMMITS), timeout=30)
     def context():
         return {'lifecycle':lifecycle_status(release), 'compose_version':compose_version(release),
                 'recent_runtime_logs':recent_runtime_logs(identity),
@@ -1013,6 +1036,17 @@ def run(package, host, release):
                     'oom_killed':after.get('oom_killed') if type(after.get('oom_killed')) is bool else None,
                     'running':after.get('running') if type(after.get('running')) is bool else None,
                     'container_restarts':number(after.get('restarts'))}}
+    if passive:
+        details = context()
+        details['storage_metadata'] = storage_metadata()
+        checked = postflight()
+        return {'ok':checked['postflight']['code'] is None,'mode':'runtime-diagnostics',
+                'source_commit':commit,'database_opened':False,'mutations':0,**details,**checked}
+    captured = capture_process(['docker', 'exec', '-i', '--user', '10001:10001', identity,
+                           'python', '-I', '-B', '-'], data=script(catalog_links=commit in CATALOG_LINKS_COMMITS,
+                            daily_limited=commit in DAILY_LIMITED_COMMITS,
+                            morning_progress=commit in MONITORING_COMMITS,
+                            reports=commit in MONITORING_COMMITS), timeout=30)
     if captured['reason'] or captured['exit_code'] != 0:
         details = context()
         checked = postflight()

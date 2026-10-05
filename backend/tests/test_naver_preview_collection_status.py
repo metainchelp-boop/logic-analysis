@@ -21,6 +21,19 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
+    def test_passive_storage_metadata_never_reads_content_or_follows_symlinks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/'engine.db').write_bytes(b'PRIVATE')
+            (root/'engine.db-wal').symlink_to(root/'engine.db')
+            with patch.object(Path,'read_bytes',side_effect=AssertionError('must not read')):
+                result = M.storage_metadata(root)
+            self.assertEqual(result['files']['database']['bytes'],7)
+            self.assertFalse(result['files']['wal']['available'])
+            self.assertFalse(result['files']['shared_memory']['available'])
+            self.assertNotIn('PRIVATE',json.dumps(result))
+            self.assertNotIn(folder,json.dumps(result))
+
     def test_recent_log_projection_keeps_only_fixed_job_error_and_lifecycle_labels(self):
         messages = [
             'ERROR naver_runtime.scheduler 예약 작업 실패: reports OperationalError',
@@ -740,6 +753,9 @@ class CollectionTest(unittest.TestCase):
     def test_run_checks_approved_identity_and_reprojects_engine_output(self):
         self.check_run_diagnostics(M.CATALOG_LINKS_COMMIT)
 
+    def test_passive_runtime_diagnosis_never_opens_database_or_executes_container_process(self):
+        self.check_run_diagnostics(M.CATALOG_LINKS_COMMIT, passive=True)
+
     def test_run_reviewed_releases_require_new_aggregates_and_unknown_commit_gets_neither(self):
         for commit in ('01344b145d0b679a6ee730d7fa4b5990278dd654',
                        '1b790b864ce27766251a205259fa6a332f60f72b',
@@ -752,7 +768,7 @@ class CollectionTest(unittest.TestCase):
                     'managed_catalog_links':dict(auto=0,name_different=0,can_confirm=0,rejected={})})
         self.check_run_diagnostics('b'*40)
 
-    def check_run_diagnostics(self, commit, extra=None):
+    def check_run_diagnostics(self, commit, extra=None, passive=False):
         package = dict(baseline='a'*64, source_commit=commit, source_tar_gz_sha256='c'*64)
         cid, image = 'd'*64, 'sha256:'+'e'*64
         with tempfile.TemporaryDirectory() as folder:
@@ -766,6 +782,8 @@ class CollectionTest(unittest.TestCase):
                 package=package, images={'engine':image}, files=files)))
             receipt.with_name('preview-start-'+package['source_commit']+'.json').write_text(json.dumps(
                 dict(ok=True, stage='internal_ready', source_commit=package['source_commit'])))
+            if passive:
+                package['passive_runtime_only'] = True
             values = dict(today='2026-10-01', prospects={'total':0,'stages':{}},
                 pairing={'available':False,'statuses':{},'unmatched_prospects':None}, latest_run=None,
                 today_checks={'statuses':{},'reasons':{}}, bootstrap=M.bootstrap_empty('no_request'),
@@ -788,6 +806,8 @@ class CollectionTest(unittest.TestCase):
                 failures.append('catalog_missing')
             if extra:
                 failures += ['daily_limited_missing','managed_catalog_links_missing']
+            if passive:
+                failures = [None,'image','mount','rootfs','restart','host_changed']
             for failure in failures:
                 calls, inspections = [], []
                 host, release = Mock(), Mock()
@@ -853,6 +873,8 @@ class CollectionTest(unittest.TestCase):
                     self.fail('unexpected command')
                 release.command.side_effect = command
                 def capture(args, **kwargs):
+                    if passive:
+                        self.assertNotEqual(args[:2],['docker','exec'])
                     if args[:2] != ['docker','exec']:
                         self.assertTrue(args[0]=='/usr/bin/journalctl' or args[:2]==['docker','logs'])
                         self.assertEqual(kwargs['timeout'],5)
@@ -895,7 +917,12 @@ class CollectionTest(unittest.TestCase):
                             M.run(package, host, release)
                     else:
                         result = M.run(package, host, release)
-                        self.assertEqual(result['collection'], values)
+                        if passive:
+                            self.assertNotIn('collection',result)
+                            self.assertFalse(result['database_opened'])
+                            self.assertEqual(result['mode'],'runtime-diagnostics')
+                        else:
+                            self.assertEqual(result['collection'], values)
                         self.assertEqual(result['mutations'], 0)
                         self.assertEqual(result['lifecycle']['engine']['active'], 'active')
                         self.assertEqual(result['compose_version'], '2.39.4')
