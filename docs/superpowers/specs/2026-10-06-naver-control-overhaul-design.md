@@ -57,3 +57,92 @@
 - 시험 폴더는 운영에서 쓰지 않는다 — 운영 이미지가 `**/tests/` 를 빼고(Dockerfile.naver-*.dockerignore), 서버 배포 도구는 시험을 실행하지 않는다.
 - 봉인 쪽 이중 방어: git `:(exclude)` 로 빼고, 그래도 묶음에 들어오면 `UNSAFE_SOURCE_ARCHIVE` 로 거절.
 - 시험: 광고센터 `tools/test_naver_preview_seal.py` 19건 통과 · 로직분석 `test_naver_preview_*.py` 289건 uid 65534 로 통과(3건 건너뜀 · root 로 돌리면 기존과 같은 환경 실패 1건).
+
+## 바꾸지 않는 것(무회귀 — 코드 조사 2026-10-06 기준)
+
+- 보는 범위 판정 `backend/app/naver_auto/scope.py` · 로그인(PKCE)·`sso-bootstrap.js`·전산 입구 · 보안 머리글(CSP — 인라인 style/script·`style=`·CSS `url()`/`@import`·바깥 주소·웹폰트 금지 · 스크립트 4개 순서 고정).
+- 화면 주소 이름 집합(`app.js` `SCREEN` = `naver_relay.py` `PAGE_SCREENS` = 알림 링크 `/naver/issues`·`/naver/system`·`/naver/unlinked`·`/naver/`) — 메뉴에서 빼는 화면(🤖 `automation`, 📄 `reports`)도 **주소는 남긴다**.
+- 배포 장치 표지: `/naver/` 에 `verificationNotice` · `/naver/dashboard` 에 `id="s-dashboard"` · 화면에서 안 쓰는 서버 경로의 401(`/reports`·`/reports/history`·`/accounts/reasons`·`/management/update`·`/management/collect`·`/reports/review`).
+- 화면 신선도 게이트(view-sync): 「한 섹션 = 한 자료 = `state.screen`」 — 대시보드·보고서를 한 섹션에 합치지 않는 까닭.
+- 판정은 서버 한 곳(`verdict.py`) · 숫자는 서버 `counts` 만(화면이 색·확인 필요를 정하거나 세지 않는다 — `test_screen.py` 가 고정).
+- `<body>` 는 속성 없이 · `index.html` 의 모든 id 는 정적으로(가상 DOM 시험이 id 로 화면을 만든다) · `app.js` 를 글자 표지로 잘라 쓰는 시험의 표지 두 쌍(`  var VIEW_FIELDS = ` ~ `  // 변하지 않은 행은` · `  var RUNTIME_LABELS = ` ~ `  function renderRuntime()`).
+- 읽기 전용 모드(owner_actions 꺼짐)·일반 모드도 그대로 그려진다(시험이 세 모드를 모두 돈다).
+
+## 화면 구조 — 바뀐 뒤
+
+### 상단 띠(전 화면 공통)
+- 짙은 슬레이트 `#1e293b` 56px · 브랜드 「네이버 관제」 앞 초록 점 · 메뉴 활성 = 흰 글자 + 반투명 흰 바탕 · 🔔 · 「이름 · 범위 · 전체/내 담당」 · 수집기 상태 줄(대비를 어두운 바탕에 맞춤).
+- 메뉴: 대표 🛰 관제 · 📊 성과·보고서 · 📋 이관 현황 · ⚙️ 설정 / 직원 앞의 셋.
+- 📊 성과·보고서 = 한 메뉴 · 화면 안 하위 탭 「이번 달 성과」(`/naver/dashboard`, `#s-dashboard`) · 「광고주별 보고서」(`/naver/reports`, `#s-reports`). 두 섹션·두 주소를 그대로 두고 메뉴 활성만 같은 단추를 켠다(시안의 「한 화면 위아래」 대신 — 신선도 게이트가 섹션 하나를 전제하기 때문 · 메뉴 수는 같다).
+
+### 🛰 관제 첫 화면(위에서 아래로)
+1. 제목 줄 「🛰 관제」 + 오른쪽 「목록 새로고침」 · 한 줄 설명 「오늘 볼 광고주만 보시면 됩니다 …」.
+2. 「📖 이 화면 보는 법」 접는 상자 — 지금의 안내 띠(`#verificationNotice`, 문구 그대로)를 접어 둔다.
+3. 점검 띠(`#runbar` · 내용 그대로 · 한 줄 모양).
+4. 숫자 4칸(단위는 모두 「곳」 · 서버 `today_counts` — 넷의 합 = 전체 광고주): 👉 오늘 볼 곳(「긴급 N곳 포함」) · 🟢 문제없음 · 🔌 연결 안 됨 · ⚪ 점검 못 함. 👉 는 「오늘 볼 광고주」로 내려가고, 나머지 셋은 접힌 「전체 광고주 보기」를 그 칸으로 걸러 연다(⚪ 는 까닭별 표도 함께).
+5. (대표만 · 있을 때만) 「대표님만 하실 일」 — 붙잡아 둔 목록 · 12시간 넘게 아무도 안 본 주의(지금의 ⬆ 상향 목록) · 번호 겹침 · 이름 후보.
+6. (대표만) 「사람별 처리 현황」 — 직원 | 오늘 볼 곳 | 긴급 | 👀 확인 중 | 12시간 넘게 안 봄 | 연결 안 됨 · 줄을 누르면 그 사람 범위로.
+7. 「오늘 볼 광고주」 한 목록 — 광고주 한 덩어리(상태 점 · 이름 · 담당 · 단계) 안에 그 광고주의 열린 이슈 줄(원인·사실 · **할 일 한 줄** · 상태 🆕/👀 누가·언제 · 👀 ✅ 🙈). 긴급 먼저. 이슈가 없는데 오늘 볼 곳이면(점검 못 함 등) 그 까닭과 할 일 한 줄.
+8. (직원) 「연결 안 된 내 업체 N곳 — 광고 계정 ID 를 넣어야 다음 날부터 점검됩니다 [이관 현황에서 넣기]」 · 「계정이 맞는지 확인할 곳 N곳 [확인하기]」(D3).
+9. 접힌 「전체 광고주 보기 N곳」(지금의 9칸 표 · 칩·검색 그대로) · 접힌 「오늘 풀린 것 · 예외 처리한 것 N건」.
+
+옮긴 것(4단계 · 실제로 만든 자리):
+- 🔗 짝 확인·일괄 확정 → 📋 이관 현황(요약 카드·「바로 보기」 줄 바로 아래, 대조표 위). `/naver/links`(·`?possibility_id=N`)는 이관 현황을 열고 그 칸을 펼친다. 짝 목록은 확정할 수 있는 판(일반 판 · 운영과 같은 확인 판)에서만 미리 부르고, 그 밖에는 「펼치기」 때 부른다(이관 현황이 계정 목록 한 번만 부른다는 기존 계약 유지).
+- 일괄 확정 = 확인창 `#m-confirm-auto` 의 「확정」으로만 보낸다(D5). 창을 연 뒤 화면 이동·범위·짝 목록이 바뀌었으면 보내지 않고 「짝 목록이 바뀌었습니다」.
+- 「거두기」 단추 = 일반 판은 그대로 · 실사용 판(owner_actions)은 대표에게만(서버가 다시 판정 · 사유 한 줄 필수).
+- 📦 계약 끝난 광고주 칸 → 관제에서 뺌 · 이관 현황 「바로 보기 · 📦 계약이 끝났는데 이관이 남은 계정」 = 「이관 광고 계정 전체」 + 업무 단계 「계약만료」(D9). 옛 `/naver/ended` 주소도 같은 거르기로.
+- 🔌 이관 띠 → 접힌 「전체 광고주 보기」 안 + 숫자 「🔌 연결 안 됨」 칸(누르면 접힌 표를 연결 안 된 곳으로 걸러 연다). `/naver/unlinked`(월요일 알림)는 종전처럼 관제에서 같은 거르기.
+- 대표 복구용 조회 → ⚙️ 설정 › 시스템 칸 맨 위(조회 상태도 설정 화면에서만 읽는다). 「대표님만 하실 일 · 붙잡아 둔 계약 단계 목록」 단추는 `/naver/system` 으로 바로 간다.
+- 📊 성과·보고서: 2단계에서 맞춘 모양 그대로(하위 탭 「이번 달 성과」·「광고주별 보고서」) — 4단계에서 더 바꾼 것은 없다. 보고서 화면의 「광고 계정 연결을 확인할 실관리 업체 N곳 … 이관 현황에서 확인」 안내는 짝 확인의 새 자리와 맞다.
+
+## 엔진(서버) 변경 — 표시용 칸 더하기 위주(조사: 2026-10-06 · 8dd4292 기준)
+
+| 결정 | 바꿀 곳 | 내용 | 저장 구조 |
+|---|---|---|---|
+| ⚪ 사유별 숫자 | `naver_engine/views.py` | 행에 `white_detail`(+`partial_accounts`) · 최상위 `white_breakdown{코드: 곳}` 가산. `no_link` 를 짝 줄 상태·막힘 코드로 `id_missing`·`name_candidate`·`id_conflict`·`id_invalid`·`not_transferred`·`pairing_pending` 으로 가른다(이관 현황 실관리 분류와 같은 순서). `counts` 안에는 넣지 않는다(키 집합을 시험이 고정). | 무접촉 |
+| 숫자 4칸 | `views.py` | 최상위 `today_counts{need, need_red, ok, unlinked, unchecked}` 가산(need·ok·unlinked·unchecked 가 겹치지 않게 나눔) — `unlinked` = ⚪ 중 연결 사유(id_missing·name_candidate·id_conflict·id_invalid·not_transferred·link_missing·link_broken·pairing_pending) · `unchecked` = 나머지 ⚪ | 무접촉 |
+| D3 계정 확인 전 | `backend/app/naver_auto/verdict.py` · `views.py` | `judge(…, auto_needs_attention=True)` 키워드 가산 → 관제 판(`views.judge`)만 거짓으로. 최상위 `account_confirm` 곳 수 가산. 🔔·보고서·대시보드·이관 현황은 판정을 쓰지 않아 그대로. | 무접촉 |
+| 주 1회 관찰 | `verdict.py` · `views.py` | 새 사유 `WHITE_WEEKLY = "weekly_watch"`(확인 필요 아님) — 매일 점검 단계(4단계)가 아닌 업체(홀딩·환불·만료)는 08:00 뒤 「오늘 점검 안 됨·확인 필요」가 아니라 「주 1회 관찰」. 이름은 `CHECK_` 로 시작하지 않는다(저장소 시험이 그 접두를 셈). | 무접촉 |
+| D4 사람별 현황 | `views.py` | 대표(`scope` ALL)일 때만 `/board` 에 `people_summary[{idx, name, team, need, red, acked, stale_yellow, unlinked}]` 가산. 기존 읽기 함수(`issue_new_since`·`issue_hand_events`) 재사용. | 무접촉 |
+| D5 거두기 | `naver_engine/web.py` · `app.js` | 허용 목록에 `/links/revoke` 가산 · 제한판에서는 대표만(`_ceo_only`) · 사유 한 줄 검사(이슈 사유와 같은 글자 규칙). 화면 허용 정규식도 같이. 배포 장치의 「거두기 403」 확인을 「로그인 없이 401」로. | 무접촉 |
+| D7 👀 메모 | `naver_engine/store.py`(파이썬만) · `web.py` · `app.js` | `ack_issue(…, note=None)` + `clean_note` + `_human(note=)`(3~6줄). `_h_issue_ack` 가 선택 본문 `{note}` 를 받음. **SQL 글자·스키마·SCHEMA_VERSION(11)은 그대로** — 코드 전용 배포의 `STORE_SHA256` 새 값만 고정. 표시는 이미 있다(이슈 줄 📝). | SQL 무변경 |
+| D9 📦 | `app.js` · `index.html` | 관제 첫 화면에서 📦 카드를 빼고 이관 현황 「업무 단계: 계약만료」 거르기로 이어 줌(`/accounts?workflow=계약만료` 는 이미 있음). `/naver/ended` 주소는 그 거르기로 보냄. `/ended` 서버 경로는 남김. | 무접촉 |
+| D6 알림 | — | 이번 배포에 없음. 개편 배포 1주 뒤 별도(전산 BE #805 머지 선행). | — |
+
+- 운영 제한판에서는 알림 스위치가 꺼져 있어 직원 🔔 이 사실상 비어 있다(추정 · 조사 메모 §9) — D6 때 같이 본다.
+- 거두기: 담당 판정이 옛 가망 목록 기준이라 catalog 에만 있는 업체는 대표도 404 — 화면은 그때 「이 업체는 이관 현황 화면에서 연결을 확인해 주세요」 한 줄.
+
+## 시험 — 바꾼 것과 까닭(뜻을 약하게 하지 않았다)
+
+| 단계 | 시험 | 바꾼 것 | 까닭 |
+|---|---|---|---|
+| 1 | `tools/test_naver_preview_seal.py` | 시험 폴더 제외 · 묶음에 들어오면 거절 2건 가산 | 봉인 여유 379 → 387,716바이트 |
+| 2 | dashboard·fluid_screen_audit·inventory·management·runtime_status·view_delta·`test_screen.py` | 메뉴 이름·순서(대표 4 · 🤖 숨김) · 📊 하위 탭 | D2 |
+| 3(서버) | `backend/tests/test_naver_auto_verdict.py` | 판정 순서·주 1회 관찰·자동 연결만으로는 확인 필요 아님 | D3 · 주 1회 관찰 |
+| 3(서버) | `naver_engine/tests/test_overhaul_board.py`(신규 13) | 숫자 4칸 분할(합 = 전체)·까닭별 숫자·사람별(대표만)·👀 메모 규칙 | D3·D4·D7·D8 |
+| 3(서버) | `tests/test_naver_owner_actions.py` · `naver_owner_actions_screen_browser.js` | 거두기 = 대표만(직원·팀장 403 ceo-only · 사유 한 줄) | D5 |
+| 3(화면) | screen_browser·dashboard·view_delta·view_sections·management | 숫자 4칸 · 「오늘 볼 광고주」 묶음 · 전체 표 접힘 · 올림 목록은 표 찾기와 무관 | 첫 화면 개편 |
+| 4 | `tests/naver_management_ui.test.js` | 일괄 확정 시험에 확인창 「확정」 누르기 가산 · 「다른 페이지」 = 관제 첫 화면 · 신규 3(확인창·거두기·옛 📦 주소) | D5·D9 |
+| 4 | verified_collection·owner_screen·naver_owner_actions_screen_browser | 짝 확인은 이관 현황 · 복구 조회는 설정 › 시스템 · 대표는 거두기 보임(사유 없으면 안 보냄) · 직원은 안 보임 | 칸 이동 · D5 |
+
+- 일부러 고장 내 보기: 서버 단계 · 4단계 다섯 가지(확인창 없이 확정 · 거두기 누구에게나 · 옛 📦 주소 · 창 연 뒤 목록 바뀜 무시 · 바로 보기 단추) 모두 시험이 잡음. 넷째는 처음에 화면 이동의 창 닫기가 대신 막아 살아남았고, 이동 없이 목록만 바뀌는 경우를 시험에 더해 잡았다.
+- 문구 고정 시험(`test_owner_screen_copy.py`)이 지키는 문장 「현재 관리 중인 확정 업체의 보고서는 자동 생성」·「현재 이관 계정의 비관리 주간 관찰은 별도」는 새 자리(짝 확인 머리글 · 📦 바로 보기 줄)에 같은 뜻으로 남겼다.
+
+## 배포 순서(대표 「배포하자」 뒤 — 이 문서의 어느 단계도 미리 하지 않는다)
+
+1. 광고센터 저장소: 개편 커밋을 `codex/naver-account-first-20261002` 에 올린다 → 「제품 Linux CI」(시험 4묶음 · 네트워크 없는 환경) 통과 확인.
+2. 봉인 고정값: `tools/naver-preview-seal.py` 의 `ACCOUNT_FIRST_COMMIT` 를 새 커밋으로(시험 줄 2곳 함께) → 봉인 실행 → 봉인 영수증의 소스 지문 확인.
+3. 로직분석 저장소(배포 장치): 코드 전용 전환 8dd4292 → 새 커밋 고정 — 옛·새 소스 지문(새 쪽 = 봉인 영수증) · `store.py` 옛/새 지문(SQL·스키마 11 그대로, 파이썬만 바뀜) · `CODE_PATHS` 7개(verdict.py · views.py · store.py · web.py · app.js · index.html · app.css) · 시험 폴더는 「지워진 파일」로 허용(d140ea6) · 탐침: 새 판은 `/links/revoke` 가 로그인 없이 401, 옛 판은 403 · 준비 묶음 상한 180,000 안.
+4. 준비(prepare) → 적용(apply · 엔진·중계 재시작 몇십 초 · DB 그대로) → 사후 수동 확인(passive) → 사후 실화면 읽기. 결과는 배포 기록 문서 한 장.
+5. 실패하면 도구가 옛 판(8dd4292)으로 되돌린다(DB 보존). 되돌린 뒤 다른 프로세스로 엔진 DB 를 열지 않는다(a38c537 교훈).
+
+## 위험과 대응
+
+- 판정 변경(D3·주 1회 관찰)은 「확인 필요」 수만 줄인다 — 이슈 생성·🔔·보고서·대시보드는 판정을 쓰지 않아 그대로(코드 조사). 숫자 4칸은 서버가 나눠 합 = 전체가 시험으로 고정.
+- `store.py` 는 파이썬만 바뀐다(👀 메모 저장) — 표·스키마 번호 그대로라 되돌려도 DB 가 맞다.
+- 화면 칸 이동으로 옛 습관 경로가 바뀐다(짝 확인 · 📦 · 복구 조회) → 옛 주소는 새 자리로 이어 주고, 직원 안내문에 「어디로 옮겼나」 표를 넣는다.
+- 비서방 아침 요약(D6)은 이 배포에 없다 — 배포 1주 뒤 별도(전산 BE #805 선행).
+
+## 만든 순서(커밋 · 광고센터 `claude/naver-control-overhaul`)
+
+afb26e9(봉인 여유) → ad4adbc·7192863·71c1e55(뼈대·색·탭 + 시험) → df6f20d(서버 표시 칸·판정·거두기·👀 메모) → a128982·62c36d0·b7bf71a(첫 화면 + 시험) → 9adfd5b(휴대폰 사람별 표) → c3ab259(4단계 칸 이동·확인창·거두기). 로직분석 `claude/naver-control-overhaul` d140ea6(준비 묶음 상한·시험 폴더 삭제 허용).
