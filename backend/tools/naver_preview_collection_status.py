@@ -5,7 +5,10 @@ from pathlib import Path
 import re
 import sqlite3
 import stat
-from datetime import date, datetime, timedelta
+import selectors
+import subprocess
+import time
+from datetime import date, datetime, timedelta, timezone
 
 STAGE = 'input'
 CATALOG_LINKS_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
@@ -47,7 +50,7 @@ DIAGNOSTIC_STAGES = frozenset(('identity','reader','snapshot','core','catalog','
 DIAGNOSTIC_KINDS = frozenset(('ValueError','RuntimeError','TypeError','KeyError','AttributeError',
     'JSONDecodeError','PermissionError','FileNotFoundError','OSError','OperationalError',
     'DatabaseError','IntegrityError','ProgrammingError','InterfaceError','NotSupportedError',
-    'DataError','InternalError','MemoryError','UNRECOGNIZED'))
+    'DataError','InternalError','MemoryError','StoreError','StoreBusy','StoreRefused','UNRECOGNIZED'))
 SQLITE_PRIMARY = {1:'SQLITE_ERROR',5:'SQLITE_BUSY',6:'SQLITE_LOCKED',8:'SQLITE_READONLY',
     9:'SQLITE_INTERRUPT',10:'SQLITE_IOERR',11:'SQLITE_CORRUPT',14:'SQLITE_CANTOPEN',
     17:'SQLITE_SCHEMA',18:'SQLITE_TOOBIG',19:'SQLITE_CONSTRAINT',20:'SQLITE_MISMATCH',
@@ -57,9 +60,13 @@ SQLITE_PRIMARY = {1:'SQLITE_ERROR',5:'SQLITE_BUSY',6:'SQLITE_LOCKED',8:'SQLITE_R
 def diagnostic_failure(stage, error):
     kind = type(error).__name__
     primary = None
-    if isinstance(error, sqlite3.Error):
-        code = getattr(error, 'sqlite_errorcode', None)
-        primary = SQLITE_PRIMARY.get(code & 255, 'UNRECOGNIZED') if type(code) is int else 'UNRECOGNIZED'
+    cause = error
+    for unused in range(3):
+        if isinstance(cause, sqlite3.Error):
+            code = getattr(cause, 'sqlite_errorcode', None)
+            primary = SQLITE_PRIMARY.get(code & 255, 'UNRECOGNIZED') if type(code) is int else 'UNRECOGNIZED'
+            break
+        cause = getattr(cause, '__cause__', None) or getattr(cause, '__context__', None)
     return {'stage':stage if stage in DIAGNOSTIC_STAGES else 'UNRECOGNIZED',
             'error_kind':kind if kind in DIAGNOSTIC_KINDS else 'UNRECOGNIZED',
             'sqlite_primary':primary}
@@ -769,6 +776,172 @@ def lifecycle_status(release):
     return out
 
 
+def capture_process(args, *, data=b'', timeout=5, stdout_limit=32768, stderr_limit=8192):
+    """Bound both pipe memory and wall time; kill only our diagnostic CLI on failure."""
+    chunks = {'stdout':bytearray(), 'stderr':bytearray()}
+    limits = {'stdout':stdout_limit, 'stderr':stderr_limit}
+    reason, process = None, None
+    try:
+        process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C'})
+        with selectors.DefaultSelector() as poll:
+            try:
+                for name in chunks:
+                    stream = getattr(process, name)
+                    os.set_blocking(stream.fileno(), False)
+                    poll.register(stream, selectors.EVENT_READ, name)
+                if data:
+                    os.set_blocking(process.stdin.fileno(), False)
+                    poll.register(process.stdin, selectors.EVENT_WRITE, 'stdin')
+                else:
+                    process.stdin.close()
+                offset, deadline = 0, time.monotonic()+timeout
+                while poll.get_map():
+                        remaining = deadline-time.monotonic()
+                        if remaining <= 0:
+                            reason = 'PROCESS_TIMEOUT'; break
+                        for key, _ in poll.select(remaining):
+                            if key.data == 'stdin':
+                                try:
+                                    offset += os.write(key.fd, data[offset:offset+4096])
+                                except BrokenPipeError:
+                                    offset = len(data)
+                                if offset == len(data):
+                                    poll.unregister(key.fileobj); key.fileobj.close()
+                                continue
+                            body = os.read(key.fd, 4096)
+                            if not body:
+                                poll.unregister(key.fileobj); key.fileobj.close(); continue
+                            target = chunks[key.data]
+                            room = limits[key.data]-len(target)
+                            target.extend(body[:room])
+                            if len(body) > room:
+                                reason = 'PROCESS_OUTPUT_LIMIT'; break
+                        if reason:
+                            break
+                if reason is None:
+                    try:
+                        process.wait(timeout=max(0.001, deadline-time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        reason = 'PROCESS_TIMEOUT'
+            except OSError:
+                reason = 'PROCESS_UNAVAILABLE'
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        reason = 'PROCESS_CLEANUP_PENDING'
+                for name in ('stdin','stdout','stderr'):
+                    getattr(process,name).close()
+        return dict(exit_code=process.returncode, reason=reason,
+                    **{key:bytes(value) for key,value in chunks.items()})
+    except OSError:
+        return dict(exit_code=None, reason='PROCESS_UNAVAILABLE', stdout=b'', stderr=b'')
+
+
+def process_failure(result):
+    # Exception messages, file paths, source lines and arbitrary class names never leave the host.
+    kinds = DIAGNOSTIC_KINDS | frozenset(('NameError','ImportError','ModuleNotFoundError',
+                                        'SyntaxError','IndentationError','UnboundLocalError'))
+    found = re.findall(rb'^([A-Za-z][A-Za-z0-9_]{0,63}):[^\n]*$', result['stderr'], re.M)
+    kind = found[-1].decode('ascii') if found else None
+    kind = kind if kind in kinds else 'UNRECOGNIZED'
+    return {'code':result['reason'] or 'PROCESS_EXIT', 'exit_code':result['exit_code'],
+            'error_kind':kind, 'output_limited':result['reason']=='PROCESS_OUTPUT_LIMIT'}
+
+
+LOG_STAGES = frozenset('org stages accounts pairing inventory_catalog inventory reports readiness morning alerts backup metrics'.split())
+LOG_KINDS = DIAGNOSTIC_KINDS | frozenset('NameError IndexError ImportError ModuleNotFoundError StoreError StoreBusy StoreRefused TimeoutError SyntaxError IndentationError UnboundLocalError'.split())
+RELAY_KINDS = frozenset('engine-loop engine-not-configured relay-busy relay-no-thread engine-timeout engine-bad-answer engine-answer-too-large engine-cut ConnectionRefusedError ConnectionResetError BrokenPipeError TimeoutError OSError RemoteDisconnected BadStatusLine IncompleteRead'.split())
+
+
+def log_projection(raw, *, source, unit):
+    """Recent log sample, never a claim that every failure was captured."""
+    if source not in ('journal','docker') or unit not in ('engine','relay') or len(raw)>1048576:
+        raise ValueError('LOG_SCOPE')
+    rows = raw.splitlines()
+    if len(rows)>300:
+        raise ValueError('LOG_LIMIT')
+    counts, unknown, last = {}, 0, None
+    for row in rows:
+        at = None
+        try:
+            message = row.decode('utf-8')
+            if source == 'journal':
+                item = json.loads(message)
+                message = item['MESSAGE']
+                tick = item.get('__REALTIME_TIMESTAMP')
+                if isinstance(tick,str) and re.fullmatch('[0-9]{16}',tick):
+                    at = datetime.fromtimestamp(int(tick)/1000000,timezone.utc).isoformat()
+            else:
+                tick, _, message = message.partition(' ')
+                at = docker_stamp(tick)
+            if not isinstance(message,str) or len(message)>4096:
+                raise ValueError('LOG_MESSAGE')
+        except (ValueError,KeyError,TypeError,OverflowError,OSError):
+            unknown+=1; continue
+        message = re.sub(r'^naver-'+unit+r'(?:-1)?\s+\|\s*','',message)
+        step = re.fullmatch(r'ERROR naver_runtime.scheduler 예약 작업 실패: ([a-z_]{1,32}) ([A-Za-z][A-Za-z0-9_]{0,63})',message)
+        cycle = re.fullmatch(r'ERROR naver_runtime 예약 회차 실패: ([A-Za-z][A-Za-z0-9_]{0,63})',message)
+        exited = re.fullmatch(r'metainc-naver-'+unit+r'\.service: Main process exited, code=(exited|killed|dumped), status=([0-9]{1,3})/[A-Za-z0-9/_-]{1,32}',message)
+        failed = re.fullmatch(r'metainc-naver-'+unit+r"\.service: Failed with result '(exit-code|signal|core-dump|timeout|watchdog|start-limit-hit|resources|protocol|oom-kill)'\.",message)
+        exception = re.fullmatch(r'([A-Za-z][A-Za-z0-9_]{0,63}):[^\n]*',message)
+        relay = re.fullmatch(r'(?:WARNING:?[ ]+(?:app.naver_relay )?)?관제 엔진 중계 실패: ([A-Za-z][A-Za-z0-9_-]{0,63})',message)
+        event = None
+        if step and step[1] in LOG_STAGES:
+            event = dict(event='job_failed',stage=step[1],error_kind=enum(step[2],LOG_KINDS))
+        elif cycle:
+            event = dict(event='cycle_failed',error_kind=enum(cycle[1],LOG_KINDS))
+        elif message == 'ERROR naver_runtime.scheduler 예약 작업 실패 기록을 저장하지 못했습니다':
+            event = dict(event='failure_record_failed')
+        elif exited and int(exited[2])<=255:
+            event = dict(event='process_exited',exit_type=exited[1],exit_code=int(exited[2]))
+        elif failed:
+            event = dict(event='service_failed',result=failed[1])
+        elif relay:
+            event = dict(event='relay_failed',error_kind=enum(relay[1],RELAY_KINDS))
+        elif exception and exception[1] in LOG_KINDS:
+            event = dict(event='exception_line',error_kind=exception[1])
+        if event is None:
+            unknown+=1; continue
+        key = json.dumps(event,sort_keys=True)
+        counts[key] = counts.get(key,0)+1
+        if at and (last is None or datetime.fromisoformat(at)>datetime.fromisoformat(last)):
+            last = at
+    ordered = sorted(counts.items())
+    return dict(entries_inspected=len(rows), sample_limit_reached=len(rows)==300,
+                unrecognized_entries=unknown,last_recognized_at=last,
+                omitted_event_count=sum(value for key,value in ordered[32:]),
+                events=[dict(json.loads(key),count=value) for key,value in ordered[:32]])
+
+
+def recent_runtime_logs(identity):
+    sources = []
+    for unit in ('engine','relay'):
+        args = ['/usr/bin/journalctl','--no-pager','--output=json',
+                '--output-fields=MESSAGE,__REALTIME_TIMESTAMP','--since','24 hours ago',
+                '--lines=300','--unit=metainc-naver-'+unit+'.service']
+        sources.append((unit,'journal',args))
+    sources.append(('engine','docker',['docker','logs','--since','24h','--tail','300','--timestamps',identity]))
+    results = []
+    for unit, source, args in sources:
+        result = capture_process(args,timeout=5,stdout_limit=1048576,stderr_limit=1048576)
+        item = dict(unit=unit,source=source)
+        if result['reason'] or result['exit_code']!=0:
+            item.update(available=False,failure=process_failure(result))
+        else:
+            try:
+                raw = result['stdout'] if source=='journal' else result['stdout']+result['stderr']
+                item.update(available=True,**log_projection(raw,source=source,unit=unit))
+            except ValueError:
+                item.update(available=False,code='LOG_PROJECTION_UNAVAILABLE')
+        results.append(item)
+    return dict(scope='last_24h_tail_300_per_source_sample_not_complete_history',
+                sources_may_overlap_do_not_sum=True,sources=results)
+
+
 def run(package, host, release):
     global STAGE
     STAGE = 'preflight'
@@ -816,21 +989,36 @@ def run(package, host, release):
                 'Destination': '/var/lib/naver-engine', 'Source': '/var/lib/metainc/naver-engine'}.items())):
         raise ValueError('PREVIEW_DATA_MOUNT')
     STAGE = 'read_only_status'
-    raw = release.command(['docker', 'exec', '-i', '--user', '10001:10001', identity,
+    captured = capture_process(['docker', 'exec', '-i', '--user', '10001:10001', identity,
                            'python', '-I', '-B', '-'], data=script(catalog_links=commit in CATALOG_LINKS_COMMITS,
                             daily_limited=commit in DAILY_LIMITED_COMMITS,
                             morning_progress=commit in MONITORING_COMMITS,
                             reports=commit in MONITORING_COMMITS), timeout=30)
+    def context():
+        return {'lifecycle':lifecycle_status(release), 'compose_version':compose_version(release),
+                'recent_runtime_logs':recent_runtime_logs(identity),
+                'engine_state':{'started_at':docker_stamp(before.get('started')),
+                    'oom_killed':before.get('oom_killed') if type(before.get('oom_killed')) is bool else None}}
+    if captured['reason'] or captured['exit_code'] != 0:
+        details = context()
+        STAGE = 'postflight'
+        if container() != before or host.baseline() != package['baseline']:
+            raise ValueError('POST_BASELINE')
+        return {'ok':False,'mode':'collection-status','source_commit':commit,'stage':'reader_process',
+                'process_failure':process_failure(captured),**details,
+                'mutations':0,'existing_app_baseline_unchanged':True}
+    raw = captured['stdout']
     if len(raw) > 32768:
         raise ValueError('STATUS_SIZE')
     value = json.loads(raw, object_pairs_hook=release.unique)
     if isinstance(value, dict) and 'diagnostic_failure' in value:
         failure = diagnostic_projection(value)
+        details = context()
         STAGE = 'postflight'
         if container() != before or host.baseline() != package['baseline']:
             raise ValueError('POST_BASELINE')
         # The receiver exits nonzero for ok=False. No partial aggregates become success or zeros.
-        return {'ok':False,'mode':'collection-status','source_commit':commit,**failure,
+        return {'ok':False,'mode':'collection-status','source_commit':commit,**failure,**details,
                 'mutations':0,'existing_app_baseline_unchanged':True}
     values = project(value)
     if ('catalog_links' in values) != (commit in CATALOG_LINKS_COMMITS):
@@ -843,14 +1031,10 @@ def run(package, host, release):
         raise ValueError('COLLECTION_MORNING_FIELDS')
     if ('reports' in values) != (commit in MONITORING_COMMITS):
         raise ValueError('COLLECTION_REPORTS')
-    lifecycle = lifecycle_status(release)
-    version = compose_version(release)
-    engine_state = {'started_at': docker_stamp(before.get('started')),
-                    'oom_killed': before.get('oom_killed') if type(before.get('oom_killed')) is bool else None}
+    details = context()
     STAGE = 'postflight'
     if container() != before or host.baseline() != package['baseline']:
         raise ValueError('POST_BASELINE')
-    return {'ok': True, 'mode': 'collection-status', 'source_commit': commit, 'collection': values, 'lifecycle': lifecycle,
-            'compose_version': version, 'engine_state': engine_state,
+    return {'ok': True, 'mode': 'collection-status', 'source_commit': commit, 'collection': values, **details,
             'runtime_state_not_used_as_data_success': True, 'reader_mode': 'store-mode-ro-authorizer',
             'mutations': 0, 'existing_app_baseline_unchanged': True}

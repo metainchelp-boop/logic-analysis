@@ -21,6 +21,75 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
+    def test_recent_log_projection_keeps_only_fixed_job_error_and_lifecycle_labels(self):
+        messages = [
+            'ERROR naver_runtime.scheduler 예약 작업 실패: reports OperationalError',
+            'ERROR naver_runtime.scheduler 예약 작업 실패: inventory PRIVATE_SECRET',
+            'ERROR naver_runtime 예약 회차 실패: StoreBusy',
+            'ERROR naver_runtime.scheduler 예약 작업 실패 기록을 저장하지 못했습니다',
+            'metainc-naver-engine.service: Main process exited, code=exited, status=1/FAILURE',
+            "metainc-naver-engine.service: Failed with result 'exit-code'.",
+            'naver-engine-1  | ERROR naver_runtime.scheduler 예약 작업 실패: morning ValueError',
+            'OperationalError: PRIVATE token=SECRET 987654321',
+            'customer PRIVATE token=SECRET']
+        raw = b'\n'.join(json.dumps(dict(MESSAGE=message,__REALTIME_TIMESTAMP='1791180000000000')).encode()
+                         for message in messages)
+        projected = M.log_projection(raw, source='journal', unit='engine')
+        self.assertEqual(projected['entries_inspected'],9)
+        self.assertEqual(projected['unrecognized_entries'],1)
+        self.assertIn(dict(event='job_failed',stage='reports',error_kind='OperationalError',count=1),
+                      projected['events'])
+        self.assertIn(dict(event='job_failed',stage='inventory',error_kind='UNRECOGNIZED',count=1),
+                      projected['events'])
+        self.assertIsNotNone(projected['last_recognized_at'])
+        for private in ('PRIVATE','SECRET','987654321','MESSAGE'):
+            self.assertNotIn(private,json.dumps(projected))
+        result = M.log_projection(b'2026-10-05T05:00:00.123456789Z '+messages[0].encode(),
+                                 source='docker',unit='engine')
+        self.assertEqual(result['events'][0]['stage'], 'reports')
+        self.assertEqual(result['last_recognized_at'],'2026-10-05T05:00:00.123456+00:00')
+
+    def test_failed_reader_process_returns_exit_and_safe_exception_without_raw_stderr(self):
+        result = M.capture_process([sys.executable, '-I', '-c',
+            "import sys; sys.stderr.write('Traceback (most recent call last):\\nNameError: PRIVATE 987654321\\n'); sys.exit(1)"],
+            timeout=3, stdout_limit=32768)
+        self.assertEqual(result['exit_code'], 1)
+        self.assertEqual(M.process_failure(result), {'code':'PROCESS_EXIT', 'exit_code':1,
+            'error_kind':'NameError', 'output_limited':False})
+        self.assertNotIn('PRIVATE', json.dumps(M.process_failure(result)))
+
+    def test_process_capture_bounds_stdout_stderr_timeout_and_transfers_complete_script(self):
+        for stream, limit in (('stdout',32768),('stderr',8192)):
+            result = M.capture_process([sys.executable,'-I','-c',
+                f"import sys; sys.{stream}.write('x'*2000000)"], timeout=3)
+            self.assertEqual(result['reason'], 'PROCESS_OUTPUT_LIMIT')
+            self.assertLessEqual(len(result[stream]), limit)
+        result = M.capture_process([sys.executable,'-I','-c','import time;time.sleep(10)'], timeout=0.05)
+        self.assertEqual(M.process_failure(result)['code'], 'PROCESS_TIMEOUT')
+        result = M.capture_process([sys.executable,'-I','-c','import sys;print(len(sys.stdin.buffer.read()))'],
+                                   data=b'x'*100000, timeout=3)
+        self.assertEqual((result['exit_code'],result['stdout']), (0,b'100000\n'))
+
+    def test_capture_setup_failure_cleans_up_child_with_bounded_wait(self):
+        process = Mock()
+        process.poll.return_value = None
+        process.returncode = -9
+        with patch.object(M.subprocess,'Popen',return_value=process), \
+                patch.object(M.os,'set_blocking',side_effect=OSError('PRIVATE')):
+            result = M.capture_process(['diagnostic-fixture'])
+        process.kill.assert_called_once()
+        process.wait.assert_called_once_with(timeout=1)
+        self.assertEqual(result['reason'],'PROCESS_UNAVAILABLE')
+
+    def test_log_event_groups_are_capped_and_omissions_are_explicit(self):
+        messages = ['ERROR naver_runtime.scheduler 예약 작업 실패: '+stage+' '+kind
+                    for stage in sorted(M.LOG_STAGES) for kind in sorted(M.LOG_KINDS)]
+        raw = b'\n'.join(json.dumps(dict(MESSAGE=message)).encode() for message in messages[:300])
+        result = M.log_projection(raw,source='journal',unit='engine')
+        self.assertEqual(len(result['events']),32)
+        self.assertEqual(result['omitted_event_count'],268)
+        self.assertTrue(result['sample_limit_reached'])
+
     def test_emitted_identity_failure_returns_only_fixed_diagnostic_not_partial_counts(self):
         output = io.StringIO()
         with patch.object(os, 'geteuid', return_value=0), contextlib.redirect_stdout(output):
@@ -57,6 +126,16 @@ class CollectionTest(unittest.TestCase):
             db.execute('SELECT 1')
         self.assertEqual(M.diagnostic_failure('core', caught.exception), dict(stage='core',
             error_kind='OperationalError',sqlite_primary='SQLITE_INTERRUPT'))
+
+    def test_wrapped_store_failure_exposes_only_bounded_sqlite_primary_cause(self):
+        store_error = type('StoreError',(Exception,),{})('PRIVATE')
+        sql = sqlite3.OperationalError('PRIVATE filename')
+        sql.sqlite_errorcode = 261
+        store_error.__context__ = sql
+        self.assertEqual(M.diagnostic_failure('reader',store_error),
+                         dict(stage='reader',error_kind='StoreError',sqlite_primary='SQLITE_BUSY'))
+        store_error.__context__ = store_error
+        self.assertIsNone(M.diagnostic_failure('reader',store_error)['sqlite_primary'])
 
     def test_diagnostic_projection_rejects_unknown_fields_shapes_and_labels(self):
         valid = {'diagnostic_failure':dict(stage='reports',error_kind='OperationalError',
@@ -693,7 +772,7 @@ class CollectionTest(unittest.TestCase):
                 values['morning_progress'] = morning
                 values['reports'] = {kind:dict(period_key=None,latest_company_reports=0,
                     versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None) for kind in ('weekly','monthly')}
-            failures = [None,'image','mount','rootfs','output','restart','unexpected_daily',
+            failures = [None,'image','mount','rootfs','output','restart','unexpected_daily','exec_failed',
                 'diagnostic','diagnostic_extra','diagnostic_stage','diagnostic_kind',
                 'diagnostic_primary','diagnostic_size','diagnostic_restart']
             failures.append('morning_missing' if commit in M.MONITORING_COMMITS else 'unexpected_morning')
@@ -764,12 +843,33 @@ class CollectionTest(unittest.TestCase):
                         return json.dumps(dict(values, secret='SECRET') if failure=='output' else values).encode()
                     self.fail('unexpected command')
                 release.command.side_effect = command
-                with self.subTest(failure=failure), patch.object(M.os, 'geteuid', return_value=0):
-                    if failure == 'diagnostic':
+                def capture(args, **kwargs):
+                    if args[:2] != ['docker','exec']:
+                        self.assertTrue(args[0]=='/usr/bin/journalctl' or args[:2]==['docker','logs'])
+                        self.assertEqual(kwargs['timeout'],5)
+                        return dict(exit_code=0,reason=None,stdout=b'',stderr=b'')
+                    if failure == 'exec_failed':
+                        return dict(exit_code=1,reason=None,stdout=b'',stderr=b'NameError: PRIVATE\n')
+                    return dict(exit_code=0,reason=None,stdout=command(args, **kwargs),stderr=b'')
+                with self.subTest(failure=failure), patch.object(M.os, 'geteuid', return_value=0), \
+                        patch.object(M, 'capture_process', side_effect=capture):
+                    if failure == 'exec_failed':
                         result = M.run(package, host, release)
-                        self.assertEqual(result, dict(ok=False, mode='collection-status',source_commit=commit,
+                        self.assertFalse(result['ok'])
+                        self.assertEqual(result['process_failure']['error_kind'], 'NameError')
+                        self.assertEqual(result['lifecycle']['engine']['active'], 'active')
+                        self.assertEqual(len(result['recent_runtime_logs']['sources']),3)
+                        self.assertNotIn('collection', result)
+                        self.assertNotIn('PRIVATE', json.dumps(result))
+                        self.assertEqual(len(inspections), 2)
+                    elif failure == 'diagnostic':
+                        result = M.run(package, host, release)
+                        self.assertEqual({key:result[key] for key in ('ok','mode','source_commit','stage',
+                            'error_kind','sqlite_primary','mutations','existing_app_baseline_unchanged')},
+                            dict(ok=False, mode='collection-status',source_commit=commit,
                             stage='reports',error_kind='OperationalError',sqlite_primary='SQLITE_INTERRUPT',
                             mutations=0,existing_app_baseline_unchanged=True))
+                        self.assertEqual(result['lifecycle']['engine']['active'], 'active')
                         self.assertEqual(len(inspections), 2)
                         self.assertNotIn('collection', result)
                         self.assertNotIn('PRIVATE', json.dumps(result))
