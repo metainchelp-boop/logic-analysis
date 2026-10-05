@@ -121,7 +121,7 @@ class SealTest(unittest.TestCase):
         self.assertEqual({p.name for p in self.output.iterdir()}, {"runtime-secrets.cms", "receipt.json"})
 
     def test_compressed_approved_source_roundtrip_preserves_schema_one_and_source_bytes(self):
-        commit = "a38c53775c112cdf5db420f979093d6bee9e5376"
+        commit = "c21f5f05f610abf89df0c24e85c00b1bec23d01c"
         source = b"synthetic-approved-source"
         with patch.object(P, "OPENSSL", OPENSSL):
             receipt = P.seal_bundle(self.env, self.cert, self.output, source_commit=commit,
@@ -174,13 +174,21 @@ class SealTest(unittest.TestCase):
         self.assertLess(len(wire), P.MAX_BUNDLE - 4096)
         self.assertLessEqual(receipt["ciphertext_size"], P.MAX_BUNDLE)
         self.assertLessEqual(len(raw), P.MAX_PAYLOAD)
-        # Conservative size-only bound, not credentials accepted by runtime_files:
-        # real env max 2670 bytes; certificate/key <=4096, and even the fixed ECDSA host
-        # line receives 4096 here. Incompressible printable text overstates PEM entropy.
+        # Conservative size-only bound over credentials accepted by runtime_files:
+        # real env max 2670 bytes; certificate/key <=4096 as incompressible printable text,
+        # which overstates PEM entropy. The ECDSA host line is fixed by validation: a P-256
+        # key blob with trailing data is refused, so the accepted line is exactly 179 bytes.
         self.assertEqual(len(payload["files"][0]["content"]), 2670)
-        for row in payload["files"][1:]:
+        host = payload["files"][3]["content"]
+        self.assertEqual(len(host), 179)
+        prefix, blob = host.rstrip("\n").rsplit(" ", 1)
+        padded = prefix + " " + base64.b64encode(base64.b64decode(blob) + b"\x00" * 3000).decode() + "\n"
+        with self.assertRaises(Exception):
+            P.runtime_files({**env, "NAVER_BACKUP_KNOWN_HOSTS": padded})
+        for row in payload["files"][1:3]:
             row["content"] = text(4096)
-        self.assertEqual(sum(len(row["content"]) for row in payload["files"]), 14958)
+        payload["files"][3]["content"] = text(len(host))
+        self.assertEqual(sum(len(row["content"]) for row in payload["files"]), 11041)
         bounded = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("ascii")
         self.assertLessEqual(len(bounded), P.MAX_PAYLOAD)
         self.assertLess(len(P.PAYLOAD_GZIP_MAGIC + gzip.compress(bounded, mtime=0)), P.MAX_BUNDLE - 4096)
@@ -321,7 +329,7 @@ class SealTest(unittest.TestCase):
              contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             self.assertEqual(P.main(), 0)
         receipt = json.loads(stdout.getvalue())
-        self.assertEqual(receipt["source_commit"], "a38c53775c112cdf5db420f979093d6bee9e5376")
+        self.assertEqual(receipt["source_commit"], "c21f5f05f610abf89df0c24e85c00b1bec23d01c")
         self.assertEqual(receipt["source_tar_gz_sha256"], hashlib.sha256(b"APPROVED_SOURCE").hexdigest())
         self.assertEqual(stderr.getvalue(), "")
         self.assertTrue(self.decrypted_wire().startswith(b"NAVER-PREVIEW-PAYLOAD-GZIP-1\n"))
