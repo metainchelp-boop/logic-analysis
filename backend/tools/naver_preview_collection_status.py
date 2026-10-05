@@ -782,9 +782,9 @@ def capture_process(args, *, data=b'', timeout=5, stdout_limit=32768, stderr_lim
     limits = {'stdout':stdout_limit, 'stderr':stderr_limit}
     reason, process = None, None
     try:
-        process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C'})
         with selectors.DefaultSelector() as poll:
+            process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C'})
             try:
                 for name in chunks:
                     stream = getattr(process, name)
@@ -999,14 +999,25 @@ def run(package, host, release):
                 'recent_runtime_logs':recent_runtime_logs(identity),
                 'engine_state':{'started_at':docker_stamp(before.get('started')),
                     'oom_killed':before.get('oom_killed') if type(before.get('oom_killed')) is bool else None}}
+    def postflight():
+        global STAGE
+        STAGE = 'postflight'
+        after = container()
+        unchanged = host.baseline() == package['baseline']
+        same = after == before
+        # Preserve failure evidence without accepting a changed runtime as a valid data read.
+        return {'existing_app_baseline_unchanged':unchanged,
+                'postflight':{'container_unchanged':same,'code':None if same and unchanged else 'POST_BASELINE'},
+                'engine_state_after':{
+                    'started_at':docker_stamp(after.get('started')),
+                    'oom_killed':after.get('oom_killed') if type(after.get('oom_killed')) is bool else None,
+                    'running':after.get('running') if type(after.get('running')) is bool else None,
+                    'container_restarts':number(after.get('restarts'))}}
     if captured['reason'] or captured['exit_code'] != 0:
         details = context()
-        STAGE = 'postflight'
-        if container() != before or host.baseline() != package['baseline']:
-            raise ValueError('POST_BASELINE')
+        checked = postflight()
         return {'ok':False,'mode':'collection-status','source_commit':commit,'stage':'reader_process',
-                'process_failure':process_failure(captured),**details,
-                'mutations':0,'existing_app_baseline_unchanged':True}
+                'process_failure':process_failure(captured),**details,**checked,'mutations':0}
     raw = captured['stdout']
     if len(raw) > 32768:
         raise ValueError('STATUS_SIZE')
@@ -1014,12 +1025,10 @@ def run(package, host, release):
     if isinstance(value, dict) and 'diagnostic_failure' in value:
         failure = diagnostic_projection(value)
         details = context()
-        STAGE = 'postflight'
-        if container() != before or host.baseline() != package['baseline']:
-            raise ValueError('POST_BASELINE')
+        checked = postflight()
         # The receiver exits nonzero for ok=False. No partial aggregates become success or zeros.
         return {'ok':False,'mode':'collection-status','source_commit':commit,**failure,**details,
-                'mutations':0,'existing_app_baseline_unchanged':True}
+                **checked,'mutations':0}
     values = project(value)
     if ('catalog_links' in values) != (commit in CATALOG_LINKS_COMMITS):
         raise ValueError('CATALOG_LINK_FIELDS')
@@ -1032,9 +1041,10 @@ def run(package, host, release):
     if ('reports' in values) != (commit in MONITORING_COMMITS):
         raise ValueError('COLLECTION_REPORTS')
     details = context()
-    STAGE = 'postflight'
-    if container() != before or host.baseline() != package['baseline']:
-        raise ValueError('POST_BASELINE')
+    checked = postflight()
+    if checked['postflight']['code']:
+        return {'ok':False,'mode':'collection-status','source_commit':commit,'stage':'postflight',
+                **details,**checked,'mutations':0}
     return {'ok': True, 'mode': 'collection-status', 'source_commit': commit, 'collection': values, **details,
             'runtime_state_not_used_as_data_success': True, 'reader_mode': 'store-mode-ro-authorizer',
-            'mutations': 0, 'existing_app_baseline_unchanged': True}
+            'mutations': 0, **checked}

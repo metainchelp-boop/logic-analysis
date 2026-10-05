@@ -81,6 +81,13 @@ class CollectionTest(unittest.TestCase):
         process.wait.assert_called_once_with(timeout=1)
         self.assertEqual(result['reason'],'PROCESS_UNAVAILABLE')
 
+    def test_selector_creation_failure_does_not_start_a_diagnostic_child(self):
+        with patch.object(M.selectors,'DefaultSelector',side_effect=OSError('PRIVATE')), \
+                patch.object(M.subprocess,'Popen') as start:
+            result = M.capture_process(['diagnostic-fixture'])
+        start.assert_not_called()
+        self.assertEqual(result['reason'],'PROCESS_UNAVAILABLE')
+
     def test_log_event_groups_are_capped_and_omissions_are_explicit(self):
         messages = ['ERROR naver_runtime.scheduler 예약 작업 실패: '+stage+' '+kind
                     for stage in sorted(M.LOG_STAGES) for kind in sorted(M.LOG_KINDS)]
@@ -772,7 +779,7 @@ class CollectionTest(unittest.TestCase):
                 values['morning_progress'] = morning
                 values['reports'] = {kind:dict(period_key=None,latest_company_reports=0,
                     versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None) for kind in ('weekly','monthly')}
-            failures = [None,'image','mount','rootfs','output','restart','unexpected_daily','exec_failed',
+            failures = [None,'image','mount','rootfs','output','restart','host_changed','unexpected_daily','exec_failed',
                 'diagnostic','diagnostic_extra','diagnostic_stage','diagnostic_kind',
                 'diagnostic_primary','diagnostic_size','diagnostic_restart']
             failures.append('morning_missing' if commit in M.MONITORING_COMMITS else 'unexpected_morning')
@@ -785,6 +792,8 @@ class CollectionTest(unittest.TestCase):
                 calls, inspections = [], []
                 host, release = Mock(), Mock()
                 host.baseline.return_value = package['baseline']
+                if failure == 'host_changed':
+                    host.baseline.side_effect = [package['baseline'],'f'*64]
                 release.prepared_paths.return_value = root, receipt
                 release.sha.side_effect = lambda body: hashlib.sha256(body).hexdigest()
                 release.unique.side_effect = dict
@@ -873,6 +882,14 @@ class CollectionTest(unittest.TestCase):
                         self.assertEqual(len(inspections), 2)
                         self.assertNotIn('collection', result)
                         self.assertNotIn('PRIVATE', json.dumps(result))
+                    elif failure in ('restart','diagnostic_restart','host_changed'):
+                        result = M.run(package, host, release)
+                        self.assertFalse(result['ok'])
+                        self.assertEqual(result['postflight']['container_unchanged'],failure=='host_changed')
+                        self.assertEqual(result['existing_app_baseline_unchanged'],failure!='host_changed')
+                        self.assertEqual(result['engine_state_after']['container_restarts'],int(failure!='host_changed'))
+                        self.assertNotIn('collection',result)
+                        self.assertEqual(result['postflight']['code'],'POST_BASELINE')
                     elif failure:
                         with self.assertRaises(ValueError):
                             M.run(package, host, release)
