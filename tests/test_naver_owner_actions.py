@@ -21,8 +21,9 @@ from naver_engine.tests import test_verified_collection as VC
 from naver_engine.tests import test_web as TW
 
 OPENED = ("/issues/1/ack", "/issues/1/resolve", "/issues/1/except", "/bell/1/read", "/bell/read-all",
-          "/settings/thresholds", "/holds/org/confirm", "/holds/stages/confirm", "/holds/accounts/confirm")
-STILL_CLOSED = ("/links/reject", "/links/revoke", "/links/preview", "/issues/1/reopen", "/issues/x/ack",
+          "/settings/thresholds", "/holds/org/confirm", "/holds/stages/confirm", "/holds/accounts/confirm",
+          "/links/revoke")   # 거두기 = 대표만 · 사유 한 줄(2026-10-06 대표 결정 D5 — handler 가 막는다)
+STILL_CLOSED = ("/links/reject", "/links/preview", "/issues/1/reopen", "/issues/x/ack",
                 "/issues/1/ack/extra", "/bell/read", "/holds/other/confirm", "/settings/other",
                 "/future-business-write", "/session/extra")
 
@@ -104,16 +105,49 @@ class OwnerActionsDoNotWriteLinksTest(TW.WebBase):
     def make_app(self, **kw):
         return super().make_app(**production(**kw))
 
-    def test_reject_revoke_preview_write_nothing(self):
+    def test_reject_and_preview_write_nothing(self):
         before = (self.st.link_decisions(), self.st.issues(), self.st.thresholds())
-        [d] = [d for d in self.st.current_decisions() if d.possibility_id == 11]
         for path, body in (("/links/reject", {"refs": ["0" * TW.W.REF_LENGTH]}),
-                           ("/links/revoke", {"decision_id": d.decision_id, "reason": "틀림"}),
                            ("/links/preview", {"ref": "0" * TW.W.REF_LENGTH})):
             for idx in (0, 100):
                 with self.subTest(path=path, idx=idx):
                     self.assertEqual(self.post(path, idx, body), (403, {"error": "verification-read-only"}))
         self.assertEqual(before, (self.st.link_decisions(), self.st.issues(), self.st.thresholds()))
+
+
+class OwnerRevokeCeoOnlyTest(TW.WebBase):
+    """대표 결정 D5(2026-10-06) — 운영 배선에서 거두기는 대표만 · 사유 한 줄. 직원·팀장은 아무것도 쓰지 못한다."""
+
+    def make_app(self, **kw):
+        return super().make_app(**production(**kw))
+
+    def test_staff_and_lead_are_refused_before_reading_the_decision(self):
+        [d] = [d for d in self.st.current_decisions() if d.possibility_id == 11]
+        before = self.st.link_decisions()
+        for idx in (1, 100, 101):
+            with self.subTest(idx=idx):
+                self.assertEqual(self.post("/links/revoke", idx, {"decision_id": d.decision_id, "reason": "틀림"}),
+                                 (403, {"error": "ceo-only"}))
+        self.assertEqual(before, self.st.link_decisions())
+        self.assertEqual(self.st.access_log(viewer_idx=100)[0]["result"], "not-allowed")
+
+    def test_ceo_needs_one_line_reason(self):
+        [d] = [d for d in self.st.current_decisions() if d.possibility_id == 11]
+        before = self.st.link_decisions()
+        for bad in ("틀림\n다른 줄", "틀\u2028림", "틀\u200b림", " ", "가" * 65):
+            with self.subTest(reason=bad):
+                self.assertEqual(self.post("/links/revoke", 0, {"decision_id": d.decision_id, "reason": bad}),
+                                 (400, {"error": "bad-body"}))
+        self.assertEqual(before, self.st.link_decisions())
+
+    def test_ceo_revokes_and_it_is_recorded_once(self):
+        [d] = [d for d in self.st.current_decisions() if d.possibility_id == 11]
+        self.assertEqual(self.post("/links/revoke", 0, {"decision_id": 99999, "reason": "틀림"})[0], 404)
+        self.assertEqual(self.post("/links/revoke", 0, {"decision_id": d.decision_id, "reason": "다른 업체 계정"}),
+                         (200, {"revoked": d.decision_id}))
+        self.assertNotIn(d.decision_id, [x.decision_id for x in self.st.current_decisions()])
+        self.assertEqual(self.post("/links/revoke", 0, {"decision_id": d.decision_id, "reason": "틀림"})[0], 404)
+        self.assertEqual(self.st.access_log(viewer_idx=0)[-1]["result"], "not-visible")
 
 
 class RuntimeWiringTest(unittest.TestCase):
@@ -128,7 +162,7 @@ class RuntimeWiringTest(unittest.TestCase):
                                                 web_enabled=True), env, stop=stop), 0)
         app = server.call_args.args[1]
         for path, wanted in (('/issues/1/ack', 401), ('/bell/read-all', 401), ('/settings/thresholds', 401),
-                             ('/holds/org/confirm', 401), ('/links/reject', 403), ('/links/revoke', 403),
+                             ('/holds/org/confirm', 401), ('/links/reject', 403), ('/links/revoke', 401),
                              ('/links/preview', 403)):
             status = []
             app({'PATH_INFO': WEB.PREFIX + path, 'REQUEST_METHOD': 'POST', 'CONTENT_LENGTH': '0',

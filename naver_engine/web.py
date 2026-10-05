@@ -30,6 +30,7 @@ import logging
 import re
 import threading
 import time as _time
+import unicodedata
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -68,9 +69,11 @@ _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/re
                                 (POST, "/management/collect"), (POST, "/reports/review")})
 _VERIFICATION_CLIENT = re.compile(r"/clients/[0-9]{1,18}")
 # 실사용 손길(2026-10-05 대표 지시) — 제한판 위에서 이름 붙인 것만 연다. 누가 하는지는 각 handler 판정 그대로.
-# 짝 아님·거두기·미리보기·새 경로는 계속 막는다(연결 정보는 전산 업체 계정 화면 한 곳에서 고친다).
+# 거두기는 대표만 · 사유 한 줄(2026-10-06 대표 결정 D5 — handler 가 제한판에서 대표 아님을 403 으로 막는다).
+# 짝 아님·미리보기·새 경로는 계속 막는다(연결 정보는 전산 업체 계정 화면 한 곳에서 고친다).
 _OWNER_ACTION_PATHS = frozenset({"/bell/read-all", "/settings/thresholds",
-                                 "/holds/org/confirm", "/holds/stages/confirm", "/holds/accounts/confirm"})
+                                 "/holds/org/confirm", "/holds/stages/confirm", "/holds/accounts/confirm",
+                                 "/links/revoke"})
 _OWNER_ACTION_ROUTE = re.compile(r"/issues/[0-9]{1,18}/(?:ack|resolve|except)|/bell/[0-9]{1,18}/read")
 BODY_MAX = 64 * 1024                 # ③ 중계 상한과 같다(S12)
 QUERY_MAX = 2048
@@ -214,6 +217,14 @@ def _text(v, limit: int) -> str:
     if not isinstance(v, str) or not v.strip() or len(v) > limit:
         raise HttpError(400, "bad-body")
     return v
+
+
+# 한 줄 사유 — 줄바꿈·제어·서식·줄/문단 나눔·짝 없는 대리 글자 금지(``issues.clean_note`` 와 같은 범주)
+_ONE_LINE_BANNED = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs"})
+
+
+def _one_line(v: str) -> bool:
+    return not any(unicodedata.category(ch) in _ONE_LINE_BANNED for ch in v)
 
 
 def _utf8(v) -> bool:
@@ -927,7 +938,10 @@ class App:
 
     def _h_issue_ack(self, req: Request, v: Viewer, now: datetime, iid: str) -> Tuple[int, dict]:
         n, _t = self._issue_checked(v, now, iid, "ack")
-        return self._issue_write(v, now, n, "ack", lambda st: st.ack_issue(n, v.idx, now))
+        # 메모는 선택(대표 결정 D7) — 본문 없이 부르던 화면·시험도 그대로 · 있으면 예외 사유와 같은 글자 규칙(저장소가 다시 본다)
+        body = _body(req, frozenset({"note"}), frozenset())
+        note = _text(body["note"], NOTE_MAX) if "note" in body else None
+        return self._issue_write(v, now, n, "ack", lambda st: st.ack_issue(n, v.idx, now, note=note))
 
     def _h_issue_resolve(self, req: Request, v: Viewer, now: datetime, iid: str) -> Tuple[int, dict]:
         n, _t = self._issue_checked(v, now, iid, "resolve")
@@ -1077,14 +1091,20 @@ class App:
         return self._decide(req, v, now, "rejected")
 
     def _h_links_revoke(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if self._owner_verification:   # 운영 제한판 — 대표만(대표 결정 D5 2026-10-06)
+            self._ceo_only(v, "link-revoke", "link", now)
         body = _body(req, frozenset({"decision_id", "reason"}), frozenset({"decision_id", "reason"}))
         did, reason = _pos(body["decision_id"]), _text(body["reason"], 64)
+        if self._owner_verification and not _one_line(reason):
+            raise HttpError(400, "bad-body")
         found = [d for d in v.store.current_decisions() + v.store.superseded_confirmations() if d.decision_id == did]
         ctx = v.ctx(now)
         try:
             if not found:
                 raise SC.ClientNotVisible()
-            SC.require_client(ctx.org, v.scope, ctx.owns, found[0].possibility_id, SC.ACT_CONFIRM_LINK)
+            # 대표는 옛 가망 목록에 없는(전체 전산 목록에서만 확정한) 업체의 판단도 거둘 수 있다 — 그 밖은 담당 판정 그대로
+            if v.scope.kind != SC.ALL:
+                SC.require_client(ctx.org, v.scope, ctx.owns, found[0].possibility_id, SC.ACT_CONFIRM_LINK)
         except (SC.ClientNotVisible, SC.ActionNotAllowed):
             self._audit(v.idx, "link-revoke", "link", None, "not-visible", now, required=False)
             raise SC.ClientNotVisible() from None

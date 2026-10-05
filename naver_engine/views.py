@@ -34,6 +34,7 @@ from app.naver_auto import verdict as V
 
 from . import alerts as AL
 from . import handles as H
+from . import management as MG
 from . import store as S
 from . import sync as Y
 
@@ -65,6 +66,19 @@ RESET_KINDS = frozenset({"opened", "reappeared", "exception_ended", "auto_resolv
 LINK_LISTED, LINK_MISSING, LINK_BROKEN, LINK_NOT_LINKED, LINK_NONE, LINK_PENDING = (
     "listed", "missing", "broken", "not_linked", "none", "pending")
 LINK_KINDS = (LINK_LISTED, LINK_MISSING, LINK_BROKEN, LINK_NOT_LINKED, LINK_NONE, LINK_PENDING)
+# ── 관제 개편(대표 결정 2026-10-06 · D1~D9) — 화면이 세지 않게 서버가 내는 표시용 칸 ─────────────────
+# 매일 점검하지 않는 관제 단계(홀딩·환불·만료). 연속 점검(이관 현황 원천이 있을 때)은 이 단계 계정을 매일 읽지 않는다
+# (``management.classify`` 「주 1회」) — 그 「아직 안 읽음」은 확인 필요가 아니라 ⚪ 「주 1회 관찰」.
+WEEKLY_STAGES = H.MONITORED_STAGES - MG.DAILY_STAGES
+# ⚪ 「이어진 계정 없음」의 까닭 — 이관 현황 실관리 분류(``inventory._managed_coverage``)와 같은 순서로 가른다
+W_PAIRING_PENDING, W_ID_CONFLICT, W_ID_INVALID, W_NOT_TRANSFERRED, W_NAME_CANDIDATE, W_ID_MISSING = (
+    "pairing_pending", "id_conflict", "id_invalid", "not_transferred", "name_candidate", "id_missing")
+_W_CONFLICT = frozenset({M.B_IDENTIFIER_CONFLICT, M.B_AMBIGUOUS_SPACE, M.B_CLAIMED_BY_SEVERAL,
+                         M.B_CONFIRMED_ELSEWHERE, M.B_NAME_ELSEWHERE})
+_W_INVALID = frozenset({M.B_FORMAT, M.B_LENGTH, M.B_AD_FORMAT, M.B_AD_ACCOUNT_NO})
+_W_UNLISTED = frozenset({M.B_NOT_LINKED, M.B_AD_NOT_LINKED})
+# 숫자 칸 「🔌 연결 안 됨」 — 사람이 광고 계정 ID·연결을 해야 다음 날부터 점검되는 까닭(그 밖 ⚪ 는 「점검 못 함」)
+UNLINKED_DETAILS = frozenset({W_ID_MISSING, W_NAME_CANDIDATE, W_ID_CONFLICT, W_ID_INVALID, W_NOT_TRANSFERRED})
 _REF_KEY = os.urandom(32)                # 짝 후보 가리킴표 서명 — 이 프로세스만 안다(다시 켜면 화면을 새로 불러온다)
 REF_LENGTH = 24
 
@@ -92,6 +106,7 @@ class Ctx:
     live_decisions: Tuple[S.LinkDecision, ...]   # 살아 있는 사람 판단(짝마다 가장 늦은 · 한 계정의 확인은 하나)
     lost_decisions: Tuple[S.LinkDecision, ...]   # 밀린 확인(뒤 확인을 거두면 다시 산다)
     name_owners: Mapping[str, frozenset]     # 느슨한 상호 → 지금 목록에 있는 가망 번호(계정 이름이 가리키는 가망)
+    continuous: bool = False                 # 연속 점검인가(이관 현황 원천이 있다 — 매일 4단계만 매일 읽는다)
 
     def __repr__(self) -> str:
         return f"Ctx(prospects={len(self.prospects)})"
@@ -148,7 +163,8 @@ def load(store: S.Store, now: datetime, org: Optional[O.Org] = None) -> Ctx:
                pairing is not None and pairing["at"].astimezone(KST).date() == today,
                {k: tuple(v) for k, v in rows.items()}, {a["customer_id"]: a for a in store.accounts()},
                store.account_day_checks_on(today), {k: tuple(v) for k, v in issues.items()},
-               tuple(winners), tuple(lost), {k: frozenset(v) for k, v in names.items()})
+               tuple(winners), tuple(lost), {k: frozenset(v) for k, v in names.items()},
+               continuous=catalog is not None)
 
 
 # ── 작은 도구 ────────────────────────────────────────────────────────
@@ -292,13 +308,46 @@ def _open_issue(i: dict) -> V.OpenIssue:
     return V.OpenIssue(i["severity"], i["state"], _day(i.get("exception_until")))
 
 
+def weekly(ctx: Ctx, pid: int) -> bool:
+    """이 가망을 매일 읽지 않는가 — 연속 점검이고 단계가 주 1회 관찰 단계일 때만(``management.classify`` 와 같은 단계 글자)."""
+    return ctx.continuous and H.stage_key(ctx.prospects[pid]["stage_key"]) in WEEKLY_STAGES
+
+
 def judge(ctx: Ctx, pid: int) -> V.Verdict:
-    """가망 하나의 오늘 판정 — 저장된 값을 판정 함수가 받지 않으면 ⚪ 점검 안 됨(확인 필요)."""
+    """가망 하나의 오늘 판정 — 저장된 값을 판정 함수가 받지 않으면 ⚪ 점검 안 됨(확인 필요). 관제 판은 자동 짝을
+    「확인 필요」에서 빼고 「계정 확인할 곳」으로 따로 센다(대표 결정 D3) · 주 1회 관찰 단계는 ``weekly``."""
     try:
         return V.judge(accounts=account_checks(ctx, pid), issues=[_open_issue(i) for i in ctx.open_issues.get(pid, ())],
-                       now=ctx.now, deadline=ctx.deadline)
+                       now=ctx.now, deadline=ctx.deadline, auto_needs_attention=False, weekly_watch=weekly(ctx, pid))
     except ValueError:
         return V.Verdict(V.WHITE, True, ("unreadable",), V.CHECK_NOT_CHECKED)
+
+
+def white_detail(ctx: Ctx, pid: int, v: V.Verdict) -> Optional[str]:
+    """⚪ 의 까닭 한 코드(화면 문구 · 까닭별 숫자) — 판정은 바꾸지 않는다. 「이어진 계정 없음」은 짝 맞추기 줄로 더 가른다
+    (오늘 짝 맞추기 전이면 모른다 · 주 1회 관찰 단계면 매일 이을 일이 없다)."""
+    if v.color != V.WHITE:
+        return None
+    if "unreadable" in v.reasons:
+        return "unreadable"
+    if v.white_reason != V.WHITE_NO_LINK:
+        return v.white_reason
+    if not ctx.pairing_today:
+        return W_PAIRING_PENDING
+    if weekly(ctx, pid):
+        return V.WHITE_WEEKLY
+    rows = ctx.rows_by_pid.get(pid, ())
+    states = {r["state"] for r in rows}
+    blocked = {r["code"] for r in rows if r["state"] == S.PAIR_BLOCKED}
+    if blocked & _W_CONFLICT or S.PAIR_SUPERSEDED in states:
+        return W_ID_CONFLICT
+    if blocked & _W_INVALID:
+        return W_ID_INVALID
+    if blocked & _W_UNLISTED:
+        return W_NOT_TRANSFERRED
+    if S.PAIR_CANDIDATE in states or M.B_NAME_DIFFERENT in blocked:
+        return W_NAME_CANDIDATE
+    return W_ID_MISSING
 
 
 def _verdict_out(v: V.Verdict) -> dict:
@@ -446,25 +495,29 @@ def issue_row(ctx: Ctx, store: S.Store, scope: SC.Scope, i: dict, hand: Optional
 
 
 # ── 12시간 안 풀린 🟡 — 한 단계 위로 ────────────────────────────────────
-def escalations(ctx: Ctx, store: S.Store, scope: SC.Scope, ids: Iterable[int]) -> List[dict]:
+def yellow_waited(ctx: Ctx, since: Mapping[int, datetime], i: dict) -> Optional[timedelta]:
+    """🆕 🟡 가 아무 손길 없이 기다린 시간 — 🟡 🆕 가 아니거나 시작 시각을 모르면 None(올림 · 사람별 현황이 같이 쓴다)."""
+    if i["severity"] != V.SEV_YELLOW or counting_state(i, ctx.today) != V.ST_NEW:
+        return None
+    if i["state"] == V.ST_EXCEPTION:   # 예외가 끝나 🆕 가 됨 — 끝난 다음 날 0시부터 센다
+        until = _day(i.get("exception_until"))
+        began = None if until is None else datetime.combine(until + timedelta(days=1), time(0), KST)
+    else:
+        began = since.get(i["issue_id"])
+    return None if began is None else ctx.now - began
+
+
+def escalations(ctx: Ctx, store: S.Store, scope: SC.Scope, ids: Iterable[int],
+                since: Optional[Mapping[int, datetime]] = None) -> List[dict]:
     """지금 나에게 올라온 🟡 — 🆕 가 된 뒤 12시간마다 ``todo_chain`` 의 다음 묶음으로(담당 → 팀장 → 상위 팀장 → 대표)."""
-    since = store.issue_new_since()
+    since = store.issue_new_since() if since is None else since
     viewer = scope.viewer_idx
     out = []
     for pid in sorted(ids):
         own = ctx.owns[pid]
         for i in ctx.open_issues.get(pid, ()):
-            if i["severity"] != V.SEV_YELLOW or counting_state(i, ctx.today) != V.ST_NEW:
-                continue
-            if i["state"] == V.ST_EXCEPTION:   # 예외가 끝나 🆕 가 됨 — 끝난 다음 날 0시부터 센다
-                until = _day(i.get("exception_until"))
-                began = None if until is None else datetime.combine(until + timedelta(days=1), time(0), KST)
-            else:
-                began = since.get(i["issue_id"])
-            if began is None:
-                continue
-            waited = ctx.now - began
-            if waited < ESCALATE_AFTER:
+            waited = yellow_waited(ctx, since, i)
+            if waited is None or waited < ESCALATE_AFTER:
                 continue
             chain = SC.todo_chain(ctx.org, own, SC.LEVEL_STAFF)
             step = min(1 + int((waited - ESCALATE_AFTER) / ESCALATE_AFTER), len(chain) - 1)
@@ -511,23 +564,103 @@ def _band(ctx: Ctx, store: S.Store, scope: SC.Scope) -> dict:
             "stage_as_of": _iso(stage_at), "stage_state": stage_state}
 
 
+@dataclass(frozen=True)
+class Today:
+    """가망 하나의 「오늘」 요약 — 관제 판 숫자 4칸 · 오늘 볼 광고주 · 사람별 현황이 같은 값을 쓴다(화면이 세지 않게)."""
+    verdict: V.Verdict
+    red: int                 # 열린(🆕·👀) 🔴 이슈 수
+    yellow: int              # 열린(🆕·👀) 🟡 이슈 수
+    acked: int               # 👀 확인 중인 🔴·🟡 이슈 수
+    stale: int               # 🆕 🟡 가 12시간 넘게 아무 손길 없는 수(올림과 같은 규칙)
+    detail: Optional[str]    # ⚪ 까닭 한 코드(``white_detail``)
+    look: bool               # 오늘 볼 광고주인가 — 확인 필요 또는 열린 🔴·🟡 가 있음(👀 확인 중도 끝날 때까지 남는다)
+    group: str               # 숫자 4칸 중 하나: need · ok · unlinked · unchecked(서로 겹치지 않는다)
+
+
+TODAY_GROUPS = ("need", "ok", "unlinked", "unchecked")
+
+
+def today_of(ctx: Ctx, pid: int, since: Mapping[int, datetime], v: Optional[V.Verdict] = None) -> Today:
+    """오늘 볼 곳인가 · 어느 숫자 칸인가 — 판정(``judge``)과 열린 이슈만으로(대표 결정 2026-10-06 숫자 4칸)."""
+    v = judge(ctx, pid) if v is None else v
+    red = yellow = acked = stale = 0
+    for i in ctx.open_issues.get(pid, ()):
+        state = counting_state(i, ctx.today)
+        if state not in ISSUE_OPEN or i["severity"] not in (V.SEV_RED, V.SEV_YELLOW):
+            continue
+        red += i["severity"] == V.SEV_RED
+        yellow += i["severity"] == V.SEV_YELLOW
+        acked += state == V.ST_ACK
+        waited = yellow_waited(ctx, since, i)
+        stale += waited is not None and waited >= ESCALATE_AFTER
+    detail = white_detail(ctx, pid, v)
+    look = v.needs_attention or red > 0 or yellow > 0
+    group = ("need" if look else "ok" if v.color != V.WHITE else
+             "unlinked" if detail in UNLINKED_DETAILS else "unchecked")
+    return Today(v, red, yellow, acked, stale, detail, look, group)
+
+
+def people_summary(ctx: Ctx, scope: SC.Scope, ids: Iterable[int], todays: Mapping[int, Today]) -> List[dict]:
+    """대표 첫 화면 「사람별 처리 현황」(대표 결정 D4) — 담당(``scope.owner_key``)별 오늘 볼 곳 · 긴급 · 👀 확인 중 ·
+    12시간 넘게 안 본 🟡 · 연결 안 됨 · 계정 확인할 곳. 고르기와 상관없이 대표 최대 범위 · 재직 관리팀은 0이어도 한 줄 ·
+    담당 미정은 맨 끝 한 줄(``idx`` 없음)."""
+    groups: Dict[Optional[int], dict] = {}
+
+    def row(idx: Optional[int], name: Optional[str], team_name: Optional[str]) -> dict:
+        return {"idx": idx, "name": name, "team_name": team_name, "clients": 0, "need": 0, "red": 0, "acked": 0,
+                "stale_yellow": 0, "unlinked": 0, "account_confirm": 0}
+
+    for idx in sorted(scope.people):   # 재직 관리팀 직원은 0곳이어도 한 줄(보는 대표 본인은 담당 광고주가 있을 때만)
+        person = ctx.org.people.get(idx)
+        if person is not None and person.active and idx != scope.viewer_idx:
+            groups[idx] = row(idx, person.name, _team_name(ctx.org, person.team_idx))
+    for pid in sorted(ids):
+        o = _owner(ctx, ctx.owns[pid])
+        g = groups.get(o["idx"])
+        if g is None:
+            g = groups[o["idx"]] = row(o["idx"], o["name"], o["team_name"])
+        t = todays[pid]
+        g["clients"] += 1
+        g["need"] += t.look
+        g["red"] += t.look and t.verdict.color == V.RED
+        g["acked"] += t.acked
+        g["stale_yellow"] += t.stale
+        g["unlinked"] += t.group == "unlinked"
+        g["account_confirm"] += _auto_link(ctx, pid)
+    return sorted(groups.values(), key=lambda g: (g["idx"] is None, g["team_name"] or "", g["name"] or "",
+                                                 -1 if g["idx"] is None else g["idx"]))
+
+
 def board(ctx: Ctx, store: S.Store, scope: SC.Scope, selection: str = "all", attention_only: bool = True) -> dict:
-    """관제 판 — 점검 띠 · 숫자 5칸 · 오늘의 이슈(원인별) · 전 광고주 표(팀 → 사람 · 기본 「확인 필요만」) · 올라온 🟡."""
+    """관제 판 — 점검 띠 · 숫자 · 오늘의 이슈(원인별) · 전 광고주 표(팀 → 사람 · 기본 「확인 필요만」) · 올라온 🟡.
+    개편(2026-10-06): 숫자 4칸(``today_counts``) · ⚪ 까닭별 숫자 · 계정 확인할 곳 · 대표만 사람별 현황을 더한다."""
     ids = visible(ctx, scope, selection)
+    widest = visible(ctx, scope)          # 올림 · 사람별 현황은 고르기와 상관없이 최대 범위
+    ceo = scope.kind == SC.ALL
+    since = store.issue_new_since()
+    todays = {pid: today_of(ctx, pid, since) for pid in sorted(ids | widest if ceo else ids)}
     counts = {"red": 0, "white": 0, "yellow": 0, "green": 0, "needs_attention": 0, "total": len(ids)}
+    today_counts = {k: 0 for k in TODAY_GROUPS}
+    today_counts["need_red"] = 0
+    breakdown: Dict[str, Dict[str, int]] = {"unlinked": {}, "unchecked": {}}
+    account_confirm = 0
     by_code: Dict[str, dict] = {}
     rows = []
     for pid in sorted(ids):
-        v = judge(ctx, pid)
+        t = todays[pid]
+        v = t.verdict
         counts[v.color] += 1
         counts["needs_attention"] += 1 if v.needs_attention else 0
-        red = yellow = 0
+        today_counts[t.group] += 1
+        today_counts["need_red"] += t.look and v.color == V.RED
+        if t.group in breakdown:
+            breakdown[t.group][t.detail] = breakdown[t.group].get(t.detail, 0) + 1
+        auto = _auto_link(ctx, pid)
+        account_confirm += auto
         for i in ctx.open_issues.get(pid, ()):
             state = counting_state(i, ctx.today)
             if state not in ISSUE_OPEN:
                 continue
-            red += i["severity"] == V.SEV_RED
-            yellow += i["severity"] == V.SEV_YELLOW
             g = by_code.setdefault(i["code"], {"code": i["code"], "rule": i["rule"], "severity": i["severity"],
                                                "clients": set(), "new": 0})
             g["clients"].add(pid)
@@ -539,9 +672,10 @@ def board(ctx: Ctx, store: S.Store, scope: SC.Scope, selection: str = "all", att
         p, own = ctx.prospects[pid], ctx.owns[pid]
         rows.append({"possibility_id": pid, "name": p["name"], "stage": p["stage_key"],
                      "relation": SC.relation(ctx.org, scope, own), "owner": _owner(ctx, own),
-                     "verdict": _verdict_out(v), "open_red": red, "open_yellow": yellow,
-                     "account_unconfirmed": _auto_link(ctx, pid), "link": link_state(ctx, pid),
-                     "unlinked": has_unlinked(ctx, pid), **today_numbers(ctx, pid)})
+                     "verdict": _verdict_out(v), "open_red": t.red, "open_yellow": t.yellow,
+                     "account_unconfirmed": auto, "link": link_state(ctx, pid),
+                     "unlinked": has_unlinked(ctx, pid), **today_numbers(ctx, pid),
+                     "white_detail": t.detail, "look_today": t.look, "today_group": t.group})
     issues = sorted(({**g, "clients": len(g["clients"])} for g in by_code.values()),
                     key=lambda g: (g["severity"] != V.SEV_RED, -g["clients"], g["code"]))
     rows.sort(key=lambda r: (r["owner"]["team_name"] or "", r["owner"]["name"] or "", r["possibility_id"]))
@@ -564,11 +698,16 @@ def board(ctx: Ctx, store: S.Store, scope: SC.Scope, selection: str = "all", att
     open_rows.sort(key=lambda r: (sev.get(r["severity"], 3), r["code"], r["state"] != V.ST_NEW, r["possibility_id"],
                                   r["issue_id"]))
     done_rows.sort(key=lambda r: (r["updated_at"], r["issue_id"]), reverse=True)
-    return {"band": _band(ctx, store, scope), "counts": counts, "issues": issues, "rows": rows,
-            "attention_only": attention_only, "selection": selection, "links": links,
-            "issue_rows": open_rows, "done_rows": done_rows,
-            # 나에게 올라온 일은 고르기(나만 · 사람 · 팀)와 상관없다 — 최대 범위 안에서만(검토 escalation-hidden-by-selection)
-            "escalated_to_me": escalations(ctx, store, scope, visible(ctx, scope))}
+    out = {"band": _band(ctx, store, scope), "counts": counts, "issues": issues, "rows": rows,
+           "attention_only": attention_only, "selection": selection, "links": links,
+           "issue_rows": open_rows, "done_rows": done_rows,
+           # 나에게 올라온 일은 고르기(나만 · 사람 · 팀)와 상관없다 — 최대 범위 안에서만(검토 escalation-hidden-by-selection)
+           "escalated_to_me": escalations(ctx, store, scope, widest, since),
+           # 개편 숫자 4칸 — 서로 겹치지 않고 더하면 counts.total(``today_of``) · 화면은 세지 않고 이 값을 그린다
+           "today_counts": today_counts, "white_breakdown": breakdown, "account_confirm": account_confirm}
+    if ceo:
+        out["people_summary"] = people_summary(ctx, scope, widest, todays)
+    return out
 
 
 def _history(store: S.Store, ctx: Ctx, customer_id: int, pid: int) -> List[dict]:
@@ -637,6 +776,7 @@ def client(ctx: Ctx, store: S.Store, scope: SC.Scope, pid) -> dict:
             "latest_end_date": p["latest_end_date"], "relation": SC.relation(ctx.org, scope, own),
             "owner": _owner(ctx, own), "verdict": _verdict_out(v), "accounts": accounts, "issues": issues,
             "link": link_state(ctx, pid), "account_unconfirmed": _auto_link(ctx, pid), "unlinked": has_unlinked(ctx, pid),
+            "white_detail": white_detail(ctx, pid, v),
             **today_numbers(ctx, pid, CLIENT_NUMBER_KEYS), "days": day_totals(accounts),
             "report": REPORT_PREPARING,
             "actions": {"handle_issue": SC.ACT_HANDLE_ISSUE in allowed, "confirm_link": SC.ACT_CONFIRM_LINK in allowed,

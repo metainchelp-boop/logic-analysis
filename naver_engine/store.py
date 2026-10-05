@@ -4333,9 +4333,15 @@ class Store(ManagedStorage):
                               row["rule"], ch, t, by=who, note=note)
         return self.issue(iid)
 
-    def ack_issue(self, issue_id: int, by: int, at: datetime) -> dict:
-        """👀 확인 중(🆕 에서만)."""
-        return self._human(issue_id, by, at, lambda I, s, d: I.ack(s, d))
+    def ack_issue(self, issue_id: int, by: int, at: datetime, note: Optional[str] = None) -> dict:
+        """👀 확인 중(🆕 에서만) — 메모는 선택(대표 결정 D7 2026-10-06 · 예외 사유와 같은 글자 규칙 · 이슈 기록 한 줄)."""
+        if note is not None:
+            I = _issue_rules()
+            try:
+                note = I.clean_note(note)
+            except I.IssueRuleError as e:
+                raise IssueRefused(e.code) from None
+        return self._human(issue_id, by, at, lambda I, s, d: I.ack(s, d), note=note)
 
     def resolve_issue(self, issue_id: int, by: int, at: datetime) -> dict:
         """✅ 해결(열린 것에서만) — 다음 점검에서 그대로면 다시 🆕."""

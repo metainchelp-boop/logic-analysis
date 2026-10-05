@@ -1,5 +1,6 @@
 /* 실사용 손길(2026-10-05): 운영 배선과 같은 세 스위치로 실제 화면·중계·엔진을 Chromium 으로 누른다.
-   열린 손길(이슈 👀 · 🔔 읽음 · 대표 점검 기준)은 화면에서 보이고 서버에 닿으며, 짝 아님·거두기·미리보기는 끝까지 닫혀 있다. */
+   열린 손길(이슈 👀 · 🔔 읽음 · 대표 점검 기준)은 화면에서 보이고 서버에 닿으며, 짝 아님·미리보기는 끝까지 닫혀 있다.
+   거두기는 대표만(2026-10-06 대표 결정 D5) — 직원은 서버가 403 으로 막는다. */
 'use strict';
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
@@ -91,10 +92,11 @@ async function enter(browser, code) {
     assert.ok(!time.includes('비서방으로 갑니다'), time);
 
     for (const [path, body] of [['/links/reject', { refs: ['0'.repeat(cfg.refLength)] }],
-                                ['/links/revoke', { decision_id: 1, reason: '틀림' }],
                                 ['/links/preview', { ref: '0'.repeat(cfg.refLength) }]]) {
       assert.deepEqual(await ceo.call('POST', path, body), { status: 403, body: { error: 'verification-read-only' } }, path);
     }
+    // 없는 판단 번호 — 대표에게 열렸어도 쓰지 않고 「없음」(404)
+    assert.equal((await ceo.call('POST', '/links/revoke', { decision_id: 999999999, reason: '틀림' })).status, 404);
     const ceoWrites = ceo.writes.filter(path => !OPENED.test(path) && !/\/links\/(reject|revoke|preview)$/.test(path));
     assert.deepEqual(ceoWrites, [], '화면은 열린 손길 밖으로 쓰기를 보내지 않는다');
     assert.ok(ceo.writes.includes(API + '/issues/' + cfg.yellow + '/ack'), ceo.writes.join(','));
@@ -115,6 +117,8 @@ async function enter(browser, code) {
     assert.equal(await page.locator('#issues .iss[data-issue="' + cfg.yellow + '"]').count(), 0, '남의 담당 이슈는 보이지 않는다');
     const denied = await staff.call('POST', '/settings/thresholds', { changes: { zero_spend_days: 5 } });
     assert.deepEqual([denied.status, denied.body.error], [403, 'ceo-only']);
+    const revokeDenied = await staff.call('POST', '/links/revoke', { decision_id: 1, reason: '틀림' });
+    assert.deepEqual([revokeDenied.status, revokeDenied.body.error], [403, 'ceo-only'], '거두기는 대표만');
     assert.deepEqual(staff.external, []); assert.deepEqual(staff.errors, []);
     await staff.context.close();
     console.log('owner-actions-screen-ok: notice, issue-ack, bell-read, thresholds, staff-scope, links-closed');

@@ -9,7 +9,10 @@
 - 「돌았지만 규칙 일부를 온전한 자료로 못 돌림」도 ⚪ 다(반박 C1(a)).
 - 이어졌던 짝의 계정이 오늘 이관 목록에 없으면(첫날) ⚪ 「오늘 이관 목록에 없음」 — 확인 필요 아니오(대표 결정 I2 ⓐ).
 - 마감(08:00) 전 아직 안 돈 계정은 ⚪ 「점검 전」(확인 필요 아니오), 마감 뒤는 「점검 안 됨」(확인 필요 예) — 반박 M2.
-- 전산 고객 번호로 이어진 자동 짝은 색과 상관없이 「확인 필요 예(계정 확인 전)」 — 반박 H4.
+- 전산 고객 번호로 이어진 자동 짝은 색과 상관없이 「확인 필요 예(계정 확인 전)」 — 반박 H4. 단 관제 판은 2026-10-06 대표 결정
+  D3 으로 「확인 필요」에서 빼고 「계정 확인할 곳」으로 따로 센다(``auto_needs_attention=False`` · 사유 코드는 그대로 남는다).
+- 매일 점검하지 않는 단계(홀딩·환불·만료 — 주 1회 관찰)의 「오늘 아직 안 읽음」은 「점검 안 됨 · 확인 필요」가 아니라
+  ⚪ 「주 1회 관찰」(확인 필요 아니오 · ``weekly_watch=True``). 오늘 실제로 읽힌 결과는 그대로 쓴다.
 - 🙈 예외는 기간 안에서만 세지 않는다. 기간이 끝난 예외는 다시 🆕 처럼 센다.
 """
 from __future__ import annotations
@@ -37,6 +40,9 @@ CHECK_NOT_ELIGIBLE = "not_eligible"  # 들어가면 안 되는 계정(예: 전�
 LINK_CONFIRMED, LINK_AUTO = "confirmed", "auto"
 
 WHITE_NO_LINK = "no_link"            # 이어진 네이버 계정이 없음(주간 목록으로 따로 · 확인 필요 아니오)
+# 매일 점검하지 않는 단계의 「오늘 아직 안 읽음」(확인 필요 아니오). ⚠️ 이름이 CHECK_ 로 시작하면 저장소 계정 상태 집합
+# 시험이 함께 바뀌어야 한다 — 계정 상태가 아니라 판정 수준 사유라 WHITE_ 로 둔다.
+WHITE_WEEKLY = "weekly_watch"
 
 # ⚪ 사유 → 「확인 필요」인가
 _WHITE_NEEDS = {
@@ -49,12 +55,13 @@ _WHITE_NEEDS = {
     CHECK_DATA_LATE: False,          # 네이버 쪽 늦음 — 직원이 할 일이 없다(시스템 경보는 따로)
     CHECK_SYSTEM_GAP: False,         # 우리 쪽 자료 문제 — 모든 광고주가 한꺼번에 「확인 필요」로 뜨지 않게(시스템 경보는 따로)
     CHECK_PENDING: False,
+    WHITE_WEEKLY: False,             # 주 1회 관찰 단계 — 매일 읽지 않는 것이 정상(대표 결정 2026-10-06)
     WHITE_NO_LINK: False,
 }
 # 화면에 먼저 보일 ⚪ 사유(앞일수록 먼저)
 _WHITE_ORDER = (CHECK_NOT_CHECKED, CHECK_PARTIAL, CHECK_KEY_REJECTED, CHECK_LINK_BROKEN, CHECK_NOT_ELIGIBLE,
-                CHECK_LINK_MISSING, CHECK_DATA_LATE, CHECK_SYSTEM_GAP, CHECK_PENDING, WHITE_NO_LINK)
-_STATUSES = frozenset(_WHITE_ORDER) - {WHITE_NO_LINK} | {CHECK_OK}
+                CHECK_LINK_MISSING, CHECK_DATA_LATE, CHECK_SYSTEM_GAP, WHITE_WEEKLY, CHECK_PENDING, WHITE_NO_LINK)
+_STATUSES = frozenset(_WHITE_ORDER) - {WHITE_NO_LINK, WHITE_WEEKLY} | {CHECK_OK}   # 판정 수준 사유는 계정 상태로 받지 않는다
 
 SEV_RED, SEV_YELLOW, SEV_INFO = "red", "yellow", "info"
 ST_NEW, ST_ACK, ST_EXCEPTION = "new", "ack", "exception"
@@ -125,11 +132,16 @@ def _account_status(a: AccountCheck, today: date, deadline_passed: bool) -> str:
 
 
 def judge(*, accounts: Sequence[AccountCheck], issues: Iterable[OpenIssue], now: datetime,
-          deadline: datetime) -> Verdict:
-    """가망 하나의 오늘 판정. ``now``·``deadline`` 은 시간대가 있는 시각(마감 = 그날 08:00 KST)."""
+          deadline: datetime, auto_needs_attention: bool = True, weekly_watch: bool = False) -> Verdict:
+    """가망 하나의 오늘 판정. ``now``·``deadline`` 은 시간대가 있는 시각(마감 = 그날 08:00 KST).
+
+    ``auto_needs_attention`` — 자동 짝을 「확인 필요」로 셀지(기본 참 · 반박 H4). 관제 판은 거짓(대표 결정 D3).
+    ``weekly_watch`` — 이 가망이 매일 점검하지 않는 단계인가. 참이면 오늘 아직 안 읽은 계정을 「주 1회 관찰」로."""
     if not isinstance(now, datetime) or now.tzinfo is None or not isinstance(deadline, datetime) \
             or deadline.tzinfo is None:
         raise ValueError("시각에는 시간대가 있어야 한다")
+    if type(auto_needs_attention) is not bool or type(weekly_watch) is not bool:
+        raise ValueError("판정 선택은 참/거짓이어야 한다")
     today = now.astimezone(KST).date()   # 「오늘」은 지금 시각의 한국 날짜 — 마감의 시간대에 기대지 않는다
     if deadline.astimezone(KST).date() != today:
         raise ValueError("마감은 오늘(KST) 날짜의 시각이어야 한다")   # 낡은 마감·다른 날 마감으로 어제 결과가 🟢 가 되지 않게
@@ -144,6 +156,8 @@ def judge(*, accounts: Sequence[AccountCheck], issues: Iterable[OpenIssue], now:
     open_yellow = [s for sev, s in states if sev == SEV_YELLOW and s in (ST_NEW, ST_ACK)]
 
     statuses = [_account_status(a, today, deadline_passed) for a in accounts]
+    if weekly_watch:   # 매일 읽지 않는 단계 — 「아직 안 읽음」만 바꾼다(읽힌 결과·이관 빠짐·오늘 없음은 그대로)
+        statuses = [WHITE_WEEKLY if s in (CHECK_PENDING, CHECK_NOT_CHECKED) else s for s in statuses]
     whites = [s for s in statuses if s != CHECK_OK]
     if not accounts:
         whites = [WHITE_NO_LINK]
@@ -164,7 +178,7 @@ def judge(*, accounts: Sequence[AccountCheck], issues: Iterable[OpenIssue], now:
         needs = needs or ST_NEW in open_yellow
     if auto:
         reasons.append("account-unconfirmed")
-        needs = True                     # 자동 짝 — 계정 확인 전(반박 H4)
+        needs = needs or auto_needs_attention   # 자동 짝 — 계정 확인 전(반박 H4 · 관제 판은 D3 로 따로 셈)
 
     if open_red:
         color = RED

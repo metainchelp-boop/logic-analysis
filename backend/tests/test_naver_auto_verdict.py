@@ -189,10 +189,55 @@ class SufficiencyTest(unittest.TestCase):
     def test_white_order_fixed(self):
         self.assertEqual(V._WHITE_ORDER, (V.CHECK_NOT_CHECKED, V.CHECK_PARTIAL, V.CHECK_KEY_REJECTED,
                                           V.CHECK_LINK_BROKEN, V.CHECK_NOT_ELIGIBLE, V.CHECK_LINK_MISSING,
-                                          V.CHECK_DATA_LATE, V.CHECK_SYSTEM_GAP, V.CHECK_PENDING, V.WHITE_NO_LINK))
+                                          V.CHECK_DATA_LATE, V.CHECK_SYSTEM_GAP, V.WHITE_WEEKLY, V.CHECK_PENDING,
+                                          V.WHITE_NO_LINK))
         self.assertEqual({k for k, v in V._WHITE_NEEDS.items() if v},
                          {V.CHECK_NOT_CHECKED, V.CHECK_PARTIAL, V.CHECK_KEY_REJECTED, V.CHECK_LINK_BROKEN,
                           V.CHECK_NOT_ELIGIBLE})
+        self.assertEqual(set(V._WHITE_NEEDS), set(V._WHITE_ORDER))
+
+
+class OverhaulOptionsTest(unittest.TestCase):
+    """관제 개편(대표 결정 2026-10-06) — D3 자동 짝 따로 세기 · 주 1회 관찰 단계. 기본값은 예전과 같다."""
+
+    def test_defaults_unchanged(self):
+        v = V.judge(accounts=[acc(link=V.LINK_AUTO)], issues=(), now=AFTER, deadline=DEADLINE)
+        self.assertEqual((v.color, v.needs_attention), (V.GREEN, True))
+        v = V.judge(accounts=[acc(on=TODAY - timedelta(days=1))], issues=(), now=AFTER, deadline=DEADLINE)
+        self.assertEqual((v.white_reason, v.needs_attention), (V.CHECK_NOT_CHECKED, True))
+
+    def test_auto_link_can_stay_out_of_needs(self):
+        v = V.judge(accounts=[acc(link=V.LINK_AUTO)], issues=(), now=AFTER, deadline=DEADLINE,
+                    auto_needs_attention=False)
+        self.assertEqual((v.color, v.needs_attention), (V.GREEN, False))
+        self.assertIn("account-unconfirmed", v.reasons, "사유는 남겨 「계정 확인할 곳」으로 센다")
+        v = V.judge(accounts=[acc(link=V.LINK_AUTO)], issues=[iss(V.SEV_YELLOW)], now=AFTER, deadline=DEADLINE,
+                    auto_needs_attention=False)
+        self.assertTrue(v.needs_attention, "다른 까닭으로 확인 필요면 그대로")
+
+    def test_weekly_stage_unread_is_not_needs(self):
+        for on, now in ((TODAY - timedelta(days=1), AFTER), (None, AFTER), (None, BEFORE)):
+            with self.subTest(on=on, now=now.isoformat()):
+                v = V.judge(accounts=[acc(on=on)], issues=(), now=now, deadline=DEADLINE, weekly_watch=True)
+                self.assertEqual((v.color, v.white_reason, v.needs_attention), (V.WHITE, V.WHITE_WEEKLY, False))
+
+    def test_weekly_stage_keeps_real_results(self):
+        for st, needs in ((V.CHECK_KEY_REJECTED, True), (V.CHECK_PARTIAL, True), (V.CHECK_LINK_BROKEN, True),
+                          (V.CHECK_LINK_MISSING, False), (V.CHECK_DATA_LATE, False)):
+            with self.subTest(st=st):
+                v = V.judge(accounts=[acc(status=st)], issues=(), now=AFTER, deadline=DEADLINE, weekly_watch=True)
+                self.assertEqual((v.white_reason, v.needs_attention), (st, needs))
+        v = V.judge(accounts=[acc()], issues=(), now=AFTER, deadline=DEADLINE, weekly_watch=True)
+        self.assertEqual(v.color, V.GREEN, "오늘 읽혔으면 주 1회 단계라도 🟢")
+        v = V.judge(accounts=[acc()], issues=[iss(V.SEV_RED)], now=AFTER, deadline=DEADLINE, weekly_watch=True)
+        self.assertEqual((v.color, v.needs_attention), (V.RED, True), "열린 긴급은 단계와 상관없이")
+
+    def test_weekly_is_not_an_account_status(self):
+        with self.assertRaises(ValueError):
+            j([acc(status=V.WHITE_WEEKLY)])
+        for bad in ({"auto_needs_attention": 0}, {"weekly_watch": "yes"}):
+            with self.assertRaises(ValueError):
+                V.judge(accounts=[acc()], issues=(), now=AFTER, deadline=DEADLINE, **bad)
 
 
 class LinkMissingTest(unittest.TestCase):
