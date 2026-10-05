@@ -1,4 +1,4 @@
-"""Schema11 SHM-lock fix release; paired DB rollback."""
+"""Schema11 owner-actions release; paired DB rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -12,16 +12,21 @@ import stat
 import sqlite3
 from types import SimpleNamespace
 import uuid
-OLD_COMMIT = 'a38c53775c112cdf5db420f979093d6bee9e5376'
-TARGET_COMMIT = 'c21f5f05f610abf89df0c24e85c00b1bec23d01c'
+OLD_COMMIT = 'c21f5f05f610abf89df0c24e85c00b1bec23d01c'
+TARGET_COMMIT = '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = 'dc442fa19e4809b290124e8a72fa3243d911957176ba6988269ec27ef736302a'
-# c21f5f0 seal receipt (metainc-ad-dashboard run 37318788721), equal to the local git-archive recomputation.
-TARGET_SOURCE_SHA256 = 'e23f84b0ba2799861746168d1d8f3dc4915b419977dbbc7b5afac13cf31ea898'
-STORE_SHA256 = {'old':'272e8993981823f65fde01b194eeedfb4deaf7c1942f980ff13e5645809752bb',
-        'target':'31be2c8ed8d8a3d321f0fb93b08b105cf7a1d8b47dc8d5e55cc2f84910ea767e'}
-CODE_PATHS = {'naver_engine/store.py'}
-TEST_PATHS = {'naver_engine/tests/test_store_shm_lock.py'}
+# c21f5f0 seal receipt (run 37318788721).
+OLD_SOURCE_SHA256 = 'e23f84b0ba2799861746168d1d8f3dc4915b419977dbbc7b5afac13cf31ea898'
+# 8dd4292 git archive digest; must equal the seal receipt.
+TARGET_SOURCE_SHA256 = 'd419f108243ae36aec50e668b4e8e822b64a2d8225870f30878a8373140c5996'
+# store.py unchanged.
+STORE_SHA256 = dict.fromkeys(('old','target'), '31be2c8ed8d8a3d321f0fb93b08b105cf7a1d8b47dc8d5e55cc2f84910ea767e')
+CODE_PATHS = {'naver_engine/web.py', 'naver_runtime/__main__.py',
+              'backend/naver_page/app.js', 'backend/naver_page/index.html'}
+TEST_PATHS = {'naver_engine/tests/owner_screen_browser.js', 'naver_engine/tests/test_owner_screen_copy.py'}
+# Target: 401 without a token; old: 403.
+OWNER_ACTION_ROUTES = ('/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all',
+    '/settings/thresholds', *('/holds/'+k+'/confirm' for k in ('org', 'stages', 'accounts')))
 REPORT_ASSETS = {
     '/naver/'+name:(size,digest,'application/gzip' if name.endswith('.gz') else 'text/javascript; charset=utf-8')
     for name,size,digest in (
@@ -439,7 +444,7 @@ def compatible_code_scope(old, new, upgrade):
         if before.get(name) != value and name not in CODE_PATHS | TEST_PATHS:
             raise ValueError('CODE_SCOPE_CHANGED')
 def probe(release, source_commit, upgrade):
-    report_target = source_commit == TARGET_COMMIT
+    target = source_commit == TARGET_COMMIT
     management_target = source_commit in (OLD_COMMIT, TARGET_COMMIT)
     if source_commit == OLD_COMMIT:
         source_commit = TARGET_COMMIT
@@ -448,7 +453,8 @@ def probe(release, source_commit, upgrade):
         raise ValueError('CODE_PROBE_SOURCE')
     def request(path, route, method='GET'):
         status, headers, body = release.unix_request(path, route, method)
-        if route == '/api/naver-auto/links/confirm' and method == 'POST':
+        opened = target and route.removeprefix('/api/naver-auto') in OWNER_ACTION_ROUTES
+        if method == 'POST' and (route == '/api/naver-auto/links/confirm' or opened):
             if status != 401:
                 raise ValueError('VERIFIED_WRITE_AUTH_NOT_REQUIRED')
             return 403, headers, body
@@ -472,11 +478,11 @@ def probe(release, source_commit, upgrade):
                 raise ValueError('CODE_ROUTE_STATUS')
     for route, method, expected in (
             ('/collection/status', 'GET', 401), ('/collection/request', 'POST', 401),
-            *((r, 'POST', 403) for r in ('/issues/1/resolve', '/issues/1/except',
-                '/links/reject', '/links/revoke', '/links/preview', '/bell/1/read', '/bell/read-all'))):
+            *((r, 'POST', 401 if target else 403) for r in OWNER_ACTION_ROUTES),
+            *((r, 'POST', 403) for r in ('/links/reject', '/links/revoke', '/links/preview'))):
         if release.unix_request(relay, '/api/naver-auto' + route, method)[0] != expected:
             raise ValueError('CODE_ROUTE_STATUS')
-    if report_target:
+    if target:
         for route in ('/reports/accounts?selection=all&kind=weekly&page=0',
                       '/reports/detail?report_id=1&account_key=company'):
             if release.unix_request(relay, '/api/naver-auto'+route, 'GET')[0] != 401:
