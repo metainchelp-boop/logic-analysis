@@ -108,12 +108,13 @@
     var done = function () { delete state.busy[key]; if (btn) btn.disabled = false; };
     run().then(done, done);
   }
-  function toast(t) {
+  // 전산과 같은 알림 — 오른쪽 위 · 성공(기본)/오류 bad/주의 warn/안내 info · 3초
+  function toast(t, kind) {
     var el = $('toast');
     el.textContent = t;
-    el.classList.add('on');
+    el.className = 'toast on' + (kind === 'bad' || kind === 'warn' || kind === 'info' ? ' ' + kind : '');
     clearTimeout(toast._t);
-    toast._t = setTimeout(function () { el.classList.remove('on'); }, 3200);
+    toast._t = setTimeout(function () { el.classList.remove('on'); }, 3000);
   }
 
   // 업체 자료는 이 창의 제한된 메모리에만 둔다. 커서는 권한이 아니며 재진입은 매번 서버 확인 뒤 연다.
@@ -346,7 +347,24 @@
     running_zero_spend: '진행중인데 광고비가 0원입니다', period_ending: '캠페인 기간이 곧 끝납니다',
     key_rejected: '네이버가 읽기를 거절했습니다 (이관은 남아 있음)', link_broken: '🔌 이관이 빠졌습니다'
   };
-  function cause(code) { return CAUSE[code] || ('점검 항목 (' + code + ')'); }
+  // 개편 D8(대표 확정 2026-10-06) — 원인마다 「할 일 한 줄」. 열쇠는 CAUSE 와 같은 이슈 코드다.
+  var TODO = {
+    link_broken: '광고주에게 네이버 검색광고 「대행사 관리」에서 우리 회사 연결이 남아 있는지 확인 요청',
+    bizmoney_low: '광고주에게 충전 요청(남은 날·하루 평균 광고비 함께 안내)',
+    bizmoney_empty: '광고주에게 충전 요청(남은 날·하루 평균 광고비 함께 안내)',
+    active_no_impressions: '네이버 광고 관리에서 노출 제한 사유(검수·입찰가·예산) 확인',
+    spend_up: '광고주 기획전·예산 변경인지 확인 · 아니면 입찰가·키워드 점검',
+    spend_down: '예산 소진·입찰 순위·광고 중지 여부 확인',
+    running_zero_spend: '캠페인 꺼짐·잔액·검수 상태 확인',
+    key_rejected: '광고주에게 우리 회사 권한(운영관리)이 바뀌었는지 확인 요청',
+    spend_after_contract: '전산 계약 단계(환불중·만료) 확인 · 광고 중지 여부 광고주와 확인',
+    period_ending: '이어 갈지 광고주와 확인',
+    budget_lock: '광고주에게 비즈머니 예산 잠금이 걸린 까닭을 확인하고 풀어 달라고 요청',
+    refund_lock: '광고주가 비즈머니 환불을 신청했는지 확인 · 전산 계약 단계(환불중)와 맞는지 확인'
+  };
+  // 모르는 코드는 영문 코드를 보이지 않는다(쉬운 말 원칙).
+  function cause(code) { return CAUSE[code] || '기타 점검 항목'; }
+  function todo(code) { return TODO[code] || ''; }
   function fact(i) {
     var f = i.facts || {};
     switch (i.code) {
@@ -593,7 +611,8 @@
     if (name !== state.screen) gateView(name);
     state.screen = name;
     SCREENS.forEach(function (s) { var el = $('s-' + s); if (el) el.classList.toggle('on', s === name); });
-    var menuKey = { dashboard: '/naver/dashboard', watch: '/naver/', client: '/naver/', automation: '/naver/automation', reports: '/naver/reports',
+    // 개편(D2): 대시보드·보고서는 「📊 성과·보고서」 한 탭 · 🤖 자동화는 5차 때까지 메뉴에 없다(주소는 남김)
+    var menuKey = { dashboard: '/naver/dashboard', watch: '/naver/', client: '/naver/', reports: '/naver/dashboard',
                     transfers: '/naver/transfers', settings: '/naver/settings' }[name];
     Array.prototype.forEach.call(document.querySelectorAll('.menu button'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-go') === menuKey);
@@ -1156,7 +1175,7 @@
           return api('POST', '/management/collect', { ad_account_no: row.ad_account_no }).then(function () {
             if (!fresh()) return;
             toast('조회 요청을 받았습니다 · 완료 여부는 수집 결과에서 확인해 주세요.'); loadInventory();
-          }, function (e) { if (fresh()) toast(errText(e)); });
+          }, function (e) { if (fresh()) toast(errText(e), 'bad'); });
         });
       } }, '지금 조회'));
       if (typeof row.possibility_id === 'number' && row.possibility_id > 0) {
@@ -1180,14 +1199,14 @@
     var edit = managementEdit;
     if (!edit || edit.inventory !== state.inventory || edit.gen !== state.gen) return;
     var reason = $('managementReason').value.trim();
-    if (!reason) { toast('변경 사유를 적어 주세요'); $('managementReason').focus(); return; }
+    if (!reason) { toast('변경 사유를 적어 주세요', 'warn'); $('managementReason').focus(); return; }
     var body = { ad_account_no: edit.row.ad_account_no, stage_revision: edit.row.management.stage_revision, included: edit.included, reason: reason };
     if (!managementCapability('/management/update', body)) return;
     once('management-update:' + edit.row.ad_account_no, $('managementSave'), function () {
       return api('POST', '/management/update', body).then(function () {
         if (edit.gen !== state.gen || edit.inventory !== state.inventory) return;
         closeModals(); toast((edit.included ? '관제 포함' : '관제 제외') + '를 저장했습니다 · 전산 단계·광고는 변경하지 않았습니다.'); loadInventory();
-      }, function (e) { if (edit.gen === state.gen && edit.inventory === state.inventory) toast(errText(e)); });
+      }, function (e) { if (edit.gen === state.gen && edit.inventory === state.inventory) toast(errText(e), 'bad'); });
     });
   }
   function savePeriodRecheck() {
@@ -1196,13 +1215,13 @@
     var body = { ad_account_no: edit.row.ad_account_no, possibility_id: edit.row.possibility_id,
       period_start: $('periodStart').value, period_end: $('periodEnd').value };
     var error = closedPeriodError(body.period_start, body.period_end);
-    if (error) { toast(error); $('periodStart').focus(); return; }
+    if (error) { toast(error, 'bad'); $('periodStart').focus(); return; }
     if (!managementCapability('/management/collect', body)) return;
     once('management-collect:' + edit.row.ad_account_no, $('periodSave'), function () {
       return api('POST', '/management/collect', body).then(function () {
         if (edit.gen !== state.gen || edit.inventory !== state.inventory) return;
         closeModals(); toast('기간 재확인 요청을 받았습니다 · 완료 여부는 수집 결과에서 확인해 주세요.'); loadInventory();
-      }, function (e) { if (edit.gen === state.gen && edit.inventory === state.inventory) toast(errText(e)); });
+      }, function (e) { if (edit.gen === state.gen && edit.inventory === state.inventory) toast(errText(e), 'bad'); });
     });
   }
   var COVERAGE_STATE = { matched: '연결 확인', id_missing: '번호 미입력', identifier_invalid: '번호 형식 확인',
@@ -1393,19 +1412,19 @@
     var edit = reportEdit;
     if (!edit || edit.reports !== state.reports || edit.gen !== state.gen) return;
     var note = $('reviewNote').value.trim();
-    if (!note) { toast('검토 메모를 적어 주세요'); $('reviewNote').focus(); return; }
+    if (!note) { toast('검토 메모를 적어 주세요', 'warn'); $('reviewNote').focus(); return; }
     var body = { report_id: edit.row.report_id, decision: edit.decision, note: note };
     if (!reportCapability('/reports/review', body)) return;
     once('report-review:' + edit.row.report_id, $('reviewSave'), function () {
       return api('POST', '/reports/review', body).then(function () {
         if (edit.gen !== state.gen || edit.reports !== state.reports) return;
         closeModals(); toast(edit.label + '을 저장했습니다 · 게시·전송하지 않았습니다.'); loadReports();
-      }, function (e) { if (edit.gen === state.gen && edit.reports === state.reports) toast(errText(e)); });
+      }, function (e) { if (edit.gen === state.gen && edit.reports === state.reports) toast(errText(e), 'bad'); });
     });
   }
   function fail(e) {
     if (e && e.status === 401) return;
-    toast(errText(e));
+    toast(errText(e), 'bad');
   }
   function renderWatch() {
     renderRun();
@@ -1516,6 +1535,7 @@
              h('span', { class: 'sig ' + sev, role: 'img', 'aria-label': COLOR_TEXT[sev] || '알아 두기' }),
              h('div', { class: 'tx' }, name, where === 'client' ? [h('b', null, cause(i.code)), fact(i) ? h('span', { class: 'w' }, fact(i)) : null]
                : (fact(i) || cause(i.code)),
+               todo(i.code) && open ? h('span', { class: 'todo' }, '할 일 · ' + todo(i.code)) : null,
                h('span', { class: 'w' }, h('span', { class: 'st ' + st }, STATE[st] || st), ' · 처음 ' + md(i.first_seen_on) + until + again + target + who),
                memo),
              h('div', { class: 'act' }, act));
@@ -1652,7 +1672,7 @@
       return api('POST', '/issues/' + i.issue_id + '/' + act, body).then(function () {
         toast({ ack: '👀 확인 중으로 바꿨습니다(기록 남김)', resolve: '✅ 해결로 바꿨습니다 — 다음 점검에서 그대로면 다시 🆕', except: '🙈 예외로 두었습니다(기록 남김)' }[act]);
         reload();
-      }, function (e) { toast(errText(e)); reload(); });
+      }, function (e) { toast(errText(e), 'bad'); reload(); });
     });
   }
   /* 손길 뒤 다시 읽기 — 지금 보고 있는 화면이 관제·광고주 한 장일 때만(그 사이 다른 화면으로 옮겨 갔으면 건드리지 않는다 ·
@@ -1683,7 +1703,7 @@
       return;
     }
     var today = serverToday(), max = i.can && i.can.except_until_max;
-    if (!today || !max) { toast('지금은 예외를 줄 수 없습니다'); return; }
+    if (!today || !max) { toast('지금은 예외를 줄 수 없습니다', 'warn'); return; }
     except = i;
     $('mx-sub').textContent = (i.name || (state.client && state.client.name) || '') + ' — ' + cause(i.code);
     var opts = [1, 3, 7, 14, 30].filter(function (d) { var u = addDays(today, d - 1); return u !== null && u <= max; });
@@ -1699,7 +1719,7 @@
   function doExcept() {
     var i = except, note = $('mx-why').value.trim(), until = $('mx-days').value;
     if (!i) return;
-    if (!note) { toast(ERR['note-required']); return; }
+    if (!note) { toast(ERR['note-required'], 'warn'); return; }
     closeModals();
     hand(i, 'except', { until: until, note: note });
   }
@@ -1865,7 +1885,7 @@
       }, function (e) {
         if (gen !== state.gen || links !== state.links) return;
         // 짝 목록이 바뀌었을 수 있다(새 짝 맞추기 · 엔진 다시 켬) — 목록을 새로 받아 죽은 줄을 치운다
-        toast(e.status === 404 ? '짝 목록이 바뀌었습니다 — 새로 불러왔으니 다시 확인해 주세요' : errText(e));
+        toast(e.status === 404 ? '짝 목록이 바뀌었습니다 — 새로 불러왔으니 다시 확인해 주세요' : errText(e), e.status === 404 ? 'warn' : 'bad');
         if (e.status !== 401) { state.links = null; loadLinks(); }
       });
     });
@@ -1908,8 +1928,8 @@
         });
       }
       return next().then(function () { if (current()) toast(stopped ? count + '곳 확정 후 중단했습니다 — 남은 연결 후보·권한이 바뀌었거나 재확인이 필요합니다. 최신 목록을 확인해 주세요.' :
-        count + '곳 연결을 확정했습니다. 「이관 현황」에서 관리·수집 결과를 확인해 주세요.'); },
-        function (e) { if (current()) toast(count + '곳 확정 후 중단했습니다 — ' + errText(e)); })
+        count + '곳 연결을 확정했습니다. 「이관 현황」에서 관리·수집 결과를 확인해 주세요.', stopped ? 'warn' : undefined); },
+        function (e) { if (current()) toast(count + '곳 확정 후 중단했습니다 — ' + errText(e), 'bad'); })
         .then(function () { if (current()) return loadLinks(); });
     });
   }
@@ -1955,7 +1975,7 @@
       return api('POST', '/links/preview', { ref: r.ref }).then(function (j) {
         var names = j.campaigns || [];
         toast(names.length ? '캠페인: ' + names.join(' · ') : '캠페인이 없습니다');
-      }, function (e) { toast(errText(e)); });
+      }, function (e) { toast(errText(e), 'bad'); });
     });
   }
   var revoke = null;
@@ -1963,7 +1983,7 @@
   function doRevoke() {
     var d = revoke, why = $('mr-why').value.trim();
     if (!d) return;
-    if (!why) { toast(ERR['note-required']); return; }
+    if (!why) { toast(ERR['note-required'], 'warn'); return; }
     closeModals();
     once('revoke:' + d.decision_id, null, function () {
       return api('POST', '/links/revoke', { decision_id: d.decision_id, reason: why }).then(function () {
@@ -1971,7 +1991,7 @@
         state.links = null;
         loadLinks();
       }, function (e) {
-        toast(errText(e));
+        toast(errText(e), 'bad');
         if (e.status !== 401) { state.links = null; loadLinks(); }
       });
     });
@@ -2230,7 +2250,7 @@
       setBell(Math.max(0, (state.bell.unread || 1) - 1));
       state.bell.unread = Math.max(0, (state.bell.unread || 1) - 1);
       done();
-    }, function (e) { toast(errText(e)); });
+    }, function (e) { toast(errText(e), 'bad'); });
   }
   function bellAll() {
     if (!state.bell) return;
@@ -2241,7 +2261,7 @@
         state.bell.unread = 0;
         setBell(0);
         renderBell();
-      }, function (e) { toast(errText(e)); });
+      }, function (e) { toast(errText(e), 'bad'); });
     });
   }
 
@@ -2346,8 +2366,8 @@
       if (!isFinite(v)) { bad = true; return; }
       if (v !== cur[k]) changes[k] = v;
     });
-    if (bad) { toast('숫자를 넣어 주세요'); return; }
-    if (!Object.keys(changes).length) { toast(ERR['no-change']); return; }
+    if (bad) { toast('숫자를 넣어 주세요', 'warn'); return; }
+    if (!Object.keys(changes).length) { toast(ERR['no-change'], 'warn'); return; }
     once('th', btn, function () {
       return api('POST', '/settings/thresholds', { changes: changes }).then(function () { toast('점검 기준을 저장했습니다 — 다음 아침 점검부터'); state.gen++; openSettings(); },
         function (e) { toast(e.body && e.body.fields && e.body.fields.length ? '범위 밖이거나 맞지 않는 값: ' + e.body.fields.map(function (k) { return TH[k] ? TH[k][0] : k; }).join(' · ') : errText(e)); });
@@ -2356,7 +2376,7 @@
   function confirmHold(x, btn) {
     once('hold:' + x.kind, btn, function () {
       return api('POST', '/holds/' + x.kind + '/confirm', { hold_id: x.hold_id }).then(function () { toast('확인하고 받았습니다'); state.gen++; openSettings(); },
-        function (e) { toast(errText(e)); state.gen++; openSettings(); });
+        function (e) { toast(errText(e), 'bad'); state.gen++; openSettings(); });
     });
   }
 
