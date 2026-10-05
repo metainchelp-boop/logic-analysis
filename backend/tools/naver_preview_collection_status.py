@@ -973,6 +973,10 @@ def run(package, host, release):
     STAGE = 'preflight'
     validate_package(package)
     passive = package.get('passive_runtime_only') is True
+    # Incident 2026-10-05: live reader attempts overlapped engine exits. No further
+    # active probes on this release until isolated causality testing is complete.
+    if package['source_commit'] == REPORTS_COMMIT and not passive:
+        raise ValueError('LIVE_READER_SUSPENDED')
     package = {key:value for key,value in package.items() if key!='passive_runtime_only'}
     if os.geteuid() != 0 or host.baseline() != package['baseline']:
         raise ValueError('HOST_BASELINE')

@@ -754,13 +754,20 @@ class CollectionTest(unittest.TestCase):
         self.check_run_diagnostics(M.CATALOG_LINKS_COMMIT)
 
     def test_passive_runtime_diagnosis_never_opens_database_or_executes_container_process(self):
-        self.check_run_diagnostics(M.CATALOG_LINKS_COMMIT, passive=True)
+        self.check_run_diagnostics(M.REPORTS_COMMIT, passive=True)
+
+    def test_incident_release_refuses_further_live_reader_diagnosis(self):
+        package = dict(baseline='a'*64,source_commit=M.REPORTS_COMMIT,source_tar_gz_sha256='b'*64)
+        host,release = Mock(),Mock()
+        with self.assertRaisesRegex(ValueError,'^LIVE_READER_SUSPENDED$'):
+            M.run(package,host,release)
+        host.baseline.assert_not_called()
+        release.command.assert_not_called()
 
     def test_run_reviewed_releases_require_new_aggregates_and_unknown_commit_gets_neither(self):
         for commit in ('01344b145d0b679a6ee730d7fa4b5990278dd654',
                        '1b790b864ce27766251a205259fa6a332f60f72b',
-                       '0a302856c6177c4f53145abaf9ed31b6a39654f3',
-                       'a38c53775c112cdf5db420f979093d6bee9e5376'):
+                       '0a302856c6177c4f53145abaf9ed31b6a39654f3'):
             with self.subTest(commit=commit):
                 self.check_run_diagnostics(commit, {
                     'daily_limited':dict(cycle_day='2026-10-01',jobs=0,current_daily_targets=1,
