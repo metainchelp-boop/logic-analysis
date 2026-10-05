@@ -121,7 +121,7 @@ const cfg = JSON.parse(process.argv[2]);
     await assertSelection('all', board.rows[0].name);
     await page.fill('#q', '없는 광고주');
     await assertSelection('all', '없는 광고주');
-    assert.equal(await page.locator('#upbox').isVisible(), false);
+    assert.equal(await page.locator('#upbox').isVisible(), true, '개편: 전체 표 찾기는 올림 목록을 숨기지 않는다');
     const menu = await page.locator('.menu button').allTextContents();
     assert.equal(menu.findIndex(t => t.includes('관제')), 0);
     assert.equal(menu.findIndex(t => t.includes('성과·보고서')), 1);

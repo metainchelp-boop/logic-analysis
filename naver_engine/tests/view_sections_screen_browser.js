@@ -102,12 +102,14 @@ const cfg = JSON.parse(process.argv[2]);
     assert.equal(await page.evaluate(() => document.activeElement === window.__upToggle), true,
       '변경분 갱신 중 상향 목록 버튼 노드와 초점을 보존해야 합니다');
     assert.equal(await page.locator('#upToggle').getAttribute('aria-expanded'), 'true');
+    // 개편(2026-10-06): 올림 목록은 전체 표 찾기와 상관없다 — 찾기를 해도 펼친 채 · 건수 그대로
     await page.fill('#q', '없는합성검색어');
-    assert.equal(await page.locator('#upbox').isVisible(), false);
+    assert.equal(await page.locator('#upbox').isVisible(), true);
+    assert.equal(await page.locator('#upList').isVisible(), true);
     await page.fill('#q', '');
     assert.equal(await page.locator('#upList').isVisible(), true);
     assert.match(await page.locator('#upTitle').innerText(), new RegExp(initialBoard.escalated_to_me.length + '건'));
-    checks.push('up-toggle-keyboard-and-delta-focus', 'up-filter-zero-restores-choice-and-count');
+    checks.push('up-toggle-keyboard-and-delta-focus', 'up-list-independent-of-table-search');
     await page.selectOption('#scope', 'person:101'); await settled('watch');
     assert.equal(await page.locator('#upToggle').getAttribute('aria-expanded'), 'false', '담당 범위 변경은 기본 접힘으로 돌아가야 합니다');
     assert.equal(await page.locator('#upList').isVisible(), false);
