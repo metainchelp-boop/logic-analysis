@@ -1,4 +1,4 @@
-"""Schema11 owner-actions release; paired DB rollback."""
+"""Schema11 screen-overhaul release; paired DB rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -12,24 +12,31 @@ import stat
 import sqlite3
 from types import SimpleNamespace
 import uuid
-OLD_COMMIT = 'c21f5f05f610abf89df0c24e85c00b1bec23d01c'
-TARGET_COMMIT = '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505'
+OLD_COMMIT = '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505'
+TARGET_COMMIT = 'a981b35e298aa58a52b30e266792bd0f36506c5d'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-# c21f5f0 seal receipt (run 37318788721).
-OLD_SOURCE_SHA256 = 'e23f84b0ba2799861746168d1d8f3dc4915b419977dbbc7b5afac13cf31ea898'
-# 8dd4292 git archive digest; must equal the seal receipt.
-TARGET_SOURCE_SHA256 = 'd419f108243ae36aec50e668b4e8e822b64a2d8225870f30878a8373140c5996'
-# store.py unchanged.
-STORE_SHA256 = dict.fromkeys(('old','target'), '31be2c8ed8d8a3d321f0fb93b08b105cf7a1d8b47dc8d5e55cc2f84910ea767e')
-CODE_PATHS = {'naver_engine/web.py', 'naver_runtime/__main__.py',
-              'backend/naver_page/app.js', 'backend/naver_page/index.html'}
-TEST_PATHS = {'naver_engine/tests/owner_screen_browser.js', 'naver_engine/tests/test_owner_screen_copy.py'}
+# 8dd4292 seal receipt (run 37334732660).
+OLD_SOURCE_SHA256 = 'd419f108243ae36aec50e668b4e8e822b64a2d8225870f30878a8373140c5996'
+# a981b35 git archive digest of the seal paths without test folders; must equal the seal receipt.
+TARGET_SOURCE_SHA256 = '1b1179f1afddd4ac9ad7d6d9d7bd4178d593e2f9e40edf6347ee77f3f6b98514'
+# store.py: Python only (optional note on issue ack); SQL, SCHEMA_VERSION 11, _REVISION_COLUMNS and _migrate unchanged.
+STORE_SHA256 = {'old':'31be2c8ed8d8a3d321f0fb93b08b105cf7a1d8b47dc8d5e55cc2f84910ea767e',
+                'target':'cead3be31d1816107307251562576c2c22edf09328b1402eb0961d08e4f68c74'}
+CODE_PATHS = {'backend/app/naver_auto/verdict.py', 'naver_engine/views.py', 'naver_engine/store.py',
+              'naver_engine/web.py', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
+              'backend/naver_page/app.css'}
+# The target archive ships no test folders; their removal is covered by REMOVABLE_SOURCE_PREFIXES.
+TEST_PATHS = frozenset()
 # The seal no longer ships test folders (ad-dashboard tools/naver-preview-seal.py SOURCE_EXCLUDED_PATHS);
 # old deployed trees still carry them. Tests never run on the server, so only these may disappear.
 REMOVABLE_SOURCE_PREFIXES = ('naver_engine/tests/', 'naver_runtime/tests/')
-# Target: 401 without a token; old: 403.
+# Opened since the owner-actions release (8dd4292): 401 without a token on both sides.
 OWNER_ACTION_ROUTES = ('/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all',
     '/settings/thresholds', *('/holds/'+k+'/confirm' for k in ('org', 'stages', 'accounts')))
+# Opened by the target only (CEO-only revoke with a one-line reason): target 401, old 403.
+TARGET_ACTION_ROUTES = ('/links/revoke',)
+# Closed on both sides.
+CLOSED_LINK_ROUTES = ('/links/reject', '/links/preview')
 REPORT_ASSETS = {
     '/naver/'+name:(size,digest,'application/gzip' if name.endswith('.gz') else 'text/javascript; charset=utf-8')
     for name,size,digest in (
@@ -456,7 +463,8 @@ def probe(release, source_commit, upgrade):
         raise ValueError('CODE_PROBE_SOURCE')
     def request(path, route, method='GET'):
         status, headers, body = release.unix_request(path, route, method)
-        opened = target and route.removeprefix('/api/naver-auto') in OWNER_ACTION_ROUTES
+        key = route.removeprefix('/api/naver-auto')
+        opened = key in OWNER_ACTION_ROUTES or (target and key in TARGET_ACTION_ROUTES)
         if method == 'POST' and (route == '/api/naver-auto/links/confirm' or opened):
             if status != 401:
                 raise ValueError('VERIFIED_WRITE_AUTH_NOT_REQUIRED')
@@ -481,8 +489,9 @@ def probe(release, source_commit, upgrade):
                 raise ValueError('CODE_ROUTE_STATUS')
     for route, method, expected in (
             ('/collection/status', 'GET', 401), ('/collection/request', 'POST', 401),
-            *((r, 'POST', 401 if target else 403) for r in OWNER_ACTION_ROUTES),
-            *((r, 'POST', 403) for r in ('/links/reject', '/links/revoke', '/links/preview'))):
+            *((r, 'POST', 401) for r in OWNER_ACTION_ROUTES),
+            *((r, 'POST', 401 if target else 403) for r in TARGET_ACTION_ROUTES),
+            *((r, 'POST', 403) for r in CLOSED_LINK_ROUTES)):
         if release.unix_request(relay, '/api/naver-auto' + route, method)[0] != expected:
             raise ValueError('CODE_ROUTE_STATUS')
     if target:

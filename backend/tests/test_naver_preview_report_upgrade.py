@@ -27,7 +27,7 @@ class ReportUpgradeTest(unittest.TestCase):
             if route in ('/naver/', '/naver/dashboard'):
                 return 200, {'referrer-policy':'no-referrer','cache-control':'no-store'}, b'verificationNotice id="s-dashboard"'
             approved = ('/links/confirm','/collection/request','/management/update','/management/collect','/reports/review',
-                        *(code.OWNER_ACTION_ROUTES if source == 'target' else ()))
+                        *code.OWNER_ACTION_ROUTES, *(code.TARGET_ACTION_ROUTES if source == 'target' else ()))
             return (401 if method == 'GET' or route.removeprefix('/api/naver-auto') in approved else 403), {}, b''
         with patch.object(code, 'REPORT_ASSETS', {route:(len(body),hashlib.sha256(body).hexdigest(),
                 'application/gzip' if route.endswith('.gz') else 'text/javascript; charset=utf-8') for route,body in assets.items()}):
@@ -75,9 +75,9 @@ class ReportUpgradeTest(unittest.TestCase):
 
     def test_pending_linux_digest_refuses_before_prepare_actions(self):
         code = legacy.load('naver_preview_code_upgrade')
-        # The SHM-lock fix release (c21f5f0) is now the old side of the owner-actions release.
-        self.assertEqual(code.OLD_COMMIT, 'c21f5f05f610abf89df0c24e85c00b1bec23d01c')
-        self.assertEqual(code.TARGET_COMMIT, '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505')
+        # The owner-actions release (8dd4292) is now the old side of the screen-overhaul release.
+        self.assertEqual(code.OLD_COMMIT, '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505')
+        self.assertEqual(code.TARGET_COMMIT, 'a981b35e298aa58a52b30e266792bd0f36506c5d')
         for pending in (None, 'PENDING_SEAL'):
             with self.subTest(pending=pending), patch.object(code, 'TARGET_SOURCE_SHA256', pending):
                 with self.assertRaisesRegex(ValueError, 'CODE_TARGET_NOT_PINNED'):

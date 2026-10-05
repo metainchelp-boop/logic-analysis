@@ -26,6 +26,8 @@ class SameSchemaContractTest(unittest.TestCase):
             b'\n_SCHEMA += '+repr(StoreScopeTest.MONITORING_SQL).encode()+b'\n'
         # Owner-actions release (8dd4292): store.py is byte-identical on both sides.
         sources['old'] = sources['target']
+        # Screen overhaul (a981b35): Python only on the target; schema 11 contract unchanged.
+        sources['target'] += b'\n# issue ack note\n'
         with tempfile.TemporaryDirectory() as directory:
             old, new = (Path(directory).resolve()/part for part in ('old', 'new'))
             for path, role in ((old, 'old'), (new, 'target')):
@@ -97,8 +99,8 @@ class SameSchemaContractTest(unittest.TestCase):
                     return 200, {}, b'{}'
                 if route in ('/naver/', '/naver/dashboard'):
                     return 200, {'referrer-policy':'no-referrer', 'cache-control':'no-store'}, b'verificationNotice id="s-dashboard"'
-                approved = ('/links/confirm', '/collection/request') + new_posts + (
-                    code.OWNER_ACTION_ROUTES if source == code.TARGET_COMMIT else ())
+                approved = ('/links/confirm', '/collection/request') + new_posts + code.OWNER_ACTION_ROUTES + (
+                    code.TARGET_ACTION_ROUTES if source == code.TARGET_COMMIT else ())
                 status = 401 if method == 'GET' or route.removeprefix('/api/naver-auto') in approved else 403
                 return status, {}, b''
             code.probe(Mock(unix_request=request), source, load('naver_preview_upgrade'))
