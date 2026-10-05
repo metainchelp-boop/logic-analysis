@@ -345,18 +345,25 @@ class ContractTest(unittest.TestCase):
             'naver_engine/tests/test_screen.py', 'naver_engine/tests/test_view_delta_screen.py',
             'naver_engine/tests/view_delta_screen_browser.js'})
 
-    def scenario(self, failure=None, mode='apply'):
+    def scenario(self, failure=None, mode='apply', *, code_only=False):
         code = sealed_code()
+        policy = load('naver_preview_code_only') if code_only else None
         fixture = load('naver_preview_upgrade')
         fixture.OLD_COMMIT = code.OLD_COMMIT
         # Shared synthetic Docker/filesystem adapter, not the old controller.
         def prepare(package, host, release, life):
             package = dict(package, source_commit=code.TARGET_COMMIT, operation='code-prepare')
-            return code.prepare(package, host, release, life, fixture)
+            return policy.prepare(package, host, release, life, fixture, code) if policy else code.prepare(package, host, release, life, fixture)
         def apply(package, host, release, life):
             package = {'release': dict(package['release'], source_commit=code.TARGET_COMMIT,
                                       operation='code-prepare'), 'operation_id': '9'*32}
-            return code.apply(package, host, release, life, fixture)
+            if failure == 'rollback_host_changed':
+                calls = []
+                def baseline():
+                    calls.append(True)
+                    return code.EXPECTED_BASELINE if len(calls) <= 2 else '0'*64
+                host.baseline.side_effect = baseline
+            return policy.apply(package, host, release, life, fixture, code) if policy else code.apply(package, host, release, life, fixture)
         fixture.prepare, fixture.apply = prepare, apply
         def setup(root, release):
             (root/'incoming'/'123456').mkdir(parents=True, exist_ok=True)
@@ -432,6 +439,10 @@ class ContractTest(unittest.TestCase):
                     services[args[-1]] = 'failed' if failure=='failed_stopped' else 'inactive'
                 if args[:2] == ['/usr/bin/systemctl', 'start']:
                     services[args[-1]] = 'active'
+                    if failure == 'rollback_source_changed' and current['source'] == code.TARGET_COMMIT:
+                        source = root/'releases'/('naver-'+code.TARGET_COMMIT)/'naver_engine/store.py'
+                        source.write_bytes(source.read_bytes()+b'\n# unreviewed source drift\n')
+                        raise RuntimeError('COMMAND_FAILED')
                 if args[:2] == ['/usr/bin/systemctl', 'show']:
                     active=services.get(args[2], 'active')
                     values={'ActiveState':active,'SubState':'running' if active=='active' else
@@ -498,13 +509,21 @@ class ContractTest(unittest.TestCase):
                 patch.object(code, 'TARGET_SOURCE_SHA256', 'c'*64), \
                 patch.object(code, 'STORE_SHA256', {'old':hashlib.sha256(StoreScopeTest.SOURCE).hexdigest(),
                                                   'target':hashlib.sha256(StoreScopeTest.TARGET_SOURCE).hexdigest()}), \
-                patch.object(code, 'verify_database_schema'), \
+                patch.object(code, 'verify_database_schema') as verify_database, \
                 patch.object(code, 'db_snapshot', return_value=(Path('/synthetic-snapshot'), 'd'*64)) as snapshot, \
                 patch.object(code, 'restore_db') as restore, \
                 patch.object(code, 'warm_sources', side_effect=(ValueError('WARM_FAILED') if failure=='warm'
                              else RuntimeError('WARM_CLEANUP_FAILED') if failure=='warm_cleanup' else None),
-                             return_value={'ok':True, 'org_fresh':True, 'schema':11, 'catalog_total':2, 'management_count':1}):
+                             return_value={'ok':True, 'org_fresh':True, 'schema':11, 'catalog_total':2, 'management_count':1}) as warm:
+            if code_only:
+                policy.REVIEWED_TRANSITION = (
+                    code.OLD_COMMIT, code.TARGET_COMMIT, code.OLD_SOURCE_SHA256, code.TARGET_SOURCE_SHA256,
+                    code.STORE_SHA256['old'], code.STORE_SHA256['target'], code.EXPECTED_BASELINE)
             result = legacy_test.UpgradeTest().scenario(failure, mode, setup)
+            if code_only:
+                for database_action in (snapshot, restore, warm, verify_database):
+                    database_action.assert_not_called()
+                return result
             if failure in ('warm','recreate','start','probe'):
                 restore.assert_called_once()
             if failure == 'warm_cleanup':
