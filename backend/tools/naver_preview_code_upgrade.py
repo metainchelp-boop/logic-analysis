@@ -16,8 +16,8 @@ OLD_COMMIT = 'a38c53775c112cdf5db420f979093d6bee9e5376'
 TARGET_COMMIT = 'c21f5f05f610abf89df0c24e85c00b1bec23d01c'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 OLD_SOURCE_SHA256 = 'dc442fa19e4809b290124e8a72fa3243d911957176ba6988269ec27ef736302a'
-# Seal receipt value only; this non-hex placeholder refuses prepare/apply.
-TARGET_SOURCE_SHA256 = 'PENDING_SEAL'
+# c21f5f0 seal receipt (metainc-ad-dashboard run 37318788721), equal to the local git-archive recomputation.
+TARGET_SOURCE_SHA256 = 'e23f84b0ba2799861746168d1d8f3dc4915b419977dbbc7b5afac13cf31ea898'
 STORE_SHA256 = {'old':'272e8993981823f65fde01b194eeedfb4deaf7c1942f980ff13e5645809752bb',
         'target':'31be2c8ed8d8a3d321f0fb93b08b105cf7a1d8b47dc8d5e55cc2f84910ea767e'}
 CODE_PATHS = {'naver_engine/store.py'}

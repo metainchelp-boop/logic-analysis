@@ -309,8 +309,9 @@ class ContractTest(unittest.TestCase):
         # The previous target archive (sealed for a38c537) is now the pinned old archive.
         self.assertEqual(module.OLD_SOURCE_SHA256,
                          'dc442fa19e4809b290124e8a72fa3243d911957176ba6988269ec27ef736302a')
-        # Filled only from the c21f5f0 seal receipt; until then prepare/apply must refuse.
-        self.assertEqual(module.TARGET_SOURCE_SHA256, 'PENDING_SEAL')
+        # c21f5f0 seal receipt; equals git archive of the 18 sealed paths, gzip mtime=0 (Python 3.12).
+        self.assertEqual(module.TARGET_SOURCE_SHA256,
+                         'e23f84b0ba2799861746168d1d8f3dc4915b419977dbbc7b5afac13cf31ea898')
         self.assertEqual(module.STORE_SHA256, {
             'old':'272e8993981823f65fde01b194eeedfb4deaf7c1942f980ff13e5645809752bb',
             'target':'31be2c8ed8d8a3d321f0fb93b08b105cf7a1d8b47dc8d5e55cc2f84910ea767e'})
@@ -324,7 +325,9 @@ class ContractTest(unittest.TestCase):
 
     def test_pending_seal_placeholder_refuses_prepare_and_apply_before_any_action(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.TARGET_SOURCE_SHA256, 'PENDING_SEAL')
+        pending = patch.object(module, 'TARGET_SOURCE_SHA256', 'PENDING_SEAL')
+        pending.start()
+        self.addCleanup(pending.stop)
         release = load('naver_preview_release')
         package = dict(baseline=module.EXPECTED_BASELINE, source_commit=module.TARGET_COMMIT,
                        ciphertext_sha256='c'*64, source_tar_gz_sha256='d'*64,
