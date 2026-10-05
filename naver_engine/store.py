@@ -1175,6 +1175,29 @@ def _fix_side_files(real: str) -> None:
             os.close(fd)
 
 
+def _check_side_files_unopened(real: str) -> None:
+    """연결을 연 뒤의 곁 파일 점검 — 파일을 절대 열지 않는다(``lstat``·``chmod`` 만).
+
+    ⚠️ SQLite 가 ``-shm`` 에 건 POSIX(fcntl) 잠금은 같은 프로세스가 그 파일의 **다른 fd 를 하나라도 닫으면 전부 풀린다**.
+    연결 뒤에 ``_fix_side_files`` 처럼 ``os.open → os.close`` 하면 엔진의 ``-shm`` DMS 잠금이 사라지고, 그 뒤 다른
+    프로세스(진단·점검 도구)가 DB 를 열면 자기를 첫 사용자로 여겨 ``-shm`` 을 3바이트로 자른다 — ``-shm`` 을 mmap 하던
+    엔진은 SIGBUS 로 죽는다(컨테이너 종료 코드 135 · 2026-10-04~05 운영 재시작 5회 · 로컬 재현 8/8). 그래서 여기서는
+    fd 를 만들지 않는다. 폴더는 ``_check_dir`` 가 남이 못 쓰게 확인했고, 일반 파일임을 ``lstat`` 으로 본 직후 이름으로 좁힌다.
+    """
+    for suffix in ("-wal", "-shm", "-journal"):
+        p = real + suffix
+        try:
+            st = os.lstat(p)
+        except FileNotFoundError:
+            continue
+        if not _stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
+            raise StoreRefused("곁 파일: 우리 소유 일반 파일이 아닙니다")
+        if st.st_nlink != 1:
+            raise StoreRefused("곁 파일: 다른 이름(하드링크)이 있는 파일은 쓰지 않습니다")   # 두 이름 = 두 쓰기
+        if st.st_mode & 0o077:
+            os.chmod(p, 0o600)
+
+
 def _wrap(e: BaseException, what: str) -> StoreError:
     return StoreError(f"{what}: {type(e).__name__}")   # 경로·값이 든 원래 문구는 싣지 않는다
 
@@ -1206,7 +1229,7 @@ def open_writer(path: str, clock: Optional[Callable[[], datetime]] = None) -> "S
         conn.execute("PRAGMA synchronous = FULL")   # 사람의 짝 판단이 「저장됨」 뒤 전원이 꺼져도 남게
         if hasattr(conn, "setconfig"):
             conn.setconfig(_sqlite3.SQLITE_DBCONFIG_DEFENSIVE, True)   # 스키마 직접 고치기 막음
-        _fix_side_files(real)
+        _check_side_files_unopened(real)   # 연결 뒤에는 곁 파일을 열지 않는다 — 열었다 닫으면 SQLite 의 -shm 잠금이 풀린다
         store = Store(conn, real, lock_fd, writer=True, clock=clock)
         store._migrate()
         conn.set_authorizer(_authorizer(PHASE_RUN))
