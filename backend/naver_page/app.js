@@ -1623,7 +1623,10 @@
     }) : h('tr', null, h('td', { colspan: 3, class: 'empty' }, typeof t.unchecked === 'number' ? '점검 못 한 곳이 없습니다.' : '까닭별 숫자를 아직 받지 못했습니다.')));
   }
   function renderUp() {
-    var up = state.board.escalated_to_me || [], box = $('upbox');
+    // 올림은 서버가 최대 범위로 준다 — 화면은 지금 고른 범위의 광고주 것만(표 거르기·찾기와는 상관없다)
+    var shown = {};
+    (state.board.rows || []).forEach(function (r) { shown[r.possibility_id] = true; });
+    var up = (state.board.escalated_to_me || []).filter(function (e) { return shown[e.possibility_id] === true; }), box = $('upbox');
     box.hidden = !up.length;
     $('upTitle').textContent = '⬆ 나에게 올라온 🟡 ' + up.length + '건';
     $('upToggle').textContent = state.upOpen ? '접기' : '펼치기';
@@ -1701,6 +1704,8 @@
       if (!list.length && r && r.white_detail) {
         body.push(h('div', { class: 'adv-note' }, h('b', null, WHITE_TEXT[r.white_detail] || '점검 못 함'),
                     WHITE_TODO[r.white_detail] ? h('span', { class: 'todo' }, '할 일 · ' + WHITE_TODO[r.white_detail]) : null));
+      } else if (!list.length) {
+        body.push(h('div', { class: 'adv-note' }, '열린 이슈 줄이 없습니다 — 광고주 이름을 눌러 오늘 점검 결과를 확인해 주세요'));
       }
       return h('div', { class: 'adv', 'data-pid': pid }, head, body);
     });

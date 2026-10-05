@@ -13,7 +13,7 @@ async function shot(p, name) { if (cfg.shots) await p.screenshot({ path: cfg.sho
 function ok(name, pass, detail) { results.push({ name, pass: !!pass, detail: detail === undefined ? null : detail }); }
 
 async function newCtx(browser, opts) {
-  const ctx = await browser.newContext(Object.assign({ locale: 'ko-KR', timezoneId: 'Asia/Seoul' }, opts || {}));
+  const ctx = await browser.newContext(Object.assign({ locale: 'ko-KR', timezoneId: 'Asia/Seoul' }, opts && opts.context || {}));
   const log = { requests: [], external: [], csp: [], errors: [], statuses: [] };
   await ctx.route('**/*', (route) => {
     const u = route.request().url();
@@ -21,6 +21,10 @@ async function newCtx(browser, opts) {
     log.external.push(u);
     return route.abort();
   });
+  // 개편(2026-10-06): 「전체 광고주 보기」는 접혀서 시작한다 — 표를 다루는 이 시험은 펼친 채로 본다(접힘·숫자 칸 누르기는 아래 「가짜 값」에서 본다)
+  if (!(opts && opts.foldClosed)) {
+    await ctx.addInitScript(() => document.addEventListener('DOMContentLoaded', () => { const d = document.getElementById('allFold'); if (d) d.open = true; }));
+  }
   await ctx.addInitScript(() => {
     window.__csp = [];
     document.addEventListener('securitypolicyviolation', (e) => { window.__csp.push(e.violatedDirective + ' ' + e.blockedURI); });
@@ -96,15 +100,22 @@ async function hygiene(tag, p, log, firstNavUrl) {
       const board = (await api(p, '/board?selection=all&attention=0')).body;
       const kv = await p.$$eval('#kpis .kpi .v', (els) => els.map((e) => e.textContent));
       const c = board.counts;
-      ok('대표: 숫자 6칸 = 서버 숫자', JSON.stringify(kv) === JSON.stringify([c.total, c.needs_attention, c.red, c.yellow, c.green, c.white].map(fmt)), kv);
+      const tc = board.today_counts;
+      ok('대표: 숫자 4칸 = 서버 숫자(오늘 볼 곳 · 문제없음 · 연결 안 됨 · 점검 못 함)', JSON.stringify(kv) === JSON.stringify([tc.need, tc.ok, tc.unlinked, tc.unchecked].map(fmt)), kv);
+      ok('대표: 숫자 4칸은 서로 겹치지 않고 더하면 전체', tc.need + tc.ok + tc.unlinked + tc.unchecked === c.total, [tc, c.total]);
       await p.click('#tblChips .chip[data-f="all"]');
       const drawn = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => [Number(e.getAttribute('data-pid')), e.getAttribute('data-color'), e.querySelector('.sig').className]));
       const want = board.rows.map((r) => [r.possibility_id, r.verdict.color, 'sig ' + r.verdict.color]).sort((a, b) => a[0] - b[0]);
       ok('대표: 표의 색 = 서버 판정(한 줄씩)', JSON.stringify(drawn.slice().sort((a, b) => a[0] - b[0])) === JSON.stringify(want), { drawn, want });
       const iss = await p.$$eval('#issues .iss', (els) => els.map((e) => Number(e.getAttribute('data-issue'))));
-      ok('대표: 오늘의 이슈 줄 = 서버 이슈 줄', JSON.stringify(iss) === JSON.stringify(board.issue_rows.map((r) => r.issue_id)), { iss });
+      ok('대표: 오늘 볼 광고주의 이슈 줄 = 서버 이슈 줄(광고주마다 묶음)', JSON.stringify(iss.slice().sort((a, b) => a - b)) === JSON.stringify(board.issue_rows.map((r) => r.issue_id).sort((a, b) => a - b)), { iss });
+      const advs = await p.$$eval('#issues .adv', (els) => els.map((e) => Number(e.getAttribute('data-pid'))));
+      const lookPids = board.rows.filter((r) => r.look_today).map((r) => r.possibility_id);
+      ok('대표: 오늘 볼 광고주 = 서버가 「오늘 볼 곳」이라 한 광고주(+ 열린 이슈가 있는 곳)', lookPids.every((x) => advs.includes(x)) &&
+        advs.every((x) => lookPids.includes(x) || board.issue_rows.some((r) => r.possibility_id === x)) && lookPids.length === tc.need, { advs, lookPids });
       const need = await p.$$eval('#kpis .kpi', (els) => els.length);
-      ok('대표: 숫자 칸 6개', need === 6, need);
+      ok('대표: 숫자 칸 4개', need === 4, need);
+      ok('대표: 사람별 처리 현황(대표만)', await p.isVisible('#peopleCard') && (await p.$$eval('#people tr', (els) => els.length)) === board.people_summary.length);
       const iw = await p.textContent('#iwan');
       ok('대표: 이관 띠에 서버 이관 수', iw.includes('이관됨 ' + fmt(board.links.listed)) && iw.includes('이관 안 된 번호 ' + fmt(board.links.unlinked_numbers)), iw);
       await p.click('#iwan .ichip:has-text("이관 안 된 번호")');
@@ -283,7 +294,7 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await p.waitForSelector('#watchSync[data-status="current"]');
       await p.waitForSelector('#s-watch.on #kpis .kpi');
       ok('경합: 다시 확인 성공 뒤에만 게이트를 열고 숫자 칸이 나온다',
-        await p.locator('#s-watch.view-unverified').count() === 0 && (await p.$$eval('#kpis .kpi', (els) => els.length)) === 6);
+        await p.locator('#s-watch.view-unverified').count() === 0 && (await p.$$eval('#kpis .kpi', (els) => els.length)) === 4);
       await p.click('#tblChips .chip[data-f="all"]');
       await p.fill('#q', '가');
       await p.fill('#q', '');
@@ -300,12 +311,12 @@ async function hygiene(tag, p, log, firstNavUrl) {
         await p.locator('#s-watch.view-unverified').count() === 0 && await p.locator('#tbody tr[data-pid]').count() > 0);
       log.statuses = log.statuses.filter((x) => !(x[0] === 503 && x[1].startsWith('/api/naver-auto/board')));   // 일부러 낸 실패
       // 빠른 범위 바꾸기 — 늦게 오는 「내 담당만」 답이 「전체」를 덮지 않는다
-      const all = (await api(p, '/board?selection=all&attention=0')).body.counts;
+      const all = (await api(p, '/board?selection=all&attention=0')).body.today_counts;
       await p.selectOption('#scope', 'me');
       await p.selectOption('#scope', 'all');
       await p.waitForTimeout(1500);
       const kv = await p.$$eval('#kpis .kpi .v', (els) => els.map((e) => e.textContent));
-      ok('경합: 범위를 빨리 바꿔도 마지막 고른 범위의 숫자', JSON.stringify(kv) === JSON.stringify([all.total, all.needs_attention, all.red, all.yellow, all.green, all.white].map(fmt)) && (await p.inputValue('#scope')) === 'all', kv);
+      ok('경합: 범위를 빨리 바꿔도 마지막 고른 범위의 숫자', JSON.stringify(kv) === JSON.stringify([all.need, all.ok, all.unlinked, all.unchecked].map(fmt)) && (await p.inputValue('#scope')) === 'all', kv);
       // 두 번 누름 · 누른 뒤 다른 화면 — 답이 늦게 와도 설정 화면에 머문다
       await ctx.route('**/api/naver-auto/issues/*/ack', async (route) => { await delay(700); return route.continue(); });
       const before = log.requests.length;
@@ -477,10 +488,12 @@ async function hygiene(tag, p, log, firstNavUrl) {
 
     // ── 서버 값을 그대로 그리나 — 관제 판 응답을 일부러 다른 숫자·앞뒤가 안 맞는 줄로 바꿔 넣는다 ──
     {
-      const { ctx, log } = await newCtx(browser);
+      const { ctx, log } = await newCtx(browser, { foldClosed: true });
       const fake = {
         band: { today: '2026-09-29', deadline_passed: true, runs: [], pairing_at: null, pairing_today: true, org_freshness: 'fresh', org_generated_at: null, stage_as_of: null },
         counts: { red: 5, yellow: 3, green: 7, white: 2, needs_attention: 9, total: 17 },
+        today_counts: { need: 11, need_red: 4, ok: 3, unlinked: 2, unchecked: 1 },
+        white_breakdown: { unlinked: { id_missing: 2 }, unchecked: { weekly_watch: 1 } }, account_confirm: 0,
         links: { listed: 4, missing: 6, broken: 8, not_linked: 10, none: 1, pending: 0, unlinked_numbers: 12 },
         issues: [], done_rows: [], escalated_to_me: [], attention_only: false, selection: 'all',
         issue_rows: [901, 902].map((n) => ({ issue_id: n, possibility_id: 901, name: '예시가', owner: { name: '담당가' }, relation: 'all',
@@ -490,16 +503,16 @@ async function hygiene(tag, p, log, firstNavUrl) {
         rows: [
           { possibility_id: 901, name: '예시가', stage: '진행중', relation: 'all', owner: { name: '담당가', team_name: '팀가' },
             verdict: { color: 'green', needs_attention: false, reasons: [], white_reason: null }, open_red: 3, open_yellow: 0,
-            account_unconfirmed: false, link: 'listed', yday_spend: 1200, bizmoney: 50000 },
+            account_unconfirmed: false, link: 'listed', yday_spend: 1200, bizmoney: 50000, look_today: false, today_group: 'ok', white_detail: null },
           { possibility_id: 902, name: '예시나', stage: '환불중', relation: 'all', owner: { name: '담당가', team_name: '팀가' },
             verdict: { color: 'white', needs_attention: true, reasons: ['key_rejected'], white_reason: 'key_rejected' }, open_red: 0, open_yellow: 0,
-            account_unconfirmed: false, link: 'broken', yday_spend: null, bizmoney: null },
+            account_unconfirmed: false, link: 'broken', yday_spend: null, bizmoney: null, look_today: true, today_group: 'need', white_detail: 'key_rejected' },
           { possibility_id: 903, name: '예시다', stage: '계약만료', relation: 'all', owner: { name: null, team_name: null },
             verdict: { color: 'red', needs_attention: true, reasons: ['open-red'], white_reason: null }, open_red: 0, open_yellow: 0,
-            account_unconfirmed: true, link: 'missing', yday_spend: 0, bizmoney: 0 },
+            account_unconfirmed: true, link: 'missing', yday_spend: 0, bizmoney: 0, look_today: true, today_group: 'need', white_detail: null },
           { possibility_id: 904, name: '예시라', stage: '진행중', relation: 'all', owner: { name: '담당가', team_name: '팀가' },
             verdict: { color: 'green', needs_attention: false, reasons: [], white_reason: null }, open_red: 0, open_yellow: 0,
-            account_unconfirmed: false, link: 'listed', unlinked: true, yday_spend: 10, bizmoney: 20 }
+            account_unconfirmed: false, link: 'listed', unlinked: true, yday_spend: 10, bizmoney: 20, look_today: false, today_group: 'unlinked', white_detail: null }
         ]
       };
       await ctx.route('**/api/naver-auto/board*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fake) }));
@@ -525,12 +538,21 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await enter(p, url, cfg.sso.ceo2);
       await p.waitForSelector('#s-watch.on #kpis .kpi');
       const kv = await p.$$eval('#kpis .kpi .v', (els) => els.map((e) => e.textContent));
-      ok('가짜 값: 숫자 6칸이 서버 값 그대로(전체 · 확인 필요 · 긴급 · 주의 · 정상 · 점검 불가 순)', JSON.stringify(kv) === JSON.stringify(['17', '9', '5', '3', '7', '2']), kv);
+      ok('가짜 값: 숫자 4칸이 서버 값 그대로(오늘 볼 곳 · 문제없음 · 연결 안 됨 · 점검 못 함 순)', JSON.stringify(kv) === JSON.stringify(['11', '3', '2', '1']), kv);
+      ok('가짜 값: 전체 광고주 표는 접혀서 시작한다', (await p.$eval('#allFold', (d) => d.open)) === false);
+      await p.click('#kpis .kpi.cut');
+      ok('가짜 값: 「🔌 연결 안 됨」 칸을 누르면 접힌 표가 열리고 서버가 연결 안 됨이라 한 줄만', (await p.$eval('#allFold', (d) => d.open)) === true &&
+        JSON.stringify(await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => e.getAttribute('data-pid')))) === JSON.stringify(['904']));
+      const advOrder = await p.$$eval('#issues .adv', (els) => els.map((e) => e.getAttribute('data-pid')));
+      ok('가짜 값: 오늘 볼 광고주 = 서버 「오늘 볼 곳」 + 열린 이슈 줄 · 긴급(서버 색) 먼저', JSON.stringify(advOrder) === JSON.stringify(['903', '901', '902']), advOrder);
+      const note902 = await p.textContent('#issues .adv[data-pid="902"]');
+      ok('가짜 값: 이슈 없이 오늘 볼 곳은 서버 까닭과 할 일 한 줄', note902.includes('읽기 거절 · 이관 남음') && note902.includes('할 일 · 광고주에게 우리 회사 권한(운영관리)이 바뀌었는지 확인 요청'), note902);
       await p.click('#tblChips .chip[data-f="all"]');
       const iw = await p.textContent('#iwan');
       ok('가짜 값: 이관 띠가 서버 값 그대로', ['이관됨 4', '🔌 이관 빠짐 8', '오늘 목록에 없음 6', '이관 안 된 번호 12'].every((t) => iw.includes(t)), iw);
-      const head = await p.textContent('#issues .cause');
-      ok('가짜 값: 묶음 머리 「곳」은 광고주 수(한 광고주의 계정 둘 = 1곳 · 계정 2개)', head.includes('1곳 · 계정 2개'), head);
+      const head = await p.textContent('#issues .adv[data-pid="901"] .adv-head');
+      ok('가짜 값: 광고주 머리에 그 광고주의 열린 이슈 수(한 광고주의 계정 둘 = 한 덩어리 · 이슈 2건)', head.includes('예시가') && head.includes('이슈 2건') &&
+        (await p.$$eval('#issues .adv[data-pid="901"] .iss', (els) => els.length)) === 2, head);
       const note = await p.$$eval('#issues .iss .blocked-note', (els) => els.map((e) => e.textContent));
       const dis = await p.$$eval('#issues .iss button[disabled]', (els) => els.length);
       // 2026-10-02 명세: 긴급 예외를 팀장 권한으로 안내하지 않는다.
@@ -542,7 +564,7 @@ async function hygiene(tag, p, log, firstNavUrl) {
       ok('가짜 값: ⚪ 사유 글자 · 확인 필요 · 이관 빠짐', drawn.some((d) => d[0] === '902' && d[1] === 'sig white' && d[2] === '읽기 거절 · 이관 남음' && d[3] === '확인 필요' && d[4] === '🔌 이관 빠짐'), drawn);
       ok('가짜 값: 열린 이슈 0 이어도 서버가 🔴 라면 🔴', drawn.some((d) => d[0] === '903' && d[1] === 'sig red' && d[4] === '오늘 목록에 없음'), drawn);
       ok('가짜 값: 이관 칸에 「+ 이관 안 된 번호」(이관됨과 함께)', drawn.some((d) => d[0] === '904' && d[4].includes('이관됨') && d[4].includes('+ 이관 안 된 번호')), drawn);
-      await p.click('#kpis .kpi.white');
+      await p.click('#tblChips .chip[data-f="white"]');
       const wv = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => e.getAttribute('data-pid')));
       ok('가짜 값: 「점검 불가」 칸은 서버 색이 ⚪ 인 줄만', JSON.stringify(wv) === JSON.stringify(['902']), wv);
       await p.click('#iwan .ichip:has-text("이관 안 된 번호")');

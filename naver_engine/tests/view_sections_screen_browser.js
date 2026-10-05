@@ -6,6 +6,8 @@ const cfg = JSON.parse(process.argv[2]);
 (async () => {
   const browser = await chromium.launch(cfg.executablePath ? {executablePath: cfg.executablePath} : {});
   const ctx = await browser.newContext({locale: 'ko-KR', timezoneId: 'Asia/Seoul'});
+  // 개편(2026-10-06): 「전체 광고주 보기」는 접혀서 시작한다 — 표를 다루는 이 시험은 펼친 채로 본다
+  await ctx.addInitScript(() => document.addEventListener('DOMContentLoaded', () => { const d = document.getElementById('allFold'); if (d) d.open = true; }));
   const page = await ctx.newPage(), errors = [], external = [], writes = [], checks = [];
   page.setDefaultTimeout(10000);
   await ctx.route('**/*', route => {
@@ -202,6 +204,8 @@ const cfg = JSON.parse(process.argv[2]);
 
     await control('near-midnight');
     const midnightCtx = await browser.newContext({locale: 'ko-KR', timezoneId: 'Asia/Seoul'});
+    // 개편(2026-10-06): 「전체 광고주 보기」는 접혀서 시작한다 — 표를 다루는 이 시험은 펼친 채로 본다
+    await midnightCtx.addInitScript(() => document.addEventListener('DOMContentLoaded', () => { const d = document.getElementById('allFold'); if (d) d.open = true; }));
     await midnightCtx.route('**/*', route => {
       if (route.request().url().startsWith(cfg.base + '/')) return route.continue();
       external.push(route.request().url()); return route.abort();

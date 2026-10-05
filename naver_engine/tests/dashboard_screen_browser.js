@@ -7,6 +7,8 @@ const cfg = JSON.parse(process.argv[2]);
 (async () => {
   const browser = await chromium.launch();
   const ctx = await browser.newContext({locale: 'ko-KR', timezoneId: 'Asia/Seoul'});
+  // 개편(2026-10-06): 「전체 광고주 보기」는 접혀서 시작한다 — 표를 다루는 이 시험은 펼친 채로 본다
+  await ctx.addInitScript(() => document.addEventListener('DOMContentLoaded', () => { const d = document.getElementById('allFold'); if (d) d.open = true; }));
   const page = await ctx.newPage(), errors = [], external = [], writes = [];
   await ctx.route('**/*', route => {
     if (route.request().url().startsWith(cfg.base + '/')) return route.continue();
@@ -79,29 +81,37 @@ const cfg = JSON.parse(process.argv[2]);
     await page.clock.install({time: new Date(cfg.now)});
     await page.goto(cfg.base + '/naver/');
     await page.waitForSelector('#s-watch.on #kpis .kpi');
-    assert.equal(await page.locator('#kpis .kpi').count(), 6, '전체 보기 포함 관제 카드 6개');
+    assert.equal(await page.locator('#kpis .kpi').count(), 4, '개편 숫자 4칸(오늘 볼 곳 · 문제없음 · 연결 안 됨 · 점검 못 함)');
     await page.click('#doneToggle');
     async function assertSelection(filter, query = '') {
       const expected = board.rows.filter(row => (!query || row.name.includes(query)) &&
         (filter === 'all' || (filter === 'need' ? row.verdict.needs_attention : row.verdict.color === filter)));
       const ids = expected.map(row => row.possibility_id).sort();
       assert.deepEqual((await page.locator('#tbody tr[data-pid]').evaluateAll(rows => rows.map(row => Number(row.dataset.pid)))).sort(), ids);
-      const open = expected.map(row => 100 + board.rows.indexOf(row)).sort();
-      const done = expected.map(row => 200 + board.rows.indexOf(row)).sort();
+      // 개편(2026-10-06): 오늘 볼 광고주 · 오늘 풀린 것 · 올림 목록은 표 거르기·찾기와 상관없이 고른 범위 전부(서버 그대로)
+      const open = board.rows.map((row, i) => 100 + i).sort();
+      const done = board.rows.map((row, i) => 200 + i).sort();
       assert.deepEqual((await page.locator('#issues [data-issue]').evaluateAll(rows => rows.map(row => Number(row.dataset.issue)))).sort(), open);
       assert.deepEqual((await page.locator('#doneList [data-issue]').evaluateAll(rows => rows.map(row => Number(row.dataset.issue)))).sort(), done);
-      assert.deepEqual((await page.locator('#upbox li button').allTextContents()).sort(), expected.map(row => row.name).sort());
-      assert.doesNotMatch(await page.textContent('#upbox'), /선택 범위 밖 상향/);
+      assert.deepEqual((await page.locator('#upbox li button').allTextContents()).sort(), board.rows.map(row => row.name).sort());
+      assert.doesNotMatch(await page.textContent('#upbox'), /선택 범위 밖 상향/, '고른 범위의 광고주가 아닌 올림은 보이지 않는다');
     }
-    for (const filter of ['all', 'need', 'red', 'yellow', 'green', 'white']) {
-      await page.click('#kpis .kpi.' + filter);
-      assert.equal(await page.getAttribute('#kpis .kpi.' + filter, 'aria-pressed'), 'true');
-      await assertSelection(filter);
+    // 숫자 칸(문제없음 · 연결 안 됨 · 점검 못 함)을 누르면 전체 광고주 표가 서버 today_group 으로 걸러진다
+    async function assertGroup(group) {
+      const want = board.rows.filter(row => row.today_group === group).map(row => row.possibility_id).sort();
+      assert.deepEqual((await page.locator('#tbody tr[data-pid]').evaluateAll(rows => rows.map(row => Number(row.dataset.pid)))).sort(), want);
     }
-    await page.focus('#kpis .kpi.red');
+    for (const [cls, group] of [['okk', 'ok'], ['cut', 'unlinked'], ['nil', 'unchecked']]) {
+      await page.click('#kpis .kpi.' + cls);
+      assert.equal(await page.getAttribute('#kpis .kpi.' + cls, 'aria-pressed'), 'true');
+      assert.equal(await page.locator('#allFold').evaluate(d => d.open), true);
+      await assertGroup(group);
+    }
+    await page.focus('#kpis .kpi.cut');
     await page.keyboard.press('Enter');
-    await assertSelection('red');
-    assert.equal(await page.getAttribute('#kpis .kpi.red', 'aria-pressed'), 'true');
+    await assertGroup('unlinked');
+    assert.equal(await page.getAttribute('#kpis .kpi.cut', 'aria-pressed'), 'true');
+    assert.equal(await page.getAttribute('#kpis .kpi.need', 'aria-pressed'), null, '오늘 볼 곳은 거르기가 아니라 아래 목록으로 가는 단추');
     for (const filter of ['all', 'need', 'red', 'yellow', 'green', 'white']) {
       await page.click('#tblChips [data-f="' + filter + '"]');
       await assertSelection(filter);

@@ -8,6 +8,8 @@ const cfg=JSON.parse(process.argv[2]);
 (async()=>{
   const browser=await chromium.launch();
   const context=await browser.newContext({locale:'ko-KR',timezoneId:'Asia/Seoul'});
+  // 개편(2026-10-06): 「전체 광고주 보기」는 접혀서 시작한다 — 표를 다루는 이 시험은 펼친 채로 본다
+  await context.addInitScript(() => document.addEventListener('DOMContentLoaded', () => { const d = document.getElementById('allFold'); if (d) d.open = true; }));
   const page=await context.newPage(), errors=[],external=[],writes=[];
   let code=cfg.ceo;
   await context.route('**/*',route=>{
