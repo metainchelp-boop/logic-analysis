@@ -67,6 +67,11 @@ _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/re
                                 (GET, "/collection/status"), (POST, "/management/update"),
                                 (POST, "/management/collect"), (POST, "/reports/review")})
 _VERIFICATION_CLIENT = re.compile(r"/clients/[0-9]{1,18}")
+# 실사용 손길(2026-10-05 대표 지시) — 제한판 위에서 이름 붙인 것만 연다. 누가 하는지는 각 handler 판정 그대로.
+# 짝 아님·거두기·미리보기·새 경로는 계속 막는다(연결 정보는 전산 업체 계정 화면 한 곳에서 고친다).
+_OWNER_ACTION_PATHS = frozenset({"/bell/read-all", "/settings/thresholds",
+                                 "/holds/org/confirm", "/holds/stages/confirm", "/holds/accounts/confirm"})
+_OWNER_ACTION_ROUTE = re.compile(r"/issues/[0-9]{1,18}/(?:ack|resolve|except)|/bell/[0-9]{1,18}/read")
 BODY_MAX = 64 * 1024                 # ③ 중계 상한과 같다(S12)
 QUERY_MAX = 2048
 LOGIN_WINDOW = 60.0                  # 로그인은 이 초 안에
@@ -248,7 +253,7 @@ class App:
                  previewer: Optional[Callable[[Any], List[str]]] = None, login_max: int = LOGIN_MAX,
                  login_window: float = LOGIN_WINDOW, monotonic: Optional[Callable[[], float]] = None,
                  login_source_max: int = LOGIN_SOURCE_MAX, login_token_max: int = LOGIN_TOKEN_MAX,
-                 owner_verification: bool = False, verified_linking: bool = False,
+                 owner_verification: bool = False, verified_linking: bool = False, owner_actions: bool = False,
                  request_collection=None, collection_status=None, runtime_status=None) -> None:
         if not isinstance(signer, SE.TokenSigner):
             raise TypeError("signer 는 TokenSigner 여야 합니다(비밀값 없이 시작하지 않는다)")
@@ -256,10 +261,15 @@ class App:
             raise TypeError("owner_verification 은 참/거짓이어야 합니다")
         if type(verified_linking) is not bool:
             raise TypeError("verified_linking 은 참/거짓이어야 합니다")
+        if type(owner_actions) is not bool:
+            raise TypeError("owner_actions 는 참/거짓이어야 합니다")
+        if owner_actions and not owner_verification:
+            raise ValueError("owner_actions 는 제한판(owner_verification) 위에서만 씁니다")
         self._open_read, self._write_fn, self._signer, self._profiles = open_read, write, signer, profiles
         # 배선/응답 호환 이름 유지: 읽기 전용 검증판도 매 요청의 기존 SC 범위를 그대로 따른다.
         self._owner_verification = owner_verification
         self._verified_linking = verified_linking
+        self._owner_actions = owner_actions
         self._request_collection, self._collection_status = request_collection, collection_status
         self._runtime_status = runtime_status
         self._view_sync = VS.ViewSync()
@@ -326,7 +336,9 @@ class App:
         if self._owner_verification:
             allowed = ((method == GET and (sub in _VERIFICATION_GETS or _VERIFICATION_CLIENT.fullmatch(sub)))
                        or (method == POST and sub in _VERIFICATION_SESSIONS)
-                       or (self._verified_linking and (method, sub) in _VERIFIED_REQUESTS))
+                       or (self._verified_linking and (method, sub) in _VERIFIED_REQUESTS)
+                       or (self._owner_actions and method == POST
+                           and (sub in _OWNER_ACTION_PATHS or _OWNER_ACTION_ROUTE.fullmatch(sub) is not None)))
             if not allowed:
                 # 본문 파싱·조직 조회·감사·handler 호출 전 차단: 업무 쓰기나 미리보기 호출 0.
                 raise HttpError(403, "verification-read-only")
@@ -537,6 +549,8 @@ class App:
         out["bell_unread"] = W.bell(v.store, v.idx, now)["unread"]
         if self._owner_verification:
             out["owner_verification"] = True
+        if self._owner_actions:
+            out["owner_actions"] = True
         out["verified_linking"] = self._verified_linking and v.scope.kind in (SC.ALL, SC.MINE)
         return 200, out
 

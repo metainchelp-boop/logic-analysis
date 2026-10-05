@@ -195,6 +195,7 @@ def run(config, env, *, stop=None):
         # 읽기 연결은 요청 스레드에서 열고 닫으며, 쓰기는 기존 단일 소유자 큐만 지난다.
         web = WEB.App(open_read=lambda: S.open_reader(config.db), write=writer.call,
                       signer=signer, profiles=profiles, owner_verification=True, verified_linking=True,
+                      owner_actions=True,
                       request_collection=scheduler.request_collection,
                       collection_status=scheduler.collection_status,
                       runtime_status=scheduler.runtime_status) if config.web_enabled else None

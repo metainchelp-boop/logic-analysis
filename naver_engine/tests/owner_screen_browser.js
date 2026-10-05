@@ -22,7 +22,7 @@ const cfg = JSON.parse(process.argv[2]);
     await page.clock.install({ time: new Date(cfg.now) });
     await page.goto(cfg.base + '/naver/');
     await page.waitForSelector('#s-blocked.on');
-    assert.ok((await page.textContent('#b-p')).includes('네이버 관제(읽기 전용)'));
+    assert.ok((await page.textContent('#b-p')).includes('「광고 스튜디오 › 네이버 관제」'));
     await page.route('**/naver/sso-bootstrap.js', route => route.fulfill({ contentType: 'application/javascript',
       body: 'window.__metaincSso={started:true,legacyPresent:false,consume:()=>Promise.resolve(' +
         JSON.stringify({ code: cfg.code, codeVerifier: 'V'.repeat(42) + 'A' }) + ')};' }));

@@ -19,7 +19,7 @@ class OwnerScreenCopyTest(unittest.TestCase):
     def test_login_help_uses_separate_naver_menu(self):
         source = (PAGE / 'app.js').read_text()
         self.assertNotIn('「광고 센터」', source)
-        self.assertIn('「광고 스튜디오 › 네이버 관제(읽기 전용)」', source)
+        self.assertIn('「광고 스튜디오 › 네이버 관제」', source)
 
     def test_read_only_copy_distinguishes_scheduled_checks_and_disabled_alerts(self):
         source = (PAGE / 'app.js').read_text()
