@@ -112,8 +112,9 @@ const cfg = JSON.parse(process.argv[2]);
     await poll({...base},'green',/수집/);
 
     await page.evaluate(() => { window.__runtimeNode=document.querySelector('#runtimeStatus'); });
-    for (const destination of ['/naver/','/naver/reports','/naver/transfers','/naver/automation','/naver/dashboard']) {
-      await page.click('[data-go="' + destination + '"]');
+    for (const [destination, via] of [['/naver/','.top .menu'],['/naver/dashboard','.top .menu'],['/naver/reports','#s-dashboard.on .subtabs'],
+        ['/naver/dashboard','#s-reports.on .subtabs'],['/naver/transfers','.top .menu']]) {
+      await page.click(via + ' [data-go="' + destination + '"]');
       await page.waitForURL(cfg.base + destination);
       assert.equal(await status.isVisible(),true);
       assert.equal(await page.evaluate(() => window.__runtimeNode===document.querySelector('#runtimeStatus')),true);

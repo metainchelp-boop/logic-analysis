@@ -57,7 +57,8 @@ main{width:100%;min-width:0;margin:0 auto;padding:18px 16px 60px}
 .screen,.card,.box,.pane,.spane{min-width:0;overflow-wrap:anywhere}
 .screen{display:none}
 .screen.on{display:block}
-.screen.view-unverified>:not(.view-sync){display:none}
+/* 서버 확인 전에는 자료를 숨긴다 — 제목·하위 탭(자료 없음)은 남겨 다른 하위 탭으로 옮겨 갈 수 있게 */
+.screen.view-unverified>:not(.view-sync):not(.screen-head){display:none}
 .view-sync{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;color:var(--sub);margin:0 0 14px;line-height:1.7}
 .view-sync[data-status="stale"],.view-sync[data-status="error"]{color:var(--red)}
 h1.pt{font-size:20px;font-weight:800;margin-bottom:4px;text-wrap:balance}

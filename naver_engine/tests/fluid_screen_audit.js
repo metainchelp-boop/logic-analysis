@@ -20,16 +20,20 @@ async function assertNoHorizontalOverflow(page, label) {
 
 async function auditFluidScreens(page, cfg) {
   const widths = [320, 375, 768, 1024, 1440, 1920];
+  // 메뉴(대표 4) · 📊 안의 하위 탭 · 메뉴에서 뺀 🤖 는 주소로만 연다(주소는 남김)
   const screens = [
-    ['dashboard', '/naver/dashboard', '#dashboardMetrics .dashboard-metric'],
-    ['watch', '/naver/', '#kpis .kpi'],
-    ['automation', '/naver/automation', '#s-automation .auto-soon'],
-    ['reports', '/naver/reports', '#reportsStatus'],
-    ['transfers', '/naver/transfers', '#inventoryRows tr'],
-    ['settings', '/naver/settings', '#sp-th table']
+    ['watch', '/naver/', '#kpis .kpi', '.top .menu'],
+    ['dashboard', '/naver/dashboard', '#dashboardMetrics .dashboard-metric', '.top .menu'],
+    ['reports', '/naver/reports', '#reportsStatus', '#s-dashboard.on .subtabs'],
+    ['transfers', '/naver/transfers', '#inventoryRows tr', '.top .menu'],
+    ['settings', '/naver/settings', '#sp-th table', '.top .menu'],
+    ['automation', '/naver/automation', '#s-automation .auto-soon', null]
   ];
-  for (const [screen, route, ready] of screens) {
-    await page.locator('.top .menu [data-go="' + route + '"]').click();
+  assert.equal(await page.locator('.top .menu [data-go="/naver/automation"], .top .menu [data-go="/naver/reports"]').count(), 0,
+    '🤖 자동화·📄 보고서는 메뉴에 없다');
+  for (const [screen, route, ready, via] of screens) {
+    if (via) await page.locator(via + ' [data-go="' + route + '"]').click();
+    else await page.evaluate(path => { history.pushState(null, '', path); dispatchEvent(new PopStateEvent('popstate')); }, route);
     await page.locator('#s-' + screen + '.on').waitFor();
     await page.locator(ready).first().waitFor();
     if (screen === 'reports') {
@@ -119,7 +123,8 @@ async function auditFluidScreens(page, cfg) {
     return route.fulfill({ json: { items: [prior], next_before_report_id: null } });
   });
   try {
-    await page.locator('.top .menu [data-go="/naver/reports"]').click();
+    await page.locator('.top .menu [data-go="/naver/dashboard"]').click();
+    await page.locator('#s-dashboard.on .subtabs [data-go="/naver/reports"]').click();
     await page.locator('#reportMonthly').click();
     await page.locator('[data-report="99003"]').waitFor();
     for (const width of widths) {

@@ -45,11 +45,11 @@
   </section>
 
   <section class="screen" id="s-dashboard" aria-labelledby="t-dashboard">
+    <div class="screen-head"><h1 class="pt" id="t-dashboard">📊 성과·보고서</h1>
+      <nav class="subtabs" aria-label="성과·보고서 보기"><button type="button" class="on" aria-current="page" data-go="/naver/dashboard">이번 달 성과</button><button type="button" data-go="/naver/reports">광고주별 보고서</button></nav></div>
     <p class="view-sync" id="dashboardSync" role="status" aria-live="polite"></p>
     <div class="dashboard-heading">
-      <div><h1 class="pt" id="t-dashboard">📊 성과·보고서</h1>
-        <nav class="subtabs" aria-label="성과·보고서 보기"><button type="button" class="on" aria-current="page" data-go="/naver/dashboard">이번 달 성과</button><button type="button" data-go="/naver/reports">광고주별 보고서</button></nav>
-        <p class="ps">월초부터 어제까지, 현재 권한 범위의 광고 성과입니다. 확인하지 못한 자료는 0으로 표시하지 않습니다.</p></div>
+      <div><p class="ps">월초부터 어제까지, 현재 권한 범위의 광고 성과입니다. 확인하지 못한 자료는 0으로 표시하지 않습니다.</p></div>
       <button type="button" class="btn" id="dashboardReload">자료 새로고침</button>
     </div>
     <div class="dashboard-source card">
@@ -164,10 +164,10 @@
 
   <!-- 📄 보고서 -->
   <section class="screen" id="s-reports" aria-labelledby="t-reports">
+    <div class="screen-head"><h1 class="pt" id="t-reports">📊 성과·보고서</h1>
+      <nav class="subtabs" aria-label="성과·보고서 보기"><button type="button" data-go="/naver/dashboard">이번 달 성과</button><button type="button" class="on" aria-current="page" data-go="/naver/reports">광고주별 보고서</button></nav></div>
     <p class="view-sync" id="reportsSync" role="status" aria-live="polite"></p>
-    <div class="report-heading"><div><h1 class="pt" id="t-reports">📊 성과·보고서</h1>
-      <nav class="subtabs" aria-label="성과·보고서 보기"><button type="button" data-go="/naver/dashboard">이번 달 성과</button><button type="button" class="on" aria-current="page" data-go="/naver/reports">광고주별 보고서</button></nav>
-      <p class="ps">관리 중인 광고 계정을 찾아 주간·월간 성과를 확인하고 PDF로 내려받으세요. 계정별 보기가 기본이며 업체 전체 합산도 선택할 수 있습니다. 여기서 승인·게시·전송하지 않습니다.</p></div>
+    <div class="report-heading"><div><p class="ps">관리 중인 광고 계정을 찾아 주간·월간 성과를 확인하고 PDF로 내려받으세요. 계정별 보기가 기본이며 업체 전체 합산도 선택할 수 있습니다. 여기서 승인·게시·전송하지 않습니다.</p></div>
       <button type="button" class="btn sm" id="reportsReload">보고서 새로고침</button></div>
     <div id="reportFilters" class="card nr-filters"></div>
     <div class="card report-source" id="reportsSource"><p id="reportsSchedule"></p><p id="reportsStatus" role="status" aria-live="polite"></p></div>

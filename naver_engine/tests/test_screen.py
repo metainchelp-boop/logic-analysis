@@ -187,7 +187,7 @@ class TextRulesTest(unittest.TestCase):
         self.assertNotIn("else openWatch()", reload)                   # 다른 화면으로 옮겨 갔으면 관제로 끌고 오지 않는다
         for key in ("once('issue:' + i.issue_id", "once('link:' + r.ref", "once('th'", "once('bell-all'"):
             self.assertIn(key, CODE)
-        once = CODE[CODE.index("function once(key, btn, run) {"):CODE.index("function toast(t)")]
+        once = CODE[CODE.index("function once(key, btn, run) {"):CODE.index("function toast(t, kind)")]
         self.assertIn("if (state.busy[key]) return;", once)
         self.assertIn("btn.disabled = true", once)
 

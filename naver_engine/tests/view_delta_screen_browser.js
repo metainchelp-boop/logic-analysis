@@ -170,7 +170,7 @@ const cfg = JSON.parse(process.argv[2]);
 
     // 실제 대시보드 응답과 재진입 검증. 숨긴 탭의 행은 새 성공 응답 전 보이지 않는다.
     const dashboardFirst = page.waitForResponse(response => response.url().includes('/dashboard?'));
-    await page.click('[data-go="/naver/dashboard"]'); await settled('current', page, 'dashboard');
+    await page.click('.top .menu [data-go="/naver/dashboard"]'); await settled('current', page, 'dashboard');
     const dashFull = await dashboardFirst;
     const dashboardSecond = page.waitForResponse(response => response.url().includes('/dashboard?'));
     await page.click('#dashboardReload'); await settled('current', page, 'dashboard');
@@ -182,7 +182,7 @@ const cfg = JSON.parse(process.argv[2]);
     await page.click('[data-go="/naver/"]'); await settled('error');
     assert.equal(await page.locator('#tbody tr[data-pid="11"]').isVisible(), false);
     await page.locator('#watchSync button').click(); await settled();
-    await page.click('[data-go="/naver/dashboard"]'); await settled('current', page, 'dashboard');
+    await page.click('.top .menu [data-go="/naver/dashboard"]'); await settled('current', page, 'dashboard');
     checks.push('hidden-reentry-failure-does-not-reveal-cache');
     fault = 'hold'; held = null;
     await page.click('[data-go="/naver/"]');
@@ -252,7 +252,8 @@ const cfg = JSON.parse(process.argv[2]);
     checks.push('same-inventory-card-clears-search-and-restores-rows', 'same-inventory-card-preserves-unchanged-row');
 
     const reportsFirst = page.waitForResponse(response => response.url().includes('/reports/accounts?'));
-    await page.click('[data-go="/naver/reports"]'); await settled('current', page, 'reports');
+    await page.click('.top .menu [data-go="/naver/dashboard"]'); await settled('current', page, 'dashboard');
+    await page.click('#s-dashboard.on .subtabs [data-go="/naver/reports"]'); await settled('current', page, 'reports');
     const reportFull = await reportsFirst;
     await page.evaluate(() => { window.__reportRow = document.querySelector('#reportsRows [data-report]'); });
     const reportsSecond = page.waitForResponse(response => response.url().includes('/reports/accounts?'));
