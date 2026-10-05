@@ -167,8 +167,9 @@
     state.board = null; state.dashboard = null; state.inventory = null; state.reports = null; state.loadedDay = null;
     state.links = null; state.ended = null; state.client = null;
     Object.keys(VIEW_STATUS).forEach(function (name) { gateView(name); put($(VIEW_STATUS[name])); });
-    $('upbox').hidden = true;
+    $('upbox').hidden = true; $('ceoBox').hidden = true; $('peopleCard').hidden = true; $('staffTodo').hidden = true;
     ['tbody', 'issues', 'kpis', 'iwan', 'upTitle', 'upList', 'doneList', 'runbar', 'linksBody', 'endedBody', 'inventoryRows',
+      'ceoTodo', 'people', 'staffTodoBody', 'uncheckedBody', 'uncheckedN', 'allN',
       'inventorySummary', 'inventoryBalance', 'coverageRows', 'coverageSearchStatus', 'reportsRows', 'reportsPages', 'dashboardMetrics', 'dashboardDelivery',
       'dashboardConfiguration', 'dashboardPeriod', 'dashboardStatus', 'dashboardCoverage', 'dashboardAccounts',
       'dashboardCollected', 'dashboardRatioNote', 'inventoryCount', 'inventorySource', 'inventoryCadence', 'coverageStatus',
@@ -328,7 +329,29 @@
     not_checked: '오늘 점검 안 됨', partial: '일부만 읽힘', key_rejected: '읽기 거절 · 이관 남음',
     link_broken: '🔌 이관 빠짐', not_eligible: '점검 대상 아님', link_missing: '오늘 이관 목록에 없음',
     data_late: '네이버 자료 늦음', system_gap: '우리 쪽 자료 문제', pending: '점검 전', no_link: '이어진 계정 없음',
-    unreadable: '판정 못 함'
+    unreadable: '판정 못 함', weekly_watch: '주 1회 관찰 단계(홀딩·환불·만료)', pairing_pending: '오늘 짝 맞추기 전',
+    id_missing: '광고 계정 ID 없음', name_candidate: '이름 후보 확인 대기', id_conflict: '번호 겹침(다른 업체와 같은 번호)',
+    id_invalid: '번호 형식 확인 필요', not_transferred: '우리 회사로 이관 안 됨'
+  };
+  // ⚪ 까닭별 할 일 한 줄(개편 2026-10-06 — 이슈 「할 일」과 같은 말투 · 고칠 문구는 대표님 말씀대로)
+  var WHITE_TODO = {
+    not_checked: '수집기 상태 줄을 확인하고, 오후까지 그대로면 대표님께 알려 주세요',
+    partial: '다음 회차에 다시 읽습니다 — 내일도 같으면 알려 주세요',
+    key_rejected: '광고주에게 우리 회사 권한(운영관리)이 바뀌었는지 확인 요청',
+    link_broken: '광고주에게 네이버 검색광고 「대행사 관리」에서 우리 회사 연결이 남아 있는지 확인 요청',
+    not_eligible: '전산 계약 단계·종료일을 확인해 주세요',
+    link_missing: '기다리면 됩니다 — 내일도 없으면 「🔌 이관 빠짐」으로 올라옵니다',
+    data_late: '할 일 없음 — 네이버 자료가 들어오면 다시 읽습니다',
+    system_gap: '할 일 없음 — 우리 쪽 자료 문제로 대표님께 시스템 경보가 갔습니다',
+    pending: '할 일 없음 — 오늘 점검 전입니다',
+    weekly_watch: '할 일 없음 — 일요일에 한 번 봅니다(「확인 필요」에 넣지 않음)',
+    pairing_pending: '할 일 없음 — 오늘 짝 맞추기 뒤에 다시 셉니다',
+    unreadable: '판정할 수 없는 자료입니다 — 대표님께 알려 주세요',
+    id_missing: '전산 「업체 계정 정보」에 네이버 광고 계정 ID를 넣어 주세요',
+    name_candidate: '이름이 비슷한 계정이 맞는지 확인해 주세요',
+    id_conflict: '한 번호를 두 업체가 적었습니다 — 어느 업체 계정인지 대표님이 정합니다',
+    id_invalid: '광고 계정 ID 숫자를 다시 확인해 주세요',
+    not_transferred: '광고주에게 우리 회사로 대행 연결(이관)을 요청해 주세요'
   };
   var LINK = {
     listed: ['p-green', '이관됨'], missing: ['p-amber', '오늘 목록에 없음'], broken: ['p-red', '🔌 이관 빠짐'],
@@ -661,7 +684,7 @@
     if (r.screen === 'dashboard') return openDashboard();
     state.focus = r.focus;
     // /naver/unlinked(월요일 알림)가 건 거르기도 그 주소에서만
-    if (r.focus === 'unlinked') { state.filter = 'iw_unlinked_numbers'; state.filterFromRoute = true; }
+    if (r.focus === 'unlinked') { state.filter = 'iw_unlinked_numbers'; state.filterFromRoute = true; $('allFold').open = true; }
     else if (state.filterFromRoute) { state.filter = 'need'; state.filterFromRoute = false; }
     if (r.focus === 'links') state.linksOpen = true;
     if (r.focus === 'ended') state.endedOpen = true;
@@ -689,6 +712,8 @@
     var mine = (me.people || []).filter(function (p) { return p.idx === me.idx; })[0];
     put($('me'), h('b', null, me.name || ''), ' · ' + kind, mine ? ' · ' + num(mine.account_count) + '계정' : '');
     $('scopePill').textContent = '범위 · 내 담당';
+    $('watchLead').textContent = me.scope === 'ALL' ? '오늘 볼 광고주만 보시면 됩니다. 나머지는 매일 아침 대신 점검해 문제가 없는 곳입니다.'
+      : '내 담당 광고주 중 오늘 볼 곳만 모았습니다. 줄에 적힌 할 일대로 처리하고 단추를 눌러 주세요.';
     $('scopePill').hidden = me.scope === 'ALL';
     $('menuSettings').hidden = !(me.scope === 'ALL' || me.scope === 'TEAM');
     var sel = $('scope');
@@ -1430,10 +1455,14 @@
   }
   function renderWatch() {
     renderRun();
-    renderIwan();
     renderKpis();
+    renderCeo();
     renderUp();
+    renderPeople();
     renderIssues();
+    renderStaffTodo();
+    renderUnchecked();
+    renderIwan();
     renderTable();
     $('links-n').textContent = state.links ? state.links.rows.length + '건' : '';
     $('ended-n').textContent = state.ended ? state.ended.rows.length + '곳' : '';
@@ -1487,23 +1516,114 @@
         L.pending ? h('span', null, '짝 맞추기 전 ', h('b', { class: 'num' }, num(L.pending))) : null,
         h('span', { class: 'src' }, '대행 연결 목록 기준 · 이관 = 광고주 광고계정이 우리 회사에 연결된 상태'));
   }
+  // 개편 숫자 4칸(대표 결정 2026-10-06) — 서버 today_counts 그대로 · 서로 겹치지 않고 더하면 전체 광고주 수
+  var TODAY_CARDS = [['need', 'need', '👉 오늘 볼 곳'], ['ok', 'okk', '🟢 문제없음'], ['unlinked', 'cut', '🔌 연결 안 됨'],
+                     ['unchecked', 'nil', '⚪ 점검 못 함']];
   function renderKpis() {
-    var c = state.board.counts;
-    function k(key, cls, label, val, sub) {
-      return h('button', { type: 'button', class: 'kpi ' + cls + (state.filter === key ? ' on' : ''), 'aria-pressed': String(state.filter === key),
-                           onclick: function () { setFilter(key); } },
-               h('span', { class: 'l' }, label), h('span', { class: 'v' }, num(val)), h('span', { class: 's' }, sub));
+    var t = state.board.today_counts || {};
+    var sub = { need: '긴급 ' + num(t.need_red) + '곳 포함 · 아래 목록', ok: '오늘 안 봐도 되는 곳',
+                unlinked: '광고 계정 ID·이관이 있어야 점검됨', unchecked: '까닭별 보기는 아래' };
+    put($('kpis'), TODAY_CARDS.map(function (c) {
+      var key = c[0], on = key !== 'need' && state.filter === 'g_' + key;
+      return h('button', { type: 'button', class: 'kpi ' + c[1] + (on ? ' on' : ''), 'aria-pressed': key === 'need' ? null : String(on),
+                           onclick: function () { pickToday(key); } },
+               h('span', { class: 'l' }, c[2]), h('span', { class: 'v' }, num(t[key])), h('span', { class: 's' }, sub[key]));
+    }));
+  }
+  /* 숫자 칸 누르기 — 오늘 볼 곳은 아래 목록으로 · 나머지는 전체 광고주 표를 그 칸으로 거른다(점검 못 함은 까닭 표도 연다) */
+  function pickToday(key) {
+    if (key === 'need') { $('issuesCard').scrollIntoView(); return; }
+    setFilter('g_' + key);
+    $('allFold').open = true;
+    if (key === 'unchecked') { $('uncheckedFold').open = true; $('uncheckedFold').scrollIntoView(); }
+    else $('allFold').scrollIntoView();
+  }
+  function todoLine(title, why, label, onclick) {
+    return h('div', { class: 'todo-line' }, h('div', { class: 't' }, h('b', null, title), h('span', { class: 'w' }, why)),
+             label ? h('button', { type: 'button', class: 'btn sm', onclick: onclick }, label) : null);
+  }
+  // 대표님만 하실 일(대표 결정 D4) — 있을 때만 · 붙잡아 둔 단계 목록 · 번호 겹침 · 이름 후보(서버 까닭별 숫자)
+  function renderCeo() {
+    var b = state.board, lines = [];
+    if (state.me && state.me.scope === 'ALL') {
+      if (b.band && b.band.stage_state === 'held') {
+        lines.push(todoLine('붙잡아 둔 계약 단계 목록', '한꺼번에 크게 바뀌어 반영을 멈췄습니다 — 받아야 새 단계가 관제에 반영됩니다',
+                            '⚙️ 설정에서 확인', function () { go('/naver/settings'); }));
+      }
+      var wb = (b.white_breakdown && b.white_breakdown.unlinked) || {};
+      if (wb.id_conflict > 0) {
+        lines.push(todoLine('번호 겹침 ' + num(wb.id_conflict) + '곳', '한 광고 계정 번호를 두 업체가 적었습니다 — 어느 업체 계정인지 대표님이 정합니다',
+                            '이관 현황에서 보기', function () { go('/naver/transfers'); }));
+      }
+      if (wb.name_candidate > 0) {
+        lines.push(todoLine('이름 후보 ' + num(wb.name_candidate) + '곳', '이름만 비슷한 계정이 있습니다 — 목록에서 광고 계정 ID를 찾아 넣으면 가장 빠릅니다',
+                            '이관 현황에서 보기', function () { go('/naver/transfers'); }));
+      }
     }
-    put($('kpis'),
-        k('all', 'all', '전체 보기', c.total, '권한 범위의 모든 광고주'),
-        k('need', 'need', '👉 확인 필요', c.needs_attention, '들어가 볼 곳'),
-        k('red', 'red', [h('span', { class: 'sig red', 'aria-hidden': 'true' }), '긴급'], c.red, '오늘 안에'),
-        k('yellow', 'yellow', [h('span', { class: 'sig yellow', 'aria-hidden': 'true' }), '주의'], c.yellow, '이번 주 안에'),
-        k('green', 'green', [h('span', { class: 'sig green', 'aria-hidden': 'true' }), '정상'], c.green, '안 봐도 됨'),
-        k('white', 'white', [h('span', { class: 'sig white', 'aria-hidden': 'true' }), '점검 불가'], c.white, '이관 · 읽기 · 점검 상태'));
+    $('ceoBox').hidden = !lines.length;
+    put($('ceoTodo'), lines);
+  }
+  // 사람별 처리 현황(대표만 · 서버 people_summary — 고르기와 상관없이 대표 최대 범위)
+  function renderPeople() {
+    var ps = state.board.people_summary, card = $('peopleCard');
+    card.hidden = !ps || !ps.length;
+    if (card.hidden) { put($('people')); return; }
+    var pickable = {};
+    ((state.me && state.me.people) || []).forEach(function (p) { if (p.active) pickable[p.idx] = true; });
+    put($('people'), ps.map(function (p) {
+      var sel = typeof p.idx === 'number' && pickable[p.idx] === true ? 'person:' + p.idx : null;
+      var on = sel !== null && state.selection === sel;
+      var name = p.name || (p.idx === null ? '담당 미정' : '이름 없음');
+      return labeledRow(['직원', '오늘 볼 곳', '긴급', '👀 확인 중(건)', '12시간 넘게 안 봄(건)', '연결 안 됨'],
+        { 'data-person': p.idx === null ? 'none' : String(p.idx), class: on ? 'on' : null },
+        h('td', null, sel ? h('button', { type: 'button', class: 'link', 'aria-pressed': String(on),
+                                          onclick: function () { pickPerson(on ? 'all' : sel); } }, name) : h('b', null, name),
+          p.team_name ? h('span', { class: 'who' }, p.team_name) : null, on ? [' ', h('span', { class: 'pill p-blue' }, '보는 중')] : null),
+        h('td', { class: 'num' }, num(p.need)),
+        h('td', { class: 'num' + (p.red > 0 ? ' badnum' : '') }, num(p.red)),
+        h('td', { class: 'num' }, num(p.acked)),
+        h('td', { class: 'num' + (p.stale_yellow > 0 ? ' warnnum' : '') }, num(p.stale_yellow)),
+        h('td', { class: 'num' }, num(p.unlinked)));
+    }));
+  }
+  function pickPerson(sel) {
+    state.selection = sel;
+    $('scope').value = sel;
+    route();
+  }
+  // 직원 — 내가 챙길 연결(연결 안 됨 · 계정 확인할 곳 · 대표 결정 D3)
+  function renderStaffTodo() {
+    var b = state.board, t = b.today_counts || {}, lines = [];
+    if (state.me && state.me.scope !== 'ALL') {
+      if (t.unlinked > 0) {
+        lines.push(todoLine('연결 안 된 내 업체 ' + num(t.unlinked) + '곳', '광고 계정 ID가 비었거나 우리 회사로 이관되지 않아 관제가 읽지 못합니다 — ID는 전산 「업체 계정 정보」에서 넣습니다',
+                            '이관 현황에서 보기', function () { go('/naver/transfers'); }));
+      }
+      if (b.account_confirm > 0) {
+        lines.push(todoLine('계정이 맞는지 확인할 곳 ' + num(b.account_confirm) + '곳', '번호로 저절로 이어졌습니다 — 맞으면 「이 계정 맞음」 한 번만 누르면 됩니다',
+                            '확인하기', openLinksCard));
+      }
+    }
+    $('staffTodo').hidden = !lines.length;
+    put($('staffTodoBody'), lines);
+  }
+  function openLinksCard() {
+    if (!state.linksOpen) { state.linksOpen = true; if (!state.links) loadLinks(); else renderLinks(); }
+    $('linksCard').scrollIntoView();
+  }
+  // ⚪ 점검 못 함 — 서버 까닭별 숫자(white_breakdown.unchecked)와 할 일 한 줄
+  function renderUnchecked() {
+    var t = state.board.today_counts || {};
+    var wb = (state.board.white_breakdown && state.board.white_breakdown.unchecked) || {};
+    $('uncheckedN').textContent = num(t.unchecked);
+    var keys = Object.keys(wb).sort(function (a, b) { return wb[b] - wb[a] || (a < b ? -1 : 1); });
+    put($('uncheckedBody'), keys.length ? keys.map(function (k) {
+      return labeledRow(['까닭', '곳', '할 일'], null, h('td', null, WHITE_TEXT[k] || '기타 까닭'), h('td', { class: 'num' }, num(wb[k])),
+                        h('td', { class: 'wrap' }, WHITE_TODO[k] || '—'));
+    }) : h('tr', null, h('td', { colspan: 3, class: 'empty' }, typeof t.unchecked === 'number' ? '점검 못 한 곳이 없습니다.' : '까닭별 숫자를 아직 받지 못했습니다.')));
   }
   function renderUp() {
-    var up = watchItems(state.board.escalated_to_me), box = $('upbox');
+    var up = state.board.escalated_to_me || [], box = $('upbox');
     box.hidden = !up.length;
     $('upTitle').textContent = '⬆ 나에게 올라온 🟡 ' + up.length + '건';
     $('upToggle').textContent = state.upOpen ? '접기' : '펼치기';
@@ -1520,7 +1640,13 @@
     var st = i.state_now || i.state;
     var act = [];
     var can = readOnly() && !ownerActions() ? {} : (i.can || {});
-    if (can.ack) act.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { hand(i, 'ack', undefined, ev.currentTarget); } }, '👀 확인 중'));
+    var memoIn = can.ack && (!readOnly() || ownerActions())
+      ? h('input', { type: 'text', class: 'memo-in', maxlength: '200', placeholder: '메모(선택)', 'aria-label': '👀 확인 중 메모(선택)' }) : null;
+    if (memoIn) act.push(memoIn);
+    if (can.ack) act.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) {
+      var note = memoIn ? memoIn.value.trim() : '';
+      hand(i, 'ack', note ? { note: note } : undefined, ev.currentTarget);
+    } }, '👀 확인 중'));
     if (can.resolve) act.push(h('button', { type: 'button', class: 'btn sm blue', onclick: function (ev) { hand(i, 'resolve', undefined, ev.currentTarget); } }, '✅ 해결'));
     if (can.except) act.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { askExcept(i, ev.currentTarget); } }, '🙈 예외…'));
     else if (can.except_blocked) act.push(h('span', { class: 'blocked-note' }, BLOCKED[can.except_blocked] || '🙈 지금은 예외를 줄 수 없음'));
@@ -1530,42 +1656,60 @@
     var again = i.reappear_count > 0 ? ' · 다시 생김 ' + i.reappear_count + '회' : '';
     var open = st === 'new' || st === 'ack';
     var sev = i.severity === 'red' ? 'red' : i.severity === 'yellow' ? 'yellow' : 'info';
-    var owner = where === 'client' ? null : h('span', { class: 'who' }, (i.owner && i.owner.name) || '담당 미정');
-    var name = where === 'client' ? null : [h('button', { type: 'button', class: 'link', onclick: function () { go('/naver/clients/' + i.possibility_id); } }, i.name || ''), owner, ' — '];
+    var inside = where === 'client' || where === 'today';   // 광고주 이름이 이미 위에 있다
+    var owner = inside ? null : h('span', { class: 'who' }, (i.owner && i.owner.name) || '담당 미정');
+    var name = inside ? null : [h('button', { type: 'button', class: 'link', onclick: function () { go('/naver/clients/' + i.possibility_id); } }, i.name || ''), owner, ' — '];
     var target = i.target_tail ? ' · 계정 ••••' + i.target_tail : '';
     return h('div', { class: 'iss' + (open ? '' : ' done'), 'data-issue': i.issue_id },
              h('span', { class: 'sig ' + sev, role: 'img', 'aria-label': COLOR_TEXT[sev] || '알아 두기' }),
-             h('div', { class: 'tx' }, name, where === 'client' ? [h('b', null, cause(i.code)), fact(i) ? h('span', { class: 'w' }, fact(i)) : null]
+             h('div', { class: 'tx' }, name, inside ? [sev === 'info' ? 'ⓘ 알아 두기 · ' : null, h('b', null, cause(i.code)), fact(i) ? h('span', { class: 'w' }, fact(i)) : null]
                : (fact(i) || cause(i.code)),
                todo(i.code) && open ? h('span', { class: 'todo' }, '할 일 · ' + todo(i.code)) : null,
                h('span', { class: 'w' }, h('span', { class: 'st ' + st }, STATE[st] || st), ' · 처음 ' + md(i.first_seen_on) + until + again + target + who),
                memo),
              h('div', { class: 'act' }, act));
   }
+  /* 오늘 볼 광고주(대표 결정 D1·D8) — 서버가 「오늘 볼 곳」이라 한 광고주(look_today)와 열린 이슈 줄이 있는 광고주를
+     광고주마다 한 덩어리로. 덩어리 안 줄마다 원인 · 사실 · 할 일 한 줄 · 단추. 색·순서의 근거는 모두 서버 값이다. */
   function renderIssues() {
-    var rows = watchItems(state.board.issue_rows), box = $('issues');
-    var groups = [], at = {};
-    rows.forEach(function (i) {
-      var key = i.severity + '|' + i.code;
-      if (!(key in at)) { at[key] = groups.length; groups.push({ sev: i.severity, code: i.code, items: [] }); }
-      groups[at[key]].items.push(i);
+    var rows = state.board.rows || [], issues = state.board.issue_rows || [], byPid = {}, rowOf = {}, order = [];
+    rows.forEach(function (r) { rowOf[r.possibility_id] = r; if (r.look_today === true) order.push(r.possibility_id); });
+    issues.forEach(function (i) {
+      if (!byPid[i.possibility_id]) { byPid[i.possibility_id] = []; if (!rowOf[i.possibility_id] || rowOf[i.possibility_id].look_today !== true) order.push(i.possibility_id); }
+      byPid[i.possibility_id].push(i);
     });
-    var out = [];
-    groups.forEach(function (g) {
-      var info = g.sev !== 'red' && g.sev !== 'yellow';
-      var seen = {}, places = 0;   // 곳 = 광고주 수(한 광고주의 계정 여럿은 한 곳)
-      g.items.forEach(function (i) { if (!seen[i.possibility_id]) { seen[i.possibility_id] = true; places++; } });
-      var n = places + '곳' + (g.items.length > places ? ' · 계정 ' + g.items.length + '개' : '');
-      out.push(h('div', { class: 'cause' + (info ? ' info' : '') }, h('span', { class: 'sig ' + (info ? 'info' : g.sev), 'aria-hidden': 'true' }),
-                 info ? 'ⓘ 알아 두기 · ' + cause(g.code) : cause(g.code), ' ', h('span', { class: 'n' }, n + (info ? ' · 이슈 아님 · 「확인 필요」에 세지 않음' : ''))));
-      g.items.forEach(function (i) { out.push(issueRow(i)); });
+    function urgent(pid) {
+      var r = rowOf[pid], list = byPid[pid] || [];
+      if (r ? r.verdict.color === 'red' : list.some(function (i) { return i.severity === 'red'; })) return 0;
+      if (list.some(function (i) { return i.state === 'new' && i.severity !== 'info'; })) return 1;
+      return list.length && list.every(function (i) { return i.severity === 'info'; }) ? 3 : 2;
+    }
+    function nameOf(pid) { return rowOf[pid] ? rowOf[pid].name || '' : (byPid[pid][0].name || ''); }
+    order.sort(function (a, b) { return urgent(a) - urgent(b) || nameOf(a).localeCompare(nameOf(b), 'ko') || a - b; });
+    var showOwner = state.me && state.me.scope === 'ALL';
+    var out = order.map(function (pid) {
+      var r = rowOf[pid], list = byPid[pid] || [], first = list[0] || {};
+      var v = r ? r.verdict : null, sev = list.some(function (i) { return i.severity === 'red'; }) ? 'red' : 'yellow';
+      var owner = r ? r.owner : first.owner;
+      var head = h('div', { class: 'adv-head' },
+        v ? h('span', { class: 'sig ' + v.color, role: 'img', 'aria-label': COLOR_TEXT[v.color] }) : h('span', { class: 'sig ' + sev, role: 'img', 'aria-label': COLOR_TEXT[sev] }),
+        h('button', { type: 'button', class: 'link nm', onclick: function () { go('/naver/clients/' + pid); } }, nameOf(pid)),
+        showOwner ? h('span', { class: 'who' }, (owner && owner.name) || '담당 미정') : null,
+        r && r.stage ? h('span', { class: 'stage' }, STAGE[r.stage] || r.stage) : null,
+        list.length ? h('span', { class: 'n' }, '이슈 ' + list.length + '건') : null);
+      var body = list.map(function (i) { return issueRow(i, 'today'); });
+      if (!list.length && r && r.white_detail) {
+        body.push(h('div', { class: 'adv-note' }, h('b', null, WHITE_TEXT[r.white_detail] || '점검 못 함'),
+                    WHITE_TODO[r.white_detail] ? h('span', { class: 'todo' }, '할 일 · ' + WHITE_TODO[r.white_detail]) : null));
+      }
+      return h('div', { class: 'adv', 'data-pid': pid }, head, body);
     });
-    put(box, out.length ? out : h('div', { class: 'empty' }, resultsIncomplete()
+    put($('issues'), out.length ? out : h('div', { class: 'empty' }, resultsIncomplete()
       ? '아직 점검 결과가 충분하지 않아 문제 여부를 판단할 수 없습니다. 미점검·점검 불가 항목과 자료 기준 시각을 확인해 주세요.'
-      : '현재 조회 범위에서 열린 이슈가 없습니다. 오늘 점검 결과와 자료 기준 시각을 확인해 주세요.'));
-    var red = rows.filter(function (i) { return i.severity === 'red'; }).length;
-    $('iss-n').textContent = '열린 이슈 ' + rows.filter(function (i) { return i.severity !== 'info'; }).length + ' (긴급 ' + red + ')';
-    var done = watchItems(state.board.done_rows);
+      : '현재 조회 범위에서 오늘 볼 광고주가 없습니다. 오늘 점검 결과와 자료 기준 시각을 확인해 주세요.'));
+    var red = issues.filter(function (i) { return i.severity === 'red'; }).length;
+    $('iss-n').textContent = order.length + '곳 · 열린 이슈 ' + issues.filter(function (i) { return i.severity !== 'info'; }).length + '건(긴급 ' + red + ')';
+    var done = state.board.done_rows || [];
     $('doneToggle').textContent = (state.doneOpen ? '접기 — ' : '') + '오늘 풀린 것 · 예외 처리한 것 ' + done.length + '건' + (state.doneOpen ? '' : ' 보기');
     $('doneToggle').setAttribute('aria-expanded', String(state.doneOpen));
     $('doneList').hidden = !state.doneOpen;
@@ -1575,6 +1719,7 @@
     var f = state.filter;
     if (state.q && (r.name || '').indexOf(state.q) < 0) return false;
     if (f === 'iw_unlinked_numbers') return !!r.unlinked;
+    if (f.indexOf('g_') === 0) return r.today_group === f.slice(2);
     if (f.indexOf('iw_') === 0) return r.link === f.slice(3);
     if (f === 'need') return r.verdict.needs_attention;
     if (f === 'all') return true;
@@ -1588,12 +1733,10 @@
   }
   function renderWatchSelection() {
     if (!state.board) return;
-    renderUp();
-    renderIssues();
-    renderTable();
+    renderTable();   // 오늘 볼 광고주·올림 목록은 표 거르기·찾기와 상관없다(개편)
   }
-  function statusText(v) {
-    if (v.color === 'white') return WHITE_TEXT[v.white_reason] || '점검 불가';
+  function statusText(v, detail) {
+    if (v.color === 'white') return WHITE_TEXT[detail] || WHITE_TEXT[v.white_reason] || '점검 불가';
     if (v.color === 'red') return '긴급 이슈';
     if (v.color === 'yellow') return '주의 이슈';
     return '정상';
@@ -1606,7 +1749,7 @@
     var biz = r.bizmoney;
     return labeledRow(['상태', '광고주', '확인', '이관', '담당', '어제 광고비', '비즈머니', '열린 이슈', '계약 단계'], { class: 'click', 'data-pid': r.possibility_id, 'data-color': v.color,
                      onclick: function (ev) { if (ev.target.tagName !== 'BUTTON') go('/naver/clients/' + r.possibility_id); } },
-             h('td', null, h('span', { class: 'sig ' + v.color, role: 'img', 'aria-label': COLOR_TEXT[v.color] }), h('span', { class: 'hint' }, statusText(v))),
+             h('td', null, h('span', { class: 'sig ' + v.color, role: 'img', 'aria-label': COLOR_TEXT[v.color] }), h('span', { class: 'hint' }, statusText(v, r.white_detail))),
              h('td', null, h('button', { type: 'button', class: 'link', onclick: function () { go('/naver/clients/' + r.possibility_id); } }, r.name || ''),
                r.account_unconfirmed ? [' ', h('span', { class: 'pill p-gray', title: '읽기 점검은 합니다. 자동화·광고주용 보고서는 계정 확인 뒤' }, '계정 확인 전')] : null,
                rel ? [' ', h('span', { class: 'who' }, rel)] : null),
@@ -1655,6 +1798,7 @@
     reconcileNodes($('tbody'), out);
     var kind = { ALL: '전체', TEAM: '우리 팀', MINE: '내 담당' }[state.me.scope] || '';
     $('tbl-n').textContent = kind + (state.selection !== 'all' ? ' · 고른 범위' : '') + ' · ' + rows.length + ' / ' + all.length + '곳';
+    $('allN').textContent = num(all.length);
     Array.prototype.forEach.call(document.querySelectorAll('#tblChips .chip'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-f') === state.filter);
     });
