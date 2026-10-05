@@ -52,6 +52,9 @@ SOURCE_PATHS = (
     "Dockerfile.naver-relay", "Dockerfile.naver-relay.dockerignore", "compose.naver-engine.yml",
     "compose.naver-relay.yml", "deploy",
 )
+# 시험 폴더는 운영에서 쓰지 않는다(운영 이미지도 ``**/tests/`` 를 뺀다 · 서버 배포 도구는 시험을 돌리지 않는다).
+# 봉인 용량(2MiB)을 시험이 먹지 않게 묶음에서 뺀다 — 묶음에 들어오면 거절한다.
+SOURCE_EXCLUDED_PATHS = ("naver_engine/tests", "naver_runtime/tests")
 COMMAND_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C", "OPENSSL_CONF": "/dev/null"}
 RUNTIME_FIXED = {
     "NAVER_ENGINE_DB": "/var/lib/naver-engine/engine.db",
@@ -139,7 +142,8 @@ def source_archive(expected_commit, *, root=ROOT, checkout_commit=None):
         subprocess.run(["git", "merge-base", "--is-ancestor", expected_commit, checkout_commit], **common)
     except subprocess.CalledProcessError:
         raise SealError("SOURCE_NOT_IN_CHECKOUT_HISTORY") from None
-    raw = subprocess.run(["git", "archive", "--format=tar", expected_commit, "--", *SOURCE_PATHS], **common).stdout
+    raw = subprocess.run(["git", "archive", "--format=tar", expected_commit, "--", *SOURCE_PATHS,
+                          *(":(exclude)" + path for path in SOURCE_EXCLUDED_PATHS)], **common).stdout
     if not 0 < len(raw) <= 8 * 1024 * 1024:
         raise SealError("SOURCE_TOO_LARGE")
     seen = set()
@@ -148,7 +152,8 @@ def source_archive(expected_commit, *, root=ROOT, checkout_commit=None):
             name = entry.name.rstrip("/")
             if (name.startswith("/") or ".." in name.split("/") or not (entry.isfile() or entry.isdir())
                     or name in seen or not any(name == p or name.startswith(p + "/")
-                        or (entry.isdir() and p.startswith(name + "/")) for p in SOURCE_PATHS)):
+                        or (entry.isdir() and p.startswith(name + "/")) for p in SOURCE_PATHS)
+                    or any(name == p or name.startswith(p + "/") for p in SOURCE_EXCLUDED_PATHS)):
                 raise SealError("UNSAFE_SOURCE_ARCHIVE")
             seen.add(name)
     if not set(SOURCE_PATHS) <= seen:

@@ -393,6 +393,29 @@ class SourceArchiveTest(unittest.TestCase):
             with self.assertRaises(P.SealError):
                 P.source_archive(checkout, root=root, checkout_commit=git("rev-parse", "HEAD"))
 
+    def test_excluded_test_folders_are_refused_if_an_archive_still_carries_them(self):
+        # Defence in depth: even if git ignored the exclude pathspec, a test file must not be sealed.
+        commit = "c" * 40
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as archive:
+            for name in (*P.SOURCE_PATHS, P.SOURCE_EXCLUDED_PATHS[0] + "/test_leak.py"):
+                data = b"x"
+                info = tarfile.TarInfo(name if "." in Path(name).name else name + "/fixture.txt")
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+        def fake_run(args, **kwargs):
+            if args[:2] == ["git", "rev-parse"]:
+                return subprocess.CompletedProcess(args, 0, stdout=(commit + "\n").encode())
+            if args[:2] == ["git", "merge-base"]:
+                return subprocess.CompletedProcess(args, 0, stdout=b"")
+            self.assertEqual(args[:4], ["git", "archive", "--format=tar", commit])
+            self.assertEqual([a for a in args if a.startswith(":(exclude)")],
+                             [":(exclude)" + x for x in P.SOURCE_EXCLUDED_PATHS])
+            return subprocess.CompletedProcess(args, 0, stdout=buffer.getvalue())
+        with patch.object(P.subprocess, "run", side_effect=fake_run):
+            with self.assertRaisesRegex(P.SealError, "UNSAFE_SOURCE_ARCHIVE"):
+                P.source_archive(commit, root=ROOT)
+
     def test_exact_committed_allowlist_only_and_bad_commit_or_symlink_refused(self):
         with tempfile.TemporaryDirectory(prefix="preview-source-fixture-") as temporary:
             root = Path(temporary).resolve()
@@ -407,13 +430,22 @@ class SourceArchiveTest(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("synthetic-source")
             (root / "excluded-secret-marker").write_text("NOT_IN_ARCHIVE")
+            for name in P.SOURCE_EXCLUDED_PATHS:
+                (root / name).mkdir(parents=True, exist_ok=True)
+                (root / name / "test_fixture.py").write_text("TEST_NOT_IN_ARCHIVE")
             git("add", ".")
             git("commit", "-m", "Synthetic archive fixture")
             commit = git("rev-parse", "HEAD")
             source = P.source_archive(commit, root=root)
             self.assertEqual(source, P.source_archive(commit, root=root))
             with tarfile.open(fileobj=io.BytesIO(gzip.decompress(source)), mode="r:") as archive:
-                self.assertNotIn("excluded-secret-marker", archive.getnames())
+                names = archive.getnames()
+                self.assertNotIn("excluded-secret-marker", names)
+                # Test folders never ship: the runtime images drop **/tests/ and the server never runs them.
+                self.assertEqual([n for n in names if any(n == x or n.startswith(x + "/")
+                                                          for x in P.SOURCE_EXCLUDED_PATHS)], [])
+                self.assertIn("naver_engine/fixture.txt", names)
+                self.assertIn("naver_runtime/fixture.txt", names)
             with self.assertRaises(P.SealError):
                 P.source_archive("b" * 40, root=root)
             (root / "naver_engine" / "link").symlink_to("/etc/passwd")
