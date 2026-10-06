@@ -53,11 +53,14 @@ LINK_REFUSALS = frozenset('scope_denied selection_denied permission_denied compa
 MORNING_STATES = frozenset(('reading', 'blocked', 'consumed'))
 MORNING_KINDS = frozenset(('daily', 'summary'))
 DIAGNOSTIC_STAGES = frozenset(('identity','reader','snapshot','core','catalog','daily','managed',
-    'morning','reports','rollback','close','bootstrap','output','UNRECOGNIZED'))
+    'morning','reports','login_audit','rollback','close','bootstrap','output','UNRECOGNIZED'))
 DIAGNOSTIC_KINDS = frozenset(('ValueError','RuntimeError','TypeError','KeyError','AttributeError',
     'JSONDecodeError','PermissionError','FileNotFoundError','OSError','OperationalError',
     'DatabaseError','IntegrityError','ProgrammingError','InterfaceError','NotSupportedError',
     'DataError','InternalError','MemoryError','StoreError','StoreBusy','StoreRefused','UNRECOGNIZED'))
+# a981b35 web._h_login/_quiet result codes for action='login' (store.record_access → naver_auto_access_log).
+LOGIN_RESULTS = frozenset('ok narrowed no-scope throttled bad-body sso-rejected erp-unavailable erp-bad-shape'.split())
+LOGIN_BUCKET_MAX = 24
 SQLITE_PRIMARY = {1:'SQLITE_ERROR',5:'SQLITE_BUSY',6:'SQLITE_LOCKED',8:'SQLITE_READONLY',
     9:'SQLITE_INTERRUPT',10:'SQLITE_IOERR',11:'SQLITE_CORRUPT',14:'SQLITE_CANTOPEN',
     15:'SQLITE_PROTOCOL',17:'SQLITE_SCHEMA',18:'SQLITE_TOOBIG',19:'SQLITE_CONSTRAINT',20:'SQLITE_MISMATCH',
@@ -579,10 +582,77 @@ def collect_reports(connection):
     return reports_projection(result)
 
 
+def login_audit_projection(value):
+    fields = {'action','window_hours','since','until','results','kst_10min','older_bucket_entries','unrecognized_time_entries'}
+    allowed = LOGIN_RESULTS | {UNKNOWN}
+    if (not isinstance(value, dict) or set(value) != fields or value['action'] != 'login'
+            or type(value['window_hours']) is not int or value['window_hours'] != 24
+            or not isinstance(value['results'], dict) or set(value['results']) - allowed
+            or not isinstance(value['kst_10min'], list) or len(value['kst_10min']) > LOGIN_BUCKET_MAX):
+        raise ValueError('COLLECTION_LOGIN')
+    since, until = stamp(value['since']), stamp(value['until'])
+    if since is None or until is None or datetime.fromisoformat(since) >= datetime.fromisoformat(until):
+        raise ValueError('COLLECTION_LOGIN')
+    results = {}
+    for key, row in value['results'].items():
+        if not isinstance(row, dict) or set(row) != {'count','first_at','last_at'}:
+            raise ValueError('COLLECTION_LOGIN')
+        first, last = stamp(row['first_at']), stamp(row['last_at'])
+        if (number(row['count']) == 0 or (first is None) != (last is None)
+                or (first is not None and datetime.fromisoformat(first) > datetime.fromisoformat(last))):
+            raise ValueError('COLLECTION_LOGIN')
+        results[key] = dict(count=row['count'], first_at=first, last_at=last)
+    buckets, total = [], number(value['older_bucket_entries']) + number(value['unrecognized_time_entries'])
+    for row in value['kst_10min']:
+        if (not isinstance(row, dict) or set(row) != {'bucket','results'} or not isinstance(row['bucket'], str)
+                or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-5]0\+09:00', row['bucket'])
+                or (buckets and row['bucket'] <= buckets[-1]['bucket']) or not isinstance(row['results'], dict)
+                or not row['results'] or set(row['results']) - allowed):
+            raise ValueError('COLLECTION_LOGIN')
+        counted = {key:number(n) for key, n in row['results'].items()}
+        if 0 in counted.values():
+            raise ValueError('COLLECTION_LOGIN')
+        total += sum(counted.values())
+        buckets.append(dict(bucket=row['bucket'], results=counted))
+    if total != sum(row['count'] for row in results.values()):
+        raise ValueError('COLLECTION_LOGIN')
+    return dict(value, since=since, until=until, results=results, kst_10min=buckets)
+
+
+def collect_login_audit(connection, now):
+    """화면 로그인 기록(action='login')만 — 최근 24시간 결과 코드·10분 칸(KST)별 건수. 사람·대상 번호 칸은 고르지 않는다."""
+    since, until = (now-timedelta(hours=24)).isoformat(timespec='microseconds'), now.isoformat(timespec='microseconds')
+    codes = tuple(sorted(LOGIN_RESULTS))
+    # 기록 시각은 store._kst_text 꼴(+09:00 · 마이크로초)이라 같은 꼴끼리 글자 비교 = 시각 비교. 다른 꼴은 칸 없이 센다.
+    rows = connection.execute("SELECT CASE WHEN result IN ("+','.join('?' for _ in codes)+") THEN result "
+        "ELSE 'UNRECOGNIZED' END,CASE WHEN at GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:"
+        "[0-5][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+09:00' THEN substr(at,1,15) END,COUNT(*),MIN(at),MAX(at) "
+        "FROM naver_auto_access_log WHERE action='login' AND at>=? AND at<=? GROUP BY 1,2", codes+(since, until))
+    results, buckets, unknown_time = {}, {}, 0
+    for code, bucket, count, first, last in rows:
+        code, count = enum(code, LOGIN_RESULTS), number(count)
+        row = results.setdefault(code, dict(count=0, first_at=None, last_at=None))
+        row['count'] += count
+        if bucket is None:
+            unknown_time += count
+            continue
+        row['first_at'] = first if row['first_at'] is None else min(row['first_at'], first)
+        row['last_at'] = last if row['last_at'] is None else max(row['last_at'], last)
+        label = buckets.setdefault(bucket+'0+09:00', {})
+        label[code] = label.get(code, 0) + count
+    for row in results.values():
+        row.update(first_at=stamp(row['first_at']), last_at=stamp(row['last_at']))
+    labels = sorted(buckets)
+    return login_audit_projection(dict(action='login', window_hours=24, since=since, until=until, results=results,
+        kst_10min=[dict(bucket=label, results=buckets[label]) for label in labels[-LOGIN_BUCKET_MAX:]],
+        older_bucket_entries=sum(sum(buckets[label].values()) for label in labels[:-LOGIN_BUCKET_MAX]),
+        unrecognized_time_entries=unknown_time))
+
+
 def project(value):
     fields = {'today', 'prospects', 'pairing', 'latest_run', 'today_checks', 'bootstrap'}
     if (not isinstance(value, dict) or not fields <= set(value)
-            or set(value) - fields - {'management','catalog_links','daily_limited','managed_catalog_links','morning_progress','reports'}):
+            or set(value) - fields - {'management','catalog_links','daily_limited','managed_catalog_links','morning_progress','reports','login_audit'}):
         raise ValueError('COLLECTION_FIELDS')
     today = value['today']
     if not isinstance(today, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', today):
@@ -625,6 +695,8 @@ def project(value):
         result['morning_progress'] = morning_progress_projection(value['morning_progress'], today)
     if 'reports' in value:
         result['reports'] = reports_projection(value['reports'])
+    if 'login_audit' in value:
+        result['login_audit'] = login_audit_projection(value['login_audit'])
     return result
 
 
@@ -671,7 +743,7 @@ def validate_package(package):
             raise ValueError('PACKAGE_SHAPE')
 
 
-def script(*, catalog_links=False, daily_limited=False, morning_progress=False, reports=False):
+def script(*, catalog_links=False, daily_limited=False, morning_progress=False, reports=False, login_audit=False):
     parts = ['import json,os,sys,stat,re,time,sqlite3\nfrom pathlib import Path\nfrom datetime import date,datetime,timedelta,timezone\n', PROJECTION_SOURCE]
     parts.append("""
 diagnostic_stage='identity'
@@ -707,6 +779,9 @@ try:
         if REPORTS_DIAGNOSTIC:
             diagnostic_stage='reports'
             result['reports']=collect_reports(reader._conn)
+        if LOGIN_AUDIT_DIAGNOSTIC:
+            diagnostic_stage='login_audit'
+            result['login_audit']=collect_login_audit(reader._conn,now)
     except Exception as error:
         failure=diagnostic_failure(diagnostic_stage,error)
         raise
@@ -727,7 +802,8 @@ try:
 except Exception as error:
     print(json.dumps({'diagnostic_failure':failure or diagnostic_failure(diagnostic_stage,error)},sort_keys=True))
 """.replace('CATALOG_LINK_DIAGNOSTIC', repr(catalog_links)).replace('DAILY_LIMITED_DIAGNOSTIC', repr(daily_limited))
-       .replace('MORNING_PROGRESS_DIAGNOSTIC', repr(morning_progress)).replace('REPORTS_DIAGNOSTIC', repr(reports)))
+       .replace('MORNING_PROGRESS_DIAGNOSTIC', repr(morning_progress)).replace('REPORTS_DIAGNOSTIC', repr(reports))
+       .replace('LOGIN_AUDIT_DIAGNOSTIC', repr(login_audit)))
     return '\n'.join(parts).encode()
 
 
@@ -865,7 +941,89 @@ def process_failure(result):
 
 LOG_STAGES = frozenset('org stages accounts pairing inventory_catalog inventory reports readiness morning alerts backup metrics'.split())
 LOG_KINDS = DIAGNOSTIC_KINDS | frozenset('NameError IndexError ImportError ModuleNotFoundError StoreError StoreBusy StoreRefused TimeoutError SyntaxError IndentationError UnboundLocalError'.split())
-RELAY_KINDS = frozenset('engine-loop engine-not-configured relay-busy relay-no-thread engine-timeout engine-bad-answer engine-answer-too-large engine-cut ConnectionRefusedError ConnectionResetError BrokenPipeError TimeoutError OSError RemoteDisconnected BadStatusLine IncompleteRead'.split())
+RELAY_KINDS = frozenset('engine-loop engine-not-configured relay-busy relay-no-thread engine-timeout engine-bad-answer engine-answer-too-large engine-cut ConnectionRefusedError ConnectionResetError BrokenPipeError TimeoutError OSError RemoteDisconnected BadStatusLine IncompleteRead'.split()
+    # a981b35 naver_relay._forward: _warn(type(e).__name__) for OSError/HTTPException on the engine socket.
+    + 'FileNotFoundError PermissionError ConnectionAbortedError ConnectionError BlockingIOError InterruptedError NotADirectoryError HTTPException LineTooLong ResponseNotReady CannotSendRequest CannotSendHeader ImproperConnectionState NotConnected UnknownProtocol UnknownTransferEncoding InvalidURL'.split())
+KST = timezone(timedelta(hours=9))
+TYPE_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
+# a981b35 기록 틀(logging "%(levelname)s %(name)s %(message)s" · 중계는 uvicorn 기본 꼴/lastResort).
+# 줄 전체가 틀과 맞을 때만 갈래로 센다. 밖으로 나가는 값 = 갈래 이름 · 검증한 예외 종류 · HTTP 상태 숫자뿐.
+LOG_TEMPLATES = {'engine': (
+    ('web_response_failed', 'type', r'ERROR naver_engine\.web 화면 API 응답 만들기 실패: (\S{1,64})'),
+    ('web_store_refused', 'type', r'WARNING naver_engine\.web 화면 API 저장소 거절: (\S{1,64})'),
+    ('web_store_error', 'type', r'WARNING naver_engine\.web 화면 API 저장소 오류: (\S{1,64})'),
+    ('web_unexpected_error', 'type', r'ERROR naver_engine\.web 화면 API 뜻밖의 오류: (\S{1,64})'),
+    ('audit_write_failed', 'type', r'WARNING naver_engine\.web 열람·쓰기 기록 실패: (\S{1,64})'),
+    ('untrusted_source_header', None,
+     r'WARNING naver_engine\.web 요청한 곳 머리를 믿지 않음 — 믿을 연결이 아님\(소켓 서버 표지·루프백 확인\)'),
+    ('preview_failed', 'type', r'WARNING naver_engine\.web 미리보기 실패: (\S{1,64})'),
+    ('cycle_failed', 'type', r'ERROR naver_runtime 예약 회차 실패: (\S{1,64})'),
+    ('job_failed', 'type', r'ERROR naver_runtime\.scheduler 예약 작업 실패: [a-z_]{1,32} (\S{1,64})'),
+    ('failure_record_failed', None, r'ERROR naver_runtime\.scheduler 예약 작업 실패 기록을 저장하지 못했습니다'),
+    ('naver_rate_pause', None, r'WARNING naver_engine\.read \[네이버 읽기\] 속도 제한이 몰려 5분 멈춤\(이번 회차 [0-9]{1,6}번째\)'),
+    # 종류·경로 모양·코드·계정 끝자리는 버리고 HTTP 상태 숫자만 남긴다.
+    ('naver_http_warning', 'status', r'WARNING naver_engine\.read \[네이버 읽기\] \S{1,64} \S{1,256} HTTP (\S{1,8}) 코드 \S{1,32} 계정 \S{1,32}'),
+    ('startup_refused', 'type', r'\{"error": "startup-refused", "kind": "([^"]{1,64})"\}')),
+  'relay': (
+    ('relay_failed', 'relay', r'(?:WARNING:?[ ]+(?:(?:app\.)?naver_relay )?)?관제 엔진 중계 실패: (\S{1,64})'),
+    ('uvicorn_started', None, r'INFO: +Started server process \[[0-9]{1,10}\]'),
+    ('uvicorn_running', None, r'INFO: +Uvicorn running on .{1,256}'),
+    ('uvicorn_shutting_down', None, r'INFO: +Shutting down'),
+    ('uvicorn_finished', None, r'INFO: +Finished server process \[[0-9]{1,10}\]'),
+    ('uvicorn_asgi_exception', None, r'ERROR: +Exception in ASGI application'))}
+LOG_BUCKET_MAX = 24
+LOG_KIND_MAX = 5
+
+
+def type_name(value):
+    # 예외 종류 이름 모양만. 숫자가 셋 이상 이어지면(번호·계정 끝자리 꼴) 이름으로 내보내지 않는다.
+    return value if (isinstance(value,str) and TYPE_NAME.fullmatch(value)
+                     and not re.search('[0-9]{3}',value)) else UNKNOWN
+
+
+def kst_bucket(at):
+    moment = datetime.fromisoformat(at).astimezone(KST)
+    return moment.strftime('%Y-%m-%dT%H:')+str(moment.minute//10)+'0+09:00'
+
+
+def log_categories(entries, unit):
+    """Fixed template categories of one sample: count, first/last (UTC), recent 10-minute KST buckets, kinds."""
+    out, unmatched = {}, 0
+    for at, message in entries:
+        for name, value_kind, pattern in LOG_TEMPLATES[unit]:
+            match = re.fullmatch(pattern, message)
+            if match:
+                break
+        else:
+            unmatched += 1; continue
+        row = out.setdefault(name, {'count':0,'first_at':None,'last_at':None,'buckets':{},'values':{}})
+        row['count'] += 1
+        if value_kind is not None:
+            raw = match.group(1)
+            value = (enum(raw, RELAY_KINDS) if value_kind == 'relay' else type_name(raw) if value_kind == 'type'
+                     else raw if re.fullmatch('[1-5][0-9]{2}', raw) else 'none' if raw == 'None' else UNKNOWN)
+            row['values'][value] = row['values'].get(value,0)+1
+        if at is not None:
+            moment = datetime.fromisoformat(at)
+            if row['first_at'] is None or moment < datetime.fromisoformat(row['first_at']):
+                row['first_at'] = at
+            if row['last_at'] is None or moment > datetime.fromisoformat(row['last_at']):
+                row['last_at'] = at
+            label = kst_bucket(at)
+            row['buckets'][label] = row['buckets'].get(label,0)+1
+    categories = {}
+    for name, row in sorted(out.items()):
+        labels = sorted(row['buckets'])
+        item = dict(count=row['count'], first_at=row['first_at'], last_at=row['last_at'],
+                    kst_10min={label:row['buckets'][label] for label in labels[-LOG_BUCKET_MAX:]},
+                    older_bucket_entries=sum(row['buckets'][label] for label in labels[:-LOG_BUCKET_MAX]))
+        value_kind = next(kind for key, kind, _ in LOG_TEMPLATES[unit] if key == name)
+        if value_kind is not None:
+            ranked = sorted(row['values'].items(), key=lambda pair:(-pair[1],pair[0]))
+            item['http_status' if value_kind == 'status' else 'kinds'] = dict(ranked[:LOG_KIND_MAX])
+            item['other_value_entries'] = sum(n for _, n in ranked[LOG_KIND_MAX:])
+        categories[name] = item
+    return dict(template_release='a981b35', unmatched_entries=unmatched, categories=categories)
 
 
 def log_projection(raw, *, source, unit):
@@ -875,7 +1033,7 @@ def log_projection(raw, *, source, unit):
     rows = raw.splitlines()
     if len(rows)>300:
         raise ValueError('LOG_LIMIT')
-    counts, unknown, last = {}, 0, None
+    counts, unknown, last, entries = {}, 0, None, []
     for row in rows:
         at = None
         try:
@@ -894,6 +1052,7 @@ def log_projection(raw, *, source, unit):
         except (ValueError,KeyError,TypeError,OverflowError,OSError):
             unknown+=1; continue
         message = re.sub(r'^naver-'+unit+r'(?:-1)?\s+\|\s*','',message)
+        entries.append((at,message))
         step = re.fullmatch(r'ERROR naver_runtime.scheduler 예약 작업 실패: ([a-z_]{1,32}) ([A-Za-z][A-Za-z0-9_]{0,63})',message)
         cycle = re.fullmatch(r'ERROR naver_runtime 예약 회차 실패: ([A-Za-z][A-Za-z0-9_]{0,63})',message)
         exited = re.fullmatch(r'metainc-naver-'+unit+r'\.service: Main process exited, code=(exited|killed|dumped), status=([0-9]{1,3})/[A-Za-z0-9/_-]{1,32}',message)
@@ -922,13 +1081,20 @@ def log_projection(raw, *, source, unit):
         if at and (last is None or datetime.fromisoformat(at)>datetime.fromisoformat(last)):
             last = at
     ordered = sorted(counts.items())
-    return dict(entries_inspected=len(rows), sample_limit_reached=len(rows)==300,
-                unrecognized_entries=unknown,last_recognized_at=last,
-                omitted_event_count=sum(value for key,value in ordered[32:]),
-                events=[dict(json.loads(key),count=value) for key,value in ordered[:32]])
+    result = dict(entries_inspected=len(rows), sample_limit_reached=len(rows)==300,
+                  unrecognized_entries=unknown,last_recognized_at=last,
+                  omitted_event_count=sum(value for key,value in ordered[32:]),
+                  events=[dict(json.loads(key),count=value) for key,value in ordered[:32]])
+    if source == 'docker':
+        # Container output only (systemd units send stdout/stderr to null). Separate view from `events`:
+        # unreadable lines count as unmatched here; `unrecognized_entries` keeps its earlier meaning.
+        result['templates'] = log_categories(entries, unit)
+        result['templates']['unmatched_entries'] += len(rows)-len(entries)
+    return result
 
 
-def recent_runtime_logs(identity):
+def recent_runtime_logs(identity, relay=None):
+    """relay = verified relay container id, or a fixed RELAY_* code when it could not be verified."""
     sources = []
     for unit in ('engine','relay'):
         args = ['/usr/bin/journalctl','--no-pager','--output=json',
@@ -936,8 +1102,16 @@ def recent_runtime_logs(identity):
                 '--lines=300','--unit=metainc-naver-'+unit+'.service']
         sources.append((unit,'journal',args))
     sources.append(('engine','docker',['docker','logs','--since','24h','--tail','300','--timestamps',identity]))
+    # 중계 앱 기록은 컨테이너 출력에만 있다(유닛은 StandardOutput/Error=null) — 같은 방식으로 확인한 id 만 읽는다.
+    relay_verified = isinstance(relay,str) and re.fullmatch('[0-9a-f]{64}',relay) is not None
+    sources.append(('relay','docker',['docker','logs','--since','24h','--tail','300','--timestamps',relay]
+                    if relay_verified else None))
     results = []
     for unit, source, args in sources:
+        if args is None:
+            results.append(dict(unit=unit,source=source,available=False,code=relay if isinstance(relay,str)
+                                and re.fullmatch('RELAY_[A-Z_]{1,48}',relay) else 'RELAY_NOT_CHECKED'))
+            continue
         result = capture_process(args,timeout=5,stdout_limit=1048576,stderr_limit=1048576)
         item = dict(unit=unit,source=source)
         if result['reason'] or result['exit_code']!=0:
@@ -973,6 +1147,37 @@ def storage_metadata(root=Path('/var/lib/metainc/naver-engine')):
                     file_contents_read=False)
     except (ValueError,OSError):
         return dict(available=False,file_contents_read=False)
+
+
+def relay_container(release, path, prepared, commit):
+    """Relay = same checks as the engine (sealed compose files, prepared image, compose labels).
+    Optional evidence: any failure is a fixed RELAY_* code and never stops the engine diagnosis."""
+    try:
+        for file in (path/'compose.naver-relay.yml', path/'preview-relay.override.yml'):
+            if file.resolve() != file or release.sha(file.read_bytes()) != prepared.get('files', {}).get(str(file)):
+                raise ValueError('RELAY_COMPOSE_CHANGED')
+        expected = prepared.get('images', {}).get('relay')
+        if not isinstance(expected, str) or not re.fullmatch('sha256:[0-9a-f]{64}', expected):
+            raise ValueError('RELAY_PREPARED_IMAGE')
+        fmt = '{"id":{{json .Id}},"user":{{json .Config.User}},"source":{{json (index .Config.Labels "metainc.naver.preview.source")}}}'
+        image = json.loads(release.command(['docker', 'image', 'inspect', '--format', fmt, 'metainc/naver-relay:'+commit]))
+        if image != {'id': expected, 'user': '10001:10001', 'source': commit}:
+            raise ValueError('RELAY_IMAGE_CHANGED')
+        identity = release.command(release.compose(path, 'relay')+['ps', '--all', '--quiet']).decode().strip()
+        if not re.fullmatch('[0-9a-f]{64}', identity):
+            raise ValueError('RELAY_CONTAINER_ID')
+        fmt = '{"id":{{json .Id}},"image":{{json .Image}},"running":{{json .State.Running}},"user":{{json .Config.User}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"started":{{json .State.StartedAt}},"oom_killed":{{json .State.OOMKilled}},"restarts":{{json .RestartCount}},"readonly":{{json .HostConfig.ReadonlyRootfs}}}'
+        state = json.loads(release.command(['docker', 'inspect', '--format', fmt, identity]))
+        if any(state.get(key) != value for key, value in {'id': identity, 'image': expected, 'user': '10001:10001',
+                'project': 'naver-relay', 'service': 'naver-relay', 'readonly': True}.items()):
+            raise ValueError('RELAY_CONTAINER_CHANGED')
+        return identity, {'verified': True, 'started_at': docker_stamp(state.get('started')),
+                          'running': state.get('running') if type(state.get('running')) is bool else None,
+                          'oom_killed': state.get('oom_killed') if type(state.get('oom_killed')) is bool else None,
+                          'container_restarts': number(state.get('restarts'))}
+    except Exception as error:
+        code = str(error) if isinstance(error, ValueError) and re.fullmatch('RELAY_[A-Z_]{1,48}', str(error)) else 'RELAY_UNVERIFIED'
+        return code, {'verified': False, 'code': code}
 
 
 def run(package, host, release):
@@ -1027,10 +1232,11 @@ def run(package, host, release):
             or any(data[0].get(key) != value for key, value in {'Type': 'bind',
                 'Destination': '/var/lib/naver-engine', 'Source': '/var/lib/metainc/naver-engine'}.items())):
         raise ValueError('PREVIEW_DATA_MOUNT')
+    relay, relay_state = relay_container(release, path, prepared, commit)
     STAGE = 'read_only_status'
     def context():
         return {'lifecycle':lifecycle_status(release), 'compose_version':compose_version(release),
-                'recent_runtime_logs':recent_runtime_logs(identity),
+                'recent_runtime_logs':recent_runtime_logs(identity, relay), 'relay_state':relay_state,
                 'engine_state':{'started_at':docker_stamp(before.get('started')),
                     'oom_killed':before.get('oom_killed') if type(before.get('oom_killed')) is bool else None}}
     def postflight():
@@ -1057,7 +1263,8 @@ def run(package, host, release):
                            'python', '-I', '-B', '-'], data=script(catalog_links=commit in CATALOG_LINKS_COMMITS,
                             daily_limited=commit in DAILY_LIMITED_COMMITS,
                             morning_progress=commit in MONITORING_COMMITS,
-                            reports=commit in MONITORING_COMMITS), timeout=30)
+                            reports=commit in MONITORING_COMMITS,
+                            login_audit=commit in MONITORING_COMMITS), timeout=30)
     if captured['reason'] or captured['exit_code'] != 0:
         details = context()
         checked = postflight()
@@ -1085,6 +1292,8 @@ def run(package, host, release):
         raise ValueError('COLLECTION_MORNING_FIELDS')
     if ('reports' in values) != (commit in MONITORING_COMMITS):
         raise ValueError('COLLECTION_REPORTS')
+    if ('login_audit' in values) != (commit in MONITORING_COMMITS):
+        raise ValueError('COLLECTION_LOGIN')
     details = context()
     checked = postflight()
     if checked['postflight']['code']:

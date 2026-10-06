@@ -464,7 +464,7 @@ class CollectionTest(unittest.TestCase):
             versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None) for kind in ('weekly','monthly')})
         self.assertNotIn('PRIVATE', output)
 
-    def complete_emitted_fixture(self, *, deny_json=False, close_fails=False):
+    def complete_emitted_fixture(self, *, deny_json=False, close_fails=False, deny_glob=False, login_rows=()):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         db = sqlite3.connect(':memory:', isolation_level=None)
         self.addCleanup(db.close)
@@ -477,11 +477,13 @@ class CollectionTest(unittest.TestCase):
                 "generated_at,status,payload_json,revision_fingerprint,review_status) VALUES (987654321,"
                 "'weekly:2026-09-21:2026-09-27',"
                 "'2026-10-04T10:00:00+09:00','partial','{\"format_version\":2,\"private\":\"PRIVATE\"}','PRIVATE','ready')")
+        for row in login_rows:
+            db.execute('INSERT INTO naver_auto_access_log (at,emp_idx,action,target_kind,target_id,result) VALUES (?,?,?,?,?,?)', row)
         scope = dict(_A=sqlite3)
         exec(fixture['new_observed_unsealed']['authorizer'], scope)
         actual_authorizer = scope['_authorizer'](scope['PHASE_READ'])
         def authorize(action, arg1, arg2, database, source):
-            if deny_json and action == sqlite3.SQLITE_FUNCTION and arg2 == 'json_valid':
+            if action == sqlite3.SQLITE_FUNCTION and ((deny_json and arg2 == 'json_valid') or (deny_glob and arg2 == 'glob')):
                 return sqlite3.SQLITE_DENY
             return actual_authorizer(action, arg1, arg2, database, source)
         db.set_authorizer(authorize)
@@ -511,7 +513,8 @@ class CollectionTest(unittest.TestCase):
                 patch.dict(os.environ, {}), patch.object(os,'geteuid',return_value=10001), \
                 patch.object(Path,'resolve',resolve), patch.object(os,'open',side_effect=FileNotFoundError), \
                 contextlib.redirect_stdout(output):
-            exec(compile(M.script(catalog_links=True,daily_limited=True,morning_progress=True,reports=True),'<complete-status-script>','exec'), {})
+            exec(compile(M.script(catalog_links=True,daily_limited=True,morning_progress=True,reports=True,
+                                  login_audit=True),'<complete-status-script>','exec'), {})
         self.assertEqual(db.total_changes, before)
         self.assertFalse(db.in_transaction)
         reader.close.assert_called_once()
@@ -791,18 +794,20 @@ class CollectionTest(unittest.TestCase):
                     'managed_catalog_links':dict(auto=0,name_different=0,can_confirm=0,rejected={})})
         self.check_run_diagnostics('b'*40)
 
-    def check_run_diagnostics(self, commit, extra=None, passive=False):
+    def check_run_diagnostics(self, commit, extra=None, passive=False, logs=None):
         package = dict(baseline='a'*64, source_commit=commit, source_tar_gz_sha256='c'*64)
         cid, image = 'd'*64, 'sha256:'+'e'*64
+        rid, relay_image = '7'*64, 'sha256:'+'8'*64
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
             files = {}
-            for name in ('compose.naver-engine.yml', 'preview-engine.override.yml', 'deploy/naver-engine-backup.override.yml'):
+            for name in ('compose.naver-engine.yml', 'preview-engine.override.yml', 'deploy/naver-engine-backup.override.yml',
+                         'compose.naver-relay.yml', 'preview-relay.override.yml'):
                 path = root/name; path.parent.mkdir(exist_ok=True); path.write_bytes(b'fixture')
                 files[str(path)] = hashlib.sha256(b'fixture').hexdigest()
             receipt = root/('preview-'+package['source_commit']+'.json')
             receipt.write_text(json.dumps(dict(ok=True, stage='prepared', source_commit=package['source_commit'],
-                package=package, images={'engine':image}, files=files)))
+                package=package, images={'engine':image,'relay':relay_image}, files=files)))
             receipt.with_name('preview-start-'+package['source_commit']+'.json').write_text(json.dumps(
                 dict(ok=True, stage='internal_ready', source_commit=package['source_commit'])))
             if passive:
@@ -816,21 +821,26 @@ class CollectionTest(unittest.TestCase):
             values.update(extra or {})
             morning = dict(day=values['today'],scope='today_current_generation_not_run_completion',
                            states={},current_chunks={})
+            login = dict(action='login',window_hours=24,since='2026-09-30T13:00:00+09:00',
+                         until='2026-10-01T13:00:00+09:00',results={},kst_10min=[],
+                         older_bucket_entries=0,unrecognized_time_entries=0)
             if commit in M.MONITORING_COMMITS:
                 values['morning_progress'] = morning
                 values['reports'] = {kind:dict(period_key=None,latest_company_reports=0,
                     versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None) for kind in ('weekly','monthly')}
+                values['login_audit'] = login
             failures = [None,'image','mount','rootfs','output','restart','host_changed','unexpected_daily','exec_failed',
                 'diagnostic','diagnostic_extra','diagnostic_stage','diagnostic_kind',
-                'diagnostic_primary','diagnostic_size','diagnostic_restart']
+                'diagnostic_primary','diagnostic_size','diagnostic_restart','relay_changed','relay_image']
             failures.append('morning_missing' if commit in M.MONITORING_COMMITS else 'unexpected_morning')
             failures.append('reports_missing' if commit in M.MONITORING_COMMITS else 'unexpected_reports')
+            failures.append('login_missing' if commit in M.MONITORING_COMMITS else 'unexpected_login')
             if 'catalog_links' in values:
                 failures.append('catalog_missing')
             if extra:
                 failures += ['daily_limited_missing','managed_catalog_links_missing']
             if passive:
-                failures = [None,'image','mount','rootfs','restart','host_changed']
+                failures = [None,'image','mount','rootfs','restart','host_changed','relay_changed','relay_image']
             for failure in failures:
                 calls, inspections = [], []
                 host, release = Mock(), Mock()
@@ -840,17 +850,24 @@ class CollectionTest(unittest.TestCase):
                 release.prepared_paths.return_value = root, receipt
                 release.sha.side_effect = lambda body: hashlib.sha256(body).hexdigest()
                 release.unique.side_effect = dict
-                release.compose.return_value = ['docker','compose','--project-name','naver-engine']
+                release.compose.side_effect = lambda path, name: ['docker','compose','--project-name','naver-'+name]
                 def command(args, **kwargs):
                     calls.append(args)
                     if args[0] == '/usr/bin/systemctl':
                         return b'ActiveState=active\nSubState=running\nResult=success\nNRestarts=0\n'
                     if args[:3] == ['docker','compose','version']:
                         return b'2.39.4\n'
+                    if args[1:3] == ['image','inspect'] and args[-1] == 'metainc/naver-relay:'+package['source_commit']:
+                        return json.dumps(dict(id='sha256:'+'9'*64 if failure=='relay_image' else relay_image,
+                                               user='10001:10001',source=package['source_commit'])).encode()
                     if args[1:3] == ['image','inspect']:
                         return json.dumps(dict(id=image,user='10001:10001',source='wrong' if failure=='image' else package['source_commit'])).encode()
                     if args[1] == 'compose':
-                        return cid.encode()
+                        return (rid if args[3] == 'naver-relay' else cid).encode()
+                    if args[1] == 'inspect' and args[-1] == rid:
+                        return json.dumps(dict(id=rid,image=relay_image,running=True,user='10001:10001',
+                            project='naver-engine' if failure=='relay_changed' else 'naver-relay',service='naver-relay',
+                            started='2026-10-01T04:00:00.123456789Z',oom_killed=False,restarts=0,readonly=True)).encode()
                     if args[1] == 'inspect':
                         inspections.append(1)
                         return json.dumps(dict(id=cid,image=image,running=True,user='10001:10001',project='naver-engine',
@@ -862,7 +879,7 @@ class CollectionTest(unittest.TestCase):
                         self.assertEqual(kwargs['timeout'], 30)
                         self.assertEqual(kwargs['data'].decode().count('if True:'),
                             int(commit in M.CATALOG_LINKS_COMMITS)+int(commit in M.DAILY_LIMITED_COMMITS)
-                            +2*int(commit in M.MONITORING_COMMITS))
+                            +3*int(commit in M.MONITORING_COMMITS))
                         self.assertEqual(args, ['docker','exec','-i','--user','10001:10001',cid,'python','-I','-B','-'])
                         if failure and failure.startswith('diagnostic'):
                             diagnostic = {'diagnostic_failure':dict(stage='reports',
@@ -892,6 +909,10 @@ class CollectionTest(unittest.TestCase):
                             return json.dumps(dict(values,reports={kind:dict(period_key=None,latest_company_reports=0,
                                 versions=dict(v1=0,v2=0,unknown=0),latest_generated_at=None)
                                 for kind in ('weekly','monthly')})).encode()
+                        if failure == 'login_missing':
+                            return json.dumps({key:value for key,value in values.items() if key != 'login_audit'}).encode()
+                        if failure == 'unexpected_login':
+                            return json.dumps(dict(values,login_audit=login)).encode()
                         return json.dumps(dict(values, secret='SECRET') if failure=='output' else values).encode()
                     self.fail('unexpected command')
                 release.command.side_effect = command
@@ -901,6 +922,11 @@ class CollectionTest(unittest.TestCase):
                     if args[:2] != ['docker','exec']:
                         self.assertTrue(args[0]=='/usr/bin/journalctl' or args[:2]==['docker','logs'])
                         self.assertEqual(kwargs['timeout'],5)
+                        if args[:2] == ['docker','logs']:
+                            # Only identity-verified containers are read, always with per-line timestamps.
+                            self.assertEqual(args[:-1], ['docker','logs','--since','24h','--tail','300','--timestamps'])
+                            self.assertIn(args[-1], (cid,) if failure in ('relay_changed','relay_image') else (cid,rid))
+                            return dict(exit_code=0,reason=None,stdout=(logs or {}).get(args[-1],b''),stderr=b'')
                         return dict(exit_code=0,reason=None,stdout=b'',stderr=b'')
                     if failure == 'exec_failed':
                         return dict(exit_code=1,reason=None,stdout=b'',stderr=b'NameError: PRIVATE\n')
@@ -912,7 +938,7 @@ class CollectionTest(unittest.TestCase):
                         self.assertFalse(result['ok'])
                         self.assertEqual(result['process_failure']['error_kind'], 'NameError')
                         self.assertEqual(result['lifecycle']['engine']['active'], 'active')
-                        self.assertEqual(len(result['recent_runtime_logs']['sources']),3)
+                        self.assertEqual(len(result['recent_runtime_logs']['sources']),4)
                         self.assertNotIn('collection', result)
                         self.assertNotIn('PRIVATE', json.dumps(result))
                         self.assertEqual(len(inspections), 2)
@@ -935,6 +961,14 @@ class CollectionTest(unittest.TestCase):
                         self.assertEqual(result['engine_state_after']['container_restarts'],int(failure!='host_changed'))
                         self.assertNotIn('collection',result)
                         self.assertEqual(result['postflight']['code'],'POST_BASELINE')
+                    elif failure in ('relay_changed','relay_image'):
+                        # Relay evidence is optional: an unverified relay never blocks the engine diagnosis.
+                        result = M.run(package, host, release)
+                        self.assertTrue(result['ok'])
+                        code = 'RELAY_CONTAINER_CHANGED' if failure == 'relay_changed' else 'RELAY_IMAGE_CHANGED'
+                        self.assertEqual(result['relay_state'], {'verified':False,'code':code})
+                        self.assertEqual(result['recent_runtime_logs']['sources'][3],
+                                         dict(unit='relay',source='docker',available=False,code=code))
                     elif failure:
                         with self.assertRaises(ValueError):
                             M.run(package, host, release)
@@ -950,6 +984,15 @@ class CollectionTest(unittest.TestCase):
                         self.assertEqual(result['lifecycle']['engine']['active'], 'active')
                         self.assertEqual(result['compose_version'], '2.39.4')
                         self.assertEqual(result['engine_state'], {'started_at':'2026-10-01T13:00:00+09:00', 'oom_killed':False})
+                        self.assertEqual(result['relay_state'], {'verified':True,'started_at':'2026-10-01T04:00:00.123456+00:00',
+                                                                 'running':True,'oom_killed':False,'container_restarts':0})
+                        sources = [(item['unit'],item['source'],item['available']) for item in result['recent_runtime_logs']['sources']]
+                        self.assertEqual(sources, [('engine','journal',True),('relay','journal',True),
+                                                   ('engine','docker',True),('relay','docker',True)])
+                        for item in result['recent_runtime_logs']['sources']:
+                            self.assertEqual('templates' in item, item['source'] == 'docker')
+                        if logs:
+                            self.run_log_results.append(result)
                 if failure in ('image','mount','rootfs'):
                     self.assertFalse(any(args[1]=='exec' for args in calls))
 
@@ -1034,6 +1077,279 @@ class CollectionTest(unittest.TestCase):
         self.assertIsNone(out['management'])
         self.assertNotIn('SECRET', json.dumps(out))
         self.assertNotIn('987654321', json.dumps(out))
+
+    # ── a981b35 기록 틀 갈래(엔진·중계 컨테이너 출력) · 로그인 기록 집계 ──
+    ENGINE_SAMPLE = [
+        ('2026-10-06T00:05:01.100000000Z', 'ERROR naver_engine.web 화면 API 응답 만들기 실패: TypeError'),
+        ('2026-10-06T00:05:02Z', 'WARNING naver_engine.web 화면 API 저장소 거절: StoreRefused'),
+        ('2026-10-06T00:05:03Z', 'WARNING naver_engine.web 화면 API 저장소 오류: StoreError'),
+        ('2026-10-06T00:05:04Z', 'WARNING naver_engine.web 화면 API 저장소 오류: 가나상회농업회사법인'),
+        ('2026-10-05T23:41:00Z', 'ERROR naver_engine.web 화면 API 뜻밖의 오류: KeyError'),
+        ('2026-10-06T00:15:00Z', 'ERROR naver_engine.web 화면 API 뜻밖의 오류: KeyError'),
+        ('2026-10-06T00:16:00Z', "ERROR naver_engine.web 화면 API 뜻밖의 오류: KeyError 'customer 987654321'"),
+        ('2026-10-06T00:17:00Z', 'WARNING naver_engine.web 열람·쓰기 기록 실패: TimeoutError'),
+        ('2026-10-06T00:17:30Z', 'WARNING naver_engine.web 열람·쓰기 기록 실패: acct_987654321'),
+        ('2026-10-06T00:18:00Z', 'WARNING naver_engine.web 요청한 곳 머리를 믿지 않음 — 믿을 연결이 아님(소켓 서버 표지·루프백 확인)'),
+        ('2026-10-06T00:19:00Z', 'WARNING naver_engine.web 미리보기 실패: URLError'),
+        ('2026-10-06T00:20:00Z', 'ERROR naver_runtime 예약 회차 실패: StoreBusy'),
+        ('2026-10-06T00:21:00Z', 'ERROR naver_runtime.scheduler 예약 작업 실패: reports OperationalError'),
+        ('2026-10-06T00:22:00Z', 'ERROR naver_runtime.scheduler 예약 작업 실패 기록을 저장하지 못했습니다'),
+        ('2026-10-06T00:23:00Z', 'WARNING naver_engine.read [네이버 읽기] 속도 제한이 몰려 5분 멈춤(이번 회차 1번째)'),
+        ('2026-10-06T00:24:00Z', 'WARNING naver_engine.read [네이버 읽기] KEY_REJECTED /ncc/campaigns/{no} HTTP 403 코드 1018 계정 …4321'),
+        ('2026-10-06T00:25:00Z', 'WARNING naver_engine.read [네이버 읽기] BAD_REQUEST /ncc/ads HTTP 400 코드 PRIVATE_CODE 계정 …9876'),
+        ('2026-10-06T00:26:00Z', 'WARNING naver_engine.read [네이버 읽기] OTHER /ncc/x HTTP 40000 코드 None 계정 …5555'),
+        ('2026-10-06T00:27:00Z', '{"error": "startup-refused", "kind": "ConfigError"}'),
+        ('2026-10-06T00:28:00Z', 'Traceback (most recent call last):'),
+        ('2026-10-06T00:29:00Z', '서울 강남구 테헤란로 PRIVATE token=SECRET staff=24680 https://dashboard.metainc.co.kr/naver/?c=987654321'),
+        ('2026-10-06T00:30:00Z', '관제 엔진 중계 실패: engine-timeout')]
+    RELAY_SAMPLE = [
+        ('2026-10-05T23:33:50Z', 'INFO:     Started server process [1]'),
+        ('2026-10-05T23:33:50Z', 'INFO:     Uvicorn running on unix socket /run/naver-relay/relay.sock (Press CTRL+C to quit)'),
+        ('2026-10-06T00:40:00Z', '관제 엔진 중계 실패: relay-busy'),
+        ('2026-10-06T00:41:00Z', '관제 엔진 중계 실패: engine-bad-answer'),
+        ('2026-10-06T00:52:00Z', '관제 엔진 중계 실패: engine-bad-answer'),
+        ('2026-10-06T00:53:00Z', '관제 엔진 중계 실패: FileNotFoundError'),
+        ('2026-10-06T00:54:00Z', '관제 엔진 중계 실패: PRIVATE-987654321'),
+        ('2026-10-06T00:55:00Z', 'ERROR:    Exception in ASGI application'),
+        ('2026-10-06T00:56:00Z', 'GET /api/naver-auto/clients/987654321 PRIVATE 가나상회'),
+        ('2026-10-06T01:00:00Z', 'INFO:     Shutting down'),
+        ('2026-10-06T01:00:01Z', 'INFO:     Finished server process [1]')]
+    PRIVATE_MARKERS = ('987654321','4321','9876','5555','1018','24680','PRIVATE','SECRET','가나상회','테헤란',
+                       'customer','acct','/ncc','KEY_REJECTED','BAD_REQUEST','token','relay.sock','dashboard','…')
+
+    def docker_raw(self, sample, extra=b''):
+        return b'\n'.join((at+' '+message).encode() for at, message in sample)+b'\nPRIVATE line without timestamp 987654321\n'+extra
+
+    def test_engine_container_lines_are_classified_by_exact_a981b35_templates_without_private_values(self):
+        result = M.log_projection(self.docker_raw(self.ENGINE_SAMPLE), source='docker', unit='engine')
+        templates = result['templates']
+        self.assertEqual(templates['template_release'], 'a981b35')
+        cats = templates['categories']
+        self.assertEqual(set(cats), {'web_response_failed','web_store_refused','web_store_error','web_unexpected_error',
+            'audit_write_failed','untrusted_source_header','preview_failed','cycle_failed','job_failed',
+            'failure_record_failed','naver_rate_pause','naver_http_warning','startup_refused'})
+        # Trailing raw text, Traceback, free text, a relay line and the untimed line never match a template.
+        self.assertEqual(templates['unmatched_entries'], 5)
+        self.assertEqual(result['entries_inspected'], len(self.ENGINE_SAMPLE)+1)
+        self.assertEqual(cats['web_unexpected_error'], dict(count=2, first_at='2026-10-05T23:41:00+00:00',
+            last_at='2026-10-06T00:15:00+00:00', kst_10min={'2026-10-06T08:40+09:00':1,'2026-10-06T09:10+09:00':1},
+            older_bucket_entries=0, kinds={'KeyError':2}, other_value_entries=0))
+        self.assertEqual(cats['web_response_failed']['first_at'], '2026-10-06T00:05:01.100000+00:00')
+        self.assertEqual(cats['web_store_error']['kinds'], {'StoreError':1,'UNRECOGNIZED':1})
+        self.assertEqual(cats['web_store_refused']['kinds'], {'StoreRefused':1})
+        self.assertEqual(cats['audit_write_failed']['kinds'], {'TimeoutError':1,'UNRECOGNIZED':1})
+        self.assertEqual(cats['audit_write_failed']['kst_10min'], {'2026-10-06T09:10+09:00':2})
+        self.assertEqual(cats['preview_failed']['kinds'], {'URLError':1})
+        self.assertEqual(cats['cycle_failed']['kinds'], {'StoreBusy':1})
+        self.assertEqual(cats['job_failed']['kinds'], {'OperationalError':1})
+        self.assertEqual(cats['startup_refused']['kinds'], {'ConfigError':1})
+        self.assertEqual(cats['naver_http_warning']['http_status'], {'400':1,'403':1,'UNRECOGNIZED':1})
+        self.assertNotIn('kinds', cats['naver_http_warning'])
+        for fixed in ('untrusted_source_header','failure_record_failed','naver_rate_pause'):
+            self.assertEqual(set(cats[fixed]), {'count','first_at','last_at','kst_10min','older_bucket_entries'})
+            self.assertEqual(cats[fixed]['count'], 1)
+        # The earlier event view is unchanged: scheduler lines stay events, template lines are not new events.
+        self.assertIn(dict(event='job_failed',stage='reports',error_kind='OperationalError',count=1), result['events'])
+        self.assertIn(dict(event='cycle_failed',error_kind='StoreBusy',count=1), result['events'])
+        dumped = json.dumps(result, ensure_ascii=False)
+        for private in self.PRIVATE_MARKERS:
+            self.assertNotIn(private, dumped)
+        journal = M.log_projection(b'', source='journal', unit='engine')
+        self.assertNotIn('templates', journal)
+
+    def test_relay_container_lines_use_relay_whitelist_and_fixed_uvicorn_labels(self):
+        result = M.log_projection(self.docker_raw(self.RELAY_SAMPLE), source='docker', unit='relay')
+        cats = result['templates']['categories']
+        self.assertEqual(set(cats), {'relay_failed','uvicorn_started','uvicorn_running','uvicorn_asgi_exception',
+                                     'uvicorn_shutting_down','uvicorn_finished'})
+        self.assertEqual(cats['relay_failed']['kinds'], {'engine-bad-answer':2,'FileNotFoundError':1,
+                                                         'UNRECOGNIZED':1,'relay-busy':1})
+        self.assertEqual(cats['relay_failed']['kst_10min'], {'2026-10-06T09:40+09:00':2,'2026-10-06T09:50+09:00':3})
+        self.assertEqual(cats['uvicorn_started']['first_at'], '2026-10-05T23:33:50+00:00')
+        self.assertEqual(result['templates']['unmatched_entries'], 2)
+        self.assertIn(dict(event='relay_failed',error_kind='engine-bad-answer',count=2), result['events'])
+        dumped = json.dumps(result, ensure_ascii=False)
+        for private in self.PRIVATE_MARKERS:
+            self.assertNotIn(private, dumped)
+        # Engine templates do not apply to the relay and vice versa.
+        engine_view = M.log_projection(self.docker_raw(self.RELAY_SAMPLE), source='docker', unit='engine')
+        self.assertEqual(engine_view['templates']['categories'], {})
+
+    def test_template_buckets_and_kind_sets_are_capped_with_explicit_remainders(self):
+        sample = [('2026-10-05T%02d:%d5:00Z' % (hour, tens), 'WARNING naver_engine.web 열람·쓰기 기록 실패: '+kind)
+                  for hour in range(5) for tens in range(6) for kind in ('Kind'+chr(65+(hour*6+tens) % 7),)]
+        result = M.log_projection(b'\n'.join((at+' '+m).encode() for at, m in sample), source='docker', unit='engine')
+        row = result['templates']['categories']['audit_write_failed']
+        self.assertEqual(row['count'], 30)
+        self.assertEqual(len(row['kst_10min']), M.LOG_BUCKET_MAX)
+        self.assertEqual(row['older_bucket_entries'], 30-M.LOG_BUCKET_MAX)
+        self.assertEqual(min(row['kst_10min']), '2026-10-05T10:00+09:00')
+        self.assertEqual(len(row['kinds']), M.LOG_KIND_MAX)
+        self.assertEqual(sum(row['kinds'].values())+row['other_value_entries'], 30)
+        self.assertEqual(M.type_name('Error123'), 'UNRECOGNIZED')
+        self.assertEqual(M.type_name('_Truncated'), '_Truncated')
+        self.assertEqual(M.type_name('9Error'), 'UNRECOGNIZED')
+        self.assertEqual(M.type_name('x'*65), 'UNRECOGNIZED')
+
+    def test_relay_identity_is_checked_like_the_engine_and_failures_are_fixed_codes(self):
+        commit, image = M.SCREEN_OVERHAUL_COMMIT, 'sha256:'+'8'*64
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            files = {}
+            for name in ('compose.naver-relay.yml','preview-relay.override.yml'):
+                (root/name).write_bytes(b'fixture'); files[str(root/name)] = hashlib.sha256(b'fixture').hexdigest()
+            prepared = dict(images={'relay':image}, files=files)
+            def release(ps=b'7'*64, inspect=None, error=None):
+                mock = Mock()
+                mock.sha.side_effect = lambda body: hashlib.sha256(body).hexdigest()
+                mock.compose.side_effect = lambda path, name: ['docker','compose','--project-name','naver-'+name]
+                state = dict(id='7'*64,image=image,running=True,user='10001:10001',project='naver-relay',
+                             service='naver-relay',started='2026-10-05T23:33:44.5Z',oom_killed=False,restarts=0,readonly=True)
+                state.update(inspect or {})
+                def command(args, **kwargs):
+                    if error:
+                        raise error
+                    if args[1:3] == ['image','inspect']:
+                        return json.dumps(dict(id=image,user='10001:10001',source=commit)).encode()
+                    if args[1] == 'compose':
+                        return ps
+                    return json.dumps(state).encode()
+                mock.command.side_effect = command
+                return mock
+            identity, state = M.relay_container(release(), root, prepared, commit)
+            self.assertEqual(identity, '7'*64)
+            self.assertEqual(state, {'verified':True,'started_at':'2026-10-05T23:33:44.500000+00:00','running':True,
+                                     'oom_killed':False,'container_restarts':0})
+            for mock, code in ((release(ps=b'PRIVATE'), 'RELAY_CONTAINER_ID'),
+                               (release(inspect={'readonly':False}), 'RELAY_CONTAINER_CHANGED'),
+                               (release(inspect={'service':'naver-engine'}), 'RELAY_CONTAINER_CHANGED'),
+                               (release(inspect={'restarts':'PRIVATE'}), 'RELAY_UNVERIFIED'),
+                               (release(error=RuntimeError('PRIVATE /var/lib 987654321')), 'RELAY_UNVERIFIED')):
+                self.assertEqual(M.relay_container(mock, root, prepared, commit), (code, {'verified':False,'code':code}))
+            self.assertEqual(M.relay_container(release(), root, dict(prepared, images={}), commit)[0], 'RELAY_PREPARED_IMAGE')
+            (root/'preview-relay.override.yml').write_bytes(b'changed')
+            self.assertEqual(M.relay_container(release(), root, prepared, commit)[0], 'RELAY_COMPOSE_CHANGED')
+        calls = []
+        def capture(args, **kwargs):
+            calls.append(args)
+            return dict(exit_code=0,reason=None,stdout=b'',stderr=b'')
+        with patch.object(M, 'capture_process', side_effect=capture):
+            for relay, code in (('RELAY_IMAGE_CHANGED','RELAY_IMAGE_CHANGED'), ('PRIVATE 987654321','RELAY_NOT_CHECKED'),
+                                (None,'RELAY_NOT_CHECKED')):
+                calls.clear()
+                out = M.recent_runtime_logs('d'*64, relay)
+                self.assertEqual(out['sources'][3], dict(unit='relay',source='docker',available=False,code=code))
+                self.assertEqual([args[-1] for args in calls if args[:2] == ['docker','logs']], ['d'*64])
+                self.assertNotIn('PRIVATE', json.dumps(out))
+
+    def test_passive_run_reads_both_container_samples_and_never_opens_the_database(self):
+        self.run_log_results = []
+        logs = {'d'*64:self.docker_raw(self.ENGINE_SAMPLE), '7'*64:self.docker_raw(self.RELAY_SAMPLE)}
+        with patch.object(M.sqlite3, 'connect', side_effect=AssertionError('database opened')), \
+                patch.object(M, 'collect_login_audit', side_effect=AssertionError('database read')), \
+                patch.object(M, 'script', side_effect=AssertionError('reader script built')):
+            self.check_run_diagnostics(M.SCREEN_OVERHAUL_COMMIT, passive=True, logs=logs)
+        self.assertEqual(len(self.run_log_results), 1)
+        result = self.run_log_results[0]
+        self.assertFalse(result['database_opened'])
+        self.assertNotIn('login_audit', json.dumps(result))
+        sources = {(item['unit'],item['source']):item for item in result['recent_runtime_logs']['sources']}
+        self.assertEqual(sources[('engine','docker')]['templates']['categories']['audit_write_failed']['count'], 2)
+        self.assertEqual(sources[('relay','docker')]['templates']['categories']['relay_failed']['count'], 5)
+        dumped = json.dumps(result, ensure_ascii=False)
+        for private in self.PRIVATE_MARKERS:
+            self.assertNotIn(private, dumped)
+
+    def login_rows(self, now):
+        def at(delta):
+            return (now-delta).isoformat(timespec='microseconds')
+        from datetime import timedelta
+        return [(at(timedelta(minutes=5)),0,'login','session',None,'ok'),
+                (at(timedelta(minutes=6)),987654321,'login','session',987654322,'narrowed'),
+                (at(timedelta(minutes=7)),None,'login','session',None,'erp-unavailable'),
+                (at(timedelta(hours=3)),None,'login','session',None,'throttled'),
+                (at(timedelta(hours=3)),None,'login','session',None,'PRIVATE_RESULT_987654321'),
+                (at(timedelta(hours=25)),0,'login','session',None,'ok'),
+                (at(timedelta(minutes=5)),0,'board','board',None,'ok'),
+                (at(timedelta(minutes=5)),0,'view','client',987654321,'ok'),
+                (now.strftime('%Y-%m-%d')+' PRIVATE',0,'login','session',None,'ok')]
+
+    def test_login_audit_counts_results_and_kst_buckets_under_the_actual_reader_authorizer(self):
+        fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
+        db = sqlite3.connect(':memory:', isolation_level=None)
+        self.addCleanup(db.close)
+        for sql in fixture['new_observed_unsealed']['sql']:
+            db.execute(sql)
+        now = datetime.fromisoformat('2026-10-06T10:31:00.250000+09:00')
+        for row in self.login_rows(now):
+            db.execute('INSERT INTO naver_auto_access_log (at,emp_idx,action,target_kind,target_id,result) VALUES (?,?,?,?,?,?)', row)
+        before = db.total_changes
+        scope = dict(_A=sqlite3)
+        exec(fixture['new_observed_unsealed']['authorizer'], scope)
+        db.set_authorizer(scope['_authorizer'](scope['PHASE_READ']))
+        db.execute('BEGIN')
+        result = M.collect_login_audit(db, now)
+        db.execute('ROLLBACK')
+        self.assertEqual(db.total_changes, before)
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute('DELETE FROM naver_auto_access_log')
+        self.assertEqual(result['results'], {
+            'ok':dict(count=2,first_at='2026-10-06T10:26:00.250000+09:00',last_at='2026-10-06T10:26:00.250000+09:00'),
+            'narrowed':dict(count=1,first_at='2026-10-06T10:25:00.250000+09:00',last_at='2026-10-06T10:25:00.250000+09:00'),
+            'erp-unavailable':dict(count=1,first_at='2026-10-06T10:24:00.250000+09:00',last_at='2026-10-06T10:24:00.250000+09:00'),
+            'throttled':dict(count=1,first_at='2026-10-06T07:31:00.250000+09:00',last_at='2026-10-06T07:31:00.250000+09:00'),
+            'UNRECOGNIZED':dict(count=1,first_at='2026-10-06T07:31:00.250000+09:00',last_at='2026-10-06T07:31:00.250000+09:00')})
+        self.assertEqual(result['kst_10min'], [
+            dict(bucket='2026-10-06T07:30+09:00', results={'throttled':1,'UNRECOGNIZED':1}),
+            dict(bucket='2026-10-06T10:20+09:00', results={'ok':1,'narrowed':1,'erp-unavailable':1})])
+        self.assertEqual((result['unrecognized_time_entries'], result['older_bucket_entries']), (1, 0))
+        self.assertEqual((result['since'], result['until']),
+                         ('2026-10-05T10:31:00.250000+09:00','2026-10-06T10:31:00.250000+09:00'))
+        self.assertEqual(M.login_audit_projection(result), result)
+        for private in ('987654321','987654322','PRIVATE','emp_idx','target','board','view','client'):
+            self.assertNotIn(private, json.dumps(result))
+
+    def test_login_audit_bucket_cap_and_projection_refuses_identities_drift_and_mismatch(self):
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        db.execute('CREATE TABLE naver_auto_access_log (log_id INTEGER PRIMARY KEY, at TEXT, emp_idx INTEGER, '
+                   'action TEXT, target_kind TEXT, target_id INTEGER, result TEXT)')
+        now = datetime.fromisoformat('2026-10-06T10:31:00+09:00')
+        from datetime import timedelta
+        for n in range(30):
+            db.execute("INSERT INTO naver_auto_access_log VALUES (NULL,?,0,'login','session',NULL,'ok')",
+                       ((now-timedelta(minutes=10*n+1)).isoformat(timespec='microseconds'),))
+        result = M.collect_login_audit(db, now)
+        self.assertEqual(len(result['kst_10min']), M.LOGIN_BUCKET_MAX)
+        self.assertEqual(result['older_bucket_entries'], 30-M.LOGIN_BUCKET_MAX)
+        self.assertEqual(result['results']['ok']['count'], 30)
+        mutations = (lambda v:v.update(emp_idx=987654321), lambda v:v['results'].update(PRIVATE=dict(count=1,first_at=None,last_at=None)),
+                     lambda v:v['results']['ok'].update(count=True), lambda v:v['results']['ok'].update(target_id=1),
+                     lambda v:v['kst_10min'][0].update(bucket='PRIVATE'), lambda v:v['kst_10min'][0]['results'].update(ok=0),
+                     lambda v:v['kst_10min'].reverse(), lambda v:v.update(older_bucket_entries=0),
+                     lambda v:v.update(window_hours=48), lambda v:v.update(since=v['until']),
+                     lambda v:v['results']['ok'].update(first_at='PRIVATE'),
+                     lambda v:v['kst_10min'].extend(v['kst_10min'][:1]))
+        for mutate in mutations:
+            changed = json.loads(json.dumps(result)); mutate(changed)
+            with self.subTest(value=changed), self.assertRaises(ValueError) as caught:
+                M.login_audit_projection(changed)
+            self.assertNotIn('PRIVATE', str(caught.exception))
+        empty = M.collect_login_audit(db, now+timedelta(days=3))
+        self.assertEqual((empty['results'], empty['kst_10min']), ({}, []))
+
+    def test_emitted_script_adds_login_audit_and_failures_keep_the_login_stage(self):
+        now = datetime.now(M.KST)
+        result, output = self.complete_emitted_fixture(login_rows=self.login_rows(now))
+        projected = M.project(result)
+        self.assertEqual(projected['login_audit']['results']['ok']['count'], 2)
+        self.assertEqual(projected['login_audit']['unrecognized_time_entries'], 1)
+        self.assertNotIn('987654321', output)
+        self.assertNotIn('PRIVATE', output)
+        failed, output = self.complete_emitted_fixture(deny_glob=True, login_rows=self.login_rows(now))
+        self.assertEqual(failed, {'diagnostic_failure':{'stage':'login_audit','error_kind':'OperationalError',
+                                                        'sqlite_primary':'SQLITE_ERROR'}})
+        self.assertNotIn('987654321', output)
 
 
 if __name__ == '__main__':
