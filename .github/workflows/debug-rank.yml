@@ -1158,8 +1158,40 @@ jobs:
                 printf "5|%s|%s\t  %s  %-38s %4d건 · 위치 %d곳 · %s ~ %s\n", dd, b, dd, b, dayc[dd SUBSEP b], dplaces[dd SUBSEP b], substr(dfirst[dd SUBSEP b], 12), substr(dlast[dd SUBSEP b], 12)
             }
             AWK
+              echo "-- nginx 기록 설정(기록 지시어·관제 주소 서버 구역의 위치 이름만 · 값 원문 없음) --"
+              python3 - <<'PY' || echo "  (설정 읽기 실패)"
+            import re, subprocess
+            def run(cmd):
+                try:
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                    return r.stdout if r.returncode == 0 and r.stdout else None
+                except Exception:
+                    return None
+            out = run(['nginx', '-T']) or run(['sudo', '-n', 'nginx', '-T'])
+            if not out:
+                print('  (nginx -T 실행 불가)')
+            else:
+                for section in re.split(r'(?m)^# configuration file ', out)[1:]:
+                    name, _, body = section.partition(':\n')
+                    logs = [l.strip() for l in body.splitlines() if re.match(r'\s*(access_log|log_format)\b', l)]
+                    dash = 'dashboard.metainc.co.kr' in body
+                    if not logs and not dash:
+                        continue
+                    print(f'  [{name}] 관제 주소 포함={dash}')
+                    for l in logs:
+                        print('    ' + re.sub(r'\s+', ' ', l)[:160])
+                    if dash:
+                        depth = 0
+                        for l in body.splitlines():
+                            t = l.strip()
+                            if re.match(r'(server_name|location|listen|access_log|return|include)\b', t):
+                                print('      ' + ('  ' * min(depth, 4)) + re.sub(r'\s+', ' ', t)[:120])
+                            depth += l.count('{') - l.count('}')
+            PY
+              echo "-- /var/log/nginx 아래 파일(이름·크기) --"
+              find /var/log/nginx -maxdepth 2 -type f -printf '  %P %s바이트 %TY-%Tm-%Td %TH:%TM\n' 2>/dev/null | sort | head -60
               echo "-- 읽은 접근 기록 파일(이름·줄 수) --"
-              NE_FILES=$(ls -1tr /var/log/nginx/ 2>/dev/null | grep -E 'access' || true)
+              NE_FILES=$(cd /var/log/nginx 2>/dev/null && find . -maxdepth 2 -type f ! -name '*error*' -printf '%T@ %P\n' | sort -n | cut -d' ' -f2- || true)
               for f in $NE_FILES; do
                 printf '  %s %s줄\n' "$f" "$(zcat -f "/var/log/nginx/$f" 2>/dev/null | wc -l)"
               done
