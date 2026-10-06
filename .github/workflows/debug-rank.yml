@@ -1073,12 +1073,23 @@ jobs:
   diagnose:
     if: ${{ !inputs.ad_prepare || inputs.ad_prepare == 'off' }}
     runs-on: ubuntu-latest
+    # 관제 엔진 배포·전환과 겹쳐 읽지 않게 같은 줄에 선다(진단 갈래 diag/naver-id-worksheet 전용 · 머지 금지).
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
     steps:
       # 브랜치 코드 미리보기용 — 평소(off)엔 받아만 두고 쓰지 않는다.
       - uses: actions/checkout@v4
       - name: 브랜치 rank_link.py 인코딩
         if: ${{ github.event.inputs.use_branch_code == 'on' }}
         run: echo "RL_SRC_GZ=$(gzip -9c backend/rank_link.py | base64 -w0)" >> "$GITHUB_ENV"
+      - name: 광고 계정 ID 작업표 — 추출 코드·받는 인증서 포장(복호 키는 저장소에 없음)
+        if: ${{ github.event.inputs.collector == 'naver-id-worksheet' }}
+        run: |
+          set -eu
+          echo "IDWS_SRC_GZ=$(gzip -9nc diag/idws/idws_projection.py | base64 -w0)" >> "$GITHUB_ENV"
+          echo "IDWS_CERT_B64=$(base64 -w0 diag/idws/idws.crt)" >> "$GITHUB_ENV"
+          sha256sum diag/idws/idws_projection.py diag/idws/idws.crt
 
       - name: Rank batch read-only diagnosis
         uses: appleboy/ssh-action@v1.0.3
@@ -1090,13 +1101,83 @@ jobs:
           IN_STRUCTURE: ${{ github.event.inputs.structure }}
           IN_EXPIRED: ${{ github.event.inputs.expired }}
           IN_BRANCH_CODE: ${{ github.event.inputs.use_branch_code }}
+          IDWS_SRC_GZ: ${{ env.IDWS_SRC_GZ }}
+          IDWS_CERT_B64: ${{ env.IDWS_CERT_B64 }}
         with:
-          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_BRANCH_CODE
+          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_BRANCH_CODE,IDWS_SRC_GZ,IDWS_CERT_B64
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 90s
+          command_timeout: ${{ github.event.inputs.collector == 'naver-id-worksheet' && '300s' || '90s' }}
           script: |
+            if [ "$IN_COLLECTOR" = "naver-id-worksheet" ]; then
+              # 광고 계정 ID 확인 작업표(2026-10-06 대표 지시) — 관제 엔진(25dc24d) 읽기 전용 추출 · 이 갈래는 머지하지 않는다.
+              # ⚠️ 이 저장소는 공개다. 업체명·직원명·광고 계정 번호는 엔진 컨테이너에서 나오자마자 압축·암호화하고 암호문만 낸다.
+              #    복호 키는 저장소 밖에만 있다. 평문으로는 건수·상태 이름표·시각만 낸다. 받은 뒤 이 실행의 기록을 지운다.
+              #    읽기 = 엔진의 읽기 전용 열기(mode=ro · 읽기만 허용) 한 번 · 사용자 10001 · 메모리 상한 192MB · 쓰기·재시작·외부 호출 없음.
+              IDWS_SH=$(mktemp)
+              cat > "$IDWS_SH" <<'IDWS'
+            set -u
+            ENGINE_SRC=25dc24d8760a06b2321d4fbde481769c3ce32c34
+            W=$(mktemp -d)
+            trap 'rm -rf "$W"' EXIT
+            echo "== 광고 계정 ID 작업표 추출 (관제 엔진 읽기 전용 · 결과는 암호문만) =="
+            printf '%s' "${IDWS_SRC_GZ:-}" | base64 -d 2>/dev/null | gunzip > "$W/p.py" 2>/dev/null || { echo "IDWS_FAIL=SOURCE_DECODE"; exit 1; }
+            printf '%s' "${IDWS_CERT_B64:-}" | base64 -d > "$W/c.pem" 2>/dev/null || { echo "IDWS_FAIL=CERT_DECODE"; exit 1; }
+            [ -s "$W/p.py" ] && [ -s "$W/c.pem" ] || { echo "IDWS_FAIL=INPUT_EMPTY"; exit 1; }
+            echo "추출 코드 sha256=$(sha256sum < "$W/p.py" | cut -c1-64)"
+            echo "받는 인증서 지문=$(openssl x509 -in "$W/c.pem" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)"
+            IDS=$(docker ps -a -q --no-trunc --filter label=com.docker.compose.project=naver-engine --filter label=com.docker.compose.service=naver-engine)
+            N=$(printf '%s\n' "$IDS" | grep -c . || true)
+            [ "$N" = 1 ] || { echo "IDWS_FAIL=ENGINE_CONTAINER_COUNT_$N"; exit 1; }
+            CID=$IDS
+            F='{{.State.Running}}|{{.Config.User}}|{{.HostConfig.ReadonlyRootfs}}|{{.State.StartedAt}}|{{.RestartCount}}|{{.Image}}|{{range .Mounts}}{{if eq .Destination "/var/lib/naver-engine"}}{{.Type}}:{{.Source}}{{end}}{{end}}'
+            B=$(docker inspect -f "$F" "$CID") || { echo "IDWS_FAIL=ENGINE_INSPECT"; exit 1; }
+            IFS='|' read -r RUN USR RO STARTED RESTARTS IMG MNT <<EOF
+            $B
+            EOF
+            SRC=$(docker image inspect -f '{{index .Config.Labels "metainc.naver.preview.source"}}' "$IMG" 2>/dev/null || true)
+            if [ "$RUN" != true ] || [ "$USR" != 10001:10001 ] || [ "$RO" != true ] || [ "$MNT" != "bind:/var/lib/metainc/naver-engine" ]; then
+              echo "IDWS_FAIL=ENGINE_STATE"
+              exit 1
+            fi
+            [ "$SRC" = "$ENGINE_SRC" ] || { echo "IDWS_FAIL=ENGINE_SOURCE"; exit 1; }
+            echo "엔진: 출처 ${SRC:0:7} · 사용자 10001 · 루트 읽기 전용 · 데이터 묶음 확인 · 시작 $STARTED · 재시작 $RESTARTS"
+            set -o pipefail
+            if timeout 150 docker exec -i --user 10001:10001 "$CID" python -I -B - < "$W/p.py" 2> "$W/err" \
+                | gzip -9n | openssl cms -encrypt -binary -aes256 -outform DER -out "$W/out.der" "$W/c.pem"; then
+              RC=0
+            else
+              RC=$?
+            fi
+            set +o pipefail
+            grep -m1 -E '^IDWS_SUMMARY=' "$W/err" || echo "IDWS_SUMMARY=(없음)"
+            A=$(docker inspect -f "$F" "$CID" 2>/dev/null || true)
+            if [ "$A" = "$B" ]; then
+              echo "엔진 상태 전후 같음(실행 중 · 시작 시각 · 재시작 수 · 이미지 · 데이터 묶음)"
+            else
+              echo "IDWS_FAIL=ENGINE_CHANGED"
+              exit 1
+            fi
+            if [ "$RC" != 0 ]; then
+              echo "IDWS_FAIL=READER_RC_$RC"
+              # 오류 원문은 업체명이 섞일 수 있어 내지 않는다 — 마지막 줄의 예외 종류나 고정 코드만.
+              tail -n 1 "$W/err" | grep -oE '^[A-Za-z_.]*(Error|Exception|Interrupt)\b|^[A-Z_]{3,64}$' | head -1 || true
+              exit 1
+            fi
+            BYTES=$(wc -c < "$W/out.der")
+            [ "$BYTES" -gt 0 ] && [ "$BYTES" -le 4000000 ] || { echo "IDWS_FAIL=OUTPUT_SIZE_$BYTES"; exit 1; }
+            echo "IDWS_BYTES=$BYTES IDWS_SHA256=$(sha256sum < "$W/out.der" | cut -c1-64)"
+            echo "IDWS-BEGIN"
+            base64 -w 76 "$W/out.der"
+            echo "IDWS-END"
+            exit 0
+            IDWS
+              bash "$IDWS_SH"
+              IDWS_RC=$?
+              rm -f "$IDWS_SH"
+              exit $IDWS_RC
+            fi
             echo "== 컨테이너 상태 =="
             docker ps --filter name=logic-analysis --format '{{.Names}} {{.Status}}'
             docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}}' logic-analysis
