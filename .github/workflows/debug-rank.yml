@@ -46,6 +46,10 @@ on:
         description: '기계별 소화량·완료율(3대 확장 판단용) — off(기본) / on. 최근 4일 기계별 시도·완료·멈춘 이유·읽은 페이지(숫자만).'
         required: false
         default: 'off'
+      naver_link:
+        description: "네이버 관제와 우리 수집·검색량 오류의 접점 (on 이면 실행 · 읽기 전용 · IP·키워드 미출력)"
+        required: false
+        default: ""
       board_live:
         description: '🛰 수집 현황판(#286) 라이브 확인 — off(기본) / on. 파일·경로·인증·번들 표지 + 실제 DB 로 현황판 계산(숫자만 · 키워드 미출력).'
         required: false
@@ -424,6 +428,77 @@ jobs:
                 nav = o.get("nav") or {}
                 print("   %s  기계%s  쪽%s  %-8s %-14s %s" % (str(at)[11:19], hb.get(str(o.get("workerId") or ""), "?"), o.get("pagesRead"), str(nav.get("how", ""))[:8], (reason or "")[:14], kind))
             PY
+      - name: 🔗 네이버 관제 접점 (naver_link=on · 읽기 전용)
+        if: ${{ github.event.inputs.naver_link == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 120s
+          script: |
+            # ⚠️ 공개 저장소 — IP 원문·키워드·주소 질의는 찍지 않는다(일치 여부·해시 앞 6자·경로 뼈대만).
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            $S sh -c "cat /var/log/nginx/*access*.log.1 /var/log/nginx/*access*.log 2>/dev/null" > /tmp/_nl.txt 2>/dev/null || true
+            echo "== 접속 기록 줄 수: $(wc -l < /tmp/_nl.txt) =="
+            echo "== 서버 컨테이너 목록(이름·상태만) =="
+            docker ps --format '{{.Names}} | {{.Status}}' 2>/dev/null || true
+            echo "== systemd 관제 계열 서비스(이름·상태만) =="
+            systemctl list-units --type=service --no-pager --plain 2>/dev/null | grep -iE 'naver|relay|engine|ad-' | awk '{print $1, $3, $4}' || true
+            python3 - <<'PY'
+            import re, collections, hashlib
+            L = open("/tmp/_nl.txt", errors="ignore").read().splitlines()
+            rx = re.compile(r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d{3}) \S+ "[^"]*" "([^"]*)"')
+            rows = []
+            for ln in L:
+                m = rx.match(ln)
+                if m: rows.append(m.groups())
+            print("  읽은 요청", len(rows))
+            def h(ip): return hashlib.sha256(ip.encode()).hexdigest()[:6]
+            def skel(path):
+                p = path.split("?")[0]
+                p = re.sub(r"%[0-9A-Fa-f]{2}", "", p)
+                p = re.sub(r"[^\x21-\x7e]", "", p)
+                p = re.sub(r"/\d+", "/#", p)
+                return p[:60]
+            def ua(u):
+                k = []
+                for t in ("Windows", "Macintosh", "Linux", "python", "curl", "Go-http", "Chrome", "Edg", "Safari", "Java", "okhttp", "node"):
+                    if t in u: k.append(t)
+                return ",".join(k) or (u[:12] or "-")
+            coll = {r[0] for r in rows if "/api/collector/" in r[3] and "/health" not in r[3]}
+            print("  수집기(serp·keywords·heartbeat 등) 보낸 곳:", sorted(h(i) for i in coll))
+            # ① 수집기와 같은 곳이 /api/collector 말고 무엇을 부르나
+            other = collections.Counter()
+            for ip, ts, me, path, st, u in rows:
+                if ip in coll and "/api/collector/" not in path:
+                    other[(skel(path), st)] += 1
+            print("  ① 수집기와 같은 곳이 부른 다른 경로(상위 15):")
+            for (p, st), n in other.most_common(15): print(f"     {n:6d}  {st}  {p}")
+            if not other: print("     없음")
+            # ② 관제·자동입찰 계열 경로를 누가 부르나
+            nav = collections.Counter(); navsrc = collections.Counter()
+            for ip, ts, me, path, st, u in rows:
+                sp = skel(path)
+                if re.search(r"naver|autobid|relay|/ad/|/ad-|control", sp, re.I) and "/api/collector" not in sp:
+                    nav[(sp, st)] += 1; navsrc[(h(ip), "수집기와 같음" if ip in coll else "다름", ua(u))] += 1
+            print("  ② 관제·자동입찰 계열로 보이는 경로(상위 12):")
+            for (p, st), n in nav.most_common(12): print(f"     {n:6d}  {st}  {p}")
+            if not nav: print("     없음")
+            print("     보낸 곳:", navsrc.most_common(8))
+            # ③ 오늘 검색량 오류 시각대(13:19~13:29 · 14:40~14:42) 우리 분석 요청
+            print("  ③ 10/6 13:19~13:29 · 14:40~14:42 의 /api 요청(수집기·health 제외):")
+            for ip, ts, me, path, st, u in rows:
+                if not ts.startswith("06/Oct/2026:"): continue
+                hm = ts[12:17]
+                if not ("13:19" <= hm <= "13:29" or "14:40" <= hm <= "14:42"): continue
+                sp = skel(path)
+                if not sp.startswith("/api/") or "/api/collector" in sp or sp.endswith("/health"): continue
+                print(f"     {ts[12:20]}  {me:5s} {st}  {sp:42s} {h(ip)} {'수집기와같음' if ip in coll else ''} {ua(u)}")
+            PY
+            rm -f /tmp/_nl.txt
+
       - name: 🛰 수집 현황판 라이브 확인 (board_live=on · 읽기 전용)
         if: ${{ github.event.inputs.board_live == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
