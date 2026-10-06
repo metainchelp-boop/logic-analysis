@@ -2177,6 +2177,12 @@ class ManagedStorage:
             """SELECT * FROM naver_auto_performance_job WHERE cycle_day>=?
                OR status IN ('reading','partial','retry','source_wait')""",
             ((day-timedelta(days=40)).isoformat(),)))}
+        # 계정별 묶음(NV-S00) — 아래 두 곳이 계정마다 지난 작업 전체(40일치)를 훑어 계정 수 × 작업 수가 쓰기 줄 CPU 를 먹었다.
+        # 계정 번호가 다른 줄은 두 곳 모두 첫 조건에서 곧장 건너뛰므로, 같은 계정 줄만 **원래 차례 그대로** 모아 두고 그것만 본다
+        # (조건 · 차례 · 오류가 나는 자리 무변경 — 계정 번호 조건도 그대로 다시 본다).
+        prior_by_customer = {}
+        for saved in prior.values():
+            prior_by_customer.setdefault(saved["customer_id"], []).append(saved)
         candidates = []
         backfill = []
 
@@ -2196,7 +2202,7 @@ class ManagedStorage:
                        and saved.get("generation", "") >= job["generation"]
                        and saved["period_start"] <= job["period_start"] <= job["period_end"] <= saved["period_end"]
                        and saved["status"] not in ("limited", "reauth_required")
-                       and saved["job_key"] != job["job_key"] for saved in prior.values())
+                       and saved["job_key"] != job["job_key"] for saved in prior_by_customer.get(job["customer_id"], ()))
 
         for cid, row in decisions.items():
             decision = row["decision"]
@@ -2212,7 +2218,7 @@ class ManagedStorage:
             recheck = old is not None and old["status"] == "ok" and decision.cadence == "daily" \
                 and self._performance_conversion_due(job, row["possibility_id"], now)
             # 저장된 고정 기간은 자정/10시 뒤에도 이어 읽되 현재 권한·귀속을 재검증한다.
-            for saved in prior.values():
+            for saved in prior_by_customer.get(cid, ()):
                 if saved["customer_id"] != cid or saved["stage_revision"] != row["stage_revision"] \
                         or saved["kind"] in ("manual", "manual_period") or saved["job_key"] == job["job_key"]:
                     continue
