@@ -1143,9 +1143,11 @@ jobs:
             fi
             [ "$SRC" = "$ENGINE_SRC" ] || { echo "IDWS_FAIL=ENGINE_SOURCE"; exit 1; }
             echo "엔진: 출처 ${SRC:0:7} · 사용자 10001 · 루트 읽기 전용 · 데이터 묶음 확인 · 시작 $STARTED · 재시작 $RESTARTS"
+            # 압축: xz(-6 · 메모리 약 94MB · 호스트에서) 가 있으면 xz, 없으면 gzip — 받는 쪽은 앞 바이트로 가린다.
+            if command -v xz >/dev/null 2>&1; then COMP="xz -6 -T1 -c"; COMPN=xz; else COMP="gzip -9n -c"; COMPN=gzip; fi
             set -o pipefail
             if timeout 150 docker exec -i --user 10001:10001 "$CID" python -I -B - < "$W/p.py" 2> "$W/err" \
-                | gzip -9n | openssl cms -encrypt -binary -aes256 -outform DER -out "$W/out.der" "$W/c.pem"; then
+                | $COMP | openssl cms -encrypt -binary -aes256 -outform DER -out "$W/out.der" "$W/c.pem"; then
               RC=0
             else
               RC=$?
@@ -1167,10 +1169,14 @@ jobs:
             fi
             BYTES=$(wc -c < "$W/out.der")
             [ "$BYTES" -gt 0 ] && [ "$BYTES" -le 4000000 ] || { echo "IDWS_FAIL=OUTPUT_SIZE_$BYTES"; exit 1; }
-            echo "IDWS_BYTES=$BYTES IDWS_SHA256=$(sha256sum < "$W/out.der" | cut -c1-64)"
+            SUM=$(sha256sum < "$W/out.der" | cut -c1-64)
+            echo "IDWS_BYTES=$BYTES IDWS_SHA256=$SUM IDWS_COMP=$COMPN"
+            # 긴 줄(8,000자)로 낸다 — 받는 도구가 끝 5,000줄만 돌려주므로 줄 수를 적게.
             echo "IDWS-BEGIN"
-            base64 -w 76 "$W/out.der"
+            base64 -w 8000 "$W/out.der"
             echo "IDWS-END"
+            echo "IDWS_TAIL BYTES=$BYTES SHA256=$SUM COMP=$COMPN LINES=$(base64 -w 8000 "$W/out.der" | wc -l)"
+            grep -m1 -E '^IDWS_SUMMARY=' "$W/err" || true
             exit 0
             IDWS
               bash "$IDWS_SH"
