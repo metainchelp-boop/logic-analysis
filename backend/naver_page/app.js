@@ -467,7 +467,8 @@
     purgeViews();
     try { sessionStorage.removeItem(KEY); } catch (e) { /* 없음 */ }
   }
-  function ApiError(status, body) { this.status = status; this.body = body || {}; }
+  // plain = 답이 JSON 이 아니었다(앞단 웹 서버의 오류 쪽 등) — 진입 진단만 이것을 본다. 본문은 어디에도 싣지 않는다.
+  function ApiError(status, body, plain) { this.status = status; this.body = body || {}; this.plain = plain === true; }
   function api(method, path, body, signal) {
     if (readOnly() && method !== 'GET' && path !== '/session' && path !== '/session/refresh' &&
         !(method === 'POST' && (verifiedLinking() && path === '/links/confirm' || fullCollectionAllowed() && path === '/collection/request')) &&
@@ -482,9 +483,10 @@
     if (signal) init.signal = signal;
     if (body !== undefined) { headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
     return fetch(API + path, init).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (j) {
+      var plain = false;
+      return r.json().catch(function () { plain = true; return {}; }).then(function (j) {
         if (r.status === 401 && path !== '/session') { lost(); throw new ApiError(401, j); }
-        if (!r.ok) throw new ApiError(r.status, j);
+        if (!r.ok) throw new ApiError(r.status, j, plain);
         return j;
       });
     }, function () { throw new ApiError(0, { error: 'network' }); });
@@ -511,6 +513,11 @@
     'NV-S06': ['🛠', '관제에 연결할 네트워크를 확인해 주세요', '네트워크 요청을 완료하지 못했습니다. 인터넷 연결을 확인하고, 반복되면 관리자에게 접속 환경 확인을 요청해 주세요.'],
     'NV-S07': ['🛠', '관제 서버에 연결하지 못했습니다', '잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 관제 서버 연결 확인을 요청해 주세요.'],
     'NV-S08': ['⏳', '관제 서버의 답변이 늦어지고 있습니다', '잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 관제 서버 상태 확인을 요청해 주세요.'],
+    'NV-S09': ['🛠', '로그인 기록을 남기지 못했습니다', '로그인 기록을 남기지 못하면 관제를 열지 않습니다. 잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 관제 기록 저장 상태 확인을 요청해 주세요.'],
+    'NV-S10': ['🛠', '관제 저장소가 바쁘거나 응답하지 않습니다', '잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 관제 저장소 상태 확인을 요청해 주세요.'],
+    'NV-S11': ['🛠', '관제 서버에서 예상하지 못한 오류가 났습니다', '잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 관제 서버 오류 기록 확인을 요청해 주세요.'],
+    'NV-S12': ['🛠', '관제 중계 서버가 엔진의 답을 전달하지 못했습니다', '잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 관제 중계 상태 확인을 요청해 주세요.'],
+    'NV-S13': ['🛠', '관제 서버 앞단에서 다른 형식의 답이 돌아왔습니다', '관제 응답 대신 웹 서버의 오류 화면 같은 답을 받았습니다. 잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 관제 앞단(웹 서버) 연결 확인을 요청해 주세요.'],
     'NV-M01': ['🛠', '직원 권한을 확인할 최신 조직 자료가 없습니다', '조직 자료가 없거나 오래되어 권한 보호를 위해 화면을 열지 않았습니다. 관리자에게 전산 조직 자료 동기화 확인을 요청해 주세요.']
   };
   function entryServerDiagnostic(e) {
@@ -522,10 +529,31 @@
       case 'engine-timeout': return 'NV-S08';
       case 'org-stale':
       case 'org-unavailable': return 'NV-M01';
-      default: return 'NV-S00';
+      case 'audit-unavailable': return 'NV-S09';
+      case 'store-unavailable':
+      case 'store-busy':
+      case 'refused': return 'NV-S10';
+      case 'internal': return 'NV-S11';
+      case 'relay-busy':
+      case 'bad-gateway':
+      case 'engine-misconfigured': return 'NV-S12';
+      default: return e && e.plain ? 'NV-S13' : 'NV-S00';   // NV-S00 은 정말 모르는 답에만
     }
   }
-  function blocked(kind, diagnostic) {
+  // 안내에 그대로 보여도 되는 서버 오류 이름(고정 코드만 · 서버 문구·값은 싣지 않는다). 이 밖의 이름은 응답 번호만.
+  var ENTRY_ANSWER_CODES = { 'audit-unavailable': 1, 'store-unavailable': 1, 'store-busy': 1, 'refused': 1, internal: 1,
+                             'relay-busy': 1, 'bad-gateway': 1, 'engine-misconfigured': 1 };
+  // 응답 번호는 새로 나눈 진단과 모르는 답에만 붙인다 — 이미 나뉜 진단(NV-S01~S08 · NV-M01 · NV-E*)의 안내는 그대로.
+  var ENTRY_ANSWER_SHOWN = { 'NV-S00': 1, 'NV-S09': 1, 'NV-S10': 1, 'NV-S11': 1, 'NV-S12': 1, 'NV-S13': 1 };
+  function entryAnswer(diagnostic, e) {
+    if (!e || !Object.prototype.hasOwnProperty.call(ENTRY_ANSWER_SHOWN, diagnostic)) return '';
+    var status = e.status;
+    if (typeof status !== 'number' || Math.floor(status) !== status || status < 100 || status > 599) return '';
+    var code = e.body && e.body.error;
+    if (typeof code === 'string' && Object.prototype.hasOwnProperty.call(ENTRY_ANSWER_CODES, code)) return ' · 응답 ' + status + ' ' + code;
+    return ' · 응답 ' + status + (e.plain ? ' (JSON 아님)' : '');
+  }
+  function blocked(kind, diagnostic, answerFrom) {
     var T = {
       login: ['🔒', '전산에서 들어와 주세요', '네이버 관제는 전산(메타아이앤씨) 「광고 스튜디오 › 네이버 관제」 단추로 들어옵니다. 이 주소를 바로 열면 로그인할 수 없습니다.'],
       ended: ['⏱', '다시 들어와 주세요', '로그인이 끝났습니다(로그인 뒤 12시간이 지났거나 서버가 끝냄). 전산 「광고 스튜디오 › 네이버 관제」 단추로 다시 들어와 주세요.'],
@@ -539,11 +567,12 @@
       if (typeof diagnostic !== 'string' || !Object.prototype.hasOwnProperty.call(ENTRY_DIAGNOSTICS, diagnostic)) diagnostic = 'NV-E00';
       T = ENTRY_DIAGNOSTICS[diagnostic];
     }
+    var answer = diagnostic ? entryAnswer(diagnostic, answerFrom) : '';
     $('top').hidden = true;
     $('b-ic').textContent = T[0];
     $('b-t').textContent = T[1];
     $('b-p').textContent = T[2] + (diagnostic ?
-      ' 전산 공식 메뉴 「광고 스튜디오 › 네이버 관제」에서 다시 들어와 주세요. 진단 코드: ' + diagnostic +
+      ' 전산 공식 메뉴 「광고 스튜디오 › 네이버 관제」에서 다시 들어와 주세요. 진단 코드: ' + diagnostic + answer +
       ' · 계속되면 주소창을 제외한 이 안내만 캡처하여 관리자에게 전달해 주세요.' : '');
     show('blocked');
   }
@@ -582,7 +611,7 @@
           state.me = me; renderTop(); route();
         }, function (error) {
           if (state.session !== session || error.status === 401) return;
-          purgeViews(); blocked('down', entryServerDiagnostic(error));
+          purgeViews(); blocked('down', entryServerDiagnostic(error), error);
         });
       }
     }, function (e) {
@@ -2671,7 +2700,7 @@
     if (e.status === 403) return blocked('noscope', 'NV-S04');
     if (e.status === 429) return blocked('busy', 'NV-S05');
     if (code === 'bad-body' || e.status === 400) return blocked('rejected', 'NV-S03');
-    return blocked('down', entryServerDiagnostic(e));
+    return blocked('down', entryServerDiagnostic(e), e);
   }
   function boot() {
     scheduleRefresh();
@@ -2679,7 +2708,10 @@
       state.me = me;
       renderTop();
       route();
-    }, function (e) { if (e.status !== 401) blocked('down', entryServerDiagnostic(e)); });
+    }, function (e) {
+      // 401 은 api() 가 lost() 로 이미 끝냈다. 나머지(403·429·400 포함)는 로그인 교환과 같은 갈래로 안내한다.
+      if (e.status !== 401) loginFailed(e);
+    });
   }
   function start() {
     var entry = window.__metaincSso;

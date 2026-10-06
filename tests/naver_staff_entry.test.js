@@ -134,7 +134,7 @@ function launch(options = {}) {
         period: {kind:'weekly',start:'2026-09-21',end:'2026-09-27'}, schedule:{} } } :
         (options.me || { status: 200, body: { scope: 'MINE', name: '합성 직원' } });
       return { status: response.status, ok: response.status >= 200 && response.status < 300,
-        json: async () => response.body };
+        json: async () => { if (response.nonJson) throw new SyntaxError(secretMarker); return response.body; } };
     }
   });
   vm.runInContext(bootstrap, context, { filename: 'sso-bootstrap.js' });
@@ -275,6 +275,7 @@ test('수신부 실패 사유를 구분해 안내하되 모든 경우 인증 교
 });
 
 test('로그인 교환 실패와 로그인 후 조직 자료 실패를 고정 안내로 구분한다', async t => {
+  // 다섯째 칸 = 진단 코드 바로 뒤에 붙는 응답 표기. 비어 있으면 아무것도 붙지 않는다(이미 나뉜 진단은 안내 그대로).
   const scenarios = [
     ['전산 응답 없음', { session: { status: 503, body: { error: 'erp-unavailable' } } }, 'NV-S01', /전산 로그인 서버/],
     ['전산 응답 형식', { session: { status: 503, body: { error: 'erp-bad-shape' } } }, 'NV-S02', /응답 형식/],
@@ -288,16 +289,44 @@ test('로그인 교환 실패와 로그인 후 조직 자료 실패를 고정 �
     ['조직 자료 낡음', { me: { status: 503, body: { error: 'org-stale' } } }, 'NV-M01', /조직 자료.*오래/],
     ['교환 시 조직 자료 없음', { session: { status: 503, body: { error: 'org-unavailable' } } }, 'NV-M01', /조직 자료.*없/],
     ['로그인 후 조직 자료 없음', { me: { status: 503, body: { error: 'org-unavailable' } } }, 'NV-M01', /조직 자료.*없/],
-    ['알 수 없는 응답', { session: { status: 500, body: { error: secretMarker, message: secretMarker } } }, 'NV-S00', /완료하지 못했습니다/],
-    ['상속 속성 이름', { session: { status: 500, body: { error: '__proto__', message: secretMarker } } }, 'NV-S00', /완료하지 못했습니다/]
+    ['로그인 기록 실패', { session: { status: 503, body: { error: 'audit-unavailable' } } }, 'NV-S09', /로그인 기록을 남기지/,
+      ' · 응답 503 audit-unavailable'],
+    ['저장소 닿지 않음', { session: { status: 503, body: { error: 'store-unavailable' } } }, 'NV-S10', /관제 저장소/,
+      ' · 응답 503 store-unavailable'],
+    ['저장소 바쁨', { session: { status: 503, body: { error: 'store-busy' } } }, 'NV-S10', /관제 저장소/, ' · 응답 503 store-busy'],
+    ['저장소 거절', { session: { status: 409, body: { error: 'refused' } } }, 'NV-S10', /관제 저장소/, ' · 응답 409 refused'],
+    ['엔진 뜻밖의 오류', { session: { status: 500, body: { error: 'internal' } } }, 'NV-S11', /예상하지 못한 오류/, ' · 응답 500 internal'],
+    ['중계 혼잡', { session: { status: 503, body: { error: 'relay-busy' } } }, 'NV-S12', /중계 서버/, ' · 응답 503 relay-busy'],
+    ['중계가 받은 엔진 답 이상', { session: { status: 502, body: { error: 'bad-gateway' } } }, 'NV-S12', /중계 서버/,
+      ' · 응답 502 bad-gateway'],
+    ['중계 설정 되돌이', { session: { status: 503, body: { error: 'engine-misconfigured' } } }, 'NV-S12', /중계 서버/,
+      ' · 응답 503 engine-misconfigured'],
+    ['앞단 오류 쪽(JSON 아님)', { session: { status: 502, nonJson: true, body: secretMarker } }, 'NV-S13', /다른 형식의 답/,
+      ' · 응답 502 (JSON 아님)'],
+    ['로그인 후 엔진 뜻밖의 오류', { me: { status: 500, body: { error: 'internal' } } }, 'NV-S11', /예상하지 못한 오류/,
+      ' · 응답 500 internal'],
+    ['로그인 후 저장소 오류', { me: { status: 503, body: { error: 'store-unavailable' } } }, 'NV-S10', /관제 저장소/,
+      ' · 응답 503 store-unavailable'],
+    ['로그인 후 앞단 시간 초과(JSON 아님)', { me: { status: 504, nonJson: true, body: secretMarker } }, 'NV-S13', /다른 형식의 답/,
+      ' · 응답 504 (JSON 아님)'],
+    ['로그인 후 권한 거절', { me: { status: 403, body: { error: 'no-scope' } } }, 'NV-S04', /관제 대상/],
+    ['로그인 후 요청 제한', { me: { status: 429, body: { error: 'too-many-logins' } } }, 'NV-S05', /1분/],
+    ['로그인 후 잘못된 요청', { me: { status: 400, body: { error: 'bad-query' } } }, 'NV-S03', /전산 로그인/],
+    ['알 수 없는 응답', { session: { status: 500, body: { error: secretMarker, message: secretMarker } } }, 'NV-S00', /완료하지 못했습니다/,
+      ' · 응답 500'],
+    ['상속 속성 이름', { session: { status: 500, body: { error: '__proto__', message: secretMarker } } }, 'NV-S00', /완료하지 못했습니다/,
+      ' · 응답 500'],
+    ['목록 밖 오류 이름', { session: { status: 503, body: { error: 'store-exploded', message: secretMarker } } }, 'NV-S00',
+      /완료하지 못했습니다/, ' · 응답 503']
   ];
-  for (const [name, options, diagnostic, message] of scenarios) {
+  for (const [name, options, diagnostic, message, answer = ''] of scenarios) {
     await t.test(name, async () => {
       const run = launch(options);
       await until(() => run.messages.length);
       run.message();
       const text = await blocked(run);
-      assert.ok(text.includes('진단 코드: ' + diagnostic), text);
+      assert.ok(text.includes('진단 코드: ' + diagnostic + answer + ' · 계속되면'), text);
+      assert.doesNotMatch(text, /store-exploded/);
       assert.match(text, message);
       assert.match(text, /광고 스튜디오 › 네이버 관제/);
       assert.doesNotMatch(text, /SYNTHETIC_DO_NOT_DISPLAY|synthetic-session-token|https?:\/\/|R{43}|C{43}|Error:/);
@@ -406,8 +435,12 @@ test('새 진입 실패는 이 창의 이전 세션을 지우고 직접 주소·
 });
 
 test('저장 세션의 조직 자료 오류에도 진단을 표시하고 401 세션 종료 처리는 유지한다', async t => {
-  for (const [status, error, message] of [[503, 'org-stale', /진단 코드: NV-M01/], [503, 'org-unavailable', /진단 코드: NV-M01/], [401, 'token-expired', /다시 들어와 주세요/]]) {
-    await t.test(String(status), async () => {
+  for (const [status, error, message] of [[503, 'org-stale', /진단 코드: NV-M01 · 계속되면/], [503, 'org-unavailable', /진단 코드: NV-M01 · 계속되면/],
+    [403, 'no-scope', /진단 코드: NV-S04 · 계속되면/], [429, 'too-many-logins', /진단 코드: NV-S05 · 계속되면/],
+    [400, 'bad-query', /진단 코드: NV-S03 · 계속되면/], [500, 'internal', /진단 코드: NV-S11 · 응답 500 internal · 계속되면/],
+    [503, 'audit-unavailable', /진단 코드: NV-S09 · 응답 503 audit-unavailable · 계속되면/],
+    [401, 'token-expired', /다시 들어와 주세요/]]) {
+    await t.test(status + ' ' + error, async () => {
       const run = launch({ url: 'https://watch.invalid/naver/reports', storage: {
         'naverWatch.session': JSON.stringify({ token: 'synthetic-old-token', exp: Date.now() + 3600000 })
       }, me: { status, body: { error } } });
