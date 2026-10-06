@@ -66,6 +66,24 @@ def at(d: date, h: int, m: int = 0) -> datetime:
     return datetime.combine(d, time(h, m), tzinfo=KST)
 
 
+# 로직분석 공개 진단의 기록 분류기(backend/tools/naver_preview_collection_status.py LOG_TEMPLATES · template_release
+# a981b35)가 엔진 기록 줄을 줄 전체로 맞춰 보는 틀 — 그대로 옮겨 둔다. 엔진 줄 끝에 무엇을 붙이면 그 갈래가 0건으로
+# 떨어져 진입 실패 원인이 「사라진」 것처럼 읽힌다. 이 시험이 깨지면 분류기를 먼저(또는 같은 차례에) 바꾼다.
+CLASSIFIER_A981B35 = {
+    "web_store_refused": r"WARNING naver_engine\.web 화면 API 저장소 거절: (\S{1,64})",
+    "web_store_error": r"WARNING naver_engine\.web 화면 API 저장소 오류: (\S{1,64})",
+    "web_unexpected_error": r"ERROR naver_engine\.web 화면 API 뜻밖의 오류: (\S{1,64})",
+    "audit_write_failed": r"WARNING naver_engine\.web 열람·쓰기 기록 실패: (\S{1,64})",
+}
+
+
+def classified(line: str) -> list[tuple[str, str]]:
+    """assertLogs 한 줄(``수준:이름:문구``)을 운영 꼴(``%(levelname)s %(name)s %(message)s``)로 바꿔 맞는 갈래와 종류 이름."""
+    level, name, message = line.split(":", 2)
+    text = f"{level} {name} {message}"
+    return [(key, m.group(1)) for key, pattern in CLASSIFIER_A981B35.items() for m in (re.fullmatch(pattern, text),) if m]
+
+
 # ── 가짜 ① 내 정보 ────────────────────────────────────────────────────
 class FakeProfileErp:
     """① my-profile 흉내 — 토큰 → 응답. 받은 요청을 적는다(토큰은 표지로만 대조)."""
@@ -727,8 +745,10 @@ class LoginTest(WebBase):
         with self.assertLogs("naver_engine.web", "WARNING") as cm:
             s, b = self.login()
         self.assertEqual((s, b), (503, {"error": "audit-unavailable"}))
-        # 진입 실패를 가를 수 있게 — 종류 이름 · 방식 · 경로 틀만(기존 머리글은 그대로)
-        self.assertIn("WARNING:naver_engine.web:열람·쓰기 기록 실패: StoreBusy · POST /session", cm.output)
+        # 진입 실패를 가를 수 있게 — 종류 이름만 · 공개 진단 분류기(a981b35 틀)가 그대로 센다
+        line = "WARNING:naver_engine.web:열람·쓰기 기록 실패: StoreBusy"
+        self.assertIn(line, cm.output)
+        self.assertEqual(classified(line), [("audit_write_failed", "StoreBusy")])
         self.assertNotIn(MARK_SSO, " ".join(cm.output))
 
     def test_sso_and_personal_fields_never_kept(self):
@@ -1290,7 +1310,7 @@ class LinksTest(WebBase):
                            profiles=EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV), clock=self.fc.now)
         with self.assertLogs("naver_engine.web", "WARNING") as cm:
             self.assertEqual(self.post("/links/confirm", 0, {"refs": [ref13]}), (503, {"error": "store-busy"}))
-        self.assertIn("WARNING:naver_engine.web:화면 API 저장소 바쁨: StoreBusy · POST /links/confirm", cm.output)
+        self.assertIn("WARNING:naver_engine.web:화면 API 저장소 바쁨: StoreBusy", cm.output)
         self.assertEqual(len(self.st.current_decisions()), before)
         self.app = self.make_app()
         s, _b = self.post("/links/confirm", 0, {"refs": [ref13]})
@@ -1535,8 +1555,8 @@ class AuditTest(WebBase):
         with self.assertLogs("naver_engine.web", "WARNING") as cm:
             s, b = self.get("/clients/11", 100)
         self.assertEqual((s, b["error"]), (503, "audit-unavailable"))   # 열람 기록을 못 적으면 보여 주지 않는다
-        self.assertIn("WARNING:naver_engine.web:열람·쓰기 기록 실패: StoreBusy · GET /clients/{pid}", cm.output)
-        self.assertNotIn("/clients/11", " ".join(cm.output))   # 실제 주소의 번호는 싣지 않는다
+        self.assertIn("WARNING:naver_engine.web:열람·쓰기 기록 실패: StoreBusy", cm.output)
+        self.assertNotIn("/clients/11", " ".join(cm.output))   # 주소·번호는 싣지 않는다
 
     def test_store_refusal_is_409_not_outage(self):
         """저장소가 이 값을 받지 않은 것(거절)은 저장소 장애(503)가 아니다 — 다시 시도하게 만들지 않는다(검토 client-input)."""
@@ -1546,10 +1566,12 @@ class AuditTest(WebBase):
                            profiles=EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV), clock=self.fc.now)
         with self.assertLogs("naver_engine.web", level="WARNING") as cm:
             self.assertEqual(self.post("/bell/read-all", 100), (409, {"error": "refused"}))
-        self.assertIn("WARNING:naver_engine.web:화면 API 저장소 거절: StoreRefused · POST /bell/read-all", cm.output)
+        line = "WARNING:naver_engine.web:화면 API 저장소 거절: StoreRefused"
+        self.assertIn(line, cm.output)
+        self.assertEqual(classified(line), [("web_store_refused", "StoreRefused")])
 
-    def test_store_error_is_logged_with_route(self):
-        """저장소에 닿지 않음 — 종류 이름 · 방식 · 경로 틀(진입의 ``GET /me`` 실패를 가르는 한 줄)."""
+    def test_store_error_is_logged(self):
+        """저장소에 닿지 않음 — 종류 이름만(문구의 값은 싣지 않는다) · 공개 진단 분류기가 그대로 센다."""
         def unreachable():
             raise S.StoreError("닿지 않음 " + MARK_SSO)
         self.app = WEB.App(open_read=unreachable, write=lambda fn: fn(self.st), signer=self.signer,
@@ -1557,19 +1579,8 @@ class AuditTest(WebBase):
         with self.assertLogs("naver_engine.web", level="WARNING") as cm:
             s, b, _h, _p = self.call("GET", "/me", self.token(100))
         self.assertEqual((s, b), (503, {"error": "store-unavailable"}))
-        self.assertEqual(cm.output, ["WARNING:naver_engine.web:화면 API 저장소 오류: StoreError · GET /me"])
-        self.assertIsNone(WEB._MATCHED.get())   # 요청이 끝나면 맞춘 경로를 되돌린다(다음 요청에 남지 않게)
-
-    def test_route_label_never_carries_numbers(self):
-        """경로 이름은 경로 표에서만 — 번호 칸은 ``{이름}`` · 맞추기 전은 ``- -``."""
-        labels = {WEB._route_label(r) for r in WEB.ROUTES}
-        self.assertIn("POST /session", labels)
-        self.assertIn("GET /me", labels)
-        self.assertIn("POST /issues/{iid}/ack", labels)
-        self.assertIn("POST /holds/{kind}/confirm", labels)
-        for label in labels:
-            self.assertRegex(label, r"\A(?:GET|POST) /[a-z{}/-]+\Z")
-        self.assertEqual(WEB._route_label(None), "- -")
+        self.assertEqual(cm.output, ["WARNING:naver_engine.web:화면 API 저장소 오류: StoreError"])
+        self.assertEqual(classified(cm.output[0]), [("web_store_error", "StoreError")])
 
     def test_unserializable_response_is_json_500(self):
         class Odd(WEB.App):
@@ -1620,7 +1631,8 @@ class AuditTest(WebBase):
             s, b, _h, p = self.call("GET", "/me", self.token(100))
         self.assertEqual((s, b), (500, {"error": "internal"}))
         self.assertNotIn(MARK_SSO, "".join(cm.output))
-        self.assertEqual(cm.output, ["ERROR:naver_engine.web:화면 API 뜻밖의 오류: RuntimeError · GET /me"])
+        self.assertEqual(cm.output, ["ERROR:naver_engine.web:화면 API 뜻밖의 오류: RuntimeError"])
+        self.assertEqual(classified(cm.output[0]), [("web_unexpected_error", "RuntimeError")])
 
 
 # ── 구문 시험 ────────────────────────────────────────────────────────

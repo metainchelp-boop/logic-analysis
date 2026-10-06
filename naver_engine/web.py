@@ -25,7 +25,6 @@
 """
 from __future__ import annotations
 
-import contextvars
 import json
 import logging
 import re
@@ -256,19 +255,6 @@ class Route:
     auth: bool = True
 
 
-# 이 요청이 맞춘 경로(요청마다 · 줄기마다 따로) — 오류 기록 한 줄에 경로 표의 방식과 틀만 싣는다. 실제 주소의 번호는 싣지 않는다.
-_MATCHED: "contextvars.ContextVar[Optional[Route]]" = contextvars.ContextVar("naver_engine_web_route", default=None)
-_NAMED_GROUP = re.compile(r"\(\?P<([a-z]{1,16})>[^()]*\)")
-
-
-def _route_label(route: Optional[Route]) -> str:
-    """오류 기록용 경로 이름 — ``POST /session`` · ``GET /clients/{pid}``(번호 칸은 이름으로). 경로를 맞추기 전이면 ``- -``."""
-    if route is None:
-        return "- -"
-    # ``.sub`` 는 담당 칸 구문 시험(SyntaxGuardTest)이 막는 속성 이름이라 같은 일을 하는 ``subn`` 을 쓴다.
-    return route.method + " " + _NAMED_GROUP.subn(r"{\1}", route.pattern.pattern)[0]
-
-
 class App:
     """WSGI 앱. ``open_read()`` = 요청마다 읽기 전용 저장소 · ``write(fn)`` = 쓰기 저장소 한 곳에서 ``fn(store)`` 를 차례로
     돌리고 결과를 돌려준다(S14 배선 — 스케줄러와 같은 쓰기 저장소) · ``previewer(handle)`` = 짝 후보 미리보기(없으면 503)."""
@@ -326,7 +312,8 @@ class App:
         return [payload]
 
     def _respond(self, environ) -> Tuple[int, dict]:
-        mark = _MATCHED.set(None)
+        # 아래 기록 줄의 꼴(머리글 · 「: 종류 이름」으로 끝남)은 로직분석 공개 진단의 기록 분류기가 줄 전체로 맞춰 센다
+        # (a981b35 틀). 줄 끝에 무엇을 붙이면 그 갈래가 0건으로 떨어진다 — 꼴을 바꾸려면 분류기를 먼저 바꾼다.
         try:
             return self._dispatch(environ)
         except HttpError as e:
@@ -341,20 +328,19 @@ class App:
             return 403, {"error": "action-not-allowed", "message": SC.ACTION_NOT_ALLOWED}
         except W.OrgUnavailable:
             return 503, {"error": "org-unavailable"}
-        except S.StoreBusy as e:   # 쓰기 차례가 밀리거나 닫힘 — 예전엔 기록 없이 503 이었다(진입 실패를 가르지 못함)
-            log.warning("화면 API 저장소 바쁨: %s · %s", type(e).__name__, _route_label(_MATCHED.get()))
+        except S.StoreBusy as e:   # 쓰기 차례가 밀리거나 닫힘 — 예전엔 기록 없이 503 이었다(진입 실패를 가르지 못함).
+            # 새 줄이라 분류기에 아직 갈래가 없다(그때까지는 「맞지 않은 줄」 수로만 잡힌다) — 같은 꼴로 둔다.
+            log.warning("화면 API 저장소 바쁨: %s", type(e).__name__)
             return 503, {"error": "store-busy"}
         except S.StoreRefused as e:   # 저장소가 이 값을 받지 않음 — 저장소 장애가 아니다(검토 client-input-503)
-            log.warning("화면 API 저장소 거절: %s · %s", type(e).__name__, _route_label(_MATCHED.get()))
+            log.warning("화면 API 저장소 거절: %s", type(e).__name__)
             return 409, {"error": "refused"}
         except S.StoreError as e:
-            log.warning("화면 API 저장소 오류: %s · %s", type(e).__name__, _route_label(_MATCHED.get()))
+            log.warning("화면 API 저장소 오류: %s", type(e).__name__)
             return 503, {"error": "store-unavailable"}
         except Exception as e:   # 뜻밖의 오류 — 종류 이름만(문구에 값이 섞일 수 있다)
-            log.error("화면 API 뜻밖의 오류: %s · %s", type(e).__name__, _route_label(_MATCHED.get()))
+            log.error("화면 API 뜻밖의 오류: %s", type(e).__name__)
             return 500, {"error": "internal"}
-        finally:
-            _MATCHED.reset(mark)
 
     def _dispatch(self, environ) -> Tuple[int, dict]:
         method = environ.get("REQUEST_METHOD") or ""
@@ -378,7 +364,6 @@ class App:
         if not hit:
             raise HttpError(405, "method-not-allowed")
         route, m = hit[0]
-        _MATCHED.set(route)   # 오류 기록용 — _respond 가 요청 끝에 되돌린다
         query = _parse_query(environ.get("QUERY_STRING") or "")
         view_sync = "view_sync" in query or "view_cursor" in query
         view_cursor = None
@@ -450,7 +435,7 @@ class App:
         try:
             self._write(lambda st: st.record_access(viewer_idx, action, kind, target_id, result, now))
         except Exception as e:
-            log.warning("열람·쓰기 기록 실패: %s · %s", type(e).__name__, _route_label(_MATCHED.get()))
+            log.warning("열람·쓰기 기록 실패: %s", type(e).__name__)   # 꼴은 로직분석 기록 분류기와의 약속(_respond 주석)
             if required:
                 raise HttpError(503, "audit-unavailable") from None
 
