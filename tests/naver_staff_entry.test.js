@@ -309,9 +309,14 @@ test('로그인 교환 실패와 로그인 후 조직 자료 실패를 고정 �
       ' · 응답 503 store-unavailable'],
     ['로그인 후 앞단 시간 초과(JSON 아님)', { me: { status: 504, nonJson: true, body: secretMarker } }, 'NV-S13', /다른 형식의 답/,
       ' · 응답 504 (JSON 아님)'],
-    ['로그인 후 권한 거절', { me: { status: 403, body: { error: 'no-scope' } } }, 'NV-S04', /관제 대상/],
-    ['로그인 후 요청 제한', { me: { status: 429, body: { error: 'too-many-logins' } } }, 'NV-S05', /1분/],
-    ['로그인 후 잘못된 요청', { me: { status: 400, body: { error: 'bad-query' } } }, 'NV-S03', /전산 로그인/],
+    // /me 의 403·429·400 은 로그인 교환(NV-S04·S05·S03)의 뜻이 아니다 — 엔진의 /me 범위 밖은 401 no-scope 라
+    // 이 답은 중계(cross-origin · bad-query)나 앞단 웹 서버에서 온다. 모르는 답으로 두고 응답 번호만 붙인다.
+    ['로그인 후 권한 거절', { me: { status: 403, body: { error: 'no-scope' } } }, 'NV-S00', /완료하지 못했습니다/, ' · 응답 403'],
+    ['로그인 후 중계 출처 거절', { me: { status: 403, body: { error: 'cross-origin' } } }, 'NV-S00', /완료하지 못했습니다/, ' · 응답 403'],
+    ['로그인 후 앞단 거절(JSON 아님)', { me: { status: 403, nonJson: true, body: secretMarker } }, 'NV-S13', /다른 형식의 답/,
+      ' · 응답 403 (JSON 아님)'],
+    ['로그인 후 요청 제한', { me: { status: 429, body: { error: 'too-many-logins' } } }, 'NV-S00', /완료하지 못했습니다/, ' · 응답 429'],
+    ['로그인 후 잘못된 요청', { me: { status: 400, body: { error: 'bad-query' } } }, 'NV-S00', /완료하지 못했습니다/, ' · 응답 400'],
     ['알 수 없는 응답', { session: { status: 500, body: { error: secretMarker, message: secretMarker } } }, 'NV-S00', /완료하지 못했습니다/,
       ' · 응답 500'],
     ['상속 속성 이름', { session: { status: 500, body: { error: '__proto__', message: secretMarker } } }, 'NV-S00', /완료하지 못했습니다/,
@@ -327,6 +332,7 @@ test('로그인 교환 실패와 로그인 후 조직 자료 실패를 고정 �
       const text = await blocked(run);
       assert.ok(text.includes('진단 코드: ' + diagnostic + answer + ' · 계속되면'), text);
       assert.doesNotMatch(text, /store-exploded/);
+      if (options.me) assert.doesNotMatch(text, /관제 대상이 아닙니다|1분쯤|전산 로그인을 확인하지/);
       assert.match(text, message);
       assert.match(text, /광고 스튜디오 › 네이버 관제/);
       assert.doesNotMatch(text, /SYNTHETIC_DO_NOT_DISPLAY|synthetic-session-token|https?:\/\/|R{43}|C{43}|Error:/);
@@ -436,15 +442,18 @@ test('새 진입 실패는 이 창의 이전 세션을 지우고 직접 주소·
 
 test('저장 세션의 조직 자료 오류에도 진단을 표시하고 401 세션 종료 처리는 유지한다', async t => {
   for (const [status, error, message] of [[503, 'org-stale', /진단 코드: NV-M01 · 계속되면/], [503, 'org-unavailable', /진단 코드: NV-M01 · 계속되면/],
-    [403, 'no-scope', /진단 코드: NV-S04 · 계속되면/], [429, 'too-many-logins', /진단 코드: NV-S05 · 계속되면/],
-    [400, 'bad-query', /진단 코드: NV-S03 · 계속되면/], [500, 'internal', /진단 코드: NV-S11 · 응답 500 internal · 계속되면/],
+    [403, 'no-scope', /진단 코드: NV-S00 · 응답 403 · 계속되면/], [403, 'cross-origin', /진단 코드: NV-S00 · 응답 403 · 계속되면/],
+    [429, 'too-many-logins', /진단 코드: NV-S00 · 응답 429 · 계속되면/],
+    [400, 'bad-query', /진단 코드: NV-S00 · 응답 400 · 계속되면/], [500, 'internal', /진단 코드: NV-S11 · 응답 500 internal · 계속되면/],
     [503, 'audit-unavailable', /진단 코드: NV-S09 · 응답 503 audit-unavailable · 계속되면/],
     [401, 'token-expired', /다시 들어와 주세요/]]) {
     await t.test(status + ' ' + error, async () => {
       const run = launch({ url: 'https://watch.invalid/naver/reports', storage: {
         'naverWatch.session': JSON.stringify({ token: 'synthetic-old-token', exp: Date.now() + 3600000 })
       }, me: { status, body: { error } } });
-      assert.match(await blocked(run), message);
+      const text = await blocked(run);
+      assert.match(text, message);
+      assert.doesNotMatch(text, /NV-S04|관제 대상이 아닙니다/);   // /me 의 403 은 관제 대상 판정이 아니다
       assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/me']);
       assert.equal(run.storage.size, status === 401 ? 0 : 1);
     });

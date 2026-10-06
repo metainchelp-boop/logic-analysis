@@ -2709,8 +2709,9 @@
       renderTop();
       route();
     }, function (e) {
-      // 401 은 api() 가 lost() 로 이미 끝냈다. 나머지(403·429·400 포함)는 로그인 교환과 같은 갈래로 안내한다.
-      if (e.status !== 401) loginFailed(e);
+      // 401 은 api() 가 lost() 로 이미 끝냈다(엔진의 /me 범위 밖도 401 no-scope). 로그인 교환(loginFailed)의 403·429·400 뜻은
+      // /me 에 맞지 않는다 — /me 의 403 은 중계의 cross-origin 이나 앞단 웹 서버 거절뿐이라 응답 번호를 붙여 그대로 보인다.
+      if (e.status !== 401) blocked('down', entryServerDiagnostic(e), e);
     });
   }
   function start() {
