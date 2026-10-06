@@ -437,6 +437,69 @@ class StatementBudgetTest(unittest.TestCase):
         self.assertGreater(cycle.made, 0)
 
 
+class ReadSideTest(unittest.TestCase):
+    """최신 판 목록(JOIN)과 검토 한 건 조회가 옛 상관 부분질의 · 전체 목록 고르기와 같은 답을 낸다."""
+    def build(self, st):
+        st.groups = {101: 11, 102: 12}
+        for cid, pid in st.groups.items():
+            st.seed(date(2026, 9, 1), date(2026, 10, 4), cid=cid, pid=pid)
+        legacy = legacy_payload(WEEKS[0])   # 판 번호(revision_no) 없는 옛 판 — 표시 번호를 판 수로 센다
+        insert_snapshot(st, 12, WEEKS[0].key, legacy)
+        insert_snapshot(st, 12, WEEKS[0].key, legacy)
+        st.generate_reports(st.now)
+        st.now += timedelta(hours=1)
+        st.seed(WEEKS[3].start, WEEKS[3].start, spend=5000)
+        st.generate_reports(st.now)
+        st.seed(WEEKS[4].start, WEEKS[4].start, spend=7000)   # 대기 dirty 가 남은 최신 판(갱신 중으로 보인다)
+        return st
+
+    def test_latest_list_matches_the_correlated_subquery_on_writer_and_reader(self):
+        st = self.build(real_store(self))
+        self.assertEqual(st.report_snapshots(), OLD._report_snapshots(st))
+        self.assertTrue(any(row["validation"]["status"] == "updating" for row in st.report_snapshots()))
+        reader = S.open_reader(st._path)
+        self.addCleanup(reader.close)
+        reader._clock = st._clock
+        self.assertEqual(reader.report_snapshots(), OLD._report_snapshots(reader))
+        memory = self.build(memory_store(self))
+        self.assertEqual(memory.report_snapshots(), OLD._report_snapshots(memory))
+
+    def test_current_lookup_matches_picking_from_the_whole_list_for_every_report(self):
+        st = self.build(memory_store(self))
+        ids = [row[0] for row in st._conn.execute("SELECT report_id FROM naver_auto_report_snapshot ORDER BY report_id")]
+        self.assertGreater(len(ids), len(st.report_snapshots()))   # 최신이 아닌 판도 섞여 있다
+        for report_id in ids+[ids[-1]+1]:
+            with self.subTest(report_id=report_id):
+                self.assertEqual(S._report_current(st, report_id), OLD.review_current(st, report_id))
+
+    def test_review_outcomes_match_the_original_lookup(self):
+        def outcomes(old):
+            st = self.build(memory_store(self))
+            if old:
+                st._report_current_snapshot = lambda report_id: OLD.review_current(st, report_id)
+            latest = {(r["possibility_id"], r["period_key"]): r["report_id"] for r in st.report_snapshots()}
+            stale = st._conn.execute("""SELECT MIN(report_id) FROM naver_auto_report_snapshot
+                WHERE possibility_id=11 AND period_key=?""", (WEEKS[3].key,)).fetchone()[0]
+            calls = [(latest[(11, WEEKS[2].key)], "approved"),     # 최신 · 완결 → 승인
+                     (stale, "approved"),                            # 최신이 아닌 판 → 보고서가 변경되었습니다
+                     (latest[(11, WEEKS[4].key)], "approved"),     # 대기 dirty → 승인 막힘
+                     (latest[(11, WEEKS[4].key)], "held"),         # 보류는 남길 수 있다
+                     (latest[(11, SEPT.key)], "approved")]
+            out = []
+            for report_id, decision in calls:
+                try:
+                    out.append(st.record_report_review(report_id, 100, st.now, decision, "확인"))
+                except Exception as error:
+                    out.append((type(error).__name__, str(error)))
+            return out, digest(st)
+        new, old = outcomes(False), outcomes(True)
+        self.assertEqual(new, old)
+        self.assertEqual(new[0][0]["review_status"], "approved")
+        self.assertEqual(new[0][1], ("StoreRefused", "보고서가 변경되었습니다. 최신본을 확인해 주세요"))
+        self.assertEqual(new[0][2][0], "StoreRefused")
+        self.assertEqual(new[0][3]["review_status"], "held")
+
+
 class InvariantTest(unittest.TestCase):
     def test_runtime_sources_never_update_delete_or_replace_report_snapshots(self):
         # 판 지도 · 판 사실 기억은 「판은 넣기만 한다」에 기댄다. 연결은 지우기를 늘 거절하고, 고치기는 이 시험이 막는다.

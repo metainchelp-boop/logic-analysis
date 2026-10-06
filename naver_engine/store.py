@@ -1835,11 +1835,31 @@ def _report_snapshot_detail(store, report_id):
 def _report_snapshots(store):
     from .store import _rows
     with _report_read_snapshot(store):
+        # 업체·기간마다 최신 판 — 한 번 묶어 고른다. 원문의 상관 부분질의는 판마다 표 전체를 다시 훑어
+        # (업체·기간 색인 없음) 판 수의 제곱으로 느려졌다. 고르는 줄 · 순서 · 칸은 같다.
         rows = _rows(store._conn.execute("""SELECT r.* FROM naver_auto_report_snapshot r
-            WHERE r.report_id=(SELECT MAX(n.report_id) FROM naver_auto_report_snapshot n
-                WHERE n.possibility_id=r.possibility_id AND n.period_key=r.period_key)
-            ORDER BY generated_at DESC,report_id DESC"""))
+            JOIN (SELECT MAX(report_id) AS latest_id FROM naver_auto_report_snapshot
+                GROUP BY possibility_id,period_key) m ON r.report_id=m.latest_id
+            ORDER BY r.generated_at DESC,r.report_id DESC"""))
         return _report_present(store, rows, current=True)
+
+
+def _report_current(store, report_id):
+    """검토 한 건 — 그 판이 지금 업체·기간의 최신 판일 때만 최신 목록(_report_snapshots)과 같은 모양으로 돌려준다.
+
+    원문은 최신 판 전체 목록(판마다 대조 상태 · dirty 재계산)을 만든 뒤 번호로 골랐다. 목록의 한 줄은 다른 줄과
+    무관하게 만들어지므로 그 한 줄만 만든다. 최신이 아니면 None — 원문에서 목록에 없던 것과 같다.
+    """
+    from .store import _rows
+    with _report_read_snapshot(store):
+        rows = _rows(store._conn.execute("SELECT * FROM naver_auto_report_snapshot WHERE report_id=?", (report_id,)))
+        if not rows:
+            return None
+        latest = store._conn.execute("""SELECT MAX(report_id) FROM naver_auto_report_snapshot
+            WHERE possibility_id=? AND period_key=?""", (rows[0]["possibility_id"], rows[0]["period_key"])).fetchone()[0]
+        if latest != report_id:
+            return None
+        return _report_present(store, rows, current=True)[0]
 
 
 def _report_latest_ids(store, period_key, possibility_ids):
@@ -2858,6 +2878,10 @@ class ManagedStorage:
     def report_snapshots(self):
         return _report_snapshots(self)
 
+    def _report_current_snapshot(self, report_id):
+        """검토가 볼 「지금 판」 한 줄(전체 목록을 만들지 않는다). 시험 경계 가짜가 이 한 곳만 바꿔 끼운다."""
+        return _report_current(self, report_id)
+
     def report_snapshot_detail(self, report_id):
         return _report_snapshot_detail(self, report_id)
 
@@ -2875,7 +2899,7 @@ class ManagedStorage:
         S._pos_int(report_id, "보고서")
         if decision not in ("approved", "held") or not isinstance(note, str) or not 1 <= len(note.strip()) <= 500:
             raise S.StoreRefused("검토 상태와 사유를 확인해 주세요")
-        current = next((r for r in self.report_snapshots() if r["report_id"] == report_id), None)
+        current = self._report_current_snapshot(report_id)
         if current is None:
             raise S.StoreRefused("보고서가 변경되었습니다. 최신본을 확인해 주세요")
         org = W.load_org(self)

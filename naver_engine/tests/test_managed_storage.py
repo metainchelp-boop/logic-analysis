@@ -128,6 +128,10 @@ class _ManagedBoundary(S.ManagedStorage):
     def report_snapshots(self):
         return [{"report_id": 1, "possibility_id": 11, "status": "ready"}]
 
+    def _report_current_snapshot(self, report_id):
+        # 검토는 전체 목록 대신 그 판 한 줄만 본다(NV-S00 수정) — 같은 가짜 판을 그 자리로 준다.
+        return next((r for r in self.report_snapshots() if r["report_id"] == report_id), None)
+
     def _tx(self):
         raise AssertionError("잘못된 입력은 저장 경계에 도달하면 안 됩니다")
 
