@@ -512,6 +512,10 @@ jobs:
             docker logs logic-analysis 2>&1 | grep -c -E 'Traceback|ERROR' || true
             echo "== 오류 줄 내용별(앞 70자 · 숫자 가림 · 상위 8) =="
             docker logs logic-analysis 2>&1 | grep -E 'Traceback|ERROR' | sed -E 's/[0-9]+/#/g' | cut -c1-70 | sort | uniq -c | sort -rn | head -8
+            echo "== 검색광고 API 실패·재시도 줄(시각 · 오류 종류만 · 주소·키워드 가림) =="
+            docker logs --timestamps logic-analysis 2>&1 | grep -E '검색광고 API (요청 실패|재시도|429)' | sed -E 's/ for url.*//; s/(https?:)[^ ]*/\1<가림>/g' | cut -c1-200 | tail -20 || true
+            echo "== 같은 시각대 검색량 조회 성공 줄 수(최근 2만 줄) =="
+            docker logs --tail 20000 logic-analysis 2>&1 | grep -c '키워드 볼륨 조회' || true
       - name: 📖 순위 읽기 도우미 라이브 확인 (human_live=on · 읽기 전용)
         if: ${{ github.event.inputs.human_live == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
