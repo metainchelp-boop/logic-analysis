@@ -32,7 +32,7 @@ class SchedulerCadenceTests(TestCase):
         self.store.structure_work = lambda now, limit: []
         self.store.account_catalog_status = lambda: {"at": self.clock.now().isoformat()}
         self.reports = []
-        self.store.generate_reports = lambda now: self.reports.append(self.clock.monotonic())
+        self.store.generate_reports = lambda now, cycle=None: self.reports.append(self.clock.monotonic())
         self.readers = []
 
     def scheduler(self, **switches):
@@ -275,7 +275,7 @@ class SchedulerCadenceTests(TestCase):
 
     def test_long_tick_reuses_elapsed_work_but_does_not_repeat_reports_before_60_seconds(self):
         self.performance_jobs()
-        def report(now):
+        def report(now, cycle=None):
             self.reports.append(self.clock.monotonic())
             self.clock.advance(40)
         self.store.generate_reports = report

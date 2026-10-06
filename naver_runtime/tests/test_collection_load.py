@@ -20,7 +20,7 @@ def simulate(accounts=1792, response_seconds=0, legacy_pause=False):
     store.performance_work = lambda now,limit: [j for j in store.jobs if j["job_key"] not in store.results][:limit]
     store.structure_work = lambda now,limit: []
     store.account_catalog_status = lambda: {"at": clock.now().isoformat()}
-    store.generate_reports = lambda now: None
+    store.generate_reports = lambda now, cycle=None: None
     sent, per_tick = [], []
     def response(call):
         sent.append(clock.monotonic())

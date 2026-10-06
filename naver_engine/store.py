@@ -1752,6 +1752,41 @@ def _report_generate(store, now):
     return cycle.result()
 
 
+def _report_generate_slice(store, now, cycle):
+    """조각 길(예약 작업): ``cycle=0`` 은 등록 거래와 대상 고정까지, ``cycle=번호`` 는 업체 한 곳만.
+
+    조각마다 따로 쓰기 줄에 들어가므로 그 사이에 먼저 들어온 짧은 쓰기(로그인 감사 등)가 실행된다. 회차 상태는 이 저장소
+    객체 안에만 있다. 번호 · 시각이 다르면 거절하고, 어떤 예외든 회차를 버린다(다음 회차가 처음부터 다시 본다).
+    """
+    from . import store as S
+    store._need_writer()
+    try:
+        if type(cycle) is not int or cycle < 0:
+            raise S.StoreRefused("보고서 회차 번호가 올바르지 않습니다")
+        if cycle == 0:
+            store._report_cycle = None
+            opened = _report_plan(store, now)
+            if not opened.batches:
+                return opened.result()
+            opened.id = getattr(store, "_report_cycle_seq", 0)+1
+            store._report_cycle_seq = opened.id
+            store._report_cycle = opened
+            return {"cycle": opened.id, "remaining": len(opened.batches)}
+        active = getattr(store, "_report_cycle", None)
+        if active is None or active.id != cycle or active.now != now:
+            raise S.StoreRefused("보고서 회차가 바뀌었습니다")
+        pid, targets = active.batches[active.pos]
+        _report_batch(store, active, pid, targets)
+        active.pos += 1
+        if active.pos >= len(active.batches):
+            store._report_cycle = None
+            return active.result()
+        return {"cycle": active.id, "remaining": len(active.batches)-active.pos}
+    except BaseException:
+        store._report_cycle = None
+        raise
+
+
 def _report_require_scope(store, pid, actor, now, action):
     from . import inventory as I, views as W, store as S
     from app.naver_auto import scope as SC
@@ -2871,9 +2906,16 @@ class ManagedStorage:
                                        "period_end": str(requested_end)}, owner["possibility_id"], at)
         return {"status": "accepted", "requested_at": at}
 
-    def generate_reports(self, now):
-        """확정된 계정의 저장 자료만 집계한다. 생성/검토와 외부 게시는 별개다."""
-        return _report_generate(self, now)
+    def generate_reports(self, now, *, cycle=None):
+        """확정된 계정의 저장 자료만 집계한다. 생성/검토와 외부 게시는 별개다.
+
+        ``cycle`` 없음 = 한 번에(원래 계약 · 세 칸 반환). ``cycle=0`` = 회차를 연다 — 등록 거래와 대상 고정까지 하고
+        만들 업체가 있으면 ``{"cycle": 번호, "remaining": 남은 곳}``, 없으면 세 칸. ``cycle=번호`` = 업체 한 곳만 만들고
+        다음 번호 또는 마지막에 세 칸. 예약 작업은 조각을 따로 쓰기 줄에 넣어 그 사이 로그인 감사가 먼저 실행된다.
+        """
+        if cycle is None:
+            return _report_generate(self, now)
+        return _report_generate_slice(self, now, cycle)
 
     def report_snapshots(self):
         return _report_snapshots(self)

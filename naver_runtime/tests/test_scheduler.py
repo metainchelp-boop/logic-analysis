@@ -175,7 +175,7 @@ class SchedulerTest(TestCase):
         reader = N.NaverReader(creds(), transport=FakeNaver(), clock=fc)
         store = Mock()
         store.structure_work.return_value = []
-        store.generate_reports.side_effect = lambda now: calls.append("reports") or {"generated": 0}
+        store.generate_reports.side_effect = lambda now, cycle=None: calls.append("reports") or {"generated": 0}
         task = Scheduler(config, store, erp_factory=lambda: object(), naver_factory=lambda: reader,
                          clock=fc.now, monotonic_clock=fc.monotonic)
         with patch.object(L, "accounts_due", return_value=True), \

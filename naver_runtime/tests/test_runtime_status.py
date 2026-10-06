@@ -37,7 +37,7 @@ class RuntimeStatusTest(TestCase):
         self.store.jobs = []
         self.store.structure_work = lambda now, limit: []
         self.store.account_catalog_status = lambda: {"at": self.clock.now().isoformat()}
-        self.store.generate_reports = lambda now: []
+        self.store.generate_reports = lambda now, cycle=None: []
 
     def scheduler(self, **options):
         reader = options.pop("naver_factory", lambda: N.NaverReader(creds(), transport=self.http, clock=self.clock))
@@ -185,7 +185,7 @@ class RuntimeStatusTest(TestCase):
         self.assertEqual(audit.access_log(), logs)
 
     def test_step_exception_is_fixed_red_code_and_survives_skipped_step(self):
-        def failed(now):
+        def failed(now, cycle=None):
             raise RuntimeError("SECRET_MARKER")
         self.store.generate_reports = failed
         task = self.scheduler()

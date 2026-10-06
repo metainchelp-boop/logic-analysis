@@ -89,6 +89,14 @@ def new_generate(st):
     return st.generate_reports(st.now)
 
 
+def slice_generate(st):
+    """예약 작업이 부르는 모양(naver_runtime.scheduler.run_report_cycle)과 같은 차례 — 조각마다 따로 부른다."""
+    result = st.generate_reports(st.now, cycle=0)
+    while isinstance(result, dict) and "cycle" in result:
+        result = st.generate_reports(st.now, cycle=result["cycle"])
+    return result
+
+
 def insert_snapshot(st, pid, key, payload, review_status="not_required", status="ready"):
     """판은 넣기만 한다 — 시험도 옛 판·다른 판을 「넣어서」 만든다(기존 줄을 고치면 판 사실 기억과 어긋난다)."""
     raw = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
@@ -217,9 +225,25 @@ def sc_recheck(st, gen):
     return out
 
 
+def sc_failed_insert(st, gen):
+    st.groups = {101: 11, 102: 12, 103: 13}
+    for cid, pid in st.groups.items():
+        st.seed(date(2026, 8, 1), date(2026, 8, 31), cid=cid, pid=pid)
+    out = [gen(st)]
+    st.now += timedelta(hours=1)
+    for cid, pid in st.groups.items():
+        st.seed(date(2026, 8, 17), date(2026, 8, 17), cid=cid, pid=pid, spend=2000)
+    st.fail_period = R.period("weekly", date(2026, 8, 17)).key   # 첫 업체 거래의 두 번째 판 넣기에서 실패 → 뒤 업체는 다음 회차
+    out.append(gen(st))
+    st.fail_period = None
+    out += [gen(st), gen(st)]
+    return out
+
+
 SCENARIOS = {"idle": sc_idle, "partial_dirty": sc_partial_dirty, "over_cap": sc_over_cap,
              "consecutive": sc_consecutive, "legacy": sc_legacy, "policy_accounts": sc_policy_and_accounts,
-             "not_due_outside": sc_not_due_and_outside, "deadline": sc_deadline, "recheck": sc_recheck}
+             "not_due_outside": sc_not_due_and_outside, "deadline": sc_deadline, "recheck": sc_recheck,
+             "failed_insert": sc_failed_insert}
 REAL_SCENARIOS = ("idle", "partial_dirty", "over_cap", "consecutive", "legacy")
 
 
@@ -265,6 +289,138 @@ class OracleEquivalenceTest(unittest.TestCase):
         self.assertEqual(statuses[SEPT.key], "reconstructed")
         self.assertNotIn(WEEKS[0].key, statuses)   # 원천 없는 옛 판은 그대로(미보관) — 빈 새 판으로 바꾸지 않는다
         self.assertEqual(legacy[-1][0]["generated"], 0)
+
+
+class SliceEquivalenceTest(OracleEquivalenceTest):
+    """조각 길(cycle=0 → 업체 한 곳씩)도 옛 생성과 같은 줄을 쓴다 — 회차 · 반환 세 칸 · 예외까지."""
+    generate = staticmethod(slice_generate)
+
+    def test_failed_insert_scenario_really_failed_in_the_middle(self):
+        result = self.compare(memory_store, "failed_insert")
+        self.assertEqual(result[1][0], ("error", "OperationalError"))
+        self.assertEqual(result[2][0]["advertisers"], 3)
+
+
+class CycleNumberTest(unittest.TestCase):
+    def opened(self, pids=3):
+        st = memory_store(self)
+        st.groups = {101+n: 11+n for n in range(pids)}
+        for n in range(pids):
+            st.seed(date(2026, 9, 1), date(2026, 9, 30), cid=101+n, pid=11+n)
+        first = st.generate_reports(st.now, cycle=0)
+        self.assertEqual(first, {"cycle": 1, "remaining": pids})
+        return st, first
+
+    def refused(self, st, now, cycle):
+        with self.assertRaises(S.StoreRefused):
+            st.generate_reports(now, cycle=cycle)
+
+    def test_wrong_number_time_or_type_is_refused_and_drops_the_cycle(self):
+        for bad in (2, True, -1, "1", 1.0, [1]):
+            with self.subTest(bad=bad):
+                st, first = self.opened()
+                self.refused(st, st.now, bad)
+                self.refused(st, st.now, first["cycle"])    # 거절 뒤에는 원래 번호도 이어 부를 수 없다
+                self.assertEqual(st._report_cycle, None)
+        st, first = self.opened()
+        self.refused(st, st.now+timedelta(seconds=1), first["cycle"])
+        self.refused(st, st.now, first["cycle"])
+
+    def test_slices_count_down_and_the_last_returns_the_original_three_fields(self):
+        st, first = self.opened()
+        second = st.generate_reports(st.now, cycle=first["cycle"])
+        self.assertEqual(second, {"cycle": 1, "remaining": 2})
+        st.generate_reports(st.now, cycle=1)
+        last = st.generate_reports(st.now, cycle=1)
+        self.assertEqual(set(last), {"generated", "accounts_confirmed", "advertisers"})
+        self.assertEqual(last["advertisers"], 3)
+        self.assertGreater(last["generated"], 0)
+        self.refused(st, st.now, 1)                         # 끝난 회차는 더 이어 부를 수 없다
+        self.assertEqual(st.generate_reports(st.now, cycle=0), {"generated": 0, "accounts_confirmed": 3, "advertisers": 0})
+
+    def test_reopening_or_one_shot_drops_the_cycle_in_progress(self):
+        st, first = self.opened()
+        reopened = st.generate_reports(st.now, cycle=0)
+        self.assertEqual(reopened, {"cycle": 2, "remaining": 3})
+        self.refused(st, st.now, first["cycle"])
+        st, first = self.opened()
+        st.generate_reports(st.now, cycle=1)
+        st.generate_reports(st.now)                         # 한 번에 도는 길은 이어 부르던 회차를 버린다
+        self.refused(st, st.now, first["cycle"])
+
+    def test_failure_inside_a_slice_drops_the_cycle(self):
+        st, first = self.opened()
+        st.fail_period = R.period("weekly", date(2026, 9, 21)).key
+        with self.assertRaises(sqlite3.OperationalError):
+            st.generate_reports(st.now, cycle=first["cycle"])
+        st.fail_period = None
+        self.refused(st, st.now, first["cycle"])
+        self.assertEqual(slice_generate(st)["advertisers"], 3)
+
+    def test_reader_and_bad_time_are_refused_on_every_path(self):
+        st = real_store(self)
+        reader = S.open_reader(st._path)
+        self.addCleanup(reader.close)
+        for cycle in (None, 0, 1):
+            with self.subTest(cycle=cycle), self.assertRaises(S.StoreRefused):
+                reader.generate_reports(NOW, cycle=cycle)
+        for cycle in (None, 0):
+            with self.subTest(future=cycle), self.assertRaises(S.StoreRefused):
+                st.generate_reports(NOW+timedelta(hours=1), cycle=cycle)
+
+    def test_map_equals_the_committed_table_after_every_slice(self):
+        # 높이표가 같으면 지도를 다시 읽지 않는다 — 그러려면 확정된 판을 지도에 정확히 더해 두어야 한다.
+        st, first = self.opened(pids=4)
+        result = first
+        while isinstance(result, dict) and "cycle" in result:
+            result = st.generate_reports(st.now, cycle=result["cycle"])
+            active = st._report_cycle
+            if active is not None:
+                pairs, _by_pid, top = S._report_index(st._conn)
+                self.assertEqual(active.pairs, pairs)
+                self.assertEqual(active.top_report_id, top)
+        self.assertGreater(result["generated"], 0)
+
+    def test_rows_inserted_between_slices_rebuild_the_map(self):
+        def prepare(st):
+            st.groups = {101: 11, 102: 12}
+            for cid, pid in st.groups.items():
+                st.seed(date(2026, 9, 1), date(2026, 10, 4), cid=cid, pid=pid)
+            old_generate(st)
+            st.now += timedelta(hours=1)
+            for cid, pid in st.groups.items():
+                st.seed(WEEKS[3].start, WEEKS[3].start, cid=cid, pid=pid, spend=4000)
+        expected = memory_store(self)
+        prepare(expected)
+        for pid in (11, 12):
+            copy_latest(expected, pid, WEEKS[3].key)
+        want = run(expected, old_generate)
+        st = memory_store(self)
+        prepare(st)
+        opened = st.generate_reports(st.now, cycle=0)
+        for pid in (11, 12):
+            copy_latest(st, pid, WEEKS[3].key)              # 회차를 연 뒤 · 첫 조각 전에 들어온 판
+        self.assertEqual(run(st, lambda st: slice_continue(st, opened)), want)
+        # 첫 조각 뒤에 들어온 판도 다음 조각이 센다(판 번호 = 판 수 + 1)
+        st = memory_store(self)
+        prepare(st)
+        opened = st.generate_reports(st.now, cycle=0)
+        st.generate_reports(st.now, cycle=opened["cycle"])
+        copy_latest(st, 12, WEEKS[3].key)
+        slice_continue(st, {"cycle": opened["cycle"]})
+        count, latest = st._conn.execute("""SELECT COUNT(*),MAX(report_id) FROM naver_auto_report_snapshot
+            WHERE possibility_id=12 AND period_key=?""", (WEEKS[3].key,)).fetchone()
+        payload = json.loads(st._conn.execute("SELECT payload_json FROM naver_auto_report_snapshot WHERE report_id=?",
+                                              (latest,)).fetchone()[0])
+        self.assertEqual(payload["revision_no"], count)
+        self.assertEqual(payload["change_summary"]["previous_report_id"], latest-1)
+
+
+def slice_continue(st, opened):
+    result = opened
+    while isinstance(result, dict) and "cycle" in result:
+        result = st.generate_reports(st.now, cycle=result["cycle"])
+    return result
 
 
 class FormatJudgementTest(unittest.TestCase):
