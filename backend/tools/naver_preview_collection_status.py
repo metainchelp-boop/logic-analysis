@@ -23,8 +23,11 @@ SHM_LOCK_FIX_COMMIT = 'c21f5f05f610abf89df0c24e85c00b1bec23d01c'
 OWNER_ACTIONS_COMMIT = '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505'
 # Same diagnostics and DB schema as OWNER_ACTIONS_COMMIT; screen overhaul and display-only board fields.
 SCREEN_OVERHAUL_COMMIT = 'a981b35e298aa58a52b30e266792bd0f36506c5d'
+# Same diagnostics and DB schema as SCREEN_OVERHAUL_COMMIT; report cycle in small writer items (staff login 503)
+# and one more engine log line (store busy).
+WRITER_RELIEF_COMMIT = '25dc24d8760a06b2321d4fbde481769c3ce32c34'
 MONITORING_COMMITS = frozenset((MONITORING_COMMIT, REPORTS_COMMIT, SHM_LOCK_FIX_COMMIT, OWNER_ACTIONS_COMMIT,
-                                SCREEN_OVERHAUL_COMMIT))
+                                SCREEN_OVERHAUL_COMMIT, WRITER_RELIEF_COMMIT))
 DAILY_LIMITED_COMMITS = frozenset((DAILY_LIMITED_COMMIT, RUNTIME_STATUS_COMMIT)) | MONITORING_COMMITS
 CATALOG_LINKS_COMMITS = DAILY_LIMITED_COMMITS | frozenset((CATALOG_LINKS_COMMIT,))
 PROJECTION_SOURCE = r'''
@@ -947,11 +950,13 @@ RELAY_KINDS = frozenset('engine-loop engine-not-configured relay-busy relay-no-t
 KST = timezone(timedelta(hours=9))
 TYPE_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
 # a981b35 기록 틀(logging "%(levelname)s %(name)s %(message)s" · 중계는 uvicorn 기본 꼴/lastResort).
+# 25dc24d 는 같은 꼴의 줄 하나(화면 API 저장소 바쁨)만 더한다 — 나머지 줄은 a981b35 와 글자 그대로.
 # 줄 전체가 틀과 맞을 때만 갈래로 센다. 밖으로 나가는 값 = 갈래 이름 · 검증한 예외 종류 · HTTP 상태 숫자뿐.
 LOG_TEMPLATES = {'engine': (
     ('web_response_failed', 'type', r'ERROR naver_engine\.web 화면 API 응답 만들기 실패: (\S{1,64})'),
     ('web_store_refused', 'type', r'WARNING naver_engine\.web 화면 API 저장소 거절: (\S{1,64})'),
     ('web_store_error', 'type', r'WARNING naver_engine\.web 화면 API 저장소 오류: (\S{1,64})'),
+    ('web_store_busy', 'type', r'WARNING naver_engine\.web 화면 API 저장소 바쁨: (\S{1,64})'),
     ('web_unexpected_error', 'type', r'ERROR naver_engine\.web 화면 API 뜻밖의 오류: (\S{1,64})'),
     ('audit_write_failed', 'type', r'WARNING naver_engine\.web 열람·쓰기 기록 실패: (\S{1,64})'),
     ('untrusted_source_header', None,
@@ -1023,7 +1028,7 @@ def log_categories(entries, unit):
             item['http_status' if value_kind == 'status' else 'kinds'] = dict(ranked[:LOG_KIND_MAX])
             item['other_value_entries'] = sum(n for _, n in ranked[LOG_KIND_MAX:])
         categories[name] = item
-    return dict(template_release='a981b35', unmatched_entries=unmatched, categories=categories)
+    return dict(template_release='25dc24d', unmatched_entries=unmatched, categories=categories)
 
 
 def log_projection(raw, *, source, unit):

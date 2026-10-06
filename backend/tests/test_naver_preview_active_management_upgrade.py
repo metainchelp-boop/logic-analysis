@@ -28,6 +28,9 @@ class SameSchemaContractTest(unittest.TestCase):
         sources['old'] = sources['target']
         # Screen overhaul (a981b35): Python only on the target; schema 11 contract unchanged.
         sources['target'] += b'\n# issue ack note\n'
+        # Writer relief (25dc24d): the screen overhaul store is now the old side; Python only on the target.
+        sources['old'] = sources['target']
+        sources['target'] += b'\n# report cycle in per-client writer items\n'
         with tempfile.TemporaryDirectory() as directory:
             old, new = (Path(directory).resolve()/part for part in ('old', 'new'))
             for path, role in ((old, 'old'), (new, 'target')):

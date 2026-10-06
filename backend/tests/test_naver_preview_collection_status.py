@@ -171,7 +171,7 @@ class CollectionTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '^COLLECTION_DIAGNOSTIC$'):
                 M.diagnostic_projection(value)
 
-    def test_catalog_diagnostics_accept_only_eight_reviewed_product_commits(self):
+    def test_catalog_diagnostics_accept_only_nine_reviewed_product_commits(self):
         self.assertEqual(M.CATALOG_LINKS_COMMITS, frozenset({
             '6e4b035901027fef29266de218bfb0594227a3fe',
             '01344b145d0b679a6ee730d7fa4b5990278dd654',
@@ -180,7 +180,8 @@ class CollectionTest(unittest.TestCase):
             'a38c53775c112cdf5db420f979093d6bee9e5376',
             'c21f5f05f610abf89df0c24e85c00b1bec23d01c',
             '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
-            'a981b35e298aa58a52b30e266792bd0f36506c5d'}))
+            'a981b35e298aa58a52b30e266792bd0f36506c5d',
+            '25dc24d8760a06b2321d4fbde481769c3ce32c34'}))
         self.assertEqual(M.DAILY_LIMITED_COMMIT, '01344b145d0b679a6ee730d7fa4b5990278dd654')
         self.assertEqual(M.DAILY_LIMITED_COMMITS, frozenset({
             '01344b145d0b679a6ee730d7fa4b5990278dd654',
@@ -189,17 +190,20 @@ class CollectionTest(unittest.TestCase):
             'a38c53775c112cdf5db420f979093d6bee9e5376',
             'c21f5f05f610abf89df0c24e85c00b1bec23d01c',
             '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
-            'a981b35e298aa58a52b30e266792bd0f36506c5d'}))
+            'a981b35e298aa58a52b30e266792bd0f36506c5d',
+            '25dc24d8760a06b2321d4fbde481769c3ce32c34'}))
         self.assertEqual(M.REPORTS_COMMIT, 'a38c53775c112cdf5db420f979093d6bee9e5376')
         self.assertEqual(M.SHM_LOCK_FIX_COMMIT, 'c21f5f05f610abf89df0c24e85c00b1bec23d01c')
         self.assertEqual(M.OWNER_ACTIONS_COMMIT, '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505')
         self.assertEqual(M.SCREEN_OVERHAUL_COMMIT, 'a981b35e298aa58a52b30e266792bd0f36506c5d')
+        self.assertEqual(M.WRITER_RELIEF_COMMIT, '25dc24d8760a06b2321d4fbde481769c3ce32c34')
         self.assertEqual(M.MONITORING_COMMITS, frozenset({
             '0a302856c6177c4f53145abaf9ed31b6a39654f3',
             'a38c53775c112cdf5db420f979093d6bee9e5376',
             'c21f5f05f610abf89df0c24e85c00b1bec23d01c',
             '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
-            'a981b35e298aa58a52b30e266792bd0f36506c5d'}))
+            'a981b35e298aa58a52b30e266792bd0f36506c5d',
+            '25dc24d8760a06b2321d4fbde481769c3ce32c34'}))
 
     def test_daily_limited_uses_schema11_reader_and_separates_current_targets_from_old_jobs(self):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
@@ -780,13 +784,14 @@ class CollectionTest(unittest.TestCase):
         release.command.assert_not_called()
 
     def test_run_reviewed_releases_require_new_aggregates_and_unknown_commit_gets_neither(self):
-        # c21f5f0, 8dd4292 and a981b35 live reads stay allowed (a38c537 does not).
+        # c21f5f0, 8dd4292, a981b35 and 25dc24d live reads stay allowed (a38c537 does not).
         for commit in ('01344b145d0b679a6ee730d7fa4b5990278dd654',
                        '1b790b864ce27766251a205259fa6a332f60f72b',
                        '0a302856c6177c4f53145abaf9ed31b6a39654f3',
                        'c21f5f05f610abf89df0c24e85c00b1bec23d01c',
                        '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
-                       'a981b35e298aa58a52b30e266792bd0f36506c5d'):
+                       'a981b35e298aa58a52b30e266792bd0f36506c5d',
+                       '25dc24d8760a06b2321d4fbde481769c3ce32c34'):
             with self.subTest(commit=commit):
                 self.check_run_diagnostics(commit, {
                     'daily_limited':dict(cycle_day='2026-10-01',jobs=0,current_daily_targets=1,
@@ -1084,6 +1089,9 @@ class CollectionTest(unittest.TestCase):
         ('2026-10-06T00:05:02Z', 'WARNING naver_engine.web 화면 API 저장소 거절: StoreRefused'),
         ('2026-10-06T00:05:03Z', 'WARNING naver_engine.web 화면 API 저장소 오류: StoreError'),
         ('2026-10-06T00:05:04Z', 'WARNING naver_engine.web 화면 API 저장소 오류: 가나상회농업회사법인'),
+        # 25dc24d: store busy now leaves one line in the same shape (it used to answer 503 without a line).
+        ('2026-10-06T00:05:05Z', 'WARNING naver_engine.web 화면 API 저장소 바쁨: StoreBusy'),
+        ('2026-10-06T00:05:06Z', 'WARNING naver_engine.web 화면 API 저장소 바쁨: StoreBusy 가나상회'),
         ('2026-10-05T23:41:00Z', 'ERROR naver_engine.web 화면 API 뜻밖의 오류: KeyError'),
         ('2026-10-06T00:15:00Z', 'ERROR naver_engine.web 화면 API 뜻밖의 오류: KeyError'),
         ('2026-10-06T00:16:00Z', "ERROR naver_engine.web 화면 API 뜻밖의 오류: KeyError 'customer 987654321'"),
@@ -1120,16 +1128,16 @@ class CollectionTest(unittest.TestCase):
     def docker_raw(self, sample, extra=b''):
         return b'\n'.join((at+' '+message).encode() for at, message in sample)+b'\nPRIVATE line without timestamp 987654321\n'+extra
 
-    def test_engine_container_lines_are_classified_by_exact_a981b35_templates_without_private_values(self):
+    def test_engine_container_lines_are_classified_by_exact_25dc24d_templates_without_private_values(self):
         result = M.log_projection(self.docker_raw(self.ENGINE_SAMPLE), source='docker', unit='engine')
         templates = result['templates']
-        self.assertEqual(templates['template_release'], 'a981b35')
+        self.assertEqual(templates['template_release'], '25dc24d')
         cats = templates['categories']
-        self.assertEqual(set(cats), {'web_response_failed','web_store_refused','web_store_error','web_unexpected_error',
-            'audit_write_failed','untrusted_source_header','preview_failed','cycle_failed','job_failed',
-            'failure_record_failed','naver_rate_pause','naver_http_warning','startup_refused'})
-        # Trailing raw text, Traceback, free text, a relay line and the untimed line never match a template.
-        self.assertEqual(templates['unmatched_entries'], 5)
+        self.assertEqual(set(cats), {'web_response_failed','web_store_refused','web_store_error','web_store_busy',
+            'web_unexpected_error','audit_write_failed','untrusted_source_header','preview_failed','cycle_failed',
+            'job_failed','failure_record_failed','naver_rate_pause','naver_http_warning','startup_refused'})
+        # Trailing raw text (twice), Traceback, free text, a relay line and the untimed line never match a template.
+        self.assertEqual(templates['unmatched_entries'], 6)
         self.assertEqual(result['entries_inspected'], len(self.ENGINE_SAMPLE)+1)
         self.assertEqual(cats['web_unexpected_error'], dict(count=2, first_at='2026-10-05T23:41:00+00:00',
             last_at='2026-10-06T00:15:00+00:00', kst_10min={'2026-10-06T08:40+09:00':1,'2026-10-06T09:10+09:00':1},
@@ -1137,6 +1145,8 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(cats['web_response_failed']['first_at'], '2026-10-06T00:05:01.100000+00:00')
         self.assertEqual(cats['web_store_error']['kinds'], {'StoreError':1,'UNRECOGNIZED':1})
         self.assertEqual(cats['web_store_refused']['kinds'], {'StoreRefused':1})
+        self.assertEqual(cats['web_store_busy']['kinds'], {'StoreBusy':1})
+        self.assertEqual(cats['web_store_busy']['kst_10min'], {'2026-10-06T09:00+09:00':1})
         self.assertEqual(cats['audit_write_failed']['kinds'], {'TimeoutError':1,'UNRECOGNIZED':1})
         self.assertEqual(cats['audit_write_failed']['kst_10min'], {'2026-10-06T09:10+09:00':2})
         self.assertEqual(cats['preview_failed']['kinds'], {'URLError':1})

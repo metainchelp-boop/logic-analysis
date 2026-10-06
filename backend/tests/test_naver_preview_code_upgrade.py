@@ -236,12 +236,14 @@ class ContractTest(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         code.probe(release, source, load('naver_preview_upgrade'))
 
-    def test_named_writes_match_each_side_of_the_screen_overhaul_release(self):
+    def test_named_writes_are_the_same_on_both_sides_of_the_writer_relief_release(self):
         code = sealed_code()
+        # The screen overhaul (a981b35, now the old side) already opened the CEO revoke: both sides answer 401.
         self.assertEqual(code.OWNER_ACTION_ROUTES, (
             '/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all',
-            '/settings/thresholds', '/holds/org/confirm', '/holds/stages/confirm', '/holds/accounts/confirm'))
-        self.assertEqual(code.TARGET_ACTION_ROUTES, ('/links/revoke',))
+            '/settings/thresholds', '/holds/org/confirm', '/holds/stages/confirm', '/holds/accounts/confirm',
+            '/links/revoke'))
+        self.assertEqual(code.TARGET_ACTION_ROUTES, ())
         self.assertEqual(code.CLOSED_LINK_ROUTES, ('/links/reject', '/links/preview'))
         def fixture(open_on):
             release = Mock()
@@ -259,28 +261,49 @@ class ContractTest(unittest.TestCase):
             release.unix_request.side_effect = read
             return release
         upgrade = load('naver_preview_upgrade')
-        target_open = code.OWNER_ACTION_ROUTES + code.TARGET_ACTION_ROUTES
-        code.probe(fixture(target_open), code.TARGET_COMMIT, upgrade)
-        code.probe(fixture(code.OWNER_ACTION_ROUTES), code.OLD_COMMIT, upgrade)
+        sides = (code.TARGET_COMMIT, code.OLD_COMMIT)
+        for source in sides:
+            with self.subTest(source=source):
+                code.probe(fixture(code.OWNER_ACTION_ROUTES), source, upgrade)
         for route in code.OWNER_ACTION_ROUTES:
-            with self.subTest(route=route):
-                with self.assertRaises(ValueError):   # the target closed a write the old release opened
-                    code.probe(fixture(tuple(r for r in target_open if r != route)), code.TARGET_COMMIT, upgrade)
-                with self.assertRaises(ValueError):   # the old release must still be the owner-actions release
-                    code.probe(fixture(tuple(r for r in code.OWNER_ACTION_ROUTES if r != route)),
-                               code.OLD_COMMIT, upgrade)
-        for route in code.TARGET_ACTION_ROUTES:
-            with self.subTest(route=route):
-                with self.assertRaises(ValueError):   # the target left the CEO revoke closed
-                    code.probe(fixture(code.OWNER_ACTION_ROUTES), code.TARGET_COMMIT, upgrade)
-                with self.assertRaises(ValueError):   # the old release opened the revoke
-                    code.probe(fixture(code.OWNER_ACTION_ROUTES + (route,)), code.OLD_COMMIT, upgrade)
+            for source in sides:
+                # A side that closed a named write is not the reviewed release. On the old side this is what a
+                # rollback verify sees: a981b35 answers 401 for the revoke, so 403 there means another release.
+                with self.subTest(route=route, source=source), self.assertRaises(ValueError):
+                    code.probe(fixture(tuple(r for r in code.OWNER_ACTION_ROUTES if r != route)), source, upgrade)
         for route in code.CLOSED_LINK_ROUTES:
-            with self.subTest(route=route):
+            for source in sides:
+                with self.subTest(route=route, source=source), self.assertRaises(ValueError):
+                    code.probe(fixture(code.OWNER_ACTION_ROUTES + (route,)), source, upgrade)
+
+    def test_rollback_verify_accepts_the_revoke_the_old_release_already_opened(self):
+        # Written out, not taken from the module: a981b35 (the old side) already answers 401 on the CEO revoke.
+        # A tool that still expected 403 there would refuse the rolled-back release (CODE_ROUTE_STATUS) after a
+        # failed apply and leave the engine and relay stopped.
+        code = sealed_code()
+        opened = ('/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all',
+                  '/settings/thresholds', '/holds/org/confirm', '/holds/stages/confirm', '/holds/accounts/confirm',
+                  '/links/revoke')
+        def fixture(open_on):
+            release = Mock()
+            def read(path, route, method='GET'):
+                if asset_response(code, route):
+                    return asset_response(code, route)
+                if route == '/_engine/health':
+                    return 200, {}, b'{}'
+                if route in ('/naver/', '/naver/dashboard'):
+                    return 200, {'referrer-policy':'no-referrer','cache-control':'no-store'}, b'verificationNotice id="s-dashboard"'
+                approved = ('/links/confirm', '/collection/request', '/management/update', '/management/collect',
+                            '/reports/review', *open_on)
+                return (401 if method == 'GET' or route.removeprefix('/api/naver-auto') in approved else 403), {}, b''
+            release.unix_request.side_effect = read
+            return release
+        upgrade = load('naver_preview_upgrade')
+        for source in (code.OLD_COMMIT, code.TARGET_COMMIT):
+            with self.subTest(source=source):
+                code.probe(fixture(opened), source, upgrade)
                 with self.assertRaises(ValueError):
-                    code.probe(fixture(target_open + (route,)), code.TARGET_COMMIT, upgrade)
-                with self.assertRaises(ValueError):
-                    code.probe(fixture(code.OWNER_ACTION_ROUTES + (route,)), code.OLD_COMMIT, upgrade)
+                    code.probe(fixture(opened[:-1]), source, upgrade)
 
     def test_target_probe_rejects_each_wrong_route_status_and_health_contract(self):
         code = sealed_code()
@@ -361,28 +384,27 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505')
-        self.assertEqual(module.TARGET_COMMIT, 'a981b35e298aa58a52b30e266792bd0f36506c5d')
-        # The previous target archive (sealed for 8dd4292, run 37334732660) is now the pinned old archive.
+        self.assertEqual(module.OLD_COMMIT, 'a981b35e298aa58a52b30e266792bd0f36506c5d')
+        self.assertEqual(module.TARGET_COMMIT, '25dc24d8760a06b2321d4fbde481769c3ce32c34')
+        # The previous target archive (sealed for a981b35, run 37388648024) is now the pinned old archive.
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         'd419f108243ae36aec50e668b4e8e822b64a2d8225870f30878a8373140c5996')
-        # a981b35: git archive of the 18 sealed paths without test folders, gzip mtime=0 (Python 3.12);
+                         '1b1179f1afddd4ac9ad7d6d9d7bd4178d593e2f9e40edf6347ee77f3f6b98514')
+        # 25dc24d: git archive of the 18 sealed paths without test folders, gzip mtime=0 (Python 3.12);
         # must equal the seal receipt.
         self.assertEqual(module.TARGET_SOURCE_SHA256,
-                         '1b1179f1afddd4ac9ad7d6d9d7bd4178d593e2f9e40edf6347ee77f3f6b98514')
-        # store.py: the target adds only Python (an optional note on issue ack); schema 11 is unchanged.
+                         '05e114a9bf055ed8d1b0888afe41daa6fc77e2bc30241018a31da20284d3df28')
+        # store.py: the target changes only Python (report cycle in per-client writer items); schema 11 is unchanged.
         self.assertEqual(module.STORE_SHA256, {
-            'old':'31be2c8ed8d8a3d321f0fb93b08b105cf7a1d8b47dc8d5e55cc2f84910ea767e',
-            'target':'cead3be31d1816107307251562576c2c22edf09328b1402eb0961d08e4f68c74'})
+            'old':'cead3be31d1816107307251562576c2c22edf09328b1402eb0961d08e4f68c74',
+            'target':'6ba8865870b131bea6b6ed4fe6726a63f2a5218f09a7615578411d3bba9de7a1'})
         contract = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         # This historical migration fixture remains the original schema-11 release.
         self.assertEqual(contract['new_observed_unsealed']['sha256'],
                          '66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89')
-        # Exact git archive delta 8dd4292..a981b35 (the target archive ships no test folders).
-        self.assertEqual(module.CODE_PATHS, {'backend/app/naver_auto/verdict.py', 'naver_engine/views.py',
-                                             'naver_engine/store.py', 'naver_engine/web.py',
-                                             'backend/naver_page/app.js', 'backend/naver_page/index.html',
-                                             'backend/naver_page/app.css'})
+        # Exact git archive delta a981b35..25dc24d (neither archive ships test folders).
+        self.assertEqual(module.CODE_PATHS, {'naver_engine/store.py', 'naver_engine/management_store.py',
+                                             'naver_engine/web.py', 'naver_runtime/scheduler.py',
+                                             'backend/naver_page/app.js'})
         self.assertEqual(module.TEST_PATHS, frozenset())
 
     def test_pending_seal_placeholder_refuses_prepare_and_apply_before_any_action(self):
@@ -739,43 +761,43 @@ class ContractTest(unittest.TestCase):
                     else:
                         path.unlink()
 
-    def test_screen_overhaul_release_allows_only_exact_code_paths(self):
+    def test_writer_relief_release_allows_only_exact_code_paths(self):
         module=sealed_code()
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
         approved=tuple(module.CODE_PATHS | module.TEST_PATHS)
         self.assertEqual(module.TEST_PATHS, frozenset())
+        # Paths approved for previous releases or next to this delta are not approved for this one.
+        neighbours=('backend/app/naver_auto/verdict.py','naver_engine/views.py','backend/naver_page/index.html',
+                    'backend/naver_page/app.css','naver_runtime/__main__.py',
+                    'naver_engine/reporting.py','naver_engine/report_views.py','naver_engine/inventory.py',
+                    'naver_engine/management.py','naver_engine/catalog_links.py','naver_engine/alerts.py',
+                    'naver_engine/read.py','naver_runtime/writer.py','naver_runtime/runtime_status.py',
+                    'backend/naver_page/report-ui.js','backend/naver_page/sso-bootstrap.js',
+                    'naver_runtime/bootstrap.py','naver_engine/inventory_reads.py','naver_engine/runtime_view.py',
+                    'backend/app/naver_entry.py','backend/app/naver_relay.py',
+                    'backend/app/naver_auto/scope.py','naver_engine/credentials.py','naver_engine/session.py')
         with tempfile.TemporaryDirectory() as folder:
             old=Path(folder).resolve()/'old';new=Path(folder).resolve()/'new'
             for root in (old,new):
-                for name in approved+('naver_runtime/__main__.py','naver_engine/tests/test_store_shm_lock.py'):
+                for name in approved+neighbours:
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
-            # The deployed tree still carries test folders; the reviewed archive leaves them out.
-            (new/'naver_engine/tests/test_store_shm_lock.py').unlink()
-            # The reviewed archive changes existing code files only; nothing is added.
+            # The reviewed archive changes existing code files only; nothing is added or removed.
             for name in approved:
-                (new/name).write_bytes(b'approved screen-overhaul delta')
+                (new/name).write_bytes(b'approved writer-relief delta')
             module.compatible_code_scope(old,new,upgrade)
-            # Paths approved for previous releases or next to this delta are not approved for this one.
-            for name in ('naver_runtime/__main__.py','naver_engine/tests/test_store_shm_lock.py',
-                         'naver_engine/tests/test_overhaul_board.py','naver_engine/tests/owner_screen_browser.js',
-                         'naver_engine/reporting.py','naver_engine/report_views.py','naver_engine/inventory.py',
-                         'naver_engine/management.py','naver_engine/catalog_links.py','naver_engine/alerts.py',
-                         'naver_engine/scheduler.py','backend/naver_page/report-ui.js','backend/naver_page/sso-bootstrap.js',
-                         'naver_engine/tests/test_report_ui.py','naver_engine/tests/test_web.py',
-                         'naver_runtime/bootstrap.py','naver_engine/inventory_reads.py',
-                         'naver_runtime/runtime_status.py','naver_engine/runtime_view.py',
-                         'backend/app/naver_entry.py','backend/app/naver_relay.py',
+            for name in neighbours+('naver_engine/tests/test_report_generate_slices.py',
+                         'naver_engine/tests/test_writer_item_cost.py','naver_engine/tests/_performance_a981b35.py',
+                         'naver_runtime/tests/test_report_cycle_driver.py','naver_engine/tests/test_web.py',
                          'naver_engine/unreviewed_view_sync.py','naver_engine/web_extra.py',
-                         'backend/app/naver_auto/scope.py','naver_engine/credentials.py','naver_engine/session.py',
-                         'tests/test_naver_owner_actions.py','tools/naver-preview-seal.py'):
+                         'tests/naver_staff_entry.test.js','tools/naver-preview-seal.py'):
                 forbidden=new/name;forbidden.parent.mkdir(parents=True,exist_ok=True)
                 before=forbidden.read_bytes() if forbidden.exists() else None
                 forbidden.write_bytes(b'not approved')
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)
                 forbidden.write_bytes(before) if before is not None else forbidden.unlink()
-            added=new/'backend/naver_page/app.css'
+            added=new/'naver_engine/management_store.py'
             added.unlink();added.symlink_to(new/'naver_engine/web.py')
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
                 module.compatible_code_scope(old,new,upgrade)
@@ -1089,6 +1111,9 @@ class StoreScopeTest(unittest.TestCase):
     SOURCE = TARGET_SOURCE
     # Screen overhaul (a981b35): Python only (optional note on issue ack); schema 11 contract unchanged.
     TARGET_SOURCE = SOURCE + b'\n# Issue ack keeps an optional note in the existing event row.\n'
+    SOURCE = TARGET_SOURCE
+    # Writer relief (25dc24d): Python only (report cycle in per-client writer items); schema 11 contract unchanged.
+    TARGET_SOURCE = SOURCE + b'\n# The report cycle hands the writer one client at a time.\n'
 
     def setUp(self):
         self.code = sealed_code()

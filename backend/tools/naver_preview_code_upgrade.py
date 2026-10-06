@@ -1,4 +1,4 @@
-"""Schema11 screen-overhaul release; paired DB rollback."""
+"""Schema11 writer-relief release; paired DB rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -12,29 +12,30 @@ import stat
 import sqlite3
 from types import SimpleNamespace
 import uuid
-OLD_COMMIT = '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505'
-TARGET_COMMIT = 'a981b35e298aa58a52b30e266792bd0f36506c5d'
+OLD_COMMIT = 'a981b35e298aa58a52b30e266792bd0f36506c5d'
+TARGET_COMMIT = '25dc24d8760a06b2321d4fbde481769c3ce32c34'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-# 8dd4292 seal receipt (run 37334732660).
-OLD_SOURCE_SHA256 = 'd419f108243ae36aec50e668b4e8e822b64a2d8225870f30878a8373140c5996'
-# a981b35 git archive digest of the seal paths without test folders; must equal the seal receipt.
-TARGET_SOURCE_SHA256 = '1b1179f1afddd4ac9ad7d6d9d7bd4178d593e2f9e40edf6347ee77f3f6b98514'
-# store.py: Python only (optional note on issue ack); SQL, SCHEMA_VERSION 11, _REVISION_COLUMNS and _migrate unchanged.
-STORE_SHA256 = {'old':'31be2c8ed8d8a3d321f0fb93b08b105cf7a1d8b47dc8d5e55cc2f84910ea767e',
-                'target':'cead3be31d1816107307251562576c2c22edf09328b1402eb0961d08e4f68c74'}
-CODE_PATHS = {'backend/app/naver_auto/verdict.py', 'naver_engine/views.py', 'naver_engine/store.py',
-              'naver_engine/web.py', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
-              'backend/naver_page/app.css'}
-# The target archive ships no test folders; their removal is covered by REMOVABLE_SOURCE_PREFIXES.
+# a981b35 seal receipt (run 37388648024).
+OLD_SOURCE_SHA256 = '1b1179f1afddd4ac9ad7d6d9d7bd4178d593e2f9e40edf6347ee77f3f6b98514'
+# 25dc24d git archive digest of the seal paths without test folders; must equal the seal receipt.
+TARGET_SOURCE_SHA256 = '05e114a9bf055ed8d1b0888afe41daa6fc77e2bc30241018a31da20284d3df28'
+# store.py: Python only (report cycle in per-client writer items, snapshot map, match reuse);
+# SQL, SCHEMA_VERSION 11, _REVISION_COLUMNS and _migrate unchanged.
+STORE_SHA256 = {'old':'cead3be31d1816107307251562576c2c22edf09328b1402eb0961d08e4f68c74',
+                'target':'6ba8865870b131bea6b6ed4fe6726a63f2a5218f09a7615578411d3bba9de7a1'}
+CODE_PATHS = {'naver_engine/store.py', 'naver_engine/management_store.py', 'naver_engine/web.py',
+              'naver_runtime/scheduler.py', 'backend/naver_page/app.js'}
+# Neither archive ships test folders; their removal is covered by REMOVABLE_SOURCE_PREFIXES.
 TEST_PATHS = frozenset()
 # The seal no longer ships test folders (ad-dashboard tools/naver-preview-seal.py SOURCE_EXCLUDED_PATHS);
-# old deployed trees still carry them. Tests never run on the server, so only these may disappear.
+# old deployed trees may still carry them. Tests never run on the server, so only these may disappear.
 REMOVABLE_SOURCE_PREFIXES = ('naver_engine/tests/', 'naver_runtime/tests/')
-# Opened since the owner-actions release (8dd4292): 401 without a token on both sides.
+# Named writes open on both sides of this release: the owner-actions writes (8dd4292) and the CEO-only
+# pair revoke the screen overhaul (a981b35) opened. 401 without a token on both sides.
 OWNER_ACTION_ROUTES = ('/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all',
-    '/settings/thresholds', *('/holds/'+k+'/confirm' for k in ('org', 'stages', 'accounts')))
-# Opened by the target only (CEO-only revoke with a one-line reason): target 401, old 403.
-TARGET_ACTION_ROUTES = ('/links/revoke',)
+    '/settings/thresholds', *('/holds/'+k+'/confirm' for k in ('org', 'stages', 'accounts')), '/links/revoke')
+# Opened by the target only: none (the writer-relief release adds no route).
+TARGET_ACTION_ROUTES = ()
 # Closed on both sides.
 CLOSED_LINK_ROUTES = ('/links/reject', '/links/preview')
 REPORT_ASSETS = {
