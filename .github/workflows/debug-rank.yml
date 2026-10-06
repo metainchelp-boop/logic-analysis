@@ -1097,6 +1097,78 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 90s
           script: |
+            if [ "$IN_COLLECTOR" = "naver-entry" ]; then
+              # 관제 진입 출처 집계(2026-10-06 직원 NV-E03 조사) — 읽기 전용 · 이 갈래는 머지하지 않는다.
+              # ⚠️ 이 저장소는 공개다. 주소 원문·IP·요청값(sso_start)·브라우저 원문을 찍지 않는다.
+              #    정해진 이름표(전산 정식 주소 4 · cafe24 기본 주소 2 · 관제·로직 자신 · 빈 referrer · 그 밖 분류)와 건수·시각만 낸다.
+              echo "== 관제 진입 출처 집계 (읽기 전용 · 주소 원문·IP·요청값 미출력) =="
+              NE_AWK=$(mktemp)
+              cat > "$NE_AWK" <<'AWK'
+            BEGIN {
+              split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", mn, " ")
+              for (i = 1; i <= 12; i++) MON[mn[i]] = sprintf("%02d", i)
+              n = split("http://metainc.co.kr https://metainc.co.kr http://www.metainc.co.kr https://www.metainc.co.kr", a, " ")
+              for (i = 1; i <= n; i++) { KNOWN[a[i]] = 1; ALLOWED[a[i]] = 1 }
+              n = split("http://metaincweb.cafe24app.com https://metaincweb.cafe24app.com https://dashboard.metainc.co.kr http://dashboard.metainc.co.kr https://logic.metainc.co.kr http://logic.metainc.co.kr http://api.metainc.co.kr", a, " ")
+              for (i = 1; i <= n; i++) KNOWN[a[i]] = 1
+            }
+            {
+              if (index($2, "/naver/") == 0) next
+              entry = index($2, "/naver/?sso_start=") > 0
+              if (!entry) { plain++; next }
+              total++; nfs[NF]++
+              split($1, p, " "); ip = p[1]
+              ts = ""; if (match($1, /\[[^]]+\]/)) ts = substr($1, RSTART + 1, RLENGTH - 2)
+              split(ts, d, "[/: ]"); key = d[3] "-" MON[d[2]] "-" d[1] " " d[4] ":" d[5] ":" d[6]; tz = d[7]; day = d[3] "-" MON[d[2]] "-" d[1]
+              split($3, s, " "); st = s[1]
+              ref = $4; o = ref
+              if (match(ref, /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\/?#]+/)) o = tolower(substr(ref, RSTART, RLENGTH))
+              if (ref == "-" || ref == "") b = "(빈 referrer)"
+              else if (o in KNOWN) b = o
+              else if (ref ~ /^about:/) b = "(about: 주소)"
+              else if (o ~ /^[a-z]+:\/\/[0-9.]+(:[0-9]+)?$/) b = "(그 밖 — 숫자 주소)"
+              else if (o ~ /metainc/) b = "(그 밖 — metainc 가 든 다른 이름)"
+              else if (o ~ /cafe24/) b = "(그 밖 — cafe24 가 든 다른 이름)"
+              else b = "(그 밖 — 다른 이름)"
+              ua = $6; f = "그 밖"
+              if (ua ~ /Whale\//) f = "Whale"; else if (ua ~ /Edg\//) f = "Edge"; else if (ua ~ /SamsungBrowser/) f = "Samsung"
+              else if (ua ~ /Chrome\//) f = "Chrome"; else if (ua ~ /Firefox\//) f = "Firefox"; else if (ua ~ /Safari\//) f = "Safari"
+              if (ua ~ /Mobile|Android|iPhone|iPad/) f = f "(모바일)"
+              cnt[b]++; dayc[day SUBSEP b]++; days[day] = 1; buckets[b] = 1
+              if (!(b SUBSEP ip in seenip)) { seenip[b SUBSEP ip] = 1; places[b]++ }
+              if (!(day SUBSEP b SUBSEP ip in seendip)) { seendip[day SUBSEP b SUBSEP ip] = 1; dplaces[day SUBSEP b]++ }
+              uac[b SUBSEP f]++; uas[f] = 1; stc[b SUBSEP st]++; sts[st] = 1
+              if (!(b in first) || key < first[b]) first[b] = key
+              if (!(b in last) || key > last[b]) last[b] = key
+              if (!((day SUBSEP b) in dfirst) || key < dfirst[day SUBSEP b]) dfirst[day SUBSEP b] = key
+              if (!((day SUBSEP b) in dlast) || key > dlast[day SUBSEP b]) dlast[day SUBSEP b] = key
+            }
+            END {
+              printf "0\t관제 로그인 시작 요청(GET /naver/?sso_start=) %d건 · 그냥 /naver/ 요청 %d건 · 시간대 %s\n", total, plain, tz
+              line = "[줄 형식] 따옴표로 나눈 칸 수:"; for (k in nfs) line = line " " k "칸=" nfs[k] "줄"; printf "1\t%s\n", line
+              print "2\t[출처별 합계] (통과 = 관제 창이 받아 주는 출처 · NV-E03 = 관제 창이 막는 출처)"
+              for (b in buckets) {
+                verdict = (b in ALLOWED || b == "(빈 referrer)") ? "통과" : "NV-E03"
+                printf "3|%s|0\t  %-38s %4d건 · 접속 위치 %d곳 · %s · 처음 %s · 마지막 %s\n", b, b, cnt[b], places[b], verdict, first[b], last[b]
+                line = "      브라우저:"; for (u in uas) if ((b SUBSEP u) in uac) line = line " " u " " uac[b SUBSEP u]; printf "3|%s|1\t%s\n", b, line
+                line = "      응답 코드:"; for (t in sts) if ((b SUBSEP t) in stc) line = line " " t "=" stc[b SUBSEP t]; printf "3|%s|2\t%s\n", b, line
+              }
+              print "4\t[날짜별]"
+              for (dd in days) for (b in buckets) if ((dd SUBSEP b) in dayc)
+                printf "5|%s|%s\t  %s  %-38s %4d건 · 위치 %d곳 · %s ~ %s\n", dd, b, dd, b, dayc[dd SUBSEP b], dplaces[dd SUBSEP b], substr(dfirst[dd SUBSEP b], 12), substr(dlast[dd SUBSEP b], 12)
+            }
+            AWK
+              echo "-- 읽은 접근 기록 파일(이름·줄 수) --"
+              NE_FILES=$(ls -1tr /var/log/nginx/ 2>/dev/null | grep -E 'access' || true)
+              for f in $NE_FILES; do
+                printf '  %s %s줄\n' "$f" "$(zcat -f "/var/log/nginx/$f" 2>/dev/null | wc -l)"
+              done
+              [ -n "$NE_FILES" ] || echo "  (접근 기록 파일 없음)"
+              for f in $NE_FILES; do zcat -f "/var/log/nginx/$f" 2>/dev/null; done \
+                | awk -F'"' -f "$NE_AWK" | LC_ALL=C sort -t "$(printf '\t')" -k1,1 -s | cut -f2- || echo "  (집계 실패)"
+              rm -f "$NE_AWK"
+              exit 0
+            fi
             echo "== 컨테이너 상태 =="
             docker ps --filter name=logic-analysis --format '{{.Names}} {{.Status}}'
             docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}}' logic-analysis
