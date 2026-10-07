@@ -8,7 +8,7 @@ import os
 from typing import Optional
 
 from app.naver_auto import matching as M, org_snapshot as O, scope as SC
-from . import inventory as I, links as L, store as S, views as W
+from . import inventory as I, links as L, management_store as MS, store as S, views as W
 
 _REF_KEY = os.urandom(32)
 _REF_PREFIX = "catalog:"
@@ -34,6 +34,7 @@ class Context:
     catalog_at: Optional[datetime]
     detail_ids: frozenset
     visible_ids: frozenset
+    holder_ids: dict
 
 
 def load(store, now, org, scope, selection="all", *, narrowed=False):
@@ -76,7 +77,7 @@ def load(store, now, org, scope, selection="all", *, narrowed=False):
     rows = {}
     if state == "accepted":
         try:
-            result, _ = I._matching(base, catalog, auto_evidence=auto_evidence)
+            result, _ = MS.matching_result(store, base.accounts, base.live_decisions, catalog, auto_evidence)
             raw = L._rows(result, base.live_decisions, base.lost_decisions, store.account_times(),
                           set(companies), set())
             for row in raw:
@@ -91,7 +92,30 @@ def load(store, now, org, scope, selection="all", *, narrowed=False):
         context = _explicit_name_review(context, catalog)
     return Context(context, scope, companies, source_key, state,
                    None if catalog is None else datetime.fromisoformat(catalog["generated_at"]),
-                   W.visible(base, scope), visible_ids)
+                   W.visible(base, scope), visible_ids, _holder_index(context))
+
+
+def _holder_index(ctx):
+    """현재 context의 모든 주장. 보이는 범위로 좁히지 않아 다른 업체의 확인도 보호한다."""
+    holders = {}
+    for decision in ctx.live_decisions + ctx.lost_decisions:
+        if decision.decision == "confirmed":
+            holders.setdefault(decision.customer_id, set()).add(decision.possibility_id)
+    for pid, rows in ctx.rows_by_pid.items():
+        for row in rows:
+            cid = row["customer_id"]
+            if cid is not None:
+                holders.setdefault(cid, set()).add(pid)
+    for cid, account in ctx.accounts.items():
+        key = M.loose_name(account["account_name"])
+        if key is not None:
+            holders.setdefault(cid, set()).update(ctx.name_owners.get(key, ()))
+    return {cid: frozenset(ids) for cid, ids in holders.items()}
+
+
+def _holders(context, pid, cid):
+    """W.link_holders와 같은 집합. 거래 안 다시 만든 context의 색인만 사용한다."""
+    return frozenset() if cid is None else context.holder_ids.get(cid, frozenset()) - {pid}
 
 
 def _explicit_name_review(ctx, catalog):
@@ -186,7 +210,7 @@ def block_reason(context, row):
         return "company-unavailable"
     if not account or account["present"] != 1:
         return "account-unavailable"
-    if (not name_review and W.link_holders(ctx, pid, cid)) or row.get("claimed_elsewhere"):
+    if (not name_review and _holders(context, pid, cid)) or row.get("claimed_elsewhere"):
         return "account-claimed-elsewhere"
     if any(d.possibility_id == pid and d.customer_id == cid for d in ctx.live_decisions):
         return "pair-already-decided"
@@ -205,7 +229,7 @@ def pending(context):
                 continue
             cid = row["customer_id"]
             customer = cid is not None and row["code"] not in W.NOT_A_CUSTOMER
-            holders = W.link_holders(ctx, pid, cid) if customer else frozenset()
+            holders = _holders(context, pid, cid) if customer else frozenset()
             clear = customer and W.clear_for(ctx, scope, pid, row, holders)
             account = ctx.accounts.get(cid) if clear else None
             reason = block_reason(context, row)

@@ -144,7 +144,7 @@ def aggregate(rows, checks, now, *, ready):
 def board(ctx, store, scope, selection="all"):
     # 기존 담당자·현재 이관 경계를 통과한 행만 집계하고 내부 고객번호는 응답에 넣지 않는다.
     from . import inventory as INV
-    source = INV.board(ctx, store, scope, selection, _include_customer_ids=True)
+    source = INV.board(ctx, store, scope, selection, _include_customer_ids=True, _dashboard_only=True)
     start, end = ctx.today.replace(day=1), ctx.today-timedelta(days=1)
     checks = store.monthly_checks_on(start, end) if start <= end else {}
     rows = source["rows"]

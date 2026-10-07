@@ -240,7 +240,8 @@ def _current_matches(ctx, store, catalog, state, accounts_current):
     return result, pairs, ambiguous, candidate_counts, match_ok
 
 
-def board(ctx, store, scope, selection="all", workflow="all", mapping="all", view="current", *, _include_customer_ids=False):
+def board(ctx, store, scope, selection="all", workflow="all", mapping="all", view="current", *,
+          _include_customer_ids=False, _dashboard_only=False):
     if workflow not in ("all", *WORKFLOWS) or mapping not in ("all", *MAPPINGS) \
             or view not in ("current", "lost", "balance_known"):
         raise SC.SelectionRejected()
@@ -257,7 +258,7 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
         ctx, store, catalog, state, accounts_current)
     checks = store.inventory_checks_on(ctx.today)
     structure = store.structure_reason_summaries(ctx.accounts.keys(),ctx.now) \
-        if callable(getattr(store,"structure_reason_summaries",None)) else {}
+        if not _dashboard_only and callable(getattr(store,"structure_reason_summaries",None)) else {}
     managed = store.performance_checks(ctx.now) if callable(getattr(store,"performance_checks",None)) else {}
     legacy = store.latest_inventory_successes() if managed else {}
     for cid, current in managed.items():
@@ -333,6 +334,12 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
                      "detail_available": pid in ctx.prospects and ctx.prospects[pid]["present"] == 1 and not uncertain,
                      "reason": "SOURCE_UNAVAILABLE" if not match_ok else
                                ("MATCH_REVIEW" if uncertain else ("NO_ERP_MATCH" if company is None else None))})
+    if _dashboard_only:
+        # 월간 집계는 위의 현재 계정·담당 권한·귀속·집행 자료만 사용한다.
+        # 목록의 구조 사유·부재 계정 재매칭·관리업체 후보 분모를 별도로 만들지 않는다.
+        return {"rows": rows, "matching_ready": match_ok, "catalog_status": state,
+                "catalog_at": None if catalog is None else catalog["generated_at"],
+                "accounts_at": None if at is None else at.isoformat()}
     lost = []
     lost_ready = match_ok
     if lost_ready:
