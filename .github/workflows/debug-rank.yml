@@ -102,6 +102,16 @@ jobs:
             'preview-lifecycle':('naver_preview_lifecycle','install')}[operation]
           package=json.loads(inputs.pop('ad_expected_baseline'))
           assert all(v=='off' for v in inputs.values())
+          code_module='naver_preview_code_upgrade'
+          if operation=='preview-code-only-upgrade':
+              import importlib,sys
+              sys.path.insert(0,'backend/tools')
+              import naver_preview_code_only,naver_preview_release
+              naver_preview_release.validate_package(dict(package['release'],operation='upgrade-prepare'))
+              code_module=naver_preview_code_only.code_module_name(package['release']['source_commit'])
+              code=importlib.import_module(code_module)
+              naver_preview_code_only.require_review(code)
+              code.validate_package(package['release'],naver_preview_release)
           bundle={'package':package,'operation':operation,'function':function,
                   'source':pathlib.Path('backend/tools/'+module+'.py').read_text(),
                   'release_source':pathlib.Path('backend/tools/naver_preview_release.py').read_text(),
@@ -111,7 +121,7 @@ jobs:
           if operation in ('preview-code-upgrade','preview-code-diagnose','preview-code-only-upgrade'):
               bundle['upgrade_source']=pathlib.Path('backend/tools/naver_preview_upgrade.py').read_text()
           if operation in ('preview-code-diagnose','preview-code-only-upgrade'):
-              bundle['code_source']=pathlib.Path('backend/tools/naver_preview_code_upgrade.py').read_text()
+              bundle['code_source']=pathlib.Path('backend/tools/'+code_module+'.py').read_text()
           with open(os.environ['GITHUB_ENV'],'a') as stream:
               stream.write('PREVIEW_OPS_B64='+encode_ops(bundle)+'\n')
           PY
@@ -283,13 +293,21 @@ jobs:
               package=json.loads(inputs.pop('ad_expected_baseline'))
               assert all(value=='off' for value in inputs.values())
               if operation=='preview-code-only-prepare':
-                  import naver_preview_code_only,naver_preview_code_upgrade
-                  naver_preview_code_only.require_review(naver_preview_code_upgrade)
+                  import naver_preview_code_only
+                  selected=naver_preview_code_only.code_module_name(package.get('source_commit'))
+                  naver_preview_code_only.require_review(importlib.import_module(selected))
               fields=download(package,'preview-payload')
               fields.update(run_id=os.environ['RUN_ID'],operation={'preview-prepare':'prepare','preview-upgrade-prepare':'upgrade-prepare','preview-code-prepare':'code-prepare','preview-code-only-prepare':'code-prepare'}[operation])
+              code_module='naver_preview_code_upgrade'
               if operation in ('preview-code-prepare','preview-code-only-prepare'):
-                  import naver_preview_code_upgrade,naver_preview_release
-                  naver_preview_code_upgrade.validate_package(fields,naver_preview_release)
+                  import importlib,naver_preview_release
+                  if operation=='preview-code-only-prepare':
+                      naver_preview_release.validate_package(dict(fields,operation='upgrade-prepare'))
+                      code_module=naver_preview_code_only.code_module_name(fields['source_commit'])
+                  code=importlib.import_module(code_module)
+                  if operation=='preview-code-only-prepare':
+                      naver_preview_code_only.require_review(code)
+                  code.validate_package(fields,naver_preview_release)
               else:
                   validate_package(fields)
               bundle={'package':fields,'source':pathlib.Path('backend/tools/naver_preview_release.py').read_text(),
@@ -298,7 +316,7 @@ jobs:
                   bundle['upgrade_source']=pathlib.Path('backend/tools/naver_preview_upgrade.py').read_text()
                   bundle['lifecycle_source']=pathlib.Path('backend/tools/naver_preview_lifecycle.py').read_text()
               if operation in ('preview-code-prepare','preview-code-only-prepare'):
-                  bundle['code_source']=pathlib.Path('backend/tools/naver_preview_code_upgrade.py').read_text()
+                  bundle['code_source']=pathlib.Path('backend/tools/'+code_module+'.py').read_text()
               if operation=='preview-code-only-prepare':
                   bundle['operation']=operation
                   bundle['code_only_source']=pathlib.Path('backend/tools/naver_preview_code_only.py').read_text()

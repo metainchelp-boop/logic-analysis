@@ -29,3 +29,45 @@ class MorningLogsTest(unittest.TestCase):
         self.assertEqual(result['categories'], {})
         self.assertEqual(result['unmatched_entries'], 4)
         self.assertNotIn('PRIVATE', json.dumps(result))
+
+    def test_network_failure_projection_keeps_fixed_kind_phase_step_and_drops_timings(self):
+        messages = [
+            'WARNING naver_engine.morning morning_network_failure kind=DNS phase=OPEN '
+            'step=CAMPAIGNS request_elapsed_ms=8500 remaining_ms=1500',
+            'WARNING naver_engine.read naver_network_failure kind=DEADLINE phase=BODY '
+            'step=STATS request_elapsed_ms=20000 remaining_ms=0']
+        raw = b'\n'.join(('2026-10-08T01:00:00Z '+message).encode() for message in messages)
+        result = M.log_projection(raw, source='docker', unit='engine')
+        self.assertEqual(result['unrecognized_entries'], 0)
+        self.assertEqual(result['events'], [
+            dict(event='network_failure',network_kind='DEADLINE',phase='BODY',step='STATS',count=1),
+            dict(event='network_failure',network_kind='DNS',phase='OPEN',step='CAMPAIGNS',count=1)])
+        self.assertEqual(result['templates']['categories']['morning_network_failure']['kinds'], {'DNS:OPEN:CAMPAIGNS':1})
+        self.assertEqual(result['templates']['categories']['naver_network_failure']['kinds'], {'DEADLINE:BODY:STATS':1})
+        for value in ('8500', '1500', '20000', 'request_elapsed_ms', 'remaining_ms'):
+            self.assertNotIn(value, json.dumps(result))
+        relay = M.log_projection(raw, source='docker', unit='relay')
+        self.assertEqual(relay['events'], [])
+        self.assertEqual(relay['templates']['categories'], {})
+
+    def test_mutated_network_log_and_suffix_never_pass_full_match(self):
+        good = ('WARNING naver_engine.morning morning_network_failure kind=TIMEOUT phase=BODY '
+                'step=BIZMONEY request_elapsed_ms=20000 remaining_ms=0')
+        invalid = [good+' PRIVATE', good.replace('TIMEOUT','PRIVATE'), good.replace('BODY','PRIVATE'),
+                   good.replace('BIZMONEY','PRIVATE'), good.replace('20000','PRIVATE'),
+                   good.replace('20000','-1'), good.replace('20000','123456789012345'),
+                   good.replace('remaining_ms=0','remaining_ms=PRIVATE')]
+        raw = b'\n'.join(('2026-10-08T01:00:00Z '+message).encode() for message in invalid)
+        result = M.log_projection(raw, source='docker', unit='engine')
+        self.assertEqual(result['events'], [])
+        self.assertEqual(result['templates']['categories'], {})
+        self.assertEqual(result['templates']['unmatched_entries'], 8)
+        self.assertNotIn('PRIVATE', json.dumps(result))
+
+    def test_journal_projection_accepts_the_same_bounded_network_template(self):
+        message = ('WARNING naver_engine.morning morning_network_failure kind=UNRECOGNIZED '
+                   'phase=UNRECOGNIZED step=UNRECOGNIZED request_elapsed_ms=0 remaining_ms=0')
+        raw = json.dumps(dict(MESSAGE=message,__REALTIME_TIMESTAMP='1791421200000000')).encode()
+        result = M.log_projection(raw, source='journal', unit='engine')
+        self.assertEqual(result['events'], [dict(event='network_failure',network_kind='UNRECOGNIZED',
+            phase='UNRECOGNIZED',step='UNRECOGNIZED',count=1)])

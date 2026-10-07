@@ -30,9 +30,9 @@ def load(name):
     return module
 
 
-def sealed_code():
+def sealed_code(module_name='naver_preview_code_upgrade'):
     """Synthetic release fixture; production pins are checked independently below."""
-    module = load('naver_preview_code_upgrade')
+    module = load(module_name)
     module.TARGET_COMMIT = 'b'*40
     module.TARGET_SOURCE_SHA256 = 'd'*64
     module.STORE_SHA256['target'] = 'e'*64
@@ -425,8 +425,9 @@ class ContractTest(unittest.TestCase):
         for adapter in (host, lifecycle, upgrade):
             self.assertEqual(adapter.mock_calls, [])
 
-    def scenario(self, failure=None, mode='apply', *, code_only=False, log_database=False):
-        code = sealed_code()
+    def scenario(self, failure=None, mode='apply', *, code_only=False, log_database=False,
+                 code_module='naver_preview_code_upgrade'):
+        code = sealed_code(code_module)
         policy = load('naver_preview_code_only') if code_only else None
         fixture = load('naver_preview_upgrade')
         fixture.OLD_COMMIT = code.OLD_COMMIT
@@ -606,9 +607,13 @@ class ContractTest(unittest.TestCase):
                         raise ValueError('DB_OLD_SCHEMA')
                 verify_database.side_effect = database_read
             if code_only:
-                policy.REVIEWED_TRANSITION = (
+                transition = (
                     code.OLD_COMMIT, code.TARGET_COMMIT, code.OLD_SOURCE_SHA256, code.TARGET_SOURCE_SHA256,
                     code.STORE_SHA256['old'], code.STORE_SHA256['target'], code.EXPECTED_BASELINE)
+                if code_module == 'naver_preview_code_upgrade_v3':
+                    policy.REVIEWED_TRANSITION_V3 = transition
+                else:
+                    policy.REVIEWED_TRANSITION = transition
             result = legacy_test.UpgradeTest().scenario(failure, mode, setup)
             if code_only:
                 for database_action in (snapshot, restore, warm, verify_database):

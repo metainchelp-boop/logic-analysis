@@ -1,7 +1,7 @@
 """Gated, schema-compatible code replacement without controller DB access.
 
-The explicit workflow modes accept only the reviewed source/archive/store
-transition sealed in REVIEWED_TRANSITION below.
+The explicit workflow modes accept only the separate reviewed source/archive/store
+transitions sealed below. Their file scopes are not interchangeable.
 """
 import json
 import os
@@ -19,15 +19,34 @@ REVIEWED_TRANSITION = (
     '5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94',
     '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
 )
+REVIEWED_TRANSITION_V3 = (
+    'e4f64e165ebdf81d4127218d5c91ff6904e75958',
+    '953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6',
+    '716d849b68d72cb03489bc16da1cee3d9a0f31cb16612287b407fe244dea84c6',
+    '461be6b6ae6d09d74108f9f96a5e2bcf68feffdd2728c43f1b5e460be743ac80',
+    '5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+)
+
+
+def code_module_name(source_commit):
+    if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
+        return 'naver_preview_code_upgrade'
+    if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V3[1]:
+        return 'naver_preview_code_upgrade_v3'
+    raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
 def require_review(code):
     transition = (code.OLD_COMMIT, code.TARGET_COMMIT, code.OLD_SOURCE_SHA256,
                   code.TARGET_SOURCE_SHA256, code.STORE_SHA256.get('old'),
                   code.STORE_SHA256.get('target'), code.EXPECTED_BASELINE)
-    if (REVIEWED_TRANSITION != transition
-            or code.CODE_PATHS != {'naver_engine/catalog_links.py', 'naver_engine/dashboard.py', 'naver_engine/inventory.py'}
-            or code.TEST_PATHS != frozenset()):
+    expected_paths = ({'naver_engine/catalog_links.py', 'naver_engine/dashboard.py', 'naver_engine/inventory.py'}
+        if transition == REVIEWED_TRANSITION else
+        {'naver_engine/inventory.py', 'naver_engine/store.py', 'naver_engine/naver_read.py', 'naver_engine/morning.py'}
+        if transition == REVIEWED_TRANSITION_V3 else None)
+    if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 

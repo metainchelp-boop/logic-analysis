@@ -253,7 +253,7 @@ class CodeOnlyTest(unittest.TestCase):
     def test_unreviewed_prepare_workflow_refuses_before_download(self):
         code, policy, downloader = (shared.load(name) for name in (
             'naver_preview_code_upgrade','naver_preview_code_only','naver_preview_download'))
-        inputs = dict(ad_prepare='preview-code-only-prepare',ad_expected_baseline='{}')
+        inputs = dict(ad_prepare='preview-code-only-prepare',ad_expected_baseline=json.dumps({'source_commit':code.TARGET_COMMIT}))
         with patch.dict(sys.modules,naver_preview_code_upgrade=code,naver_preview_code_only=policy,
                         naver_preview_download=downloader), patch.object(policy,'REVIEWED_TRANSITION',None), \
                 patch.dict(os.environ,INPUTS_JSON=json.dumps(inputs)), \
@@ -276,7 +276,7 @@ class CodeOnlyTest(unittest.TestCase):
             with patch.dict(sys.modules,naver_preview_code_upgrade=code,naver_preview_code_only=policy,
                             naver_preview_download=downloader), patch.object(downloader,'download',return_value=fields), \
                     patch.dict(os.environ,INPUTS_JSON=json.dumps(dict(ad_prepare='preview-code-only-prepare',
-                        ad_expected_baseline='{}')),RUN_ID='999999',GITHUB_ENV=str(env_file)):
+                        ad_expected_baseline=json.dumps({'source_commit':code.TARGET_COMMIT}))),RUN_ID='999999',GITHUB_ENV=str(env_file)):
                 exec(compile(self.prepare_encoder(),'<code-only-prepare>','exec'),{})
             encoded = env_file.read_text().split('=',1)[1].strip()
         self.assertTrue(encoded.startswith('prepare-gzip-v1:'))

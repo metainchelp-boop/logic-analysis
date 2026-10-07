@@ -1219,8 +1219,17 @@ TYPE_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
 # a981b35 기록 틀(logging "%(levelname)s %(name)s %(message)s" · 중계는 uvicorn 기본 꼴/lastResort).
 # 25dc24d 는 같은 꼴의 줄 하나(화면 API 저장소 바쁨)만 더한다 — 나머지 줄은 a981b35 와 글자 그대로.
 # 줄 전체가 틀과 맞을 때만 갈래로 센다. 밖으로 나가는 값 = 갈래 이름 · 검증한 예외 종류 · HTTP 상태 숫자뿐.
+NETWORK_DIAGNOSTIC_PATTERN = (r'kind=(DNS|TLS_CERT|TLS|TIMEOUT|DEADLINE|RESET|REFUSED|ABORTED|BROKEN_PIPE|'
+    r'UNREACHABLE|HTTP_INCOMPLETE|HTTP_DISCONNECTED|HTTP|OTHER|UNRECOGNIZED) '
+    r'phase=(OPEN|BODY|TRANSPORT|UNRECOGNIZED) '
+    r'step=(MANAGERS|CHILD_ACCOUNTS|CAMPAIGNS|BIZMONEY|STATS|CHANNELS|ADGROUPS|ADS|KEYWORDS|EXTENSIONS|NONE|UNRECOGNIZED) '
+    r'request_elapsed_ms=[0-9]{1,7} remaining_ms=[0-9]{1,7}')
+NETWORK_LOG_PATTERN = (r'WARNING (?:naver_engine\.morning morning_network_failure|'
+                       r'naver_engine\.read naver_network_failure) ' + NETWORK_DIAGNOSTIC_PATTERN)
 LOG_TEMPLATES = {'engine': (
     ('morning_abort', 'abort', r'WARNING naver_engine\.morning morning_abort code=(REQUEST_BUDGET|REQUEST_DEADLINE|REQUEST_CALL_CAP|RATE|UNRECOGNIZED) cause=(SERVER|NETWORK|RATE|NONE|UNRECOGNIZED) calls=[0-9]{1,10} elapsed_ms=[0-9]{1,12}'),
+    ('morning_network_failure', 'network', r'WARNING naver_engine\.morning morning_network_failure ' + NETWORK_DIAGNOSTIC_PATTERN),
+    ('naver_network_failure', 'network', r'WARNING naver_engine\.read naver_network_failure ' + NETWORK_DIAGNOSTIC_PATTERN),
     ('web_response_failed', 'type', r'ERROR naver_engine\.web 화면 API 응답 만들기 실패: (\S{1,64})'),
     ('web_store_refused', 'type', r'WARNING naver_engine\.web 화면 API 저장소 거절: (\S{1,64})'),
     ('web_store_error', 'type', r'WARNING naver_engine\.web 화면 API 저장소 오류: (\S{1,64})'),
@@ -1273,7 +1282,8 @@ def log_categories(entries, unit):
         row['count'] += 1
         if value_kind is not None:
             raw = match.group(1)
-            value = (raw+':'+match.group(2) if value_kind == 'abort' else
+            value = (':'.join(match.group(i) for i in (1,2,3)) if value_kind == 'network' else
+                     raw+':'+match.group(2) if value_kind == 'abort' else
                      enum(raw, RELAY_KINDS) if value_kind == 'relay' else type_name(raw) if value_kind == 'type'
                      else raw if re.fullmatch('[1-5][0-9]{2}', raw) else 'none' if raw == 'None' else UNKNOWN)
             row['values'][value] = row['values'].get(value,0)+1
@@ -1333,6 +1343,7 @@ def log_projection(raw, *, source, unit):
         failed = re.fullmatch(r'metainc-naver-'+unit+r"\.service: Failed with result '(exit-code|signal|core-dump|timeout|watchdog|start-limit-hit|resources|protocol|oom-kill)'\.",message)
         exception = re.fullmatch(r'([A-Za-z][A-Za-z0-9_]{0,63}):[^\n]*',message)
         relay = re.fullmatch(r'(?:WARNING:?[ ]+(?:app.naver_relay )?)?관제 엔진 중계 실패: ([A-Za-z][A-Za-z0-9_-]{0,63})',message)
+        network = re.fullmatch(NETWORK_LOG_PATTERN, message) if unit == 'engine' else None
         event = None
         if step and step[1] in LOG_STAGES:
             event = dict(event='job_failed',stage=step[1],error_kind=enum(step[2],LOG_KINDS))
@@ -1346,6 +1357,8 @@ def log_projection(raw, *, source, unit):
             event = dict(event='service_failed',result=failed[1])
         elif relay:
             event = dict(event='relay_failed',error_kind=enum(relay[1],RELAY_KINDS))
+        elif network:
+            event = dict(event='network_failure',network_kind=network[1],phase=network[2],step=network[3])
         elif exception and exception[1] in LOG_KINDS:
             event = dict(event='exception_line',error_kind=exception[1])
         if event is None:
