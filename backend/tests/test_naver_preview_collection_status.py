@@ -22,6 +22,94 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
+    def resource_raw(self, engine='d'*64, relay='7'*64):
+        return b'\n'.join(json.dumps(row).encode() for row in (
+            dict(id=engine,cpu='49.73%',memory='128.5MiB / 512MiB',memory_percent='25.10%'),
+            dict(id=relay,cpu='0.20%',memory='32MB / 256MiB',memory_percent='11.92%')))
+
+    def test_resource_projection_exports_only_fixed_units_and_bounded_numbers(self):
+        targets = {'engine':'d'*64,'relay':'7'*64}
+        result = M.resource_projection(self.resource_raw(), targets)
+        self.assertEqual(result['engine'], dict(available=True,cpu_percent=49.73,
+            memory_used_bytes_approx=134742016,memory_limit_bytes_approx=536870912,memory_percent=25.10))
+        self.assertEqual(result['relay']['memory_used_bytes_approx'],32000000)
+        self.assertNotIn('d'*64,json.dumps(result))
+        self.assertNotIn('7'*64,json.dumps(result))
+        for raw in (self.resource_raw(engine='f'*64),self.resource_raw(relay='d'*64),
+                    self.resource_raw()+b'\n'+json.dumps(dict(id='f'*64,cpu='1%',
+                        memory='1MiB / 2MiB',memory_percent='50%')).encode(),
+                    b'x'*4097,b'\xff',b'',self.resource_raw().split(b'\n')[0]):
+            with self.subTest(raw_length=len(raw)),self.assertRaises(ValueError):
+                M.resource_projection(raw,targets)
+        first = json.loads(self.resource_raw().split(b'\n')[0])
+        for key,value in (('cpu','nan%'),('cpu','1000000%'),('cpu','PRIVATE'),
+                          ('memory','1MiB / 0B'),('memory','1PRIVATE / 512MiB'),
+                          ('memory','1024MiB / 512MiB'),('memory_percent','100.01%'),
+                          ('name','PRIVATE_SERVICE')):
+            with self.subTest(field=key,value=value),self.assertRaises(ValueError):
+                M.resource_projection(json.dumps(dict(first,**{key:value})).encode(),{'engine':'d'*64})
+        duplicate = b'{"id":"'+b'd'*64+b'","cpu":"1%","cpu":"2%","memory":"1B / 2B","memory_percent":"50%"}'
+        with self.assertRaises(ValueError):
+            M.resource_projection(duplicate,{'engine':'d'*64})
+
+    def test_resource_sample_targets_only_verified_containers_and_has_total_budget(self):
+        capture = dict(reason=None,exit_code=0,stdout=self.resource_raw(),stderr=b'PRIVATE STDERR')
+        with patch.object(M,'capture_process',return_value=capture) as command, \
+                patch.object(M.os,'cpu_count',return_value=8), \
+                patch.object(M.os,'getloadavg',return_value=(1.25,2.5,3.75)), \
+                patch.object(M.time,'monotonic',side_effect=(10.0,10.5)):
+            result = M.runtime_resource_sample('d'*64,'7'*64)
+        args = command.call_args.args[0]
+        self.assertEqual(args[:4],['docker','stats','--no-stream','--no-trunc'])
+        self.assertEqual(args[-2:],['d'*64,'7'*64])
+        self.assertEqual(args[4:6],['--format',M.RESOURCE_FORMAT])
+        self.assertEqual(command.call_args.kwargs,dict(timeout=3.5,absolute_deadline=14.0,
+                                                     stdout_limit=4096,stderr_limit=4096))
+        self.assertEqual(result['host'],dict(available=True,cpu_count=8,load_average_1m=1.25,
+            load_average_5m=2.5,load_average_15m=3.75))
+        self.assertEqual(result['cpu_percent_basis'],'one_logical_cpu')
+        self.assertEqual(result['scope'],'single_sample_not_request_profile')
+        self.assertNotIn('PRIVATE',json.dumps(result))
+        self.assertNotIn('d'*64,json.dumps(result))
+
+    def test_optional_resource_failure_is_fixed_and_never_starts_other_targets(self):
+        for reason,exit_code,stdout,code in (
+                ('PROCESS_TIMEOUT',None,b'PRIVATE','RESOURCE_SAMPLE_TIMEOUT'),
+                ('PROCESS_OUTPUT_LIMIT',None,b'PRIVATE','RESOURCE_SAMPLE_OUTPUT_LIMIT'),
+                (None,1,b'PRIVATE','RESOURCE_SAMPLE_UNAVAILABLE'),
+                (None,0,b'PRIVATE','RESOURCE_SAMPLE_INVALID')):
+            with self.subTest(reason=reason,exit_code=exit_code), \
+                    patch.object(M,'capture_process',return_value=dict(reason=reason,
+                        exit_code=exit_code,stdout=stdout,stderr=b'PRIVATE')):
+                result = M.runtime_resource_sample('d'*64,'7'*64)
+            self.assertEqual(result['containers'],{name:dict(available=False,code=code) for name in ('engine','relay')})
+            self.assertNotIn('PRIVATE',json.dumps(result))
+        raw = self.resource_raw().split(b'\n')[0]
+        with patch.object(M,'capture_process',return_value=dict(reason=None,exit_code=0,stdout=raw,stderr=b'')) as command:
+            result = M.runtime_resource_sample('d'*64,'RELAY_PRIVATE')
+        self.assertEqual(command.call_args.args[0][-1],'d'*64)
+        self.assertNotIn('RELAY_PRIVATE',command.call_args.args[0])
+        self.assertEqual(result['containers']['relay'],dict(available=False,code='RESOURCE_TARGET_UNVERIFIED'))
+        with patch.object(M,'capture_process') as command:
+            result = M.runtime_resource_sample('PRIVATE','7'*64)
+        command.assert_not_called()
+        self.assertEqual(result['containers']['engine'],dict(available=False,code='RESOURCE_TARGET_UNVERIFIED'))
+        with patch.object(M,'capture_process') as command, \
+                patch.object(M.time,'monotonic',side_effect=(10.0,14.0)):
+            result = M.runtime_resource_sample('d'*64,'7'*64)
+        command.assert_not_called()
+        self.assertEqual(result['containers']['engine']['code'],'RESOURCE_SAMPLE_TIMEOUT')
+
+    def test_host_resources_reject_unavailable_or_unbounded_numeric_values(self):
+        for cpus,load in ((None,(1.,2.,3.)),(True,(1.,2.,3.)),(4097,(1.,2.,3.)),
+                          (8,(float('nan'),2.,3.)),(8,(-1.,2.,3.)),(8,(1000001.,2.,3.)),
+                          (8,(1.,2.)),(8,('PRIVATE',2.,3.))):
+            with self.subTest(cpus=cpus),patch.object(M.os,'cpu_count',return_value=cpus), \
+                    patch.object(M.os,'getloadavg',return_value=load):
+                self.assertEqual(M.host_resources(),dict(available=False,code='HOST_RESOURCE_UNAVAILABLE'))
+        with patch.object(M.os,'getloadavg',side_effect=OSError('PRIVATE')):
+            self.assertEqual(M.host_resources(),dict(available=False,code='HOST_RESOURCE_UNAVAILABLE'))
+
     def test_passive_storage_metadata_never_reads_content_or_follows_symlinks(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -94,6 +182,14 @@ class CollectionTest(unittest.TestCase):
         process.kill.assert_called_once()
         process.wait.assert_called_once_with(timeout=1)
         self.assertEqual(result['reason'],'PROCESS_UNAVAILABLE')
+
+    def test_resource_absolute_deadline_includes_capture_setup_and_has_bounded_cleanup(self):
+        started = M.time.monotonic()
+        result = M.capture_process([sys.executable,'-I','-c','import time;time.sleep(10)'],
+                                   timeout=3,absolute_deadline=started+0.05)
+        self.assertEqual(result['reason'],'PROCESS_TIMEOUT')
+        self.assertLess(M.time.monotonic()-started,1.5)
+        self.assertNotEqual(result['exit_code'],0)
 
     def test_selector_creation_failure_does_not_start_a_diagnostic_child(self):
         with patch.object(M.selectors,'DefaultSelector',side_effect=OSError('PRIVATE')), \
@@ -890,7 +986,8 @@ class CollectionTest(unittest.TestCase):
             if extra:
                 failures += ['daily_limited_missing','managed_catalog_links_missing']
             if passive:
-                failures = [None,'image','mount','rootfs','restart','host_changed','relay_changed','relay_image']
+                failures = [None,'image','mount','rootfs','restart','host_changed','relay_changed','relay_image',
+                            'resource_timeout','resource_invalid','host_resources_unavailable']
             if latency or dashboard:
                 failures = [None,'image','mount','rootfs','restart','host_changed','exec_failed','profile_partial','output']
             for failure in failures:
@@ -982,6 +1079,20 @@ class CollectionTest(unittest.TestCase):
                 def capture(args, **kwargs):
                     if passive:
                         self.assertNotEqual(args[:2],['docker','exec'])
+                    if args[:2] == ['docker','stats']:
+                        calls.append(args)
+                        self.assertTrue(passive)
+                        expected = [cid] if failure in ('relay_changed','relay_image') else [cid,rid]
+                        self.assertEqual(args,['docker','stats','--no-stream','--no-trunc','--format',
+                                               M.RESOURCE_FORMAT,*expected])
+                        self.assertGreater(kwargs['timeout'],0)
+                        self.assertLessEqual(kwargs['timeout'],4)
+                        self.assertIn('absolute_deadline',kwargs)
+                        self.assertEqual((kwargs['stdout_limit'],kwargs['stderr_limit']),(4096,4096))
+                        raw = self.resource_raw() if len(expected)==2 else self.resource_raw().split(b'\n')[0]
+                        return dict(exit_code=None if failure=='resource_timeout' else 0,
+                            reason='PROCESS_TIMEOUT' if failure=='resource_timeout' else None,
+                            stdout=b'PRIVATE' if failure=='resource_invalid' else raw,stderr=b'PRIVATE')
                     if args[:2] != ['docker','exec']:
                         self.assertTrue(args[0]=='/usr/bin/journalctl' or args[:2]==['docker','logs'])
                         self.assertEqual(kwargs['timeout'],5)
@@ -995,7 +1106,9 @@ class CollectionTest(unittest.TestCase):
                         return dict(exit_code=1,reason=None,stdout=b'',stderr=b'NameError: PRIVATE\n')
                     return dict(exit_code=0,reason=None,stdout=command(args, **kwargs),stderr=b'')
                 with self.subTest(failure=failure), patch.object(M.os, 'geteuid', return_value=0), \
-                        patch.object(M, 'capture_process', side_effect=capture):
+                        patch.object(M, 'capture_process', side_effect=capture), \
+                        patch.object(M.os,'cpu_count',return_value=None if failure=='host_resources_unavailable' else 8), \
+                        patch.object(M.os,'getloadavg',return_value=(1.,2.,3.)):
                     if failure == 'exec_failed':
                         result = M.run(package, host, release)
                         self.assertFalse(result['ok'])
@@ -1038,6 +1151,25 @@ class CollectionTest(unittest.TestCase):
                         self.assertEqual(result['relay_state'], {'verified':False,'code':code})
                         self.assertEqual(result['recent_runtime_logs']['sources'][3],
                                          dict(unit='relay',source='docker',available=False,code=code))
+                        if passive:
+                            self.assertTrue(result['resource_sample']['containers']['engine']['available'])
+                            self.assertFalse(result['resource_sample']['containers']['relay']['available'])
+                    elif failure in ('resource_timeout','resource_invalid','host_resources_unavailable'):
+                        result = M.run(package,host,release)
+                        self.assertTrue(result['ok'])
+                        self.assertFalse(result['database_opened'])
+                        self.assertEqual(result['mutations'],0)
+                        self.assertEqual(len(inspections),2)
+                        self.assertEqual(host.baseline.call_count,2)
+                        self.assertNotIn('PRIVATE',json.dumps(result))
+                        resources = result['resource_sample']
+                        if failure=='host_resources_unavailable':
+                            self.assertEqual(resources['host'],dict(available=False,code='HOST_RESOURCE_UNAVAILABLE'))
+                            self.assertTrue(resources['containers']['engine']['available'])
+                        else:
+                            code = 'RESOURCE_SAMPLE_TIMEOUT' if failure=='resource_timeout' else 'RESOURCE_SAMPLE_INVALID'
+                            self.assertEqual(resources['containers'],{name:dict(available=False,code=code)
+                                                                      for name in ('engine','relay')})
                     elif failure:
                         with self.assertRaises(ValueError):
                             M.run(package, host, release)
@@ -1047,6 +1179,9 @@ class CollectionTest(unittest.TestCase):
                             self.assertNotIn('collection',result)
                             self.assertFalse(result['database_opened'])
                             self.assertEqual(result['mode'],'runtime-diagnostics')
+                            self.assertTrue(result['resource_sample']['containers']['engine']['available'])
+                            self.assertTrue(result['resource_sample']['containers']['relay']['available'])
+                            self.assertEqual(host.baseline.call_count,2)
                         elif latency or dashboard:
                             self.assertEqual(result['mode'],'dashboard-profile' if dashboard else 'latency-profile')
                             self.assertEqual(result['dashboard_profile' if dashboard else 'latency_profile'],profile)

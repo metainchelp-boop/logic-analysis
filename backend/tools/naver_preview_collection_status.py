@@ -1,5 +1,6 @@
 """Read-only collection aggregates; no identity, amount or freeform error output."""
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -9,6 +10,7 @@ import selectors
 import subprocess
 import time
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 STAGE = 'input'
 CATALOG_LINKS_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
@@ -1133,7 +1135,112 @@ def lifecycle_status(release):
     return out
 
 
-def capture_process(args, *, data=b'', timeout=5, stdout_limit=32768, stderr_limit=8192):
+RESOURCE_FORMAT = '{"id":"{{.ID}}","cpu":"{{.CPUPerc}}","memory":"{{.MemUsage}}","memory_percent":"{{.MemPerc}}"}'
+
+
+def host_resources():
+    """Optional numeric host metadata; no process names, environment or file reads."""
+    try:
+        cpus, load = os.cpu_count(), os.getloadavg()
+        if (type(cpus) is not int or not 1 <= cpus <= 4096 or
+                not isinstance(load, tuple) or len(load) != 3 or
+                any(type(n) not in (int,float) or not math.isfinite(n) or not 0 <= n <= 1000000 for n in load)):
+            raise ValueError('HOST_RESOURCE_SHAPE')
+        return dict(available=True,cpu_count=cpus,
+                    **dict(zip(('load_average_1m','load_average_5m','load_average_15m'),map(float,load))))
+    except Exception:
+        return dict(available=False,code='HOST_RESOURCE_UNAVAILABLE')
+
+
+def resource_projection(raw, targets):
+    """Docker's rounded display numbers only, mapped to verified fixed service labels."""
+    if (not isinstance(targets,dict) or not {'engine'} <= set(targets) <= {'engine','relay'} or
+            any(not isinstance(cid,str) or not re.fullmatch('[0-9a-f]{64}',cid) for cid in targets.values()) or
+            len(set(targets.values())) != len(targets) or not isinstance(raw,bytes) or not 0 < len(raw) <= 4096):
+        raise ValueError('RESOURCE_SAMPLE_SHAPE')
+    def unique(pairs):
+        fields = dict(pairs)
+        if len(fields) != len(pairs):
+            raise ValueError('RESOURCE_SAMPLE_FIELDS')
+        return fields
+    def percent(value, maximum):
+        if not isinstance(value,str) or not re.fullmatch(r'[0-9]{1,6}(?:\.[0-9]{1,4})?%',value):
+            raise ValueError('RESOURCE_SAMPLE_NUMBER')
+        n = float(value[:-1])
+        if not 0 <= n <= maximum:
+            raise ValueError('RESOURCE_SAMPLE_NUMBER')
+        return n
+    units = dict(B=1,kB=1000,KB=1000,MB=1000**2,GB=1000**3,TB=1000**4,
+                 KiB=1024,MiB=1024**2,GiB=1024**3,TiB=1024**4)
+    def memory(value):
+        match = re.fullmatch(r'([0-9]{1,16}(?:\.[0-9]{1,6})?) ?(B|kB|KB|MB|GB|TB|KiB|MiB|GiB|TiB)',value)
+        if match is None:
+            raise ValueError('RESOURCE_SAMPLE_NUMBER')
+        return number(int(Decimal(match.group(1))*units[match.group(2)]))
+    lines = raw.decode('ascii').splitlines()
+    if len(lines) != len(targets):
+        raise ValueError('RESOURCE_SAMPLE_COUNT')
+    names = {cid:name for name,cid in targets.items()}
+    result = {}
+    for line in lines:
+        item = json.loads(line,object_pairs_hook=unique)
+        if (not isinstance(item,dict) or set(item) != {'id','cpu','memory','memory_percent'} or
+                any(not isinstance(v,str) for v in item.values()) or item['id'] not in names or
+                names[item['id']] in result):
+            raise ValueError('RESOURCE_SAMPLE_FIELDS')
+        parts = item['memory'].split(' / ')
+        if len(parts) != 2:
+            raise ValueError('RESOURCE_SAMPLE_NUMBER')
+        used, limit = map(memory,parts)
+        if not 0 <= used <= limit or limit == 0:
+            raise ValueError('RESOURCE_SAMPLE_NUMBER')
+        result[names[item['id']]] = dict(available=True,cpu_percent=percent(item['cpu'],100000),
+            memory_used_bytes_approx=used,memory_limit_bytes_approx=limit,
+            memory_percent=percent(item['memory_percent'],100))
+    return result
+
+
+def runtime_resource_sample(identity, relay):
+    """Only docker stats for identity-verified engine/relay; four seconds plus one cleanup.
+
+    CPU percentage uses one logical CPU as 100%; this sample does not measure the
+    configured quota or attribute time to an HTTP request, SQLite or writer queue.
+    """
+    started = time.monotonic()
+    out = dict(scope='single_sample_not_request_profile',cpu_percent_basis='one_logical_cpu',
+               host=host_resources(),containers={name:dict(available=False,code='RESOURCE_TARGET_UNVERIFIED')
+                                                for name in ('engine','relay')})
+    if not isinstance(identity,str) or not re.fullmatch('[0-9a-f]{64}',identity):
+        return out
+    targets = {'engine':identity}
+    if isinstance(relay,str) and re.fullmatch('[0-9a-f]{64}',relay) and relay != identity:
+        targets['relay'] = relay
+    left = 4.0-(time.monotonic()-started)
+    code = 'RESOURCE_SAMPLE_TIMEOUT'
+    if left > 0:
+        try:
+            captured = capture_process(['docker','stats','--no-stream','--no-trunc','--format',
+                                        RESOURCE_FORMAT,*targets.values()],
+                                       timeout=min(4.0,left),absolute_deadline=started+4.0,
+                                       stdout_limit=4096,stderr_limit=4096)
+            reason = captured['reason']
+            if reason or captured['exit_code'] != 0:
+                code = {'PROCESS_TIMEOUT':'RESOURCE_SAMPLE_TIMEOUT',
+                        'PROCESS_OUTPUT_LIMIT':'RESOURCE_SAMPLE_OUTPUT_LIMIT'}.get(reason,'RESOURCE_SAMPLE_UNAVAILABLE')
+            else:
+                try:
+                    out['containers'].update(resource_projection(captured['stdout'],targets))
+                    return out
+                except Exception:
+                    code = 'RESOURCE_SAMPLE_INVALID'
+        except Exception:
+            code = 'RESOURCE_SAMPLE_UNAVAILABLE'
+    out['containers'].update({name:dict(available=False,code=code) for name in targets})
+    return out
+
+
+def capture_process(args, *, data=b'', timeout=5, stdout_limit=32768, stderr_limit=8192,
+                    absolute_deadline=None):
     """Bound both pipe memory and wall time; kill only our diagnostic CLI on failure."""
     chunks = {'stdout':bytearray(), 'stderr':bytearray()}
     limits = {'stdout':stdout_limit, 'stderr':stderr_limit}
@@ -1153,6 +1260,8 @@ def capture_process(args, *, data=b'', timeout=5, stdout_limit=32768, stderr_lim
                 else:
                     process.stdin.close()
                 offset, deadline = 0, time.monotonic()+timeout
+                if absolute_deadline is not None:
+                    deadline = min(deadline,absolute_deadline)
                 while poll.get_map():
                         remaining = deadline-time.monotonic()
                         if remaining <= 0:
@@ -1549,6 +1658,7 @@ def run(package, host, release):
                     'container_restarts':number(after.get('restarts'))}}
     if passive:
         details = context()
+        details['resource_sample'] = runtime_resource_sample(identity, relay)
         details['storage_metadata'] = storage_metadata()
         checked = postflight()
         return {'ok':checked['postflight']['code'] is None,'mode':'runtime-diagnostics',
