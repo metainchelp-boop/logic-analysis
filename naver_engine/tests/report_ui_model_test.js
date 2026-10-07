@@ -101,7 +101,7 @@ function harness() {
     datedTime: value => value || '', errText: error => error.body && error.body.error || 'error',
     route() { routes++; }, loadReports() { throw new Error('예상하지 않은 페이지 복구'); },
     ApiError: class extends Error { constructor(status, body) { super(body.error); this.status = status; this.body = body; } },
-    setTimeout, clearTimeout
+    setTimeout, clearTimeout, AbortController
   };
   vm.createContext(context);
   vm.runInContext(appSource.slice(viewStart, viewEnd), context);

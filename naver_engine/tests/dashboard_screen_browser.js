@@ -186,14 +186,14 @@ const cfg = JSON.parse(process.argv[2]);
     const deadline = Date.now() + 5000;
     while (!mineStarted && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     assert.ok(mineStarted, '느린 담당 범위 요청이 시작됨');
-    await page.selectOption('#scope', 'all');
-    await page.waitForSelector('#dashboardStatus[data-status="partial"]');
-    const late = page.waitForResponse(response => {
-      const url = new URL(response.url());
+    const cancelled = page.waitForEvent('requestfailed', request => {
+      const url = new URL(request.url());
       return url.pathname === '/api/naver-auto/dashboard' && url.searchParams.get('selection') === 'me';
     });
+    await page.selectOption('#scope', 'all');
+    await page.waitForSelector('#dashboardStatus[data-status="partial"]');
     releaseMine();
-    await late;
+    assert.match((await cancelled).failure().errorText, /ERR_ABORTED/, '이전 담당 범위 요청은 취소한다');
     await page.waitForTimeout(100);
     assert.equal(await page.textContent('#dashboard-spend .value'), '12,345원', '늦게 온 이전 담당 범위의 응답은 버린다');
     await page.setViewportSize({width: 390, height: 844});
