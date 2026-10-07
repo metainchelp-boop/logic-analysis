@@ -775,6 +775,9 @@ class CollectionTest(unittest.TestCase):
     def test_passive_runtime_diagnosis_never_opens_database_or_executes_container_process(self):
         self.check_run_diagnostics(M.REPORTS_COMMIT, passive=True)
 
+    def test_latency_profile_preserves_host_runtime_guards_and_partial_is_not_success(self):
+        self.check_run_diagnostics(M.WRITER_RELIEF_COMMIT, latency=True)
+
     def test_incident_release_refuses_further_live_reader_diagnosis(self):
         package = dict(baseline='a'*64,source_commit=M.REPORTS_COMMIT,source_tar_gz_sha256='b'*64)
         host,release = Mock(),Mock()
@@ -799,7 +802,7 @@ class CollectionTest(unittest.TestCase):
                     'managed_catalog_links':dict(auto=0,name_different=0,can_confirm=0,rejected={})})
         self.check_run_diagnostics('b'*40)
 
-    def check_run_diagnostics(self, commit, extra=None, passive=False, logs=None):
+    def check_run_diagnostics(self, commit, extra=None, passive=False, logs=None, latency=False):
         package = dict(baseline='a'*64, source_commit=commit, source_tar_gz_sha256='c'*64)
         cid, image = 'd'*64, 'sha256:'+'e'*64
         rid, relay_image = '7'*64, 'sha256:'+'8'*64
@@ -817,6 +820,13 @@ class CollectionTest(unittest.TestCase):
                 dict(ok=True, stage='internal_ready', source_commit=package['source_commit'])))
             if passive:
                 package['passive_runtime_only'] = True
+            if latency:
+                package['latency_profile_only'] = True
+            phases=['reader','org','scope','context','me','staff_counts','bell']+['aggregate_'+key for key in M.PROFILE_AGGREGATES]
+            profile=dict(state='complete',code=None,last_phase=phases[-1],elapsed_us=100,cpu_us=20,
+                phases=[dict(phase=name,wall_us=1,cpu_us=1,completed=True) for name in phases],functions=[],
+                aggregates={key:[0]*width for key,(_,width) in M.PROFILE_AGGREGATES.items()},
+                cgroup_before={},cgroup_after={},read_only=True,authenticated_request=False,engine_process_shared=False)
             values = dict(today='2026-10-01', prospects={'total':0,'stages':{}},
                 pairing={'available':False,'statuses':{},'unmatched_prospects':None}, latest_run=None,
                 today_checks={'statuses':{},'reasons':{}}, bootstrap=M.bootstrap_empty('no_request'),
@@ -846,6 +856,8 @@ class CollectionTest(unittest.TestCase):
                 failures += ['daily_limited_missing','managed_catalog_links_missing']
             if passive:
                 failures = [None,'image','mount','rootfs','restart','host_changed','relay_changed','relay_image']
+            if latency:
+                failures = [None,'image','mount','rootfs','restart','host_changed','exec_failed','profile_partial','output']
             for failure in failures:
                 calls, inspections = [], []
                 host, release = Mock(), Mock()
@@ -882,6 +894,15 @@ class CollectionTest(unittest.TestCase):
                     if args[1] == 'exec':
                         ast.parse(kwargs['data'])
                         self.assertEqual(kwargs['timeout'], 30)
+                        if latency:
+                            self.assertIn('signal.setitimer(signal.ITIMER_REAL,25)',kwargs['data'].decode())
+                            self.assertEqual(args,['docker','exec','-i','--user','10001:10001',cid,'python','-I','-B','-'])
+                            out=dict(profile)
+                            if failure=='profile_partial':
+                                out.update(state='partial',code='PROFILE_TIMEOUT')
+                            if failure=='output':
+                                out['private']='PRIVATE'
+                            return json.dumps({'latency_profile':out}).encode()
                         self.assertEqual(kwargs['data'].decode().count('if True:'),
                             int(commit in M.CATALOG_LINKS_COMMITS)+int(commit in M.DAILY_LIMITED_COMMITS)
                             +3*int(commit in M.MONITORING_COMMITS))
@@ -958,6 +979,12 @@ class CollectionTest(unittest.TestCase):
                         self.assertEqual(len(inspections), 2)
                         self.assertNotIn('collection', result)
                         self.assertNotIn('PRIVATE', json.dumps(result))
+                    elif failure == 'profile_partial':
+                        result = M.run(package, host, release)
+                        self.assertFalse(result['ok'])
+                        self.assertEqual(result['mode'],'latency-profile')
+                        self.assertEqual(result['latency_profile']['code'],'PROFILE_TIMEOUT')
+                        self.assertEqual(len(inspections),2)
                     elif failure in ('restart','diagnostic_restart','host_changed'):
                         result = M.run(package, host, release)
                         self.assertFalse(result['ok'])
@@ -983,6 +1010,10 @@ class CollectionTest(unittest.TestCase):
                             self.assertNotIn('collection',result)
                             self.assertFalse(result['database_opened'])
                             self.assertEqual(result['mode'],'runtime-diagnostics')
+                        elif latency:
+                            self.assertEqual(result['mode'],'latency-profile')
+                            self.assertEqual(result['latency_profile'],profile)
+                            self.assertEqual(result['reader_mode'],'store-mode-ro-authorizer')
                         else:
                             self.assertEqual(result['collection'], values)
                         self.assertEqual(result['mutations'], 0)
