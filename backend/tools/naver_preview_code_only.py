@@ -30,9 +30,9 @@ REVIEWED_TRANSITION_V3 = (
 )
 REVIEWED_TRANSITION_V4 = (
     '953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6',
-    'f3a9c321c2142ae759d9af482cde706a6af57564',
+    '49c42d645b90732071d0c61b8f9aaf7660e8b765',
     '461be6b6ae6d09d74108f9f96a5e2bcf68feffdd2728c43f1b5e460be743ac80',
-    '33092243cb955a815d573226b77f0fe7ef4db4f913edb63a11fa71848ec15d8e',
+    '69b9f79ab243eac6d3d32fe67ce267b96bdd923323997fd2661934bc6a5459d4',
     'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
     'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
     '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
@@ -57,7 +57,7 @@ def require_review(code):
         if transition == REVIEWED_TRANSITION else
         {'naver_engine/inventory.py', 'naver_engine/store.py', 'naver_engine/naver_read.py', 'naver_engine/morning.py'}
         if transition == REVIEWED_TRANSITION_V3 else
-        {'backend/naver_page/app.js', 'backend/naver_page/index.html'}
+        {'backend/naver_page/app.js', 'backend/naver_page/index.html', 'naver_engine/naver_read.py'}
         if transition == REVIEWED_TRANSITION_V4 else None)
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')

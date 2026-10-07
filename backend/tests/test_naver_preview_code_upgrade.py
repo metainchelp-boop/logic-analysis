@@ -428,8 +428,8 @@ class ContractTest(unittest.TestCase):
     def scenario(self, failure=None, mode='apply', *, code_only=False, log_database=False,
                  code_module='naver_preview_code_upgrade'):
         code = sealed_code(code_module)
-        ui_only = code_module == 'naver_preview_code_upgrade_v4'
-        target_store = StoreScopeTest.SOURCE if ui_only else StoreScopeTest.TARGET_SOURCE
+        fourth_release = code_module == 'naver_preview_code_upgrade_v4'
+        target_store = StoreScopeTest.SOURCE if fourth_release else StoreScopeTest.TARGET_SOURCE
         policy = load('naver_preview_code_only') if code_only else None
         fixture = load('naver_preview_upgrade')
         fixture.OLD_COMMIT = code.OLD_COMMIT
@@ -459,9 +459,10 @@ class ContractTest(unittest.TestCase):
             infrastructure = {'Dockerfile.naver-engine': b'FROM fixture', 'Dockerfile.naver-relay': b'FROM fixture',
                 'backend/requirements.txt': b'fixture', 'naver_runtime/bootstrap.py': b'# unchanged bootstrap',
                 'naver_engine/store.py': target_store}
-            if ui_only:
+            if fourth_release:
                 infrastructure.update({'backend/naver_page/app.js': b'new UI fixture',
-                                       'backend/naver_page/index.html': b'new HTML fixture'})
+                                       'backend/naver_page/index.html': b'new HTML fixture',
+                                       'naver_engine/naver_read.py': b'new reader fixture'})
             infrastructure.update({name: b'new fixture compose' for name in
                 ('compose.naver-engine.yml','compose.naver-relay.yml','deploy/naver-engine-backup.override.yml')})
             for path in (root/'releases').iterdir():
@@ -471,9 +472,10 @@ class ContractTest(unittest.TestCase):
                     target.write_bytes(body)
                 if path.name == 'naver-'+code.OLD_COMMIT:
                     (path/'naver_engine/store.py').write_bytes(StoreScopeTest.SOURCE)
-                    if ui_only:
+                    if fourth_release:
                         (path/'backend/naver_page/app.js').write_bytes(b'old UI fixture')
                         (path/'backend/naver_page/index.html').write_bytes(b'old HTML fixture')
+                        (path/'naver_engine/naver_read.py').write_bytes(b'old reader fixture')
                 for name in ('engine','relay'):
                     # The UI update inherits all flags without adding or changing them.
                     body = ('image: '+code.OLD_COMMIT).encode()
@@ -620,7 +622,7 @@ class ContractTest(unittest.TestCase):
                     code.STORE_SHA256['old'], code.STORE_SHA256['target'], code.EXPECTED_BASELINE)
                 if code_module == 'naver_preview_code_upgrade_v3':
                     policy.REVIEWED_TRANSITION_V3 = transition
-                elif ui_only:
+                elif fourth_release:
                     policy.REVIEWED_TRANSITION_V4 = transition
                 else:
                     policy.REVIEWED_TRANSITION = transition

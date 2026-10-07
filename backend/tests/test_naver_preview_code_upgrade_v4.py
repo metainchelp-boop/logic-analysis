@@ -1,4 +1,4 @@
-"""Fourth UI-only release pins, workflow selection and code-only safety. No live host or DB."""
+"""Fourth UI and request-budget release pins, workflow selection and code-only safety. No live host or DB."""
 import ast
 import base64
 from contextlib import redirect_stdout
@@ -19,13 +19,13 @@ import test_naver_preview_code_only as legacy_policy
 
 MODULE = 'naver_preview_code_upgrade_v4'
 PINS = ('953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6',
-        'f3a9c321c2142ae759d9af482cde706a6af57564',
+        '49c42d645b90732071d0c61b8f9aaf7660e8b765',
         '461be6b6ae6d09d74108f9f96a5e2bcf68feffdd2728c43f1b5e460be743ac80',
-        '33092243cb955a815d573226b77f0fe7ef4db4f913edb63a11fa71848ec15d8e',
+        '69b9f79ab243eac6d3d32fe67ce267b96bdd923323997fd2661934bc6a5459d4',
         'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
         'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
         '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
-PATHS = {'backend/naver_page/app.js', 'backend/naver_page/index.html'}
+PATHS = {'backend/naver_page/app.js', 'backend/naver_page/index.html', 'naver_engine/naver_read.py'}
 
 
 def pins(code):
@@ -77,7 +77,8 @@ class V4ContractTest(unittest.TestCase):
         self.assertEqual(policy.code_module_name(PINS[1]),MODULE)
         self.assertEqual(policy.code_module_name(policy.REVIEWED_TRANSITION[1]),'naver_preview_code_upgrade')
         self.assertEqual(policy.code_module_name(policy.REVIEWED_TRANSITION_V3[1]),'naver_preview_code_upgrade_v3')
-        for source in ('0'*40, None, {}, [], True, PINS[1]+'PRIVATE'):
+        for source in ('0'*40, 'f3a9c321c2142ae759d9af482cde706a6af57564',
+                       None, {}, [], True, PINS[1]+'PRIVATE'):
             with self.subTest(source_type=type(source).__name__), self.assertRaisesRegex(
                     ValueError,'^CODE_ONLY_RELEASE_NOT_REVIEWED$'):
                 policy.code_module_name(source)
@@ -100,7 +101,8 @@ class V4ContractTest(unittest.TestCase):
 
     def test_v4_scope_is_exact_and_does_not_authorize_legacy_store_changes(self):
         policy=shared.load('naver_preview_code_only')
-        for changes in (PATHS-{'backend/naver_page/app.js'},PATHS|{'naver_engine/web.py'},
+        for changes in (PATHS-{'backend/naver_page/app.js'},PATHS-{'naver_engine/naver_read.py'},
+                        PATHS|{'naver_engine/web.py'},
                         {'naver_engine/catalog_links.py','naver_engine/dashboard.py','naver_engine/inventory.py'}):
             code=shared.load(MODULE); code.CODE_PATHS=changes
             with self.subTest(paths=changes), self.assertRaisesRegex(ValueError,'CODE_ONLY_RELEASE_NOT_REVIEWED'):
@@ -177,7 +179,7 @@ class V4StoreScopeTest(unittest.TestCase):
         self.upgrade=Mock()
         self.upgrade.read_file.side_effect=lambda path,**kwargs:Path(path).read_bytes()
 
-    def test_two_ui_file_changes_with_identical_store_schema11_are_accepted(self):
+    def test_three_approved_file_changes_with_identical_store_schema11_are_accepted(self):
         self.code.compatible_source(self.old,self.new,self.upgrade)
 
     def test_repinning_cannot_authorize_store_bytes_or_infrastructure_changes(self):

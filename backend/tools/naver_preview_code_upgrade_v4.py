@@ -1,4 +1,4 @@
-"""Pinned fourth UI-only schema-11 code release; use only through the code-only controller."""
+"""Pinned fourth UI and request-budget schema-11 code release; use only through the code-only controller."""
 import ast
 from contextlib import closing
 import fcntl
@@ -13,17 +13,17 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 OLD_COMMIT = '953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6'
-TARGET_COMMIT = 'f3a9c321c2142ae759d9af482cde706a6af57564'
+TARGET_COMMIT = '49c42d645b90732071d0c61b8f9aaf7660e8b765'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 # 953c2cc operating archive, using the same Linux Python 3.12 seal encoder.
 OLD_SOURCE_SHA256 = '461be6b6ae6d09d74108f9f96a5e2bcf68feffdd2728c43f1b5e460be743ac80'
-# f3a9c32 canonical Linux Python 3.12 archive (1706235 bytes); must equal the seal receipt.
-TARGET_SOURCE_SHA256 = '33092243cb955a815d573226b77f0fe7ef4db4f913edb63a11fa71848ec15d8e'
+# 49c42d6 canonical Linux Python 3.12 archive (1706422 bytes); must equal the seal receipt.
+TARGET_SOURCE_SHA256 = '69b9f79ab243eac6d3d32fe67ce267b96bdd923323997fd2661934bc6a5459d4'
 # Store bytes are identical on both sides; schema 11 remains unchanged.
 STORE_SHA256 = {'old':'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
                 'target':'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862'}
-# Exact changed UI files inside the sealed archive, 953c2cc..f3a9c32.
-CODE_PATHS = {'backend/naver_page/app.js', 'backend/naver_page/index.html'}
+# Exact changed UI and reader files inside the sealed archive, 953c2cc..49c42d6.
+CODE_PATHS = {'backend/naver_page/app.js', 'backend/naver_page/index.html', 'naver_engine/naver_read.py'}
 # Neither archive ships test folders; their removal is covered by REMOVABLE_SOURCE_PREFIXES.
 TEST_PATHS = frozenset()
 # The seal no longer ships test folders (ad-dashboard tools/naver-preview-seal.py SOURCE_EXCLUDED_PATHS);
@@ -33,7 +33,7 @@ REMOVABLE_SOURCE_PREFIXES = ('naver_engine/tests/', 'naver_runtime/tests/')
 # pair revoke the screen overhaul (a981b35) opened. 401 without a token on both sides.
 OWNER_ACTION_ROUTES = ('/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all',
     '/settings/thresholds', *('/holds/'+k+'/confirm' for k in ('org', 'stages', 'accounts')), '/links/revoke')
-# Opened by the target only: none (the UI-only release adds no route).
+# Opened by the target only: none (the UI and request-budget release adds no route).
 TARGET_ACTION_ROUTES = ()
 # Closed on both sides.
 CLOSED_LINK_ROUTES = ('/links/reject', '/links/preview')

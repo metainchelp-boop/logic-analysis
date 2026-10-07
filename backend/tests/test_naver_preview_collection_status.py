@@ -893,6 +893,8 @@ class CollectionTest(unittest.TestCase):
     def test_profile_commit_allowlist_stays_exact_before_any_host_action(self):
         for flag, commit in (('latency_profile_only', M.CATALOG_LINKS_COMMIT),
                              ('dashboard_profile_only', M.WRITER_RELIEF_COMMIT),
+                             ('latency_profile_only', 'f3a9c321c2142ae759d9af482cde706a6af57564'),
+                             ('dashboard_profile_only', 'f3a9c321c2142ae759d9af482cde706a6af57564'),
                              ('latency_profile_only', 'f'*40),
                              ('dashboard_profile_only', 'f'*40)):
             package = dict(baseline='a'*64, source_commit=commit, source_tar_gz_sha256='b'*64)
@@ -1646,7 +1648,7 @@ class CollectionTest(unittest.TestCase):
 
     def test_fourth_ui_passive_diagnostics_preserve_guards_without_opening_database(self):
         commit=load('naver_preview_code_upgrade_v4').TARGET_COMMIT
-        self.assertEqual(commit,'f3a9c321c2142ae759d9af482cde706a6af57564')
+        self.assertEqual(commit,'49c42d645b90732071d0c61b8f9aaf7660e8b765')
         self.check_run_diagnostics(commit,passive=True)
 
     def test_reviewed_third_and_fourth_profiles_keep_bounded_readonly_guards_and_partial_results(self):
@@ -1660,7 +1662,7 @@ class CollectionTest(unittest.TestCase):
 
     def test_new_profile_archive_and_baseline_mismatch_refuse_before_host_or_process_action(self):
         self.assertEqual(set(M.PROFILE_RELEASES),{
-            '953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6','f3a9c321c2142ae759d9af482cde706a6af57564'})
+            '953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6','49c42d645b90732071d0c61b8f9aaf7660e8b765'})
         for commit,(archive,store,baseline) in M.PROFILE_RELEASES.items():
             for mode in ('latency_profile_only','dashboard_profile_only'):
                 good=dict(source_commit=commit,source_tar_gz_sha256=archive,baseline=baseline,**{mode:True})
