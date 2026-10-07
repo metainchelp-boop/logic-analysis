@@ -33,7 +33,7 @@ from naver_engine.session import load_token_secret
 OPENSSL = "/usr/bin/openssl"
 BRANCH = "refs/heads/codex/naver-ad-account-matching-20261001"
 ACCOUNT_FIRST_BRANCH = "refs/heads/codex/naver-account-first-20261002"
-ACCOUNT_FIRST_COMMIT = "953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6"
+ACCOUNT_FIRST_COMMIT = "f3a9c321c2142ae759d9af482cde706a6af57564"
 # 승인된 관리 경로 생성 영수증 36806904207. 입력값으로 이 지문을 바꿀 수 없다.
 SERVER_CERT_PEM_SHA256 = "8edff7ceaa6538bc91df7ebd1723bc6889dbebb232e1955d8dfa4131c4a5acc7"
 MAX_BUNDLE = 2 * 1024 * 1024
