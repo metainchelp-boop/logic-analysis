@@ -171,7 +171,7 @@ class CollectionTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '^COLLECTION_DIAGNOSTIC$'):
                 M.diagnostic_projection(value)
 
-    def test_catalog_diagnostics_accept_only_nine_reviewed_product_commits(self):
+    def test_catalog_diagnostics_accept_only_reviewed_product_commits(self):
         self.assertEqual(M.CATALOG_LINKS_COMMITS, frozenset({
             '6e4b035901027fef29266de218bfb0594227a3fe',
             '01344b145d0b679a6ee730d7fa4b5990278dd654',
@@ -181,7 +181,8 @@ class CollectionTest(unittest.TestCase):
             'c21f5f05f610abf89df0c24e85c00b1bec23d01c',
             '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
             'a981b35e298aa58a52b30e266792bd0f36506c5d',
-            '25dc24d8760a06b2321d4fbde481769c3ce32c34'}))
+            '25dc24d8760a06b2321d4fbde481769c3ce32c34',
+            '6198be366344a82923e10ba5e323877026d82f48'}))
         self.assertEqual(M.DAILY_LIMITED_COMMIT, '01344b145d0b679a6ee730d7fa4b5990278dd654')
         self.assertEqual(M.DAILY_LIMITED_COMMITS, frozenset({
             '01344b145d0b679a6ee730d7fa4b5990278dd654',
@@ -191,7 +192,8 @@ class CollectionTest(unittest.TestCase):
             'c21f5f05f610abf89df0c24e85c00b1bec23d01c',
             '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
             'a981b35e298aa58a52b30e266792bd0f36506c5d',
-            '25dc24d8760a06b2321d4fbde481769c3ce32c34'}))
+            '25dc24d8760a06b2321d4fbde481769c3ce32c34',
+            '6198be366344a82923e10ba5e323877026d82f48'}))
         self.assertEqual(M.REPORTS_COMMIT, 'a38c53775c112cdf5db420f979093d6bee9e5376')
         self.assertEqual(M.SHM_LOCK_FIX_COMMIT, 'c21f5f05f610abf89df0c24e85c00b1bec23d01c')
         self.assertEqual(M.OWNER_ACTIONS_COMMIT, '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505')
@@ -203,7 +205,8 @@ class CollectionTest(unittest.TestCase):
             'c21f5f05f610abf89df0c24e85c00b1bec23d01c',
             '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
             'a981b35e298aa58a52b30e266792bd0f36506c5d',
-            '25dc24d8760a06b2321d4fbde481769c3ce32c34'}))
+            '25dc24d8760a06b2321d4fbde481769c3ce32c34',
+            '6198be366344a82923e10ba5e323877026d82f48'}))
 
     def test_daily_limited_uses_schema11_reader_and_separates_current_targets_from_old_jobs(self):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
@@ -777,6 +780,7 @@ class CollectionTest(unittest.TestCase):
 
     def test_latency_profile_preserves_host_runtime_guards_and_partial_is_not_success(self):
         self.check_run_diagnostics(M.WRITER_RELIEF_COMMIT, latency=True)
+        self.check_run_diagnostics(M.LATENCY_FIX_COMMIT, latency=True)
 
     def test_incident_release_refuses_further_live_reader_diagnosis(self):
         package = dict(baseline='a'*64,source_commit=M.REPORTS_COMMIT,source_tar_gz_sha256='b'*64)
@@ -794,7 +798,8 @@ class CollectionTest(unittest.TestCase):
                        'c21f5f05f610abf89df0c24e85c00b1bec23d01c',
                        '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
                        'a981b35e298aa58a52b30e266792bd0f36506c5d',
-                       '25dc24d8760a06b2321d4fbde481769c3ce32c34'):
+                       '25dc24d8760a06b2321d4fbde481769c3ce32c34',
+                       '6198be366344a82923e10ba5e323877026d82f48'):
             with self.subTest(commit=commit):
                 self.check_run_diagnostics(commit, {
                     'daily_limited':dict(cycle_day='2026-10-01',jobs=0,current_daily_targets=1,

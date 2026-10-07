@@ -26,8 +26,10 @@ SCREEN_OVERHAUL_COMMIT = 'a981b35e298aa58a52b30e266792bd0f36506c5d'
 # Same diagnostics and DB schema as SCREEN_OVERHAUL_COMMIT; report cycle in small writer items (staff login 503)
 # and one more engine log line (store busy).
 WRITER_RELIEF_COMMIT = '25dc24d8760a06b2321d4fbde481769c3ce32c34'
+# Same schema/diagnostic contract; lightweight views, unused JSON exclusion, bounded abort logs.
+LATENCY_FIX_COMMIT = '6198be366344a82923e10ba5e323877026d82f48'
 MONITORING_COMMITS = frozenset((MONITORING_COMMIT, REPORTS_COMMIT, SHM_LOCK_FIX_COMMIT, OWNER_ACTIONS_COMMIT,
-                                SCREEN_OVERHAUL_COMMIT, WRITER_RELIEF_COMMIT))
+                                SCREEN_OVERHAUL_COMMIT, WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT))
 DAILY_LIMITED_COMMITS = frozenset((DAILY_LIMITED_COMMIT, RUNTIME_STATUS_COMMIT)) | MONITORING_COMMITS
 CATALOG_LINKS_COMMITS = DAILY_LIMITED_COMMITS | frozenset((CATALOG_LINKS_COMMIT,))
 PROJECTION_SOURCE = r'''
@@ -823,7 +825,7 @@ PROFILE_FUNCTIONS = {
         'structure_reason_summaries','_structure_reason_state','performance_checks','latest_inventory_successes',
         'daily_performance','account_day_checks_on','inventory_checks_on','my_alerts','inventory_snapshot')),
     'views.py':frozenset(('load_org','load','me','bell','_owner')),
-    'inventory.py':frozenset(('staff_counts','board','_matching','catalog_status','_lost_rows','_managed_coverage')),
+    'inventory.py':frozenset(('staff_counts','board','_current_matches','_matching','catalog_status','_lost_rows','_managed_coverage')),
     'management_store.py':frozenset(('snapshot','_matched','matching_result','_organization')),
     'matching.py':frozenset(('match','loose_name','name_relation','_letters_digits_lower')),
     'org_snapshot.py':frozenset(('parse_org_snapshot','org_freshness')),
@@ -1192,6 +1194,7 @@ TYPE_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
 # 25dc24d 는 같은 꼴의 줄 하나(화면 API 저장소 바쁨)만 더한다 — 나머지 줄은 a981b35 와 글자 그대로.
 # 줄 전체가 틀과 맞을 때만 갈래로 센다. 밖으로 나가는 값 = 갈래 이름 · 검증한 예외 종류 · HTTP 상태 숫자뿐.
 LOG_TEMPLATES = {'engine': (
+    ('morning_abort', 'abort', r'WARNING naver_engine\.morning morning_abort code=(REQUEST_BUDGET|REQUEST_DEADLINE|REQUEST_CALL_CAP|RATE|UNRECOGNIZED) cause=(SERVER|NETWORK|RATE|NONE|UNRECOGNIZED) calls=[0-9]{1,10} elapsed_ms=[0-9]{1,12}'),
     ('web_response_failed', 'type', r'ERROR naver_engine\.web 화면 API 응답 만들기 실패: (\S{1,64})'),
     ('web_store_refused', 'type', r'WARNING naver_engine\.web 화면 API 저장소 거절: (\S{1,64})'),
     ('web_store_error', 'type', r'WARNING naver_engine\.web 화면 API 저장소 오류: (\S{1,64})'),
@@ -1244,7 +1247,8 @@ def log_categories(entries, unit):
         row['count'] += 1
         if value_kind is not None:
             raw = match.group(1)
-            value = (enum(raw, RELAY_KINDS) if value_kind == 'relay' else type_name(raw) if value_kind == 'type'
+            value = (raw+':'+match.group(2) if value_kind == 'abort' else
+                     enum(raw, RELAY_KINDS) if value_kind == 'relay' else type_name(raw) if value_kind == 'type'
                      else raw if re.fullmatch('[1-5][0-9]{2}', raw) else 'none' if raw == 'None' else UNKNOWN)
             row['values'][value] = row['values'].get(value,0)+1
         if at is not None:
@@ -1434,7 +1438,7 @@ def run(package, host, release):
     # active probes on this release until isolated causality testing is complete.
     if package['source_commit'] == REPORTS_COMMIT and not passive:
         raise ValueError('LIVE_READER_SUSPENDED')
-    if latency and package['source_commit'] != WRITER_RELIEF_COMMIT:
+    if latency and package['source_commit'] not in (WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT):
         raise ValueError('PROFILE_SOURCE_UNREVIEWED')
     package = {key:value for key,value in package.items() if key not in ('passive_runtime_only','latency_profile_only')}
     if os.geteuid() != 0 or host.baseline() != package['baseline']:

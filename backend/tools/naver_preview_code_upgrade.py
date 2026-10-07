@@ -1,4 +1,4 @@
-"""Schema11 writer-relief release; paired DB rollback."""
+"""Pinned schema-11 latency release; legacy paired-DB path remains available."""
 import ast
 from contextlib import closing
 import fcntl
@@ -12,19 +12,20 @@ import stat
 import sqlite3
 from types import SimpleNamespace
 import uuid
-OLD_COMMIT = 'a981b35e298aa58a52b30e266792bd0f36506c5d'
-TARGET_COMMIT = '25dc24d8760a06b2321d4fbde481769c3ce32c34'
+OLD_COMMIT = '25dc24d8760a06b2321d4fbde481769c3ce32c34'
+TARGET_COMMIT = '6198be366344a82923e10ba5e323877026d82f48'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-# a981b35 seal receipt (run 37388648024).
-OLD_SOURCE_SHA256 = '1b1179f1afddd4ac9ad7d6d9d7bd4178d593e2f9e40edf6347ee77f3f6b98514'
-# 25dc24d git archive digest of the seal paths without test folders; must equal the seal receipt.
-TARGET_SOURCE_SHA256 = '05e114a9bf055ed8d1b0888afe41daa6fc77e2bc30241018a31da20284d3df28'
-# store.py: Python only (report cycle in per-client writer items, snapshot map, match reuse);
+# 25dc24d operating archive; reproduced with the same Linux Python 3.12 seal encoder.
+OLD_SOURCE_SHA256 = '05e114a9bf055ed8d1b0888afe41daa6fc77e2bc30241018a31da20284d3df28'
+# 6198be3 git archive digest of the seal paths without test folders; must equal the seal receipt.
+TARGET_SOURCE_SHA256 = 'b9071a746aa1879d518849bb5a76a8d2259a5d77853e28298fcd26fc7ea0d90e'
+# store.py: read projections only (no unused large JSON bodies in list queries);
 # SQL, SCHEMA_VERSION 11, _REVISION_COLUMNS and _migrate unchanged.
-STORE_SHA256 = {'old':'cead3be31d1816107307251562576c2c22edf09328b1402eb0961d08e4f68c74',
-                'target':'6ba8865870b131bea6b6ed4fe6726a63f2a5218f09a7615578411d3bba9de7a1'}
-CODE_PATHS = {'naver_engine/store.py', 'naver_engine/management_store.py', 'naver_engine/web.py',
-              'naver_runtime/scheduler.py', 'backend/naver_page/app.js'}
+STORE_SHA256 = {'old':'6ba8865870b131bea6b6ed4fe6726a63f2a5218f09a7615578411d3bba9de7a1',
+                'target':'5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94'}
+# Exact changed files inside the sealed archive, 25dc24d..6198be3.
+CODE_PATHS = {'backend/naver_page/app.js', 'naver_engine/catalog_links.py', 'naver_engine/inventory.py',
+              'naver_engine/management_store.py', 'naver_engine/morning.py', 'naver_engine/store.py'}
 # Neither archive ships test folders; their removal is covered by REMOVABLE_SOURCE_PREFIXES.
 TEST_PATHS = frozenset()
 # The seal no longer ships test folders (ad-dashboard tools/naver-preview-seal.py SOURCE_EXCLUDED_PATHS);

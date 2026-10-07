@@ -384,26 +384,27 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, 'a981b35e298aa58a52b30e266792bd0f36506c5d')
-        self.assertEqual(module.TARGET_COMMIT, '25dc24d8760a06b2321d4fbde481769c3ce32c34')
-        # The previous target archive (sealed for a981b35, run 37388648024) is now the pinned old archive.
+        self.assertEqual(module.OLD_COMMIT, '25dc24d8760a06b2321d4fbde481769c3ce32c34')
+        self.assertEqual(module.TARGET_COMMIT, '6198be366344a82923e10ba5e323877026d82f48')
+        # The current operating 25dc24d archive is the pinned old archive.
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         '1b1179f1afddd4ac9ad7d6d9d7bd4178d593e2f9e40edf6347ee77f3f6b98514')
-        # 25dc24d: git archive of the 18 sealed paths without test folders, gzip mtime=0 (Python 3.12);
+                         '05e114a9bf055ed8d1b0888afe41daa6fc77e2bc30241018a31da20284d3df28')
+        # 6198be3: git archive of the 18 sealed paths without test folders, gzip mtime=0 (Linux Python 3.12);
         # must equal the seal receipt.
         self.assertEqual(module.TARGET_SOURCE_SHA256,
-                         '05e114a9bf055ed8d1b0888afe41daa6fc77e2bc30241018a31da20284d3df28')
-        # store.py: the target changes only Python (report cycle in per-client writer items); schema 11 is unchanged.
+                         'b9071a746aa1879d518849bb5a76a8d2259a5d77853e28298fcd26fc7ea0d90e')
+        # store.py changes read projections only; the schema-11 SQL/migration contract is unchanged.
         self.assertEqual(module.STORE_SHA256, {
-            'old':'cead3be31d1816107307251562576c2c22edf09328b1402eb0961d08e4f68c74',
-            'target':'6ba8865870b131bea6b6ed4fe6726a63f2a5218f09a7615578411d3bba9de7a1'})
+            'old':'6ba8865870b131bea6b6ed4fe6726a63f2a5218f09a7615578411d3bba9de7a1',
+            'target':'5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94'})
         contract = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         # This historical migration fixture remains the original schema-11 release.
         self.assertEqual(contract['new_observed_unsealed']['sha256'],
                          '66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89')
-        # Exact git archive delta a981b35..25dc24d (neither archive ships test folders).
+        # Exact git archive delta 25dc24d..6198be3 (neither archive ships test folders).
         self.assertEqual(module.CODE_PATHS, {'naver_engine/store.py', 'naver_engine/management_store.py',
-                                             'naver_engine/web.py', 'naver_runtime/scheduler.py',
+                                             'naver_engine/catalog_links.py', 'naver_engine/inventory.py',
+                                             'naver_engine/morning.py',
                                              'backend/naver_page/app.js'})
         self.assertEqual(module.TEST_PATHS, frozenset())
 
@@ -711,10 +712,10 @@ class ContractTest(unittest.TestCase):
             old=Path(folder).resolve()/'old';new=Path(folder).resolve()/'new'
             for root in (old,new):
                 (root/'naver_engine').mkdir(parents=True)
-                (root/'naver_engine/web.py').write_bytes(b'old')
+                (root/'naver_engine/inventory.py').write_bytes(b'old')
                 (root/'naver_engine/unreviewed.py').write_bytes(b'unchanged')
-            (new/'naver_engine/web.py').write_bytes(b'new')
-            added=new/'naver_engine/web.py';added.write_bytes(b'approved')
+            (new/'naver_engine/inventory.py').write_bytes(b'new')
+            added=new/'naver_engine/inventory.py';added.write_bytes(b'approved')
             module.compatible_code_scope(old,new,upgrade)
             forbidden=new/'naver_engine/unreviewed.py';forbidden.write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
@@ -761,7 +762,7 @@ class ContractTest(unittest.TestCase):
                     else:
                         path.unlink()
 
-    def test_writer_relief_release_allows_only_exact_code_paths(self):
+    def test_latency_release_allows_only_exact_code_paths(self):
         module=sealed_code()
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -770,8 +771,8 @@ class ContractTest(unittest.TestCase):
         # Paths approved for previous releases or next to this delta are not approved for this one.
         neighbours=('backend/app/naver_auto/verdict.py','naver_engine/views.py','backend/naver_page/index.html',
                     'backend/naver_page/app.css','naver_runtime/__main__.py',
-                    'naver_engine/reporting.py','naver_engine/report_views.py','naver_engine/inventory.py',
-                    'naver_engine/management.py','naver_engine/catalog_links.py','naver_engine/alerts.py',
+                    'naver_engine/reporting.py','naver_engine/report_views.py','naver_engine/web.py',
+                    'naver_engine/management.py','naver_runtime/scheduler.py','naver_engine/alerts.py',
                     'naver_engine/read.py','naver_runtime/writer.py','naver_runtime/runtime_status.py',
                     'backend/naver_page/report-ui.js','backend/naver_page/sso-bootstrap.js',
                     'naver_runtime/bootstrap.py','naver_engine/inventory_reads.py','naver_engine/runtime_view.py',
@@ -784,7 +785,7 @@ class ContractTest(unittest.TestCase):
                     path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
             # The reviewed archive changes existing code files only; nothing is added or removed.
             for name in approved:
-                (new/name).write_bytes(b'approved writer-relief delta')
+                (new/name).write_bytes(b'approved latency delta')
             module.compatible_code_scope(old,new,upgrade)
             for name in neighbours+('naver_engine/tests/test_report_generate_slices.py',
                          'naver_engine/tests/test_writer_item_cost.py','naver_engine/tests/_performance_a981b35.py',

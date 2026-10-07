@@ -1,16 +1,24 @@
 """Gated, schema-compatible code replacement without controller DB access.
 
-Not wired into the operating workflow. A verified product fix and reviewed
-source/archive/store pins are required before this path can be activated.
+The explicit workflow modes accept only the reviewed source/archive/store
+transition sealed in REVIEWED_TRANSITION below.
 """
 import json
 import os
 import pwd
 import re
 
-# Deliberately unsealed. Never derive this approval from request input.
+# Reviewed 25dc24d -> 6198be3 transition. Never derive this approval from request input.
 # Tuple: old/new commit, old/new archive SHA256, old/new store SHA256, host baseline.
-REVIEWED_TRANSITION = None
+REVIEWED_TRANSITION = (
+    '25dc24d8760a06b2321d4fbde481769c3ce32c34',
+    '6198be366344a82923e10ba5e323877026d82f48',
+    '05e114a9bf055ed8d1b0888afe41daa6fc77e2bc30241018a31da20284d3df28',
+    'b9071a746aa1879d518849bb5a76a8d2259a5d77853e28298fcd26fc7ea0d90e',
+    '6ba8865870b131bea6b6ed4fe6726a63f2a5218f09a7615578411d3bba9de7a1',
+    '5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94',
+    '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+)
 
 
 def require_review(code):

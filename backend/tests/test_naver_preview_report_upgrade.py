@@ -75,9 +75,9 @@ class ReportUpgradeTest(unittest.TestCase):
 
     def test_pending_linux_digest_refuses_before_prepare_actions(self):
         code = legacy.load('naver_preview_code_upgrade')
-        # The screen-overhaul release (a981b35) is now the old side of the writer-relief release.
-        self.assertEqual(code.OLD_COMMIT, 'a981b35e298aa58a52b30e266792bd0f36506c5d')
-        self.assertEqual(code.TARGET_COMMIT, '25dc24d8760a06b2321d4fbde481769c3ce32c34')
+        # The current operating release is the old side of the pinned latency release.
+        self.assertEqual(code.OLD_COMMIT, '25dc24d8760a06b2321d4fbde481769c3ce32c34')
+        self.assertEqual(code.TARGET_COMMIT, '6198be366344a82923e10ba5e323877026d82f48')
         for pending in (None, 'PENDING_SEAL'):
             with self.subTest(pending=pending), patch.object(code, 'TARGET_SOURCE_SHA256', pending):
                 with self.assertRaisesRegex(ValueError, 'CODE_TARGET_NOT_PINNED'):
