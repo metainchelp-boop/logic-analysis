@@ -259,6 +259,155 @@ class CatalogLinksTest(unittest.TestCase):
         self.assertEqual(self.confirm([row], 100)[0], 409)
         self.assertEqual(before, self.store.link_decisions())
 
+    def explicit_name_collision(self, own_name, other_name):
+        self.clock.advance(1)
+        self.store.record_accounts(N.ChildAccounts({TM.A: {"customerId": TM.A,
+            "adAccountNo": 8000000, "adAccountName": "합성원본상점"}}, {1: 1}, ()), self.clock.now())
+        self.save_catalog([TC.company(11, "진행중", company_name=own_name),
+                           TC.company(12, "진행중", company_name=other_name)],
+                          [E.NaverIdRow(11, M.VENDOR_NAVER, None, "8000000")])
+        return [row for row in self.pending()["rows"] if row["possibility_id"] == 11]
+
+    def test_ceo_explicit_id_same_name_only_collision_can_confirm(self):
+        rows = self.explicit_name_collision("합성원본상점", "합성원본상점")
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["can_confirm"], rows[0]["confirm_block_reason"])
+        self.assertNotEqual(rows[0]["code"], "same")
+        self.assertEqual(self.confirm(rows, proof=None)[0], 409)
+        self.assertEqual(self.confirm(rows)[0], 200)
+
+    def test_ceo_explicit_id_different_name_only_candidate_can_confirm(self):
+        rows = self.explicit_name_collision("합성다른상호", "합성원본상점지점")
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["can_confirm"], rows[0]["confirm_block_reason"])
+        self.assertEqual(self.confirm(rows)[0], 200)
+
+    def test_ceo_explicit_id_name_points_elsewhere_has_one_confirmable_pair(self):
+        rows = self.explicit_name_collision("합성원본상점본점", "합성원본상점")
+        self.assertEqual(len(rows), 1, [(row["state"], row["code"]) for row in rows])
+        self.assertTrue(rows[0]["can_confirm"], rows[0]["confirm_block_reason"])
+        self.assertEqual(self.confirm(rows)[0], 200)
+
+    def test_name_collision_review_requires_ceo_and_explicit_ad_id(self):
+        self.explicit_name_collision("합성원본상점", "합성원본상점")
+        before = self.store.link_decisions()
+        for actor, narrowed in ((100, False), (0, True)):
+            with self.subTest(actor=actor, narrowed=narrowed):
+                rows = self.pending(actor, narrowed=narrowed)["rows"]
+                self.assertFalse(any(r["can_confirm"] for r in rows))
+                if rows:
+                    self.assertIn(self.confirm(rows[:1], actor, narrowed=narrowed)[0], (403, 409))
+                self.assertEqual(before, self.store.link_decisions())
+        self.save_catalog(ids=[E.NaverIdRow(11, M.VENDOR_NAVER, str(TM.A))])
+        rows = self.pending()["rows"]
+        self.assertFalse(any(r["can_confirm"] for r in rows))
+        self.assertEqual(self.confirm(rows[:1])[0], 409)
+        self.assertEqual(before, self.store.link_decisions())
+
+    def test_name_collision_review_keeps_current_and_superseded_confirmations(self):
+        self.explicit_name_collision("합성원본상점", "합성원본상점")
+        self.store.record_decision(12, TM.A, "confirmed", 0, self.clock.now())
+        for superseded in (False, True):
+            if superseded:
+                # catalog 밖의 확인도 이전 업체 확인과 함께 보호한다.
+                self.store.record_decision(99, TM.A, "confirmed", 0, self.clock.now())
+                self.assertTrue(self.store.superseded_confirmations())
+            rows = [r for r in self.pending()["rows"] if r["possibility_id"] == 11]
+            before = self.store.link_decisions()
+            self.assertTrue(rows)
+            self.assertFalse(any(r["can_confirm"] for r in rows))
+            self.assertEqual(self.confirm(rows[:1])[0], 409)
+            self.assertEqual(before, self.store.link_decisions())
+
+    def test_revoked_or_replaced_by_rejection_does_not_become_a_permanent_name_claim(self):
+        self.explicit_name_collision("합성원본상점", "합성원본상점")
+        did = self.store.record_decision(12, TM.A, "confirmed", 0, self.clock.now())
+        self.store.revoke_decision(did, 0, self.clock.now(), "합성 확인 거둠")
+        rows = [r for r in self.pending()["rows"] if r["possibility_id"] == 11]
+        self.assertTrue(rows[0]["can_confirm"])
+        self.store.record_decision(12, TM.A, "confirmed", 0, self.clock.now())
+        self.store.record_decision(12, TM.A, "rejected", 0, self.clock.now())
+        rows = [r for r in self.pending()["rows"] if r["possibility_id"] == 11]
+        self.assertTrue(rows[0]["can_confirm"])
+        self.assertEqual(self.confirm(rows)[0], 200)
+
+    def test_name_collision_review_keeps_hidden_and_outside_numeric_claims(self):
+        self.explicit_name_collision("합성원본상점", "합성원본상점")
+        for other_pid, other_raw, other_ad in ((12, None, "8000000"),
+                                              (99, str(TM.A), None), (99, "8000000", None)):
+            with self.subTest(other_pid=other_pid, other_raw=other_raw, other_ad=other_ad):
+                self.save_catalog([TC.company(11, "진행중", company_name="합성원본상점"),
+                    TC.company(12, "진행중", company_name="합성원본상점", stage_hidden=True)],
+                    [E.NaverIdRow(11, M.VENDOR_NAVER, None, "8000000"),
+                     E.NaverIdRow(other_pid, M.VENDOR_NAVER, other_raw, other_ad)])
+                rows = [r for r in self.pending()["rows"] if r["possibility_id"] == 11]
+                before = self.store.link_decisions()
+                self.assertTrue(rows)
+                self.assertFalse(any(r["can_confirm"] for r in rows))
+                self.assertEqual(self.confirm(rows[:1])[0], 409)
+                self.assertEqual(before, self.store.link_decisions())
+
+    def test_name_collision_review_cannot_hide_identifier_conflict_with_valid_duplicate(self):
+        self.explicit_name_collision("합성원본상점", "합성원본상점")
+        self.save_catalog(ids=[E.NaverIdRow(11, M.VENDOR_NAVER, str(TM.A + 1), "8000000"),
+                               E.NaverIdRow(11, M.VENDOR_NAVER, None, "8000000")])
+        rows = [r for r in self.pending()["rows"] if r["possibility_id"] == 11]
+        before = self.store.link_decisions()
+        self.assertTrue(rows)
+        self.assertFalse(any(r["can_confirm"] for r in rows))
+        self.assertEqual(self.confirm(rows[:1])[0], 409)
+        self.assertEqual(before, self.store.link_decisions())
+
+    def test_name_collision_review_still_needs_exact_single_proof(self):
+        rows = self.explicit_name_collision("합성원본상점", "합성원본상점")
+        before = self.store.link_decisions()
+        for proof in (None, "1", str(TM.A)[-4:], str(TM.A), True, 8000000, "08000000", "8000000 "):
+            with self.subTest(proof=proof):
+                self.assertEqual(self.confirm(rows, proof=proof)[0], 409)
+                self.assertEqual(before, self.store.link_decisions())
+
+    def test_name_collision_reviews_cannot_be_confirmed_as_a_batch(self):
+        self.explicit_name_collision("합성원본상점", "합성원본상점")
+        self.clock.advance(1)
+        self.store.record_accounts(N.ChildAccounts({
+            TM.A: {"customerId": TM.A, "adAccountNo": 8000000, "adAccountName": "합성원본상점"},
+            TM.A + 1: {"customerId": TM.A + 1, "adAccountNo": 8000001,
+                       "adAccountName": "합성두번째상점"}}, {1: 2}, ()), self.clock.now())
+        self.save_catalog([TC.company(pid, "진행중", company_name=name) for pid, name in
+            ((11, "합성원본상점"), (12, "합성원본상점"), (14, "합성두번째상점"), (15, "합성두번째상점"))],
+            [E.NaverIdRow(11, M.VENDOR_NAVER, None, "8000000"),
+             E.NaverIdRow(14, M.VENDOR_NAVER, None, "8000001")])
+        rows = [r for r in self.pending()["rows"] if r["can_confirm"]]
+        self.assertEqual(len(rows), 2)
+        before = self.store.link_decisions()
+        for proof in (None, "8000000", "8000001"):
+            self.assertEqual(self.confirm(rows, proof=proof)[0], 409)
+            self.assertEqual(before, self.store.link_decisions())
+
+    def test_name_collision_review_keeps_other_account_candidates(self):
+        self.explicit_name_collision("합성원본상점본점", "합성원본상점")
+        self.clock.advance(1)
+        self.store.record_accounts(N.ChildAccounts({
+            TM.A: {"customerId": TM.A, "adAccountNo": 8000000, "adAccountName": "합성원본상점"},
+            TM.A + 1: {"customerId": TM.A + 1, "adAccountNo": 8000001,
+                       "adAccountName": "합성원본상점본점별관"}}, {1: 2}, ()), self.clock.now())
+        rows = [r for r in self.pending()["rows"] if r["possibility_id"] == 11]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(sum(r["can_confirm"] for r in rows), 1)
+        self.assertEqual([(r["account_name"], r["confirm_block_reason"]) for r in rows if not r["can_confirm"]],
+                         [("합성원본상점본점별관", "explicit-account-required")])
+
+    def test_name_collision_review_rechecks_decision_inside_transaction(self):
+        rows = self.explicit_name_collision("합성원본상점", "합성원본상점")
+        record = self.store.record_decisions
+        def racing_record(*args, **kwargs):
+            self.store.record_decision(12, TM.A, "confirmed", 0, self.clock.now())
+            return record(*args, **kwargs)
+        with patch.object(self.store, "record_decisions", side_effect=racing_record):
+            self.assertEqual(self.confirm(rows)[0], 409)
+        self.assertEqual([(d.possibility_id, d.customer_id) for d in self.store.current_decisions()], [(12, TM.A)])
+        self.assertFalse(self.store._conn.in_transaction)
+
     def test_hidden_or_unknown_stage_does_not_prevent_ceo_identity_confirmation(self):
         for changes in ({"stage_hidden": True}, {"stage": None, "stage_known": False}):
             with self.subTest(changes=changes):

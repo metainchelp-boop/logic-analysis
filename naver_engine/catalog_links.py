@@ -87,9 +87,53 @@ def load(store, now, org, scope, selection="all", *, narrowed=False):
             state = "matching-unavailable"
     context = replace(base, owns=owns, rows_by_pid={pid: tuple(rs) for pid, rs in rows.items()},
                       name_owners={key: frozenset(ids) for key, ids in names.items()})
+    if state == "accepted" and scope.kind == SC.ALL and not narrowed:
+        context = _explicit_name_review(context, catalog)
     return Context(context, scope, companies, source_key, state,
                    None if catalog is None else datetime.fromisoformat(catalog["generated_at"]),
                    W.visible(base, scope), visible_ids)
+
+
+def _explicit_name_review(ctx, catalog):
+    """대표의 명시 번호 확인만 이름 후보와 분리한다. 자동 짝·직원·legacy holder는 바꾸지 않는다."""
+    explicit = {(r["possibility_id"], r["ad_account_no_raw"]) for r in catalog["ids"]
+                if r["vendor"] == M.VENDOR_NAVER and isinstance(r["ad_account_no_raw"], str)}
+    strong, candidates = {}, {}
+    for decision in ctx.live_decisions + ctx.lost_decisions:
+        if decision.decision == "confirmed":
+            strong.setdefault(decision.customer_id, set()).add(decision.possibility_id)
+    for pid, current in ctx.rows_by_pid.items():
+        for row in current:
+            if row["state"] != S.PAIR_CANDIDATE:
+                strong.setdefault(row["customer_id"], set()).add(pid)
+            else:
+                candidates.setdefault(row["customer_id"], set()).add(pid)
+    rows = {}
+    for pid, current in ctx.rows_by_pid.items():
+        reviews = set()
+        for row in current:
+            cid = row["customer_id"]
+            account = ctx.accounts.get(cid)
+            # 이 상태는 matching이 전체 번호 주장·두 ID 충돌·현재 확정을 검사한 뒤에만 만든다.
+            if (row["state"] != S.PAIR_AUTO and not (row["state"] == S.PAIR_BLOCKED and
+                    row["code"] in (M.B_NAME_DIFFERENT, M.B_NAME_ELSEWHERE))):
+                continue
+            if account is None or (pid, str(account["ad_account_no"])) not in explicit:
+                continue
+            if strong.get(cid, set()) - {pid}:
+                continue
+            names = ctx.name_owners.get(M.loose_name(account["account_name"]), frozenset())
+            if not ((candidates.get(cid, set()) | names) - {pid}) and row["code"] != M.B_NAME_ELSEWHERE:
+                continue
+            row["_explicit_name_review"] = True
+            # same 묶음 확인에 포함하지 않는다. 기존 non-same 단건·정확 adAccountNo 증명을 요구한다.
+            if row["code"] == M.REL_SAME:
+                row["state"], row["code"] = S.PAIR_BLOCKED, M.B_NAME_ELSEWHERE
+            reviews.add(cid)
+        # 같은 명시 번호의 이름 차단행을 이름-only 후보로 또 보여 주지 않는다. 다른 계정은 유지한다.
+        rows[pid] = tuple(r for r in current if not (r["state"] == S.PAIR_CANDIDATE and
+                                                    r["customer_id"] in reviews))
+    return replace(ctx, rows_by_pid=rows)
 
 
 def make_ref(context, row):
@@ -127,7 +171,9 @@ def block_reason(context, row):
         return "confirmation-not-permitted"
     if row is None:
         return "pair-unavailable"
-    if row["state"] != S.PAIR_AUTO and not (row["state"] == S.PAIR_BLOCKED and row["code"] == M.B_NAME_DIFFERENT):
+    name_review = row.get("_explicit_name_review") is True and scope.kind == SC.ALL
+    if row["state"] != S.PAIR_AUTO and not (row["state"] == S.PAIR_BLOCKED and
+            (row["code"] == M.B_NAME_DIFFERENT or name_review and row["code"] == M.B_NAME_ELSEWHERE)):
         return (row["code"] if row["state"] == S.PAIR_BLOCKED and row["code"] else
                 "explicit-account-required" if row["state"] == S.PAIR_CANDIDATE else "pair-unavailable")
     pid, cid = row["possibility_id"], row["customer_id"]
@@ -140,7 +186,7 @@ def block_reason(context, row):
         return "company-unavailable"
     if not account or account["present"] != 1:
         return "account-unavailable"
-    if W.link_holders(ctx, pid, cid) or row.get("claimed_elsewhere"):
+    if (not name_review and W.link_holders(ctx, pid, cid)) or row.get("claimed_elsewhere"):
         return "account-claimed-elsewhere"
     if any(d.possibility_id == pid and d.customer_id == cid for d in ctx.live_decisions):
         return "pair-already-decided"
