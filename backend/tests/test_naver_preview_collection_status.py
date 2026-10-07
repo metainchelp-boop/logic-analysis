@@ -782,6 +782,9 @@ class CollectionTest(unittest.TestCase):
         self.check_run_diagnostics(M.WRITER_RELIEF_COMMIT, latency=True)
         self.check_run_diagnostics(M.LATENCY_FIX_COMMIT, latency=True)
 
+    def test_dashboard_profile_preserves_host_runtime_guards_and_partial_is_not_success(self):
+        self.check_run_diagnostics(M.LATENCY_FIX_COMMIT, dashboard=True)
+
     def test_incident_release_refuses_further_live_reader_diagnosis(self):
         package = dict(baseline='a'*64,source_commit=M.REPORTS_COMMIT,source_tar_gz_sha256='b'*64)
         host,release = Mock(),Mock()
@@ -807,7 +810,7 @@ class CollectionTest(unittest.TestCase):
                     'managed_catalog_links':dict(auto=0,name_different=0,can_confirm=0,rejected={})})
         self.check_run_diagnostics('b'*40)
 
-    def check_run_diagnostics(self, commit, extra=None, passive=False, logs=None, latency=False):
+    def check_run_diagnostics(self, commit, extra=None, passive=False, logs=None, latency=False, dashboard=False):
         package = dict(baseline='a'*64, source_commit=commit, source_tar_gz_sha256='c'*64)
         cid, image = 'd'*64, 'sha256:'+'e'*64
         rid, relay_image = '7'*64, 'sha256:'+'8'*64
@@ -827,10 +830,13 @@ class CollectionTest(unittest.TestCase):
                 package['passive_runtime_only'] = True
             if latency:
                 package['latency_profile_only'] = True
-            phases=['reader','org','scope','context','me','staff_counts','bell']+['aggregate_'+key for key in M.PROFILE_AGGREGATES]
+            if dashboard:
+                package['dashboard_profile_only'] = True
+            phases=(['reader','org','scope','context','dashboard'] if dashboard else
+                    ['reader','org','scope','context','me','staff_counts','bell']+['aggregate_'+key for key in M.PROFILE_AGGREGATES])
             profile=dict(state='complete',code=None,last_phase=phases[-1],elapsed_us=100,cpu_us=20,
                 phases=[dict(phase=name,wall_us=1,cpu_us=1,completed=True) for name in phases],functions=[],
-                aggregates={key:[0]*width for key,(_,width) in M.PROFILE_AGGREGATES.items()},
+                aggregates={} if dashboard else {key:[0]*width for key,(_,width) in M.PROFILE_AGGREGATES.items()},
                 cgroup_before={},cgroup_after={},read_only=True,authenticated_request=False,engine_process_shared=False)
             values = dict(today='2026-10-01', prospects={'total':0,'stages':{}},
                 pairing={'available':False,'statuses':{},'unmatched_prospects':None}, latest_run=None,
@@ -861,7 +867,7 @@ class CollectionTest(unittest.TestCase):
                 failures += ['daily_limited_missing','managed_catalog_links_missing']
             if passive:
                 failures = [None,'image','mount','rootfs','restart','host_changed','relay_changed','relay_image']
-            if latency:
+            if latency or dashboard:
                 failures = [None,'image','mount','rootfs','restart','host_changed','exec_failed','profile_partial','output']
             for failure in failures:
                 calls, inspections = [], []
@@ -899,15 +905,17 @@ class CollectionTest(unittest.TestCase):
                     if args[1] == 'exec':
                         ast.parse(kwargs['data'])
                         self.assertEqual(kwargs['timeout'], 30)
-                        if latency:
+                        if latency or dashboard:
                             self.assertIn('signal.setitimer(signal.ITIMER_REAL,25)',kwargs['data'].decode())
+                            if dashboard:
+                                self.assertIn("DASH.board(ctx,reader,scope,selection='all')",kwargs['data'].decode())
                             self.assertEqual(args,['docker','exec','-i','--user','10001:10001',cid,'python','-I','-B','-'])
                             out=dict(profile)
                             if failure=='profile_partial':
                                 out.update(state='partial',code='PROFILE_TIMEOUT')
                             if failure=='output':
                                 out['private']='PRIVATE'
-                            return json.dumps({'latency_profile':out}).encode()
+                            return json.dumps({'dashboard_profile' if dashboard else 'latency_profile':out}).encode()
                         self.assertEqual(kwargs['data'].decode().count('if True:'),
                             int(commit in M.CATALOG_LINKS_COMMITS)+int(commit in M.DAILY_LIMITED_COMMITS)
                             +3*int(commit in M.MONITORING_COMMITS))
@@ -987,8 +995,8 @@ class CollectionTest(unittest.TestCase):
                     elif failure == 'profile_partial':
                         result = M.run(package, host, release)
                         self.assertFalse(result['ok'])
-                        self.assertEqual(result['mode'],'latency-profile')
-                        self.assertEqual(result['latency_profile']['code'],'PROFILE_TIMEOUT')
+                        self.assertEqual(result['mode'],'dashboard-profile' if dashboard else 'latency-profile')
+                        self.assertEqual(result['dashboard_profile' if dashboard else 'latency_profile']['code'],'PROFILE_TIMEOUT')
                         self.assertEqual(len(inspections),2)
                     elif failure in ('restart','diagnostic_restart','host_changed'):
                         result = M.run(package, host, release)
@@ -1015,9 +1023,9 @@ class CollectionTest(unittest.TestCase):
                             self.assertNotIn('collection',result)
                             self.assertFalse(result['database_opened'])
                             self.assertEqual(result['mode'],'runtime-diagnostics')
-                        elif latency:
-                            self.assertEqual(result['mode'],'latency-profile')
-                            self.assertEqual(result['latency_profile'],profile)
+                        elif latency or dashboard:
+                            self.assertEqual(result['mode'],'dashboard-profile' if dashboard else 'latency-profile')
+                            self.assertEqual(result['dashboard_profile' if dashboard else 'latency_profile'],profile)
                             self.assertEqual(result['reader_mode'],'store-mode-ro-authorizer')
                         else:
                             self.assertEqual(result['collection'], values)

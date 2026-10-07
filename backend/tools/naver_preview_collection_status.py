@@ -738,7 +738,7 @@ exec(compile(PROJECTION_SOURCE, '<collection-projection>', 'exec'))
 
 def validate_package(package):
     required = {'baseline', 'source_commit', 'source_tar_gz_sha256'}
-    modes = ('passive_runtime_only', 'latency_profile_only')
+    modes = ('passive_runtime_only', 'latency_profile_only', 'dashboard_profile_only')
     if (not isinstance(package, dict) or set(package) not in (required, *(required|{mode} for mode in modes))
             or any(mode in package and package[mode] is not True for mode in modes)):
         raise ValueError('PACKAGE_FIELDS')
@@ -814,11 +814,13 @@ except Exception as error:
 
 
 # Run only against the same sealed runtime, in a separate read-only process. This
-# measures /me computation, not HTTP authentication or the engine's own GIL queue.
+# measures /me or dashboard computation, not HTTP authentication or the engine's
+# own GIL queue. Dashboard mode exports only timings and fixed CPU/memory fields.
 LATENCY_SOURCE = r'''
 PROFILE_PHASES = frozenset(('identity','reader','org','scope','context','me','staff_counts','bell',
     'aggregate_catalog','aggregate_org','aggregate_performance','aggregate_structure','aggregate_inventory',
     'aggregate_daily','aggregate_decisions','aggregate_alerts','close'))
+PROFILE_DASHBOARD_PHASES = frozenset(('identity','reader','org','scope','context','dashboard','close'))
 PROFILE_FUNCTIONS = {
     'store.py':frozenset(('open_reader','_rows','_meta_json','org_current','account_catalog','account_catalog_status',
         'accounts','prospects','link_decisions','current_decisions','_resolve_decisions','automatic_link_evidence',
@@ -830,6 +832,9 @@ PROFILE_FUNCTIONS = {
     'matching.py':frozenset(('match','loose_name','name_relation','_letters_digits_lower')),
     'org_snapshot.py':frozenset(('parse_org_snapshot','org_freshness')),
     'scope.py':frozenset(('scope_of','narrowed_scope_of','clients_in','ownership_for_client','owner_state'))}
+PROFILE_DASHBOARD_FUNCTIONS = {**PROFILE_FUNCTIONS,
+    'store.py':PROFILE_FUNCTIONS['store.py'] | frozenset(('monthly_checks_on',)),
+    'dashboard.py':frozenset(('board','aggregate','daily_checks','_collected','_sum','_ratio'))}
 PROFILE_AGGREGATES = {
     'catalog':("SELECT length(CAST(value AS BLOB)) FROM naver_auto_meta WHERE key='account_catalog'",1),
     'org':("SELECT length(CAST(body AS BLOB)) FROM naver_auto_org WHERE slot='current'",1),
@@ -854,26 +859,28 @@ def profile_number(value, nullable=False):
     return value
 
 
-def latency_projection(value):
+def latency_projection(value, *, dashboard=False):
+    phase_names = PROFILE_DASHBOARD_PHASES if dashboard else PROFILE_PHASES
+    function_names = PROFILE_DASHBOARD_FUNCTIONS if dashboard else PROFILE_FUNCTIONS
     fields = {'state','code','last_phase','elapsed_us','cpu_us','phases','functions','aggregates',
               'cgroup_before','cgroup_after','read_only','authenticated_request','engine_process_shared'}
     if (not isinstance(value,dict) or set(value)!=fields or value['state'] not in ('complete','partial')
             or value['code'] not in (None,'PROFILE_TIMEOUT','PROFILE_ERROR')
             or (value['state']=='complete') != (value['code'] is None)
-            or not isinstance(value['last_phase'],str) or value['last_phase'] not in PROFILE_PHASES or value['read_only'] is not True
+            or not isinstance(value['last_phase'],str) or value['last_phase'] not in phase_names or value['read_only'] is not True
             or value['authenticated_request'] is not False or value['engine_process_shared'] is not False):
         raise ValueError('PROFILE_FIELDS')
     out = {key:value[key] for key in fields-{'phases','functions','aggregates','cgroup_before','cgroup_after'}}
     for key in ('elapsed_us','cpu_us'):
         out[key]=profile_number(value[key])
     phases=value['phases']
-    if not isinstance(phases,list) or len(phases)>len(PROFILE_PHASES):
+    if not isinstance(phases,list) or len(phases)>len(phase_names):
         raise ValueError('PROFILE_PHASES')
     out['phases']=[]
     seen=set()
     for row in phases:
         if (not isinstance(row,dict) or set(row)!={'phase','wall_us','cpu_us','completed'}
-                or not isinstance(row['phase'],str) or row['phase'] not in PROFILE_PHASES
+                or not isinstance(row['phase'],str) or row['phase'] not in phase_names
                 or row['phase'] in seen or type(row['completed']) is not bool):
             raise ValueError('PROFILE_PHASES')
         seen.add(row['phase'])
@@ -884,12 +891,13 @@ def latency_projection(value):
     out['functions']=[]
     for row in value['functions']:
         if (not isinstance(row,dict) or set(row)!={'file','function','line','calls','recursive_calls','total_us','self_us'}
-                or not isinstance(row['file'],str) or row['file'] not in PROFILE_FUNCTIONS
-                or not isinstance(row['function'],str) or row['function'] not in PROFILE_FUNCTIONS[row['file']]):
+                or not isinstance(row['file'],str) or row['file'] not in function_names
+                or not isinstance(row['function'],str) or row['function'] not in function_names[row['file']]):
             raise ValueError('PROFILE_FUNCTIONS')
         out['functions'].append({key:(row[key] if key in ('file','function') else profile_number(row[key])) for key in row})
     aggregates=value['aggregates']
-    if not isinstance(aggregates,dict) or set(aggregates)-set(PROFILE_AGGREGATES):
+    if (not isinstance(aggregates,dict) or set(aggregates)-set(PROFILE_AGGREGATES)
+            or (dashboard and aggregates)):
         raise ValueError('PROFILE_AGGREGATES')
     out['aggregates']={}
     for key,values in aggregates.items():
@@ -901,8 +909,9 @@ def latency_projection(value):
         if not isinstance(rows,dict) or set(rows)-PROFILE_CGROUP:
             raise ValueError('PROFILE_CGROUP')
         out[key]={name:profile_number(n,True) for name,n in rows.items()}
-    required = {'reader','org','scope','context','me','staff_counts','bell'} | {'aggregate_'+key for key in PROFILE_AGGREGATES}
-    if value['state']=='complete' and (set(aggregates)!=set(PROFILE_AGGREGATES) or seen!=required
+    required = ({'reader','org','scope','context','dashboard'} if dashboard else
+                {'reader','org','scope','context','me','staff_counts','bell'} | {'aggregate_'+key for key in PROFILE_AGGREGATES})
+    if value['state']=='complete' and ((not dashboard and set(aggregates)!=set(PROFILE_AGGREGATES)) or seen!=required
             or any(not r['completed'] for r in phases)):
         raise ValueError('PROFILE_INCOMPLETE')
     return out
@@ -943,7 +952,7 @@ class ProfileDeadline(BaseException):
     pass
 
 
-def collect_latency():
+def collect_latency(*, dashboard=False):
     import cProfile
     import signal
     import socket
@@ -983,6 +992,8 @@ def collect_latency():
         os.environ.clear()
         sys.path[:0]=['/opt/naver-engine','/opt/naver-engine/backend']
         from naver_engine import store as S,views as W,inventory as I
+        if dashboard:
+            from naver_engine import dashboard as DASH
         from app.naver_auto import scope as SC
         result['cgroup_before']=profile_cgroup()
         profiler.enable()
@@ -1000,18 +1011,24 @@ def collect_latency():
         if scope.kind!=SC.ALL:
             raise ValueError('PROFILE_SCOPE')
         ctx=phase('context',lambda:W.load(reader,now,org))
-        own=phase('me',lambda:W.me(ctx,scope))
-        counts=phase('staff_counts',lambda:I.staff_counts(ctx,reader,scope))
-        for person in own['people']:
-            person['account_count']=counts.get(person['idx'],0)
-        bell=phase('bell',lambda:W.bell(reader,scope.viewer_idx,now))
-        own['bell_unread']=bell['unread']
         # No response body or account/staff values leave this process.
-        del own,bell,counts,ctx,org,scope
+        if dashboard:
+            board=phase('dashboard',lambda:DASH.board(ctx,reader,scope,selection='all'))
+            del board
+        else:
+            own=phase('me',lambda:W.me(ctx,scope))
+            counts=phase('staff_counts',lambda:I.staff_counts(ctx,reader,scope))
+            for person in own['people']:
+                person['account_count']=counts.get(person['idx'],0)
+            bell=phase('bell',lambda:W.bell(reader,scope.viewer_idx,now))
+            own['bell_unread']=bell['unread']
+            del own,bell,counts
+        del ctx,org,scope
         profiler.disable()
-        for key,(sql,width) in PROFILE_AGGREGATES.items():
-            row=phase('aggregate_'+key,lambda:reader._conn.execute(sql).fetchone())
-            result['aggregates'][key]=list(row) if row is not None else [None]*width
+        if not dashboard:
+            for key,(sql,width) in PROFILE_AGGREGATES.items():
+                row=phase('aggregate_'+key,lambda:reader._conn.execute(sql).fetchone())
+                result['aggregates'][key]=list(row) if row is not None else [None]*width
         result.update(state='complete',code=None)
     except ProfileDeadline:
         result.update(state='partial',code='PROFILE_TIMEOUT')
@@ -1034,14 +1051,15 @@ def collect_latency():
             if isinstance(code,str) or not code.co_filename.startswith('/opt/naver-engine/'):
                 continue
             file=os.path.basename(code.co_filename)
-            if file in PROFILE_FUNCTIONS and code.co_name in PROFILE_FUNCTIONS[file]:
+            function_names = PROFILE_DASHBOARD_FUNCTIONS if dashboard else PROFILE_FUNCTIONS
+            if file in function_names and code.co_name in function_names[file]:
                 result['functions'].append(dict(file=file,function=code.co_name,line=code.co_firstlineno,
                     calls=entry.callcount,recursive_calls=entry.reccallcount,
                     total_us=max(0,int(entry.totaltime*1000000)),self_us=max(0,int(entry.inlinetime*1000000))))
         result['functions']=sorted(result['functions'],key=lambda row:row['total_us'],reverse=True)[:40]
         result.update(elapsed_us=max(0,int((time.monotonic()-start)*1000000)),
                       cpu_us=max(0,int((time.process_time()-cpu_start)*1000000)))
-    return latency_projection(result)
+    return latency_projection(result,dashboard=dashboard)
 '''
 exec(compile(LATENCY_SOURCE, '<latency-projection>', 'exec'))
 
@@ -1049,6 +1067,11 @@ exec(compile(LATENCY_SOURCE, '<latency-projection>', 'exec'))
 def latency_script():
     return ('import json,os,sys,time\nfrom datetime import datetime,timedelta,timezone\n' + LATENCY_SOURCE +
             '\nprint(json.dumps({"latency_profile":collect_latency()},sort_keys=True))\n').encode()
+
+
+def dashboard_script():
+    return ('import json,os,sys,time\nfrom datetime import datetime,timedelta,timezone\n' + LATENCY_SOURCE +
+            '\nprint(json.dumps({"dashboard_profile":collect_latency(dashboard=True)},sort_keys=True))\n').encode()
 
 
 def docker_stamp(value):
@@ -1434,13 +1457,17 @@ def run(package, host, release):
     validate_package(package)
     passive = package.get('passive_runtime_only') is True
     latency = package.get('latency_profile_only') is True
+    dashboard = package.get('dashboard_profile_only') is True
     # Incident 2026-10-05: live reader attempts overlapped engine exits. No further
     # active probes on this release until isolated causality testing is complete.
     if package['source_commit'] == REPORTS_COMMIT and not passive:
         raise ValueError('LIVE_READER_SUSPENDED')
     if latency and package['source_commit'] not in (WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT):
         raise ValueError('PROFILE_SOURCE_UNREVIEWED')
-    package = {key:value for key,value in package.items() if key not in ('passive_runtime_only','latency_profile_only')}
+    if dashboard and package['source_commit'] != LATENCY_FIX_COMMIT:
+        raise ValueError('PROFILE_SOURCE_UNREVIEWED')
+    package = {key:value for key,value in package.items()
+               if key not in ('passive_runtime_only','latency_profile_only','dashboard_profile_only')}
     if os.geteuid() != 0 or host.baseline() != package['baseline']:
         raise ValueError('HOST_BASELINE')
     commit = package['source_commit']
@@ -1511,7 +1538,7 @@ def run(package, host, release):
         return {'ok':checked['postflight']['code'] is None,'mode':'runtime-diagnostics',
                 'source_commit':commit,'database_opened':False,'mutations':0,**details,**checked}
     captured = capture_process(['docker', 'exec', '-i', '--user', '10001:10001', identity,
-                           'python', '-I', '-B', '-'], data=latency_script() if latency else script(catalog_links=commit in CATALOG_LINKS_COMMITS,
+                           'python', '-I', '-B', '-'], data=dashboard_script() if dashboard else latency_script() if latency else script(catalog_links=commit in CATALOG_LINKS_COMMITS,
                             daily_limited=commit in DAILY_LIMITED_COMMITS,
                             morning_progress=commit in MONITORING_COMMITS,
                             reports=commit in MONITORING_COMMITS,
@@ -1519,20 +1546,22 @@ def run(package, host, release):
     if captured['reason'] or captured['exit_code'] != 0:
         details = context()
         checked = postflight()
-        return {'ok':False,'mode':'latency-profile' if latency else 'collection-status','source_commit':commit,'stage':'reader_process',
+        return {'ok':False,'mode':'dashboard-profile' if dashboard else 'latency-profile' if latency else 'collection-status','source_commit':commit,'stage':'reader_process',
                 'process_failure':process_failure(captured),**details,**checked,'mutations':0}
     raw = captured['stdout']
     if len(raw) > 32768:
         raise ValueError('STATUS_SIZE')
     value = json.loads(raw, object_pairs_hook=release.unique)
-    if latency:
-        if not isinstance(value,dict) or set(value)!={'latency_profile'}:
+    if latency or dashboard:
+        profile_key = 'dashboard_profile' if dashboard else 'latency_profile'
+        if not isinstance(value,dict) or set(value)!={profile_key}:
             raise ValueError('PROFILE_FIELDS')
-        profile = latency_projection(value['latency_profile'])
+        profile = latency_projection(value[profile_key],dashboard=dashboard)
         details = context()
         checked = postflight()
         return {'ok':profile['state']=='complete' and checked['postflight']['code'] is None,
-                'mode':'latency-profile','source_commit':commit,'latency_profile':profile,**details,**checked,
+                'mode':'dashboard-profile' if dashboard else 'latency-profile','source_commit':commit,
+                profile_key:profile,**details,**checked,
                 'reader_mode':'store-mode-ro-authorizer','mutations':0}
     if isinstance(value, dict) and 'diagnostic_failure' in value:
         failure = diagnostic_projection(value)
