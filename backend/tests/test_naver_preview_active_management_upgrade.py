@@ -31,6 +31,8 @@ class SameSchemaContractTest(unittest.TestCase):
         # Writer relief (25dc24d): the screen overhaul store is now the old side; Python only on the target.
         sources['old'] = sources['target']
         sources['target'] += b'\n# report cycle in per-client writer items\n'
+        # Dashboard/link latency release: store.py must be identical on both sides.
+        sources['old'] = sources['target']
         with tempfile.TemporaryDirectory() as directory:
             old, new = (Path(directory).resolve()/part for part in ('old', 'new'))
             for path, role in ((old, 'old'), (new, 'target')):

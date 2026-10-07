@@ -128,6 +128,18 @@ class CodeOnlyTest(unittest.TestCase):
         self.assertEqual(result.failure_details['rollback_stage'], 'code_rollback')
         self.assertEqual(result.failure_details['rollback_operation'], 'rollback_state')
 
+    def test_review_refuses_scope_expansion_even_when_release_pins_are_identical(self):
+        code = shared.load('naver_preview_code_upgrade')
+        policy = shared.load('naver_preview_code_only')
+        for name, value in (('CODE_PATHS', code.CODE_PATHS | {'naver_engine/store.py'}),
+                            ('CODE_PATHS', code.CODE_PATHS | {'backend/app/naver_auto/scope.py'}),
+                            ('TEST_PATHS', frozenset({'naver_engine/tests/test_web.py'}))):
+            with self.subTest(name=name, value=value), patch.object(code, name, value):
+                adapters = [Mock() for _ in range(4)]
+                with self.assertRaisesRegex(ValueError, '^CODE_ONLY_RELEASE_NOT_REVIEWED$'):
+                    policy.prepare({}, *adapters, code)
+                self.assertTrue(all(not adapter.mock_calls for adapter in adapters))
+
     def test_host_or_source_drift_before_rollback_refuses_old_code_restart(self):
         for failure, expected in (('rollback_host_changed', 'CODE_POST_STATE'),
                                   ('rollback_source_changed', 'CODE_STORE_CHANGED')):
@@ -156,11 +168,11 @@ class CodeOnlyTest(unittest.TestCase):
 
     def test_reviewed_transition_is_sealed_to_the_exact_latency_release(self):
         code,policy=shared.load('naver_preview_code_upgrade'),shared.load('naver_preview_code_only')
-        expected=('25dc24d8760a06b2321d4fbde481769c3ce32c34',
-                  '6198be366344a82923e10ba5e323877026d82f48',
-                  '05e114a9bf055ed8d1b0888afe41daa6fc77e2bc30241018a31da20284d3df28',
+        expected=('6198be366344a82923e10ba5e323877026d82f48',
+                  'e4f64e165ebdf81d4127218d5c91ff6904e75958',
                   'b9071a746aa1879d518849bb5a76a8d2259a5d77853e28298fcd26fc7ea0d90e',
-                  '6ba8865870b131bea6b6ed4fe6726a63f2a5218f09a7615578411d3bba9de7a1',
+                  '716d849b68d72cb03489bc16da1cee3d9a0f31cb16612287b407fe244dea84c6',
+                  '5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94',
                   '5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94',
                   '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
         self.assertEqual(policy.REVIEWED_TRANSITION,expected)

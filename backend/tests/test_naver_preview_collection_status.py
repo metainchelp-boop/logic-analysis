@@ -14,6 +14,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 from datetime import datetime
+from test_naver_preview_code_upgrade import load
 
 SPEC = importlib.util.spec_from_file_location('collection_status', Path(__file__).parents[1]/'tools/naver_preview_collection_status.py')
 M = importlib.util.module_from_spec(SPEC)
@@ -182,7 +183,8 @@ class CollectionTest(unittest.TestCase):
             '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
             'a981b35e298aa58a52b30e266792bd0f36506c5d',
             '25dc24d8760a06b2321d4fbde481769c3ce32c34',
-            '6198be366344a82923e10ba5e323877026d82f48'}))
+            '6198be366344a82923e10ba5e323877026d82f48',
+            'e4f64e165ebdf81d4127218d5c91ff6904e75958'}))
         self.assertEqual(M.DAILY_LIMITED_COMMIT, '01344b145d0b679a6ee730d7fa4b5990278dd654')
         self.assertEqual(M.DAILY_LIMITED_COMMITS, frozenset({
             '01344b145d0b679a6ee730d7fa4b5990278dd654',
@@ -193,12 +195,16 @@ class CollectionTest(unittest.TestCase):
             '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
             'a981b35e298aa58a52b30e266792bd0f36506c5d',
             '25dc24d8760a06b2321d4fbde481769c3ce32c34',
-            '6198be366344a82923e10ba5e323877026d82f48'}))
+            '6198be366344a82923e10ba5e323877026d82f48',
+            'e4f64e165ebdf81d4127218d5c91ff6904e75958'}))
         self.assertEqual(M.REPORTS_COMMIT, 'a38c53775c112cdf5db420f979093d6bee9e5376')
         self.assertEqual(M.SHM_LOCK_FIX_COMMIT, 'c21f5f05f610abf89df0c24e85c00b1bec23d01c')
         self.assertEqual(M.OWNER_ACTIONS_COMMIT, '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505')
         self.assertEqual(M.SCREEN_OVERHAUL_COMMIT, 'a981b35e298aa58a52b30e266792bd0f36506c5d')
         self.assertEqual(M.WRITER_RELIEF_COMMIT, '25dc24d8760a06b2321d4fbde481769c3ce32c34')
+        code = load('naver_preview_code_upgrade')
+        self.assertEqual(M.LATENCY_FIX_COMMIT, code.OLD_COMMIT)
+        self.assertEqual(M.DASHBOARD_LATENCY_FIX_COMMIT, code.TARGET_COMMIT)
         self.assertEqual(M.MONITORING_COMMITS, frozenset({
             '0a302856c6177c4f53145abaf9ed31b6a39654f3',
             'a38c53775c112cdf5db420f979093d6bee9e5376',
@@ -206,7 +212,8 @@ class CollectionTest(unittest.TestCase):
             '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
             'a981b35e298aa58a52b30e266792bd0f36506c5d',
             '25dc24d8760a06b2321d4fbde481769c3ce32c34',
-            '6198be366344a82923e10ba5e323877026d82f48'}))
+            '6198be366344a82923e10ba5e323877026d82f48',
+            'e4f64e165ebdf81d4127218d5c91ff6904e75958'}))
 
     def test_daily_limited_uses_schema11_reader_and_separates_current_targets_from_old_jobs(self):
         fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
@@ -781,9 +788,25 @@ class CollectionTest(unittest.TestCase):
     def test_latency_profile_preserves_host_runtime_guards_and_partial_is_not_success(self):
         self.check_run_diagnostics(M.WRITER_RELIEF_COMMIT, latency=True)
         self.check_run_diagnostics(M.LATENCY_FIX_COMMIT, latency=True)
+        self.check_run_diagnostics(M.DASHBOARD_LATENCY_FIX_COMMIT, latency=True)
 
     def test_dashboard_profile_preserves_host_runtime_guards_and_partial_is_not_success(self):
         self.check_run_diagnostics(M.LATENCY_FIX_COMMIT, dashboard=True)
+        self.check_run_diagnostics(M.DASHBOARD_LATENCY_FIX_COMMIT, dashboard=True)
+
+    def test_profile_commit_allowlist_stays_exact_before_any_host_action(self):
+        for flag, commit in (('latency_profile_only', M.CATALOG_LINKS_COMMIT),
+                             ('dashboard_profile_only', M.WRITER_RELIEF_COMMIT),
+                             ('latency_profile_only', 'f'*40),
+                             ('dashboard_profile_only', 'f'*40)):
+            package = dict(baseline='a'*64, source_commit=commit, source_tar_gz_sha256='b'*64)
+            package[flag] = True
+            host, release = Mock(), Mock()
+            with self.subTest(flag=flag, commit=commit):
+                with self.assertRaisesRegex(ValueError, '^PROFILE_SOURCE_UNREVIEWED$'):
+                    M.run(package, host, release)
+                self.assertFalse(host.mock_calls)
+                self.assertFalse(release.mock_calls)
 
     def test_incident_release_refuses_further_live_reader_diagnosis(self):
         package = dict(baseline='a'*64,source_commit=M.REPORTS_COMMIT,source_tar_gz_sha256='b'*64)
@@ -802,7 +825,8 @@ class CollectionTest(unittest.TestCase):
                        '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505',
                        'a981b35e298aa58a52b30e266792bd0f36506c5d',
                        '25dc24d8760a06b2321d4fbde481769c3ce32c34',
-                       '6198be366344a82923e10ba5e323877026d82f48'):
+                       '6198be366344a82923e10ba5e323877026d82f48',
+                       'e4f64e165ebdf81d4127218d5c91ff6904e75958'):
             with self.subTest(commit=commit):
                 self.check_run_diagnostics(commit, {
                     'daily_limited':dict(cycle_day='2026-10-01',jobs=0,current_daily_targets=1,

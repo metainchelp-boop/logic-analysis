@@ -28,8 +28,11 @@ SCREEN_OVERHAUL_COMMIT = 'a981b35e298aa58a52b30e266792bd0f36506c5d'
 WRITER_RELIEF_COMMIT = '25dc24d8760a06b2321d4fbde481769c3ce32c34'
 # Same schema/diagnostic contract; lightweight views, unused JSON exclusion, bounded abort logs.
 LATENCY_FIX_COMMIT = '6198be366344a82923e10ba5e323877026d82f48'
+# Same schema/diagnostic contract; dashboard skips list-only work and linking reuses pure matching.
+DASHBOARD_LATENCY_FIX_COMMIT = 'e4f64e165ebdf81d4127218d5c91ff6904e75958'
 MONITORING_COMMITS = frozenset((MONITORING_COMMIT, REPORTS_COMMIT, SHM_LOCK_FIX_COMMIT, OWNER_ACTIONS_COMMIT,
-                                SCREEN_OVERHAUL_COMMIT, WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT))
+                                SCREEN_OVERHAUL_COMMIT, WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT,
+                                DASHBOARD_LATENCY_FIX_COMMIT))
 DAILY_LIMITED_COMMITS = frozenset((DAILY_LIMITED_COMMIT, RUNTIME_STATUS_COMMIT)) | MONITORING_COMMITS
 CATALOG_LINKS_COMMITS = DAILY_LIMITED_COMMITS | frozenset((CATALOG_LINKS_COMMIT,))
 PROJECTION_SOURCE = r'''
@@ -1462,9 +1465,9 @@ def run(package, host, release):
     # active probes on this release until isolated causality testing is complete.
     if package['source_commit'] == REPORTS_COMMIT and not passive:
         raise ValueError('LIVE_READER_SUSPENDED')
-    if latency and package['source_commit'] not in (WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT):
+    if latency and package['source_commit'] not in (WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT, DASHBOARD_LATENCY_FIX_COMMIT):
         raise ValueError('PROFILE_SOURCE_UNREVIEWED')
-    if dashboard and package['source_commit'] != LATENCY_FIX_COMMIT:
+    if dashboard and package['source_commit'] not in (LATENCY_FIX_COMMIT, DASHBOARD_LATENCY_FIX_COMMIT):
         raise ValueError('PROFILE_SOURCE_UNREVIEWED')
     package = {key:value for key,value in package.items()
                if key not in ('passive_runtime_only','latency_profile_only','dashboard_profile_only')}

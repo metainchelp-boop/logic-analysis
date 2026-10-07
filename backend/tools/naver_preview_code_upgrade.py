@@ -12,20 +12,18 @@ import stat
 import sqlite3
 from types import SimpleNamespace
 import uuid
-OLD_COMMIT = '25dc24d8760a06b2321d4fbde481769c3ce32c34'
-TARGET_COMMIT = '6198be366344a82923e10ba5e323877026d82f48'
+OLD_COMMIT = '6198be366344a82923e10ba5e323877026d82f48'
+TARGET_COMMIT = 'e4f64e165ebdf81d4127218d5c91ff6904e75958'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-# 25dc24d operating archive; reproduced with the same Linux Python 3.12 seal encoder.
-OLD_SOURCE_SHA256 = '05e114a9bf055ed8d1b0888afe41daa6fc77e2bc30241018a31da20284d3df28'
-# 6198be3 git archive digest of the seal paths without test folders; must equal the seal receipt.
-TARGET_SOURCE_SHA256 = 'b9071a746aa1879d518849bb5a76a8d2259a5d77853e28298fcd26fc7ea0d90e'
-# store.py: read projections only (no unused large JSON bodies in list queries);
-# SQL, SCHEMA_VERSION 11, _REVISION_COLUMNS and _migrate unchanged.
-STORE_SHA256 = {'old':'6ba8865870b131bea6b6ed4fe6726a63f2a5218f09a7615578411d3bba9de7a1',
+# 6198be3 operating archive; reproduced with the same Linux Python 3.12 seal encoder.
+OLD_SOURCE_SHA256 = 'b9071a746aa1879d518849bb5a76a8d2259a5d77853e28298fcd26fc7ea0d90e'
+# e4f64e1 git archive digest of the seal paths without test folders; must equal the seal receipt.
+TARGET_SOURCE_SHA256 = '716d849b68d72cb03489bc16da1cee3d9a0f31cb16612287b407fe244dea84c6'
+# store.py is byte-identical; schema 11, SQL, revision columns and migration are unchanged.
+STORE_SHA256 = {'old':'5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94',
                 'target':'5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94'}
-# Exact changed files inside the sealed archive, 25dc24d..6198be3.
-CODE_PATHS = {'backend/naver_page/app.js', 'naver_engine/catalog_links.py', 'naver_engine/inventory.py',
-              'naver_engine/management_store.py', 'naver_engine/morning.py', 'naver_engine/store.py'}
+# Exact changed files inside the sealed archive, 6198be3..e4f64e1.
+CODE_PATHS = {'naver_engine/catalog_links.py', 'naver_engine/dashboard.py', 'naver_engine/inventory.py'}
 # Neither archive ships test folders; their removal is covered by REMOVABLE_SOURCE_PREFIXES.
 TEST_PATHS = frozenset()
 # The seal no longer ships test folders (ad-dashboard tools/naver-preview-seal.py SOURCE_EXCLUDED_PATHS);

@@ -384,28 +384,26 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, '25dc24d8760a06b2321d4fbde481769c3ce32c34')
-        self.assertEqual(module.TARGET_COMMIT, '6198be366344a82923e10ba5e323877026d82f48')
-        # The current operating 25dc24d archive is the pinned old archive.
+        self.assertEqual(module.OLD_COMMIT, '6198be366344a82923e10ba5e323877026d82f48')
+        self.assertEqual(module.TARGET_COMMIT, 'e4f64e165ebdf81d4127218d5c91ff6904e75958')
+        # The current operating 6198be3 archive is the pinned old archive.
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         '05e114a9bf055ed8d1b0888afe41daa6fc77e2bc30241018a31da20284d3df28')
-        # 6198be3: git archive of the 18 sealed paths without test folders, gzip mtime=0 (Linux Python 3.12);
+                         'b9071a746aa1879d518849bb5a76a8d2259a5d77853e28298fcd26fc7ea0d90e')
+        # e4f64e1: git archive of the 18 sealed paths without test folders, gzip mtime=0 (Linux Python 3.12);
         # must equal the seal receipt.
         self.assertEqual(module.TARGET_SOURCE_SHA256,
-                         'b9071a746aa1879d518849bb5a76a8d2259a5d77853e28298fcd26fc7ea0d90e')
-        # store.py changes read projections only; the schema-11 SQL/migration contract is unchanged.
+                         '716d849b68d72cb03489bc16da1cee3d9a0f31cb16612287b407fe244dea84c6')
+        # store.py is byte-identical; the schema-11 SQL/migration contract is unchanged.
         self.assertEqual(module.STORE_SHA256, {
-            'old':'6ba8865870b131bea6b6ed4fe6726a63f2a5218f09a7615578411d3bba9de7a1',
+            'old':'5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94',
             'target':'5fa2618f3d74bdfaa10581f6ac759d605544ab0e0e8178eef89f68d8e6840c94'})
         contract = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         # This historical migration fixture remains the original schema-11 release.
         self.assertEqual(contract['new_observed_unsealed']['sha256'],
                          '66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89')
-        # Exact git archive delta 25dc24d..6198be3 (neither archive ships test folders).
-        self.assertEqual(module.CODE_PATHS, {'naver_engine/store.py', 'naver_engine/management_store.py',
-                                             'naver_engine/catalog_links.py', 'naver_engine/inventory.py',
-                                             'naver_engine/morning.py',
-                                             'backend/naver_page/app.js'})
+        # Exact git archive delta 6198be3..e4f64e1 (neither archive ships test folders).
+        self.assertEqual(module.CODE_PATHS, {'naver_engine/catalog_links.py', 'naver_engine/dashboard.py',
+                                             'naver_engine/inventory.py'})
         self.assertEqual(module.TEST_PATHS, frozenset())
 
     def test_pending_seal_placeholder_refuses_prepare_and_apply_before_any_action(self):
@@ -777,7 +775,9 @@ class ContractTest(unittest.TestCase):
                     'backend/naver_page/report-ui.js','backend/naver_page/sso-bootstrap.js',
                     'naver_runtime/bootstrap.py','naver_engine/inventory_reads.py','naver_engine/runtime_view.py',
                     'backend/app/naver_entry.py','backend/app/naver_relay.py',
-                    'backend/app/naver_auto/scope.py','naver_engine/credentials.py','naver_engine/session.py')
+                    'backend/app/naver_auto/scope.py','naver_engine/credentials.py','naver_engine/session.py',
+                    'naver_engine/store.py','naver_engine/management_store.py','naver_engine/morning.py',
+                    'backend/naver_page/app.js')
         with tempfile.TemporaryDirectory() as folder:
             old=Path(folder).resolve()/'old';new=Path(folder).resolve()/'new'
             for root in (old,new):
@@ -1115,6 +1115,8 @@ class StoreScopeTest(unittest.TestCase):
     SOURCE = TARGET_SOURCE
     # Writer relief (25dc24d): Python only (report cycle in per-client writer items); schema 11 contract unchanged.
     TARGET_SOURCE = SOURCE + b'\n# The report cycle hands the writer one client at a time.\n'
+    # Dashboard/link latency release: store.py is byte-identical on both sides.
+    SOURCE = TARGET_SOURCE
 
     def setUp(self):
         self.code = sealed_code()
@@ -1145,6 +1147,14 @@ class StoreScopeTest(unittest.TestCase):
 
     def test_only_pinned_schema11_to11_transition_is_accepted(self):
         self.code.compatible_source(self.old, self.new, self.upgrade)
+
+    def test_repinning_schema_compatible_store_code_cannot_expand_three_file_scope(self):
+        source = self.TARGET_SOURCE + b'\n# unreviewed store-only change\n'
+        (self.new/'naver_engine/store.py').write_bytes(source)
+        with patch.object(self.code, 'STORE_SHA256', dict(self.code.STORE_SHA256,
+                target=hashlib.sha256(source).hexdigest())):
+            with self.assertRaisesRegex(ValueError, '^CODE_SCOPE_CHANGED$'):
+                self.code.compatible_source(self.old, self.new, self.upgrade)
 
     def test_schema_version_sql_and_migration_changes_refuse_even_with_approved_methods(self):
         for before, after in ((b'SCHEMA_VERSION=11', b'SCHEMA_VERSION=10'),
