@@ -84,10 +84,11 @@ function launch(options = {}) {
         body = {runtime:{state:'unavailable', indicator:'red', reason_code:'UNAVAILABLE',
           verified_at:null, valid_for_seconds:0, retry_at:null}};
       }
-      else if (options.respond) body = await options.respond(req);
+      else if (options.respond) body = await options.respond(req, init);
       else body = options.data || inventory();
       // HTTP JSON 응답은 호출마다 새 객체다. fixture 참조 공유로 옛 범위의 행을 되살리지 않는다.
-      return { status: 200, ok: true, json: async () => {
+      const status = options.status ? options.status(req) : 200;
+      return { status, ok: status >= 200 && status < 300, json: async () => {
         const response = JSON.parse(JSON.stringify(body));
         if (options.freezeRows && response.rows) Object.freeze(response.rows);
         return response;
@@ -267,6 +268,201 @@ function linkResponse(data, request) {
   if (request.url.startsWith('/api/naver-auto/links/pending')) return data;
   return {};
 }
+
+test('접힌 짝 확인 카드는 확정 권한이 있어도 초기 이관 조회에 pending을 섞지 않는다', async () => {
+  for (const me of [{scope:'ALL'}, {scope:'ALL',owner_verification:true,verified_linking:true}]) {
+    let finishAccounts;
+    const run = launch({me,respond:request => request.url.includes('/accounts?') ?
+      new Promise(resolve => { finishAccounts = resolve; }) : pending([linkFixture()])});
+    await flush();
+    assert.equal(run.requests.filter(request => request.url.includes('/accounts?')).length,1);
+    assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,0);
+    finishAccounts(inventory()); await flush();
+    assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,0);
+  }
+});
+
+test('짝 확인 펼치기는 진행 중 이관 조회 뒤 한 번만 시작하고 같은 범위의 성공 자료를 재사용한다', async () => {
+  let finishAccounts, finishLinks;
+  const run = launch({me:{scope:'ALL',owner_verification:true,verified_linking:true},respond:request => {
+    if (request.url.includes('/accounts?')) return new Promise(resolve => { finishAccounts = resolve; });
+    return new Promise(resolve => { finishLinks = resolve; });
+  }});
+  await flush();
+  const toggle = run.elements.get('linksToggle');
+  toggle.dispatch('click'); toggle.dispatch('click'); toggle.dispatch('click'); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,0);
+  assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  finishAccounts(inventory()); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,1);
+  toggle.dispatch('click'); toggle.dispatch('click'); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,1);
+  finishLinks(pending([linkFixture()])); await flush();
+  assert.match(run.text('linksBody'),/목표 업체/);
+  toggle.dispatch('click'); toggle.dispatch('click'); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,1);
+  assert.equal(run.elements.get('linksBody').hidden,false);
+});
+
+test('이관 응답을 기다리다 접으면 보류한 짝 조회를 보내지 않는다', async () => {
+  let finishAccounts;
+  const run = launch({me:{scope:'ALL',owner_verification:true,verified_linking:true},respond:request =>
+    request.url.includes('/accounts?') ? new Promise(resolve => { finishAccounts = resolve; }) : pending()});
+  await flush();
+  run.elements.get('linksToggle').dispatch('click'); run.elements.get('linksToggle').dispatch('click');
+  finishAccounts(inventory()); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,0);
+  assert.equal(run.elements.get('linksToggle').getAttribute('aria-expanded'),'false');
+  run.elements.get('linksToggle').dispatch('click'); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,1);
+});
+
+test('업체 짝 주소도 이관 완료 뒤 조회하며 보류 중 범위 변경은 최신 담당 범위만 요청한다', async () => {
+  const accounts = [];
+  const run = launch({screen:'links?possibility_id=1',me:{scope:'ALL',owner_verification:true,verified_linking:true},respond:request => {
+    if (request.url.includes('/accounts?')) return new Promise(resolve => { accounts.push(resolve); });
+    return pending([linkFixture(),linkFixture({possibility_id:2,name:'범위 밖 업체',ref:'out'})]);
+  }});
+  await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,0);
+  run.scope('me'); await flush();
+  accounts[0](inventory()); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,0);
+  accounts[1](inventory()); await flush();
+  assert.deepEqual(run.requests.filter(request => request.url.includes('/links/pending')).map(request => request.url),
+    ['/api/naver-auto/links/pending?selection=me']);
+  assert.match(run.text('linksBody'),/목표 업체/);
+  assert.doesNotMatch(run.text('linksBody'),/범위 밖 업체/);
+});
+
+test('이관 완료를 기다리는 짝 조회는 다른 화면으로 이동하면 시작하지 않는다', async () => {
+  let finishAccounts;
+  const run = launch({screen:'links',me:{scope:'ALL',owner_verification:true,verified_linking:true},respond:request =>
+    request.url.includes('/accounts?') ? new Promise(resolve => { finishAccounts = resolve; }) : linkResponse(pending(),request)});
+  await flush(); run.navigate(''); await flush();
+  finishAccounts(inventory()); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,0);
+  assert.equal(run.text('linksBody'),'');
+});
+
+test('짝 조회 대기 중 하위 표를 바꾸면 새 이관 확인 뒤 열린 카드 조회를 이어간다', async () => {
+  const accounts=[];
+  const run=launch({screen:'links',me:{scope:'ALL',owner_verification:true,verified_linking:true},respond:request =>
+    request.url.includes('/accounts?') ? new Promise(resolve => accounts.push(resolve)) : pending([linkFixture()])});
+  await flush(); run.elements.get('inventoryAccountsTab').dispatch('click'); await flush();
+  accounts[0](inventory()); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,0);
+  accounts[1](inventory()); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/links/pending')).length,1);
+  assert.match(run.text('linksBody'),/목표 업체/);
+});
+
+test('펼친 짝 조회의 실패는 수동 재시도로 회복하며 이관 권한 거절 뒤 보류 조회는 취소한다', async () => {
+  let tries = 0;
+  const run = launch({me:{scope:'ALL',owner_verification:true,verified_linking:true},respond:request => {
+    if (request.url.includes('/accounts?')) return inventory();
+    if (++tries === 1) throw new Error('synthetic network only');
+    return pending([linkFixture()]);
+  }});
+  await flush(); run.elements.get('linksToggle').dispatch('click'); await flush();
+  assert.match(run.text('linksBody'),/짝 목록을 불러오지 못했습니다/);
+  run.buttons('linksBody').find(button => button.textContent === '다시 불러오기').dispatch('click'); await flush();
+  assert.equal(tries,2); assert.match(run.text('linksBody'),/목표 업체/);
+  const denied = launch({screen:'links',me:{scope:'ALL',owner_verification:true,verified_linking:true},
+    status:request => request.url.includes('/accounts?') ? 403 : 200,respond:request =>
+      request.url.includes('/accounts?') ? {error:'not-visible'} : pending([linkFixture()])});
+  await flush();
+  assert.equal(denied.requests.filter(request => request.url.includes('/links/pending')).length,0);
+  assert.equal(denied.text('linksBody'),'');
+});
+
+test('이관 두 표는 활성 영역만 100행을 만들고 전체 검색·정렬·잔액과 독립 페이지를 유지한다', async () => {
+  const rows = Array.from({length:205}, (_, index) => fixture({ad_account_no:String(700+index),account_name:'합성 계정 '+index,
+    collection:{bizmoney:index+1}}));
+  const coverage = {ready:true,total:121,matched:121,missing:0,items:Array.from({length:121},(_,index) =>
+    ({possibility_id:index+1,company_name:'대조 업체 '+index,workflow:'진행중',state:'matched'}))};
+  const run = launch({data:inventory(rows,coverage)}); await flush();
+  assert.equal(run.elements.get('inventoryRows').children.length,0);
+  assert.equal(run.elements.get('coverageRows').children.length,100);
+  assert.match(run.text('coveragePages'),/현재 1~100 \/ 총 121업체/);
+  run.buttons('coveragePages').find(button => button.textContent === '다음').dispatch('click');
+  assert.equal(run.elements.get('coverageRows').children.length,21);
+  assert.match(run.text('coveragePages'),/현재 101~121 \/ 총 121업체/);
+  const coverageSearch = run.elements.get('coverageSearch'); coverageSearch.value='대조 업체 120'; coverageSearch.dispatch('input');
+  assert.match(run.text('coverageRows'),/대조 업체 120/);
+  assert.equal(run.text('coverageSearchStatus'),'검색 결과 1 / 121업체');
+  assert.match(run.text('coveragePages'),/현재 1~1 \/ 총 1업체/);
+  coverageSearch.value=''; coverageSearch.dispatch('input');
+  await showAccounts(run);
+  assert.equal(run.elements.get('coverageRows').children.length,0);
+  assert.equal(run.elements.get('inventoryRows').children.length,100);
+  assert.match(run.text('inventoryPages'),/현재 1~100 \/ 총 205계정/);
+  assert.match(run.text('inventoryBalance'),/합계 : 21,115원.*확인 205 \/ 205계정/);
+  assert.equal(run.elements.get('inventoryRows').children[0].getAttribute('data-account'),'904');
+  const first = run.elements.get('inventoryRows').children[0];
+  const detail = tree(first).find(element => element.tagName === 'DETAILS'); detail.open = true;
+  run.buttons('inventoryPages').find(button => button.textContent === '다음').dispatch('click');
+  assert.match(run.text('inventoryPages'),/현재 101~200 \/ 총 205계정/);
+  assert.equal(run.elements.get('inventoryRows').children[0].getAttribute('data-account'),'804');
+  run.buttons('inventoryPages').find(button => button.textContent === '이전').dispatch('click');
+  assert.equal(run.elements.get('inventoryRows').children[0],first);
+  assert.equal(detail.open,true);
+  const search = run.elements.get('inventorySearch'); search.value='700'; search.dispatch('input');
+  assert.equal(run.elements.get('inventoryRows').children.length,1);
+  assert.equal(run.elements.get('inventoryRows').children[0].getAttribute('data-account'),'700');
+  assert.match(run.text('inventoryBalance'),/합계 : 1원.*확인 1 \/ 1계정/);
+  assert.match(run.text('inventoryPages'),/현재 1~1 \/ 총 1계정/);
+  assert.equal(run.requests.filter(request => request.url.includes('/accounts?')).length,2,'검색과 페이지 이동은 서버를 추가 조회하지 않는다');
+  assert.equal(run.requests.filter(request => request.method !== 'GET').length,0);
+});
+
+test('동일 범위 새 조회는 마지막 페이지를 줄인 총수에 맞추고 서버 필터·범위 변경은 첫 페이지로 돌아간다', async () => {
+  let count = 205;
+  const run = launch({respond:request => inventory(Array.from({length:request.url.includes('workflow=all') ? count : 115},
+    (_,index) => fixture({ad_account_no:String(700+index),collection:{bizmoney:1}})))});
+  await flush(); await showAccounts(run);
+  run.buttons('inventoryPages').find(button => button.textContent === '다음').dispatch('click');
+  run.buttons('inventoryPages').find(button => button.textContent === '다음').dispatch('click');
+  assert.match(run.text('inventoryPages'),/현재 201~205 \/ 총 205계정/);
+  count=105; run.elements.get('inventoryReload').dispatch('click'); await flush();
+  assert.match(run.text('inventoryPages'),/현재 101~105 \/ 총 105계정/);
+  const workflow=run.elements.get('inventoryWorkflow'); workflow.value='진행중'; workflow.dispatch('change'); await flush();
+  assert.match(run.text('inventoryPages'),/현재 1~100 \/ 총 115계정/);
+  run.buttons('inventoryPages').find(button => button.textContent === '다음').dispatch('click');
+  run.scope('me');
+  assert.equal(run.text('inventoryPages'),'');
+  await flush(); assert.match(run.text('inventoryPages'),/현재 1~100 \/ 총 115계정/);
+});
+
+test('검색 전 보관한 페이지 버튼은 두 표의 새 검색 결과를 이동시키지 않는다', async () => {
+  const rows=Array.from({length:205},(_,index) => fixture({ad_account_no:String(700+index),
+    account_name:(index<121?'GroupA':'GroupB')+' '+index}));
+  const coverage={ready:true,total:205,matched:205,missing:0,items:rows.map((row,index) =>
+    ({possibility_id:index+1,company_name:row.account_name,state:'matched'}))};
+  const run=launch({data:inventory(rows,coverage)}); await flush();
+  for (const panel of ['coverage','inventory']) {
+    if (panel==='inventory') await showAccounts(run);
+    const stale=run.buttons(panel+'Pages').find(button => button.textContent==='다음');
+    const search=run.elements.get(panel+'Search'); search.value='GroupA'; search.dispatch('input');
+    stale.dispatch('click');
+    assert.match(run.text(panel+'Pages'),/현재 1~100 \/ 총 121/);
+    run.buttons(panel+'Pages').find(button => button.textContent==='다음').dispatch('click');
+    assert.match(run.text(panel+'Pages'),/현재 101~121 \/ 총 121/);
+  }
+});
+
+test('같은 snapshot unchanged 재검증으로 하위 표를 바꿔도 활성 표를 처음 생성한다', async () => {
+  const data=inventory([fixture()],{ready:true,total:1,matched:1,missing:0,items:[{possibility_id:1,company_name:'대조 합성 업체',state:'matched'}]});
+  const run=launch({respond:request => ({version:1,mode:request.url.includes('view_cursor=')?'unchanged':'full',
+    cursor:'synthetic_cursor',base_cursor:request.url.includes('view_cursor=')?'synthetic_cursor':null,
+    checked_at:new Date().toISOString(),data:request.url.includes('view_cursor=')?null:data,rows:null})});
+  await flush(); assert.equal(run.elements.get('inventoryRows').children.length,0);
+  await showAccounts(run); assert.match(run.text('inventoryRows'),/합성 계정/);
+  assert.equal(run.elements.get('coverageRows').children.length,0);
+  run.elements.get('inventoryCoverageTab').dispatch('click'); await flush();
+  assert.match(run.text('coverageRows'),/대조 합성 업체/);
+  assert.equal(run.elements.get('inventoryRows').children.length,0);
+});
 
 test('실관리 대조의 짝 확인은 선택 업체만 열고 전체보기로 제한을 해제한다', async () => {
   const data = pending([linkFixture(), linkFixture({ref:'other-ref', possibility_id:2, name:'다른 업체'})], [

@@ -6,16 +6,16 @@ const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'..'), pageDir=path.join(root,'backend/naver_page');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const now=new Date().toISOString();
-let apiLog=[],meDelay=0,accountDelay=0,large=false,nextFault=0,revision=0;
-const baseRows=Array.from({length:1789},(_,i)=>({ad_account_no:String(700000+i),account_name:'합성 계정 '+i,
+let apiLog=[],meDelay=0,accountDelay=0,large=false,nextFault=0,nextLinksFault=0,revision=0;
+const baseRows=Array.from({length:1793},(_,i)=>({ad_account_no:String(700000+i),account_name:'합성 계정 '+i,
  company_name:'합성 업체 '+i,possibility_id:i+1,mapping:'matched',workflow:'진행중',owner:{name:'합성 담당'},
  collection:{status:'ok',bizmoney:i,checked_at:now},management:{cadence:'daily',excluded:false,can_manage:false,can_collect:false}}));
-const coverage=Array.from({length:450},(_,i)=>({possibility_id:i+1,company_name:'합성 업체 '+i,workflow:'진행중',
+const coverage=Array.from({length:759},(_,i)=>({possibility_id:i+1,company_name:'합성 업체 '+i,workflow:'진행중',
  owner:{name:'합성 담당'},state:'matched',matched_account_count:1,candidate_count:1}));
 function inv(selection='all'){return {selection,rows:large?baseRows.map(r=>({...r,synthetic_padding:'X'.repeat(7200)})):baseRows,
- total:1789,counts:{matched:1789,no_erp_record:0,unclassified:0},accounts_current:true,matching_ready:true,
+ total:baseRows.length,counts:{matched:baseRows.length,no_erp_record:0,unclassified:0},accounts_current:true,matching_ready:true,
  catalog_status:'accepted',accounts_at:now,catalog_at:now,
- managed_coverage:{ready:true,total:450,matched:450,missing:0,items:coverage}};}
+ managed_coverage:{ready:true,total:coverage.length,matched:coverage.length,missing:0,items:coverage}};}
 const server=http.createServer(async(req,res)=>{
  const u=new URL(req.url,'http://localhost');
  if(u.pathname.startsWith('/api/naver-auto/')){
@@ -28,7 +28,10 @@ const server=http.createServer(async(req,res)=>{
    if(fault){entry.responded=performance.now();if(!res.destroyed){res.writeHead(fault,{'content-type':'application/json'});res.end(JSON.stringify({error:fault===403?'org-stale':'unavailable'}));}return;}
    body={version:1,checked_at:now,cursor:'synthetic_cursor_'+revision,base_cursor:null,mode:'full',data:inv(u.searchParams.get('selection')||'all'),rows:null};
    if(entry.cursor===body.cursor)body={...body,mode:'unchanged',base_cursor:entry.cursor,data:null};
-  }else if(u.pathname.endsWith('/links/pending'))body={rows:[],decisions:[],source:'catalog',source_state:'accepted'};
+  }else if(u.pathname.endsWith('/links/pending')){
+   if(nextLinksFault){const fault=nextLinksFault;nextLinksFault=0;entry.responded=performance.now();res.writeHead(fault,{'content-type':'application/json'});res.end('{"error":"unavailable"}');return;}
+   body={rows:[],decisions:[],source:'catalog',source_state:'accepted'};
+  }
   else if(u.pathname.endsWith('/health'))body={runtime:{state:'unavailable',indicator:'red',reason_code:'UNAVAILABLE',verified_at:null,valid_for_seconds:0}};
   else if(u.pathname.endsWith('/board'))body={rows:[],band:{},counts:{},selection:'all'};
   else if(u.pathname.endsWith('/dashboard'))body={rows:[],period:{},accounts:{},coverage:{},selection:'all'};
@@ -57,6 +60,37 @@ const server=http.createServer(async(req,res)=>{
   const accounts=()=>apiLog.filter(x=>x.path.endsWith('/accounts'));
   const nav=()=>page.locator('.menu [data-go="/naver/transfers"]');
   await page.goto(base+'/naver/transfers');await current();
+  await check('collapsed-links-and-hidden-table-create-no-initial-work',async()=>{
+   assert.equal(apiLog.filter(x=>x.path.endsWith('/links/pending')).length,0);
+   assert.equal(await page.locator('#inventoryRows tr').count(),0);
+   assert.equal(await page.locator('#coverageRows tr').count(),100);
+   assert.match(await page.locator('#coveragePages').innerText(),/현재 1~100 \/ 총 759업체/);
+   metrics.initial_table_rows={accounts:0,coverage:100};
+   metrics.initial_dom_nodes=await page.locator('*').count();
+   await page.locator('#coveragePages button').filter({hasText:'다음'}).click();
+   assert.match(await page.locator('#coveragePages').innerText(),/현재 101~200 \/ 총 759업체/);
+   await page.fill('#coverageSearch','합성 업체 758');
+   assert.equal(await page.locator('#coverageRows tr').count(),1);
+   assert.match(await page.locator('#coverageSearchStatus').innerText(),/검색 결과 1 \/ 759업체/);
+   await page.fill('#coverageSearch','');
+  });
+  await check('expanded-links-wait-for-accounts-and-manual-retry-is-explicit',async()=>{
+   accountDelay=300;await page.click('#inventoryReload');const account=accounts().at(-1);
+   await page.click('#linksToggle');await page.waitForTimeout(40);
+   assert.equal(apiLog.filter(x=>x.path.endsWith('/links/pending')).length,0);
+   await current();await page.waitForFunction(()=>document.querySelector('#linksBody').textContent.includes('확인할 짝이 없습니다'));
+   const link=apiLog.find(x=>x.path.endsWith('/links/pending'));assert.ok(link.at>=account.responded,'pending은 accounts 응답 뒤에 시작한다');
+   await page.click('#linksToggle');await page.click('#linksToggle');
+   assert.equal(apiLog.filter(x=>x.path.endsWith('/links/pending')).length,1,'같은 범위 성공 자료는 펼치기에서 재사용');
+   await page.click('#linksToggle');nextLinksFault=503;
+   await nav().click();await current();await page.click('#linksToggle');
+   await page.getByRole('button',{name:'다시 불러오기',exact:true}).waitFor();
+   const before=apiLog.filter(x=>x.path.endsWith('/links/pending')).length;
+   await page.getByRole('button',{name:'다시 불러오기',exact:true}).click();
+   await page.waitForFunction(()=>document.querySelector('#linksBody').textContent.includes('확인할 짝이 없습니다'));
+   assert.equal(apiLog.filter(x=>x.path.endsWith('/links/pending')).length-before,1);
+   await page.click('#linksToggle');
+  });
   await check('panel-switch-revalidates-before-reveal',async()=>{
    accountDelay=250;const before=accounts().length;
    await page.click('#inventoryAccountsTab');
@@ -64,12 +98,19 @@ const server=http.createServer(async(req,res)=>{
    assert.equal(await page.locator('#managedCoverage').isVisible(),false);
    await current();assert.equal(accounts().length-before,1);
    assert.equal(await page.locator('#inventoryCard').isVisible(),true);
+   assert.equal(await page.locator('#coverageRows tr').count(),0);
+   assert.equal(await page.locator('#inventoryRows tr').count(),100);
+   assert.match(await page.locator('#inventoryPages').innerText(),/현재 1~100 \/ 총 1,793계정/);
+   await page.fill('#inventorySearch','700000');
+   assert.equal(await page.locator('#inventoryRows tr').count(),1);
+   assert.match(await page.locator('#inventoryRows').innerText(),/ID 700000/);
+   await page.fill('#inventorySearch','');
   });
   await check('same-route-in-flight-clicks-coalesce',async()=>{
    accountDelay=500;const before=accounts().length,links=apiLog.filter(x=>x.path.endsWith('/links/pending')).length;
    await nav().click();await nav().click();await nav().click();await current();
    assert.equal(accounts().length-before,1);
-   assert.equal(apiLog.filter(x=>x.path.endsWith('/links/pending')).length-links,1);
+   assert.equal(apiLog.filter(x=>x.path.endsWith('/links/pending')).length-links,0);
   });
   await check('failure-releases-deduped-request-for-retry',async()=>{
    accountDelay=200;nextFault=503;const before=accounts().length;
@@ -110,7 +151,8 @@ const server=http.createServer(async(req,res)=>{
    await page.locator('#inventorySync button').click();await current();
   });
   await check('changed-server-edition-refreshes-visible-content',async()=>{
-   revision++;baseRows[0].account_name='정정된 합성 계정';await page.click('#inventoryReload');await current();
+   await page.click('#inventoryAccountsTab');await current();
+   revision++;baseRows.at(-1).account_name='정정된 합성 계정';await page.click('#inventoryReload');await current();
    assert.match(await page.locator('#inventoryRows').innerText(),/정정된 합성 계정/);
   });
   await check('large-cache-cap-remains-bounded',async()=>{
@@ -119,7 +161,7 @@ const server=http.createServer(async(req,res)=>{
    metrics.large_repeat_bytes=accounts().at(-1).bytes;
   });
   await check('no-external-or-browser-errors',()=>{assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.equal(apiLog.filter(x=>x.method!=='GET').length,0);});
-  const result={at:new Date().toISOString(),environment:'installed Chrome, synthetic API delays/1789 accounts/450 companies; no live API',metrics,checks,errors,external_requests:external.length};
+  const result={at:new Date().toISOString(),environment:'installed Chrome, synthetic API delays/1793 accounts/759 companies; no live API',metrics,checks,errors,external_requests:external.length};
   if(process.env.NAVER_NAVIGATION_RESULT)fs.writeFileSync(process.env.NAVER_NAVIGATION_RESULT,JSON.stringify(result,null,2));
   console.log(JSON.stringify(result,null,2));process.exitCode=checks.some(x=>x.result==='FAIL')?1:0;
  }finally{await browser.close();await new Promise(r=>server.close(r));}

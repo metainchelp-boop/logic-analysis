@@ -213,6 +213,7 @@
       <div class="kh"><h2>전산 실관리 업체 · 계정 누락 대조</h2><span class="n" id="coverageStatus" role="status"></span></div>
       <p class="ps">진행중 · 사후관리 · 전략관리 · 재계약진행중 업체가 기준입니다. 계정이 아직 연결되지 않은 업체도 포함합니다. 「이관 광고 계정 전체」의 검색·필터와 별도로 현재 담당 범위를 대조합니다.</p>
       <div class="chips"><input class="search" id="coverageSearch" type="search" placeholder="업체명 · 업무 단계 · 담당자 이름" aria-label="실관리 업체 찾기" autocomplete="off"><span id="coverageSearchStatus" class="n" role="status" aria-live="polite"></span></div>
+      <div id="coveragePages" class="account-actions" aria-label="실관리 업체 페이지"></div>
       <div class="tblwrap"><table role="table" aria-label="전산 실관리 업체 계정 대조"><thead><tr><th scope="col">전산 업체 · 단계</th><th scope="col">계정 확인 상태</th><th scope="col">연결 / 전체 후보</th><th scope="col">확인할 곳</th></tr></thead><tbody id="coverageRows"></tbody></table></div>
       <p class="ps">번호 입력: 광고주 관리 → 업체 계정 정보 → 네이버 관제용 광고 계정 ID. 기존 API 고객 ID나 비밀키는 변경하지 않습니다. 번호 충돌은 대표에게 확인을 요청해 주세요.</p>
     </div>
@@ -228,6 +229,7 @@
         <label>업무 단계 <select class="scopesel" id="inventoryWorkflow" aria-label="계정 업무 단계"><option value="all">전체</option><option>진행중</option><option>전략관리</option><option>사후관리</option><option>재계약진행중</option><option>환불중</option><option>홀딩중</option><option>환불완료</option><option>계약만료</option><option>미분류</option></select></label>
         <input class="search" id="inventorySearch" type="search" placeholder="계정 이름 · 업체 · 광고 계정 ID" aria-label="이관 계정 찾기" autocomplete="off">
       </div>
+      <div id="inventoryPages" class="account-actions" aria-label="이관 계정 페이지"></div>
       <div class="tblwrap"><table class="wide-table" role="table" aria-label="이관 광고 계정 목록">
         <thead><tr><th scope="col">광고 계정 · ID</th><th scope="col">전산 업체</th><th scope="col">매칭 상태</th><th scope="col">업무 단계</th><th scope="col">담당</th><th scope="col">수집 결과</th><th scope="col">확인된 실적 · 기간</th><th scope="col">비즈머니 · 확인 시각</th><th scope="col">관제 관리</th></tr></thead>
         <tbody id="inventoryRows"></tbody>

@@ -27,7 +27,7 @@
     lastInput: Date.now(), refreshing: false, retryAt: 0, refreshRetryTimer: null, warned: false, bellGen: 0,
     filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
     inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current', inventoryPanel: 'coverage',
-    coverageQ: '', dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null, screen: null, routeKey: null
+    coverageQ: '', inventoryPage: 0, coveragePage: 0, dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null, screen: null, routeKey: null
   };
 
   // ── 작은 도구 ─────────────────────────────────────────────────────
@@ -120,8 +120,9 @@
   // 업체 자료는 이 창의 제한된 메모리에만 둔다. 커서는 권한이 아니며 재진입은 매번 서버 확인 뒤 연다.
   var VIEW_FIELDS = { watch: ['possibility_id'], transfers: ['ad_account_no'], reports: ['possibility_id', 'account_key'], dashboard: null };
   var VIEW_STATUS = { watch: 'watchSync', transfers: 'inventorySync', reports: 'reportsSync', dashboard: 'dashboardSync' };
-  var viewCache = new Map(), viewRequests = {}, viewShown = {}, viewChecked = {}, viewLegacy = {}, viewContext = null, viewEpoch = 0, upContext = null, linksRequest = null;
+  var viewCache = new Map(), viewRequests = {}, viewShown = {}, viewChecked = {}, viewLegacy = {}, viewContext = null, viewEpoch = 0, upContext = null, linksRequest = null, linksWait = null;
   var VIEW_CACHE_COUNT = 8, VIEW_CACHE_BYTES = 4 * 1024 * 1024, VIEW_CACHE_AGE = 10 * 60 * 1000;
+  var INVENTORY_PAGE_SIZE = 100, inventoryNodes = new Map();
   function plain(value) { return !!value && typeof value === 'object' && !Array.isArray(value); }
   function rowKey(row, fields) {
     if (!plain(row)) return null;
@@ -161,6 +162,7 @@
   }
   function gateView(name) { var el = $('s-' + name); if (el && VIEW_STATUS[name]) el.classList.add('view-unverified'); }
   function cancelViewRequests() {
+    linksWait = null;
     Object.keys(viewRequests).forEach(function (name) {
       var request = viewRequests[name];
       delete viewRequests[name];
@@ -175,11 +177,12 @@
     state.gen++; state.inventoryGen++; state.reportsGen++; state.linksGen++; state.bellGen++;
     state.board = null; state.dashboard = null; state.inventory = null; state.reports = null; state.loadedDay = null;
     state.links = null; state.client = null;
+    state.inventoryPage = 0; state.coveragePage = 0; inventoryNodes.clear();
     Object.keys(VIEW_STATUS).forEach(function (name) { gateView(name); put($(VIEW_STATUS[name])); });
     $('upbox').hidden = true; $('ceoBox').hidden = true; $('peopleCard').hidden = true; $('staffTodo').hidden = true;
     ['tbody', 'issues', 'kpis', 'iwan', 'upTitle', 'upList', 'doneList', 'runbar', 'linksBody', 'inventoryRows',
       'ceoTodo', 'people', 'staffTodoBody', 'uncheckedBody', 'uncheckedN', 'allN',
-      'inventorySummary', 'inventoryBalance', 'coverageRows', 'coverageSearchStatus', 'reportsRows', 'reportsPages', 'dashboardMetrics', 'dashboardDelivery',
+      'inventorySummary', 'inventoryBalance', 'inventoryPages', 'coverageRows', 'coveragePages', 'coverageSearchStatus', 'reportsRows', 'reportsPages', 'dashboardMetrics', 'dashboardDelivery',
       'dashboardConfiguration', 'dashboardPeriod', 'dashboardStatus', 'dashboardCoverage', 'dashboardAccounts',
       'dashboardCollected', 'dashboardRatioNote', 'inventoryCount', 'inventorySource', 'inventoryCadence', 'coverageStatus',
       'reportsSchedule', 'reportsStatus', 'iss-n', 'tbl-n', 'links-n', 'c-name', 'c-crumb', 'c-sub', 'c-badges',
@@ -731,8 +734,8 @@
       if (r.focus === 'links') state.linksOpen = true;
       if (r.focus === 'ended') endedAccountsFilter();
       show('transfers');
-      // 짝을 확정할 수 있는 판이거나 짝 확인 주소로 왔을 때만 미리 부른다(그 밖에는 「펼치기」 때)
-      if (r.focus === 'links' || linksActionable()) loadLinks();
+      // 접힌 짝 카드는 조회하지 않는다. 열린 카드도 이관 목록 확인을 마친 뒤 순서대로 읽는다.
+      renderLinks();
       return loadInventory();
     }
     if (r.screen === 'dashboard') return openDashboard();
@@ -750,7 +753,6 @@
   function ownerActions() { return readOnly() && state.me.owner_actions === true; }
   function verifiedLinking() { return !!(state.me && state.me.verified_linking === true && (state.me.scope === 'ALL' || state.me.scope === 'MINE') && !state.me.narrowed); }
   function fullCollectionAllowed() { return verifiedLinking() && state.me.scope === 'ALL'; }
-  function linksActionable() { return !readOnly() || verifiedLinking(); }
   function renderTop() {
     var me = state.me;
     $('top').hidden = false;
@@ -979,6 +981,7 @@
       state.inventoryView === view && state.inventoryWorkflow === 'all';
     state.inventoryMapping = mapping; state.inventoryView = view;
     state.inventoryWorkflow = 'all'; state.inventoryQ = '';
+    state.inventoryPage = 0;
     $('inventoryMapping').value = mapping; $('inventoryView').value = view;
     $('inventoryWorkflow').value = 'all'; $('inventorySearch').value = '';
     // 검색은 서버 조회 조건이 아니다. 같은 카드의 unchanged 응답 전에도 지운 검색을 반영한다.
@@ -990,6 +993,7 @@
     setInventoryPanel('accounts');
     state.inventoryMapping = 'all'; state.inventoryView = 'current';
     state.inventoryWorkflow = '계약만료'; state.inventoryQ = '';
+    state.inventoryPage = 0;
     $('inventoryMapping').value = 'all'; $('inventoryView').value = 'current';
     $('inventoryWorkflow').value = '계약만료'; $('inventorySearch').value = '';
   }
@@ -1024,13 +1028,13 @@
   function loadInventory() {
     var sel = state.selection;
     closeModals();
-    return fetchView('transfers', '/accounts?selection=' + encodeURIComponent(sel) + '&workflow=' +
+    var promise = fetchView('transfers', '/accounts?selection=' + encodeURIComponent(sel) + '&workflow=' +
       encodeURIComponent(state.inventoryWorkflow) + '&mapping=' + encodeURIComponent(state.inventoryMapping) +
       '&view=' + encodeURIComponent(state.inventoryView), function (data) {
-      var unchanged = state.inventory === data;
       state.inventory = data;
       state.loadedDay = kstDay();
-      if (!unchanged) renderInventory();
+      // unchanged라도 처음 연 하위 표를 그린다. 같은 계정 행은 보존해 펼친 사유를 유지한다.
+      renderInventory();
       if (state.focus === 'links') {
         var gen = state.gen;
         // 화면 게이트가 풀린 다음(같은 차례 뒤)에야 칸이 보인다
@@ -1038,6 +1042,8 @@
       }
       state.focus = null;
     });
+    if (state.linksOpen && !state.links) loadLinks();
+    return promise;
   }
   function knownBalance(row) {
     var value = row.collection && row.collection.bizmoney;
@@ -1072,8 +1078,10 @@
   function renderInventory() {
     var data = state.inventory;
     if (!data) return;
+    var selection = state.selection;
     renderInventorySummary(data);
-    renderManagedCoverage(data.managed_coverage);
+    if (state.inventoryPanel === 'coverage') renderManagedCoverage(data.managed_coverage);
+    else { put($('coverageRows')); put($('coveragePages')); }
     var query = state.inventoryQ.toLocaleLowerCase();
     var rows = data.rows.filter(function (r) {
       return [r.account_name, r.company_name, r.ad_account_no].join(' ').toLocaleLowerCase().indexOf(query) !== -1;
@@ -1088,6 +1096,8 @@
     $('inventorySource').textContent = '이관 목록 ' + (mdhm(data.accounts_at) || '수신 전') + ' · 전산 전체 목록 ' +
       (mdhm(data.catalog_at) || '수신 전') + (data.catalog_status !== 'accepted' || !data.accounts_current || data.matching_ready === false ?
       ' · 원본 확인 필요: 미등록 판정 및 직원 연결 표시를 보류합니다.' : ' · 목록 새로고침은 저장된 최신 결과를 다시 표시합니다.');
+    if (state.inventoryPanel !== 'accounts') { put($('inventoryRows')); put($('inventoryPages')); return; }
+    var pageRows = inventoryPageRows('accounts', rows, '계정');
     var collection = { ok: '수집 완료', partial: '일부 수집', pending: '수집 대기', source_wait: '네이버 집계 대기', failed: '수집 실패',
       retry: '재시도 대기', reading: '수집 중', running: '수집 중', reauth_required: '네이버 접근 권한 확인',
       limited: '수집 중단 · 관리자 확인 필요', denied: '접근 권한 확인', blocked: '접근 권한 확인', not_current: '수집 대상 제외 · 이관 빠짐' };
@@ -1125,9 +1135,12 @@
       return '원인: ' + (Object.prototype.hasOwnProperty.call(collectionReason, code) ? collectionReason[code] :
         '상세 원인 미확인 · 관리자 확인 필요');
     }
-    var validKeys = rowMap(data.rows, VIEW_FIELDS.transfers), nodes = retainedNodes($('inventoryRows'));
-    reconcileNodes($('inventoryRows'), rows.length ? rows.map(function (r, index) {
-      return retainedNode(nodes, validKeys ? rowKey(r, VIEW_FIELDS.transfers) : null, validKeys ? r : index, function () {
+    var validKeys = rowMap(data.rows, VIEW_FIELDS.transfers);
+    if (!validKeys) inventoryNodes.clear();
+    else inventoryNodes.forEach(function (node, key) { if (!validKeys.has(key) || node._viewValue !== validKeys.get(key)) inventoryNodes.delete(key); });
+    reconcileNodes($('inventoryRows'), pageRows.length ? pageRows.map(function (r, index) {
+      var key = validKeys ? rowKey(r, VIEW_FIELDS.transfers) : null;
+      var node = retainedNode(inventoryNodes, key, validKeys ? r : index, function () {
       var c = r.collection || {}, m = r.management || {}, status = collection[c.status] || c.status || '수집 대기';
       var recheck = c.revalidation, recheckNames = {manual_period:'수동 기간 재확인',recent:'최근 3일 재확인',
         reconcile:'최근 31일 재확인',report_weekly:'주간 보고기간 재확인',report_monthly:'월간 보고기간 재확인',backfill:'누락 기간 보충'};
@@ -1137,7 +1150,7 @@
       var hasValues = typeof spend === 'number' && isFinite(spend);
       var previous = (hasValues || !!c.last_success_at) && (c.stale === true || c.status !== 'ok');
       var company = r.detail_available ? h('button', { type: 'button', class: 'btn sm', onclick: function () {
-        go('/naver/clients/' + r.possibility_id);
+        if (selection === state.selection && rowCurrent('transfers', r)) go('/naver/clients/' + r.possibility_id);
       } }, r.company_name || '전산 업체') : r.company_name || '—';
       return labeledRow(['광고 계정 · ID', '전산 업체', '매칭 상태', '업무 단계', '담당', '수집 결과', '확인된 실적 · 기간', '비즈머니 · 확인 시각', '관제 관리'], { 'data-account': r.ad_account_no },
         h('td', null, r.account_name || '계정 이름 없음', h('span', { class: 'w' }, 'ID ' + (r.ad_account_no || '확인 필요')), adReasons(r)),
@@ -1167,7 +1180,30 @@
           m.reason ? h('span', { class: 'w' }, managementReason(m.reason)) : null,
           managementActions(r)));
       });
+      if (key !== null) inventoryNodes.set(key, node);
+      return node;
     }) : [h('tr', null, h('td', { colspan: 9, class: 'empty' }, '이 조건에 해당하는 계정이 없습니다. 매칭 상태·업무 단계·검색어를 확인해 주세요.'))]);
+  }
+  // 전체 자료의 검색·정렬·합계 뒤 화면에 놓는 행만 자른다. 페이지 이동은 조회나 수집을 요청하지 않는다.
+  function inventoryPageRows(panel, rows, unit) {
+    var field = panel === 'accounts' ? 'inventoryPage' : 'coveragePage';
+    var page = Math.min(state[field], Math.max(0, Math.ceil(rows.length / INVENTORY_PAGE_SIZE) - 1));
+    state[field] = page;
+    var start = page * INVENTORY_PAGE_SIZE, end = Math.min(start + INVENTORY_PAGE_SIZE, rows.length);
+    var snapshot = state.inventory, selection = state.selection, gen = state.gen;
+    var query = panel === 'accounts' ? state.inventoryQ : state.coverageQ;
+    function move(next) {
+      if (state.inventory !== snapshot || state.selection !== selection || state.gen !== gen || state[field] !== page ||
+          query !== (panel === 'accounts' ? state.inventoryQ : state.coverageQ) ||
+          state.inventoryPanel !== panel || state.screen !== 'transfers' || !state.me || !state.session ||
+          document.visibilityState === 'hidden' || $('s-transfers').classList.contains('view-unverified')) return;
+      state[field] = next; renderInventory();
+    }
+    put($(panel === 'accounts' ? 'inventoryPages' : 'coveragePages'),
+      h('span', { class: 'n', role: 'status', 'aria-live': 'polite' }, '현재 ' + (rows.length ? num(start + 1) : '0') + '~' + num(end) + ' / 총 ' + num(rows.length) + unit + ' · 100개씩 표시'),
+      h('button', { type: 'button', class: 'btn sm', disabled: page === 0, onclick: function () { move(page - 1); } }, '이전'),
+      h('button', { type: 'button', class: 'btn sm', disabled: end >= rows.length, onclick: function () { move(page + 1); } }, '다음'));
+    return rows.slice(start, end);
   }
   function adCode(label, value) {
     value = value || {};
@@ -1352,13 +1388,15 @@
     h('span', { class: 'w' }, '창 열기는 저장·연결 완료가 아닙니다. 저장 후 동기화를 기다려 「목록 새로고침」으로 확인하세요.'));
   }
   function renderManagedCoverage(data, message) {
+    if (state.inventoryPanel !== 'coverage') return;
     var selection = state.selection;
     var ready = data && data.ready === true;
     var items = data && data.items || [], rows = items.filter(coverageMatches);
     $('coverageStatus').textContent = ready ? '실관리 ' + num(data.total) + ' · 연결 확인 ' + num(data.matched) + ' · 확인 필요 ' + num(data.missing) :
       message || (data ? '원천 자료 확인 필요 · 확정 집계 보류' : '불러오는 중…');
     $('coverageSearchStatus').textContent = data ? '검색 결과 ' + num(rows.length) + ' / ' + num(items.length) + '업체' : '';
-    put($('coverageRows'), rows.length ? rows.map(function (r) {
+    var pageRows = inventoryPageRows('coverage', rows, '업체');
+    put($('coverageRows'), pageRows.length ? pageRows.map(function (r) {
       var status = ready ? r.state : 'source_unavailable';
       var action = status === 'matched' ? '「이관 광고 계정 전체」에서 관리·수집 상태 확인' :
         status === 'source_unavailable' ? '자료 동기화 확인 후 목록 새로고침' :
@@ -1971,12 +2009,27 @@
     return '확정 차단 사유를 확인하지 못했습니다. 목록을 새로고침하고 현재 담당 권한·원천 자료를 확인해 주세요.';
   }
   function loadLinks() {
+    if (!state.me || !state.session || document.visibilityState === 'hidden' || state.screen === 'transfers' && !state.linksOpen) return Promise.resolve();
+    var inventoryRequest = state.screen === 'transfers' && viewRequests.transfers;
+    if (inventoryRequest) {
+      if (linksWait && linksWait.inventory === inventoryRequest) return linksWait.promise;
+      var wait = { inventory: inventoryRequest, gen: state.gen, selection: state.selection, pid: state.linksPid };
+      linksWait = wait;
+      if (!state.links) put($('linksBody'), h('div', { class: 'loading' }, '이관 목록 확인을 마친 뒤 짝 목록을 불러옵니다…'));
+      wait.promise = inventoryRequest.promise.then(function () {
+        if (linksWait !== wait) return;
+        linksWait = null;
+        if (wait.gen === state.gen && wait.selection === state.selection && wait.pid === state.linksPid && state.screen === 'transfers' && state.linksOpen) return loadLinks();
+      });
+      return wait.promise;
+    }
     var path = linksPath();
     if (linksRequest && linksRequest.gen === state.gen && linksRequest.path === path) return linksRequest.promise;
     if (linksRequest) linksRequest.controller.abort();
     var gen = state.gen, selection = state.selection, linkGen = ++state.linksGen;
     var request = {gen: gen, path: path, controller: new AbortController()};
     linksRequest = request;
+    if (!state.links) put($('linksBody'), h('div', { class: 'loading' }, '짝 목록을 불러오는 중…'));
     request.promise = api('GET', path, undefined, request.controller.signal).then(function (j) {
       if (gen !== state.gen || selection !== state.selection || linkGen !== state.linksGen) return;
       if (!linksShape(j)) {
@@ -1985,7 +2038,12 @@
         return;
       }
       state.links = j; renderLinks(); renderClientLinks();
-    }, function (e) { if (gen === state.gen && selection === state.selection && linkGen === state.linksGen) fail(e); })
+    }, function (e) {
+      if (gen !== state.gen || selection !== state.selection || linkGen !== state.linksGen) return;
+      fail(e);
+      if (!state.links) put($('linksBody'), h('div', { class: 'note warn' }, '짝 목록을 불러오지 못했습니다. ',
+        h('button', { type: 'button', class: 'btn sm', onclick: loadLinks }, '다시 불러오기')));
+    })
       .then(function () { if (linksRequest === request) linksRequest = null; });
     return request.promise;
   }
@@ -2061,6 +2119,9 @@
     }) : [];
   }
   function renderLinks() {
+    $('linksBody').hidden = !state.linksOpen;
+    $('linksToggle').textContent = state.linksOpen ? '접기' : '펼치기';
+    $('linksToggle').setAttribute('aria-expanded', String(state.linksOpen));
     if (!state.links) return;
     var L = state.links, box = $('linksBody');
     var rows = visibleLinks(L.rows), decisions = visibleLinks(L.decisions);
@@ -2090,9 +2151,6 @@
       decisions.forEach(function (d) { out.push(decisionRow(d)); });
     }
     put(box, out);
-    box.hidden = !state.linksOpen;
-    $('linksToggle').textContent = state.linksOpen ? '접기' : '펼치기';
-    $('linksToggle').setAttribute('aria-expanded', String(state.linksOpen));
   }
   function decide(r, act, btn, accountProof) {
     var gen = state.gen, links = state.links;
@@ -2658,11 +2716,11 @@
       b.addEventListener('click', function () { setFilter(b.getAttribute('data-f')); });
     });
     $('q').addEventListener('input', function () { state.q = this.value.trim(); renderWatchSelection(); });
-    $('inventorySearch').addEventListener('input', function () { state.inventoryQ = this.value.trim(); renderInventory(); });
-    $('coverageSearch').addEventListener('input', function () { state.coverageQ = this.value; if (state.inventory) renderManagedCoverage(state.inventory.managed_coverage); });
-    $('inventoryView').addEventListener('change', function () { state.inventoryView = this.value; loadInventory(); });
-    $('inventoryMapping').addEventListener('change', function () { state.inventoryMapping = this.value; loadInventory(); });
-    $('inventoryWorkflow').addEventListener('change', function () { state.inventoryWorkflow = this.value; loadInventory(); });
+    $('inventorySearch').addEventListener('input', function () { state.inventoryQ = this.value.trim(); state.inventoryPage = 0; renderInventory(); });
+    $('coverageSearch').addEventListener('input', function () { state.coverageQ = this.value; state.coveragePage = 0; if (state.inventory) renderManagedCoverage(state.inventory.managed_coverage); });
+    $('inventoryView').addEventListener('change', function () { state.inventoryView = this.value; state.inventoryPage = 0; loadInventory(); });
+    $('inventoryMapping').addEventListener('change', function () { state.inventoryMapping = this.value; state.inventoryPage = 0; loadInventory(); });
+    $('inventoryWorkflow').addEventListener('change', function () { state.inventoryWorkflow = this.value; state.inventoryPage = 0; loadInventory(); });
     $('inventoryReload').addEventListener('click', loadInventory);
     $('inventoryCoverageTab').addEventListener('click', function () { setInventoryPanel('coverage'); loadInventory(); });
     $('inventoryAccountsTab').addEventListener('click', function () { setInventoryPanel('accounts'); loadInventory(); });
@@ -2684,8 +2742,8 @@
     });
     $('linksToggle').addEventListener('click', function () {
       state.linksOpen = !state.linksOpen;
-      if (state.linksOpen && !state.links) loadLinks(); else renderLinks();
-      if (!state.linksOpen) { $('linksBody').hidden = true; $('linksToggle').textContent = '펼치기'; $('linksToggle').setAttribute('aria-expanded', 'false'); }
+      renderLinks();
+      if (state.linksOpen && !state.links) loadLinks();
     });
     Array.prototype.forEach.call(document.querySelectorAll('[data-ctab]'), function (b) {
       b.addEventListener('click', function () { setCtab(b.getAttribute('data-ctab')); });
