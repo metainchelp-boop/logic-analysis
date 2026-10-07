@@ -1,5 +1,6 @@
 """Read-only collection aggregates; no identity, amount or freeform error output."""
 import json
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -32,6 +33,18 @@ WRITER_RELIEF_COMMIT = '25dc24d8760a06b2321d4fbde481769c3ce32c34'
 LATENCY_FIX_COMMIT = '6198be366344a82923e10ba5e323877026d82f48'
 # Same schema/diagnostic contract; dashboard skips list-only work and linking reuses pure matching.
 DASHBOARD_LATENCY_FIX_COMMIT = 'e4f64e165ebdf81d4127218d5c91ff6904e75958'
+# Additional active profiles require these exact source/archive/store/baseline pins.
+# They do not widen ordinary collection readers or the incident-suspended release.
+PROFILE_RELEASES = {
+    '953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6': (
+        '461be6b6ae6d09d74108f9f96a5e2bcf68feffdd2728c43f1b5e460be743ac80',
+        'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+        '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'),
+    'f3a9c321c2142ae759d9af482cde706a6af57564': (
+        '33092243cb955a815d573226b77f0fe7ef4db4f913edb63a11fa71848ec15d8e',
+        'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+        '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'),
+}
 MONITORING_COMMITS = frozenset((MONITORING_COMMIT, REPORTS_COMMIT, SHM_LOCK_FIX_COMMIT, OWNER_ACTIONS_COMMIT,
                                 SCREEN_OVERHAUL_COMMIT, WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT,
                                 DASHBOARD_LATENCY_FIX_COMMIT))
@@ -754,6 +767,29 @@ def validate_package(package):
             raise ValueError('PACKAGE_SHAPE')
 
 
+def verify_profile_store(root, digest, *, uid=0, gid=0):
+    # Read only sealed source code, never the operating database. Reject substituted paths.
+    path = root/'naver_engine/store.py'
+    try:
+        if path.resolve() != path:
+            raise ValueError('PROFILE_STORE_CHANGED')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or
+                    (before.st_uid,before.st_gid,stat.S_IMODE(before.st_mode)) != (uid,gid,0o644) or
+                    not 0 < before.st_size <= 1048576):
+                raise ValueError('PROFILE_STORE_CHANGED')
+            raw = stream.read(1048577)
+            fields = lambda value:(value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns,
+                                   value.st_uid,value.st_gid,value.st_mode,value.st_nlink)
+            if (len(raw) != before.st_size or fields(before) != fields(os.fstat(stream.fileno())) or
+                    fields(before) != fields(path.lstat()) or hashlib.sha256(raw).hexdigest() != digest):
+                raise ValueError('PROFILE_STORE_CHANGED')
+    except OSError:
+        raise ValueError('PROFILE_STORE_CHANGED') from None
+
+
 def script(*, catalog_links=False, daily_limited=False, morning_progress=False, reports=False, login_audit=False):
     parts = ['import json,os,sys,stat,re,time,sqlite3\nfrom pathlib import Path\nfrom datetime import date,datetime,timedelta,timezone\n', PROJECTION_SOURCE]
     parts.append("""
@@ -1327,12 +1363,12 @@ KST = timezone(timedelta(hours=9))
 TYPE_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
 # a981b35 기록 틀(logging "%(levelname)s %(name)s %(message)s" · 중계는 uvicorn 기본 꼴/lastResort).
 # 25dc24d 는 같은 꼴의 줄 하나(화면 API 저장소 바쁨)만 더한다 — 나머지 줄은 a981b35 와 글자 그대로.
-# 줄 전체가 틀과 맞을 때만 갈래로 센다. 밖으로 나가는 값 = 갈래 이름 · 검증한 예외 종류 · HTTP 상태 숫자뿐.
+# 줄 전체가 틀과 맞을 때만 갈래로 센다. 네트워크 시간도 고정 틀의 제한된 숫자만 내보낸다.
 NETWORK_DIAGNOSTIC_PATTERN = (r'kind=(DNS|TLS_CERT|TLS|TIMEOUT|DEADLINE|RESET|REFUSED|ABORTED|BROKEN_PIPE|'
     r'UNREACHABLE|HTTP_INCOMPLETE|HTTP_DISCONNECTED|HTTP|OTHER|UNRECOGNIZED) '
     r'phase=(OPEN|BODY|TRANSPORT|UNRECOGNIZED) '
     r'step=(MANAGERS|CHILD_ACCOUNTS|CAMPAIGNS|BIZMONEY|STATS|CHANNELS|ADGROUPS|ADS|KEYWORDS|EXTENSIONS|NONE|UNRECOGNIZED) '
-    r'request_elapsed_ms=[0-9]{1,7} remaining_ms=[0-9]{1,7}')
+    r'request_elapsed_ms=([0-9]{1,7}) remaining_ms=([0-9]{1,7})')
 NETWORK_LOG_PATTERN = (r'WARNING (?:naver_engine\.morning morning_network_failure|'
                        r'naver_engine\.read naver_network_failure) ' + NETWORK_DIAGNOSTIC_PATTERN)
 LOG_TEMPLATES = {'engine': (
@@ -1366,6 +1402,24 @@ LOG_BUCKET_MAX = 24
 LOG_KIND_MAX = 5
 
 
+def network_timing(match):
+    if match is None:
+        return None
+    elapsed, remaining = (int(match.group(i)) for i in (4,5))
+    if not (0 <= elapsed <= 3600000 and 0 <= remaining <= 3600000):
+        return None
+    return dict(latest_request_elapsed_ms=elapsed, latest_remaining_ms=remaining)
+
+
+def latest_timing(samples, key, at, timing):
+    # Keep one numeric sample per existing category; changing durations create no new groups.
+    previous = samples.get(key)
+    if previous is None or (at is not None and
+            (previous[0] is None or datetime.fromisoformat(at) >= datetime.fromisoformat(previous[0]))) or (
+            at is None and previous[0] is None):
+        samples[key] = (at, timing)
+
+
 def type_name(value):
     # 예외 종류 이름 모양만. 숫자가 셋 이상 이어지면(번호·계정 끝자리 꼴) 이름으로 내보내지 않는다.
     return value if (isinstance(value,str) and TYPE_NAME.fullmatch(value)
@@ -1379,16 +1433,18 @@ def kst_bucket(at):
 
 def log_categories(entries, unit):
     """Fixed template categories of one sample: count, first/last (UTC), recent 10-minute KST buckets, kinds."""
-    out, unmatched = {}, 0
+    out, unmatched, timings = {}, 0, {}
     for at, message in entries:
         for name, value_kind, pattern in LOG_TEMPLATES[unit]:
             match = re.fullmatch(pattern, message)
-            if match:
+            if match and (value_kind != 'network' or network_timing(match) is not None):
                 break
         else:
             unmatched += 1; continue
         row = out.setdefault(name, {'count':0,'first_at':None,'last_at':None,'buckets':{},'values':{}})
         row['count'] += 1
+        if value_kind == 'network':
+            latest_timing(timings, name, at, network_timing(match))
         if value_kind is not None:
             raw = match.group(1)
             value = (':'.join(match.group(i) for i in (1,2,3)) if value_kind == 'network' else
@@ -1415,6 +1471,8 @@ def log_categories(entries, unit):
             ranked = sorted(row['values'].items(), key=lambda pair:(-pair[1],pair[0]))
             item['http_status' if value_kind == 'status' else 'kinds'] = dict(ranked[:LOG_KIND_MAX])
             item['other_value_entries'] = sum(n for _, n in ranked[LOG_KIND_MAX:])
+        if name in timings:
+            item.update(timings[name][1])
         categories[name] = item
     return dict(template_release='25dc24d', unmatched_entries=unmatched, categories=categories)
 
@@ -1426,7 +1484,7 @@ def log_projection(raw, *, source, unit):
     rows = raw.splitlines()
     if len(rows)>300:
         raise ValueError('LOG_LIMIT')
-    counts, unknown, last, entries = {}, 0, None, []
+    counts, unknown, last, entries, timings = {}, 0, None, [], {}
     for row in rows:
         at = None
         try:
@@ -1453,6 +1511,7 @@ def log_projection(raw, *, source, unit):
         exception = re.fullmatch(r'([A-Za-z][A-Za-z0-9_]{0,63}):[^\n]*',message)
         relay = re.fullmatch(r'(?:WARNING:?[ ]+(?:app.naver_relay )?)?관제 엔진 중계 실패: ([A-Za-z][A-Za-z0-9_-]{0,63})',message)
         network = re.fullmatch(NETWORK_LOG_PATTERN, message) if unit == 'engine' else None
+        timing = network_timing(network)
         event = None
         if step and step[1] in LOG_STAGES:
             event = dict(event='job_failed',stage=step[1],error_kind=enum(step[2],LOG_KINDS))
@@ -1466,7 +1525,7 @@ def log_projection(raw, *, source, unit):
             event = dict(event='service_failed',result=failed[1])
         elif relay:
             event = dict(event='relay_failed',error_kind=enum(relay[1],RELAY_KINDS))
-        elif network:
+        elif network and timing is not None:
             event = dict(event='network_failure',network_kind=network[1],phase=network[2],step=network[3])
         elif exception and exception[1] in LOG_KINDS:
             event = dict(event='exception_line',error_kind=exception[1])
@@ -1474,13 +1533,16 @@ def log_projection(raw, *, source, unit):
             unknown+=1; continue
         key = json.dumps(event,sort_keys=True)
         counts[key] = counts.get(key,0)+1
+        if event['event'] == 'network_failure':
+            latest_timing(timings, key, at, timing)
         if at and (last is None or datetime.fromisoformat(at)>datetime.fromisoformat(last)):
             last = at
     ordered = sorted(counts.items())
     result = dict(entries_inspected=len(rows), sample_limit_reached=len(rows)==300,
                   unrecognized_entries=unknown,last_recognized_at=last,
                   omitted_event_count=sum(value for key,value in ordered[32:]),
-                  events=[dict(json.loads(key),count=value) for key,value in ordered[:32]])
+                  events=[dict(json.loads(key),count=value,**(timings[key][1] if key in timings else {}))
+                          for key,value in ordered[:32]])
     if source == 'docker':
         # Container output only (systemd units send stdout/stderr to null). Separate view from `events`:
         # unreadable lines count as unmatched here; `unrecognized_entries` keeps its earlier meaning.
@@ -1587,10 +1649,14 @@ def run(package, host, release):
     # active probes on this release until isolated causality testing is complete.
     if package['source_commit'] == REPORTS_COMMIT and not passive:
         raise ValueError('LIVE_READER_SUSPENDED')
-    if latency and package['source_commit'] not in (WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT, DASHBOARD_LATENCY_FIX_COMMIT):
+    if latency and package['source_commit'] not in (WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT, DASHBOARD_LATENCY_FIX_COMMIT, *PROFILE_RELEASES):
         raise ValueError('PROFILE_SOURCE_UNREVIEWED')
-    if dashboard and package['source_commit'] not in (LATENCY_FIX_COMMIT, DASHBOARD_LATENCY_FIX_COMMIT):
+    if dashboard and package['source_commit'] not in (LATENCY_FIX_COMMIT, DASHBOARD_LATENCY_FIX_COMMIT, *PROFILE_RELEASES):
         raise ValueError('PROFILE_SOURCE_UNREVIEWED')
+    profile_pins = PROFILE_RELEASES.get(package['source_commit']) if latency or dashboard else None
+    if profile_pins is not None and (package['source_tar_gz_sha256'],package['baseline']) != (
+            profile_pins[0],profile_pins[2]):
+        raise ValueError('PROFILE_SOURCE_PIN_CHANGED')
     package = {key:value for key,value in package.items()
                if key not in ('passive_runtime_only','latency_profile_only','dashboard_profile_only')}
     if os.geteuid() != 0 or host.baseline() != package['baseline']:
@@ -1612,6 +1678,8 @@ def run(package, host, release):
                  path/'deploy/naver-engine-backup.override.yml'):
         if file.resolve() != file or release.sha(file.read_bytes()) != prepared.get('files', {}).get(str(file)):
             raise ValueError('COMPOSE_CHANGED')
+    if profile_pins is not None:
+        verify_profile_store(path,profile_pins[1])
     expected_image = prepared.get('images', {}).get('engine')
     if not isinstance(expected_image, str) or not re.fullmatch('sha256:[0-9a-f]{64}', expected_image):
         raise ValueError('PREPARED_IMAGE')
@@ -1647,10 +1715,19 @@ def run(package, host, release):
         STAGE = 'postflight'
         after = container()
         unchanged = host.baseline() == package['baseline']
+        source_unchanged = True
+        if profile_pins is not None:
+            try:
+                verify_profile_store(path,profile_pins[1])
+            except ValueError:
+                source_unchanged = False
         same = after == before
         # Preserve failure evidence without accepting a changed runtime as a valid data read.
         return {'existing_app_baseline_unchanged':unchanged,
-                'postflight':{'container_unchanged':same,'code':None if same and unchanged else 'POST_BASELINE'},
+                'postflight':{'container_unchanged':same,
+                    **({'profile_source_store_unchanged':source_unchanged} if profile_pins is not None else {}),
+                    'code':'POST_BASELINE' if not same or not unchanged else
+                           'POST_SOURCE_CHANGED' if not source_unchanged else None},
                 'engine_state_after':{
                     'started_at':docker_stamp(after.get('started')),
                     'oom_killed':after.get('oom_killed') if type(after.get('oom_killed')) is bool else None,

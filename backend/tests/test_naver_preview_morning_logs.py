@@ -30,7 +30,7 @@ class MorningLogsTest(unittest.TestCase):
         self.assertEqual(result['unmatched_entries'], 4)
         self.assertNotIn('PRIVATE', json.dumps(result))
 
-    def test_network_failure_projection_keeps_fixed_kind_phase_step_and_drops_timings(self):
+    def test_network_failure_projection_keeps_fixed_kind_phase_step_and_bounded_timings(self):
         messages = [
             'WARNING naver_engine.morning morning_network_failure kind=DNS phase=OPEN '
             'step=CAMPAIGNS request_elapsed_ms=8500 remaining_ms=1500',
@@ -40,11 +40,13 @@ class MorningLogsTest(unittest.TestCase):
         result = M.log_projection(raw, source='docker', unit='engine')
         self.assertEqual(result['unrecognized_entries'], 0)
         self.assertEqual(result['events'], [
-            dict(event='network_failure',network_kind='DEADLINE',phase='BODY',step='STATS',count=1),
-            dict(event='network_failure',network_kind='DNS',phase='OPEN',step='CAMPAIGNS',count=1)])
+            dict(event='network_failure',network_kind='DEADLINE',phase='BODY',step='STATS',count=1,
+                 latest_request_elapsed_ms=20000,latest_remaining_ms=0),
+            dict(event='network_failure',network_kind='DNS',phase='OPEN',step='CAMPAIGNS',count=1,
+                 latest_request_elapsed_ms=8500,latest_remaining_ms=1500)])
         self.assertEqual(result['templates']['categories']['morning_network_failure']['kinds'], {'DNS:OPEN:CAMPAIGNS':1})
         self.assertEqual(result['templates']['categories']['naver_network_failure']['kinds'], {'DEADLINE:BODY:STATS':1})
-        for value in ('8500', '1500', '20000', 'request_elapsed_ms', 'remaining_ms'):
+        for value in ('request_elapsed_ms=', 'remaining_ms='):
             self.assertNotIn(value, json.dumps(result))
         relay = M.log_projection(raw, source='docker', unit='relay')
         self.assertEqual(relay['events'], [])
@@ -70,4 +72,4 @@ class MorningLogsTest(unittest.TestCase):
         raw = json.dumps(dict(MESSAGE=message,__REALTIME_TIMESTAMP='1791421200000000')).encode()
         result = M.log_projection(raw, source='journal', unit='engine')
         self.assertEqual(result['events'], [dict(event='network_failure',network_kind='UNRECOGNIZED',
-            phase='UNRECOGNIZED',step='UNRECOGNIZED',count=1)])
+            phase='UNRECOGNIZED',step='UNRECOGNIZED',count=1,latest_request_elapsed_ms=0,latest_remaining_ms=0)])

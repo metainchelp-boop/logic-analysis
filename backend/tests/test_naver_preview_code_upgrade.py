@@ -428,6 +428,8 @@ class ContractTest(unittest.TestCase):
     def scenario(self, failure=None, mode='apply', *, code_only=False, log_database=False,
                  code_module='naver_preview_code_upgrade'):
         code = sealed_code(code_module)
+        ui_only = code_module == 'naver_preview_code_upgrade_v4'
+        target_store = StoreScopeTest.SOURCE if ui_only else StoreScopeTest.TARGET_SOURCE
         policy = load('naver_preview_code_only') if code_only else None
         fixture = load('naver_preview_upgrade')
         fixture.OLD_COMMIT = code.OLD_COMMIT
@@ -456,7 +458,10 @@ class ContractTest(unittest.TestCase):
             release.write_new = write
             infrastructure = {'Dockerfile.naver-engine': b'FROM fixture', 'Dockerfile.naver-relay': b'FROM fixture',
                 'backend/requirements.txt': b'fixture', 'naver_runtime/bootstrap.py': b'# unchanged bootstrap',
-                'naver_engine/store.py': StoreScopeTest.TARGET_SOURCE}
+                'naver_engine/store.py': target_store}
+            if ui_only:
+                infrastructure.update({'backend/naver_page/app.js': b'new UI fixture',
+                                       'backend/naver_page/index.html': b'new HTML fixture'})
             infrastructure.update({name: b'new fixture compose' for name in
                 ('compose.naver-engine.yml','compose.naver-relay.yml','deploy/naver-engine-backup.override.yml')})
             for path in (root/'releases').iterdir():
@@ -466,6 +471,9 @@ class ContractTest(unittest.TestCase):
                     target.write_bytes(body)
                 if path.name == 'naver-'+code.OLD_COMMIT:
                     (path/'naver_engine/store.py').write_bytes(StoreScopeTest.SOURCE)
+                    if ui_only:
+                        (path/'backend/naver_page/app.js').write_bytes(b'old UI fixture')
+                        (path/'backend/naver_page/index.html').write_bytes(b'old HTML fixture')
                 for name in ('engine','relay'):
                     # The UI update inherits all flags without adding or changing them.
                     body = ('image: '+code.OLD_COMMIT).encode()
@@ -592,7 +600,7 @@ class ContractTest(unittest.TestCase):
                 patch.object(code, 'OLD_SOURCE_SHA256', 'c'*64), \
                 patch.object(code, 'TARGET_SOURCE_SHA256', 'c'*64), \
                 patch.object(code, 'STORE_SHA256', {'old':hashlib.sha256(StoreScopeTest.SOURCE).hexdigest(),
-                                                  'target':hashlib.sha256(StoreScopeTest.TARGET_SOURCE).hexdigest()}), \
+                                                  'target':hashlib.sha256(target_store).hexdigest()}), \
                 patch.object(code, 'verify_database_schema') as verify_database, \
                 patch.object(code, 'db_snapshot', return_value=(Path('/synthetic-snapshot'), 'd'*64)) as snapshot, \
                 patch.object(code, 'restore_db') as restore, \
@@ -612,6 +620,8 @@ class ContractTest(unittest.TestCase):
                     code.STORE_SHA256['old'], code.STORE_SHA256['target'], code.EXPECTED_BASELINE)
                 if code_module == 'naver_preview_code_upgrade_v3':
                     policy.REVIEWED_TRANSITION_V3 = transition
+                elif ui_only:
+                    policy.REVIEWED_TRANSITION_V4 = transition
                 else:
                     policy.REVIEWED_TRANSITION = transition
             result = legacy_test.UpgradeTest().scenario(failure, mode, setup)

@@ -932,10 +932,21 @@ class CollectionTest(unittest.TestCase):
 
     def check_run_diagnostics(self, commit, extra=None, passive=False, logs=None, latency=False, dashboard=False):
         package = dict(baseline='a'*64, source_commit=commit, source_tar_gz_sha256='c'*64)
+        profile_pins=M.PROFILE_RELEASES.get(commit) if latency or dashboard else None
+        if profile_pins is not None:
+            package.update(baseline=profile_pins[2],source_tar_gz_sha256=profile_pins[0])
         cid, image = 'd'*64, 'sha256:'+'e'*64
         rid, relay_image = '7'*64, 'sha256:'+'8'*64
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
+            source_store=root/'naver_engine/store.py'
+            source_store.parent.mkdir()
+            source_store.write_bytes(b'SCHEMA_VERSION=11\n# synthetic reviewed store\n')
+            source_store.chmod(0o644)
+            fixture_profiles=dict(M.PROFILE_RELEASES)
+            if profile_pins is not None:
+                fixture_profiles[commit]=(profile_pins[0],hashlib.sha256(source_store.read_bytes()).hexdigest(),profile_pins[2])
+            actual_verify=M.verify_profile_store
             files = {}
             for name in ('compose.naver-engine.yml', 'preview-engine.override.yml', 'deploy/naver-engine-backup.override.yml',
                          'compose.naver-relay.yml', 'preview-relay.override.yml'):
@@ -990,6 +1001,8 @@ class CollectionTest(unittest.TestCase):
                             'resource_timeout','resource_invalid','host_resources_unavailable']
             if latency or dashboard:
                 failures = [None,'image','mount','rootfs','restart','host_changed','exec_failed','profile_partial','output']
+                if profile_pins is not None:
+                    failures += ['profile_store_changed','profile_store_post_changed']
             for failure in failures:
                 calls, inspections = [], []
                 host, release = Mock(), Mock()
@@ -1104,12 +1117,31 @@ class CollectionTest(unittest.TestCase):
                         return dict(exit_code=0,reason=None,stdout=b'',stderr=b'')
                     if failure == 'exec_failed':
                         return dict(exit_code=1,reason=None,stdout=b'',stderr=b'NameError: PRIVATE\n')
+                    if failure == 'profile_store_post_changed':
+                        source_store.write_bytes(b'PRIVATE altered store')
                     return dict(exit_code=0,reason=None,stdout=command(args, **kwargs),stderr=b'')
                 with self.subTest(failure=failure), patch.object(M.os, 'geteuid', return_value=0), \
+                        patch.object(M,'PROFILE_RELEASES',fixture_profiles), \
+                        patch.object(M,'verify_profile_store',side_effect=lambda root,digest:
+                            actual_verify(root,digest,uid=os.getuid(),gid=os.getgid())), \
                         patch.object(M, 'capture_process', side_effect=capture), \
                         patch.object(M.os,'cpu_count',return_value=None if failure=='host_resources_unavailable' else 8), \
                         patch.object(M.os,'getloadavg',return_value=(1.,2.,3.)):
-                    if failure == 'exec_failed':
+                    if failure == 'profile_store_changed':
+                        original=source_store.read_bytes();source_store.write_bytes(b'PRIVATE altered store')
+                        with self.assertRaisesRegex(ValueError,'^PROFILE_STORE_CHANGED$'):
+                            M.run(package,host,release)
+                        self.assertFalse(any(args[:2]==['docker','exec'] for args in calls))
+                        self.assertEqual(len(inspections),0)
+                        source_store.write_bytes(original)
+                    elif failure == 'profile_store_post_changed':
+                        result=M.run(package,host,release)
+                        self.assertFalse(result['ok'])
+                        self.assertEqual(result['postflight']['code'],'POST_SOURCE_CHANGED')
+                        self.assertFalse(result['postflight']['profile_source_store_unchanged'])
+                        self.assertEqual(result['mutations'],0)
+                        self.assertNotIn('PRIVATE',json.dumps(result))
+                    elif failure == 'exec_failed':
                         result = M.run(package, host, release)
                         self.assertFalse(result['ok'])
                         self.assertEqual(result['process_failure']['error_kind'], 'NameError')
@@ -1564,6 +1596,111 @@ class CollectionTest(unittest.TestCase):
                                                         'sqlite_primary':'SQLITE_ERROR'}})
         self.assertNotIn('987654321', output)
 
+
+    def test_network_log_timings_keep_latest_bounded_sample_without_new_event_groups(self):
+        prefix='WARNING naver_engine.read naver_network_failure kind=TIMEOUT phase=OPEN step=BIZMONEY '
+        messages=[('2026-10-07T19:35:00Z',prefix+'request_elapsed_ms=20001 remaining_ms=180000'),
+                  ('2026-10-07T19:36:00Z',prefix+'request_elapsed_ms=3600000 remaining_ms=0'),
+                  ('2026-10-07T19:34:00Z',prefix+'request_elapsed_ms=1 remaining_ms=3600000')]
+        raw=b'\n'.join((at+' '+message).encode() for at,message in messages)
+        result=M.log_projection(raw,source='docker',unit='engine')
+        self.assertEqual(result['unrecognized_entries'],0)
+        self.assertEqual(result['events'],[dict(event='network_failure',network_kind='TIMEOUT',
+            phase='OPEN',step='BIZMONEY',count=3,latest_request_elapsed_ms=3600000,latest_remaining_ms=0)])
+        category=result['templates']['categories']['naver_network_failure']
+        self.assertEqual(category['count'],3)
+        self.assertEqual(category['kinds'],{'TIMEOUT:OPEN:BIZMONEY':3})
+        self.assertEqual(category['latest_request_elapsed_ms'],3600000)
+        self.assertEqual(category['latest_remaining_ms'],0)
+        self.assertNotIn('request_elapsed_ms=',json.dumps(result))
+        # Both existing logger names use the same strict template, including the journal path.
+        line=prefix.replace('naver_engine.read naver_network_failure',
+                            'naver_engine.morning morning_network_failure')+'request_elapsed_ms=0 remaining_ms=1'
+        journal=json.dumps(dict(MESSAGE=line,__REALTIME_TIMESTAMP='1791401760000000')).encode()
+        projected=M.log_projection(journal,source='journal',unit='engine')
+        self.assertEqual(projected['events'][0]['latest_request_elapsed_ms'],0)
+        self.assertEqual(projected['events'][0]['latest_remaining_ms'],1)
+        self.assertNotIn('templates',projected)
+
+    def test_network_log_timings_reject_out_of_bounds_malformed_and_freeform_suffixes(self):
+        prefix='WARNING naver_engine.read naver_network_failure kind=TIMEOUT phase=OPEN step=BIZMONEY '
+        invalid=('request_elapsed_ms=3600001 remaining_ms=0',
+                 'request_elapsed_ms=0 remaining_ms=3600001',
+                 'request_elapsed_ms=-1 remaining_ms=0','request_elapsed_ms=1.0 remaining_ms=0',
+                 'request_elapsed_ms=1e3 remaining_ms=0','request_elapsed_ms=PRIVATE remaining_ms=0',
+                 'request_elapsed_ms=00000000 remaining_ms=0','remaining_ms=0 request_elapsed_ms=1',
+                 'request_elapsed_ms=1 remaining_ms=0 PRIVATE_URL',
+                 'request_elapsed_ms=1 remaining_ms=0\tPRIVATE_ACCOUNT')
+        for suffix in invalid:
+            with self.subTest(suffix=suffix):
+                result=M.log_projection(('2026-10-07T19:35:00Z '+prefix+suffix).encode(),source='docker',unit='engine')
+                self.assertEqual(result['events'],[])
+                self.assertEqual(result['unrecognized_entries'],1)
+                self.assertEqual(result['templates']['categories'],{})
+                self.assertEqual(result['templates']['unmatched_entries'],1)
+                self.assertNotIn('PRIVATE',json.dumps(result))
+        wrong_unit=M.log_projection(('2026-10-07T19:35:00Z '+prefix+
+            'request_elapsed_ms=1 remaining_ms=0').encode(),source='docker',unit='relay')
+        self.assertEqual(wrong_unit['events'],[])
+        self.assertEqual(wrong_unit['templates']['categories'],{})
+
+    def test_fourth_ui_passive_diagnostics_preserve_guards_without_opening_database(self):
+        commit=load('naver_preview_code_upgrade_v4').TARGET_COMMIT
+        self.assertEqual(commit,'f3a9c321c2142ae759d9af482cde706a6af57564')
+        self.check_run_diagnostics(commit,passive=True)
+
+    def test_reviewed_third_and_fourth_profiles_keep_bounded_readonly_guards_and_partial_results(self):
+        for module in ('naver_preview_code_upgrade_v3','naver_preview_code_upgrade_v4'):
+            code=load(module)
+            self.assertEqual(M.PROFILE_RELEASES[code.TARGET_COMMIT],(
+                code.TARGET_SOURCE_SHA256,code.STORE_SHA256['target'],code.EXPECTED_BASELINE))
+            for mode in ('latency','dashboard'):
+                with self.subTest(module=module,mode=mode):
+                    self.check_run_diagnostics(code.TARGET_COMMIT,**{mode:True})
+
+    def test_new_profile_archive_and_baseline_mismatch_refuse_before_host_or_process_action(self):
+        self.assertEqual(set(M.PROFILE_RELEASES),{
+            '953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6','f3a9c321c2142ae759d9af482cde706a6af57564'})
+        for commit,(archive,store,baseline) in M.PROFILE_RELEASES.items():
+            for mode in ('latency_profile_only','dashboard_profile_only'):
+                good=dict(source_commit=commit,source_tar_gz_sha256=archive,baseline=baseline,**{mode:True})
+                for field in ('source_tar_gz_sha256','baseline'):
+                    host,release=Mock(),Mock()
+                    with self.subTest(commit=commit,mode=mode,field=field),patch.object(M,'capture_process') as capture:
+                        with self.assertRaisesRegex(ValueError,'^PROFILE_SOURCE_PIN_CHANGED$'):
+                            M.run(dict(good,**{field:'0'*64}),host,release)
+                        capture.assert_not_called()
+                    self.assertFalse(host.mock_calls)
+                    self.assertFalse(release.mock_calls)
+
+    def test_profile_store_hash_path_and_mode_are_verified_without_database_access(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve();source=root/'naver_engine/store.py'
+            source.parent.mkdir();body=b'SCHEMA_VERSION=11\n';source.write_bytes(body);source.chmod(0o644)
+            digest=hashlib.sha256(body).hexdigest()
+            args=dict(uid=os.getuid(),gid=os.getgid())
+            with patch.object(M.sqlite3,'connect',side_effect=AssertionError('DB forbidden')):
+                M.verify_profile_store(root,digest,**args)
+                source.write_bytes(body+b' altered')
+                with self.assertRaisesRegex(ValueError,'^PROFILE_STORE_CHANGED$'):
+                    M.verify_profile_store(root,digest,**args)
+                source.write_bytes(body);source.chmod(0o666)
+                with self.assertRaisesRegex(ValueError,'^PROFILE_STORE_CHANGED$'):
+                    M.verify_profile_store(root,digest,**args)
+                source.chmod(0o644)
+                for value in (b'',b'x'*1048577):
+                    source.write_bytes(value)
+                    with self.subTest(size=len(value)),self.assertRaisesRegex(ValueError,'^PROFILE_STORE_CHANGED$'):
+                        M.verify_profile_store(root,digest,**args)
+                source.write_bytes(body)
+                hardlink=source.with_name('store-hardlink.py');os.link(source,hardlink)
+                with self.assertRaisesRegex(ValueError,'^PROFILE_STORE_CHANGED$'):
+                    M.verify_profile_store(root,digest,**args)
+                hardlink.unlink()
+                source.rename(source.with_name('store-copy.py'))
+                source.symlink_to(source.with_name('store-copy.py'))
+                with self.assertRaisesRegex(ValueError,'^PROFILE_STORE_CHANGED$'):
+                    M.verify_profile_store(root,digest,**args)
 
 if __name__ == '__main__':
     unittest.main()
