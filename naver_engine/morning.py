@@ -48,6 +48,7 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 from collections import Counter
 from dataclasses import dataclass, field
@@ -66,6 +67,8 @@ from . import store as S
 from . import sync as Y
 from . import management as MP
 from . import morning_progress as CP
+
+log = logging.getLogger(__name__)
 
 CHECK_START = time(6, 30)            # 설계 §매일 아침 점검 — 06:30 시작
 CHECK_DEADLINE = time(8, 0)          # 08:00 전 끝(② 08:00·08:30 작업과 같은 서버·같은 주소 — 겹치지 않게)
@@ -647,6 +650,7 @@ def _record(store: S.Store, run_id: int, row: dict, clock, counts: Counter, tall
 def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: date, deadline: datetime,
           th: Thresholds, switches, enabled: Tuple[str, ...], redo: frozenset, codes: List[str], counts: Counter,
           tally: Counter, *, continuous=False) -> Tuple[str, Optional[str]]:
+    started_at = _need_time(clock())
     relevant, dups, per_cid = _pair_rows(store, pairing_id)
     if dups:
         codes.append(CODE_PAIR_DUPLICATE)
@@ -744,6 +748,14 @@ def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: da
                 codes.append("BUDGET_YIELD")
                 counts["abort_left"] += len(todo)-i
                 return S.RUN_DONE, None
+            # 원장 RUN_ABORT와 재시도 정책은 유지한다. 원문·계정·키 없이 실패 원인만 남긴다.
+            abort_code = exc.code if type(exc.code) is str and exc.code in (
+                "REQUEST_BUDGET", "REQUEST_DEADLINE", "REQUEST_CALL_CAP", "RATE") else "UNRECOGNIZED"
+            cause = "NONE" if exc.cause_code is None else exc.cause_code if type(exc.cause_code) is str \
+                and exc.cause_code in (N.KIND_SERVER, N.KIND_NETWORK, N.KIND_RATE) else "UNRECOGNIZED"
+            elapsed_ms = max(0, int((_need_time(clock()) - started_at).total_seconds() * 1000))
+            log.warning("morning_abort code=%s cause=%s calls=%d elapsed_ms=%d",
+                        abort_code, cause, reader.calls, elapsed_ms)
             if progress:
                 progress.discard()
             codes.append(CODE_RUN_ABORT)

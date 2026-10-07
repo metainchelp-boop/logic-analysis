@@ -27,7 +27,7 @@
     lastInput: Date.now(), refreshing: false, retryAt: 0, refreshRetryTimer: null, warned: false, bellGen: 0,
     filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
     inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current', inventoryPanel: 'coverage',
-    coverageQ: '', dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null, screen: null
+    coverageQ: '', dashboard: null, reports: null, reportsGen: 0, linksGen: 0, linksPid: null, screen: null, routeKey: null
   };
 
   // ── 작은 도구 ─────────────────────────────────────────────────────
@@ -120,7 +120,7 @@
   // 업체 자료는 이 창의 제한된 메모리에만 둔다. 커서는 권한이 아니며 재진입은 매번 서버 확인 뒤 연다.
   var VIEW_FIELDS = { watch: ['possibility_id'], transfers: ['ad_account_no'], reports: ['possibility_id', 'account_key'], dashboard: null };
   var VIEW_STATUS = { watch: 'watchSync', transfers: 'inventorySync', reports: 'reportsSync', dashboard: 'dashboardSync' };
-  var viewCache = new Map(), viewRequests = {}, viewShown = {}, viewChecked = {}, viewLegacy = {}, viewContext = null, viewEpoch = 0, upContext = null;
+  var viewCache = new Map(), viewRequests = {}, viewShown = {}, viewChecked = {}, viewLegacy = {}, viewContext = null, viewEpoch = 0, upContext = null, linksRequest = null;
   var VIEW_CACHE_COUNT = 8, VIEW_CACHE_BYTES = 4 * 1024 * 1024, VIEW_CACHE_AGE = 10 * 60 * 1000;
   function plain(value) { return !!value && typeof value === 'object' && !Array.isArray(value); }
   function rowKey(row, fields) {
@@ -160,8 +160,17 @@
     }
   }
   function gateView(name) { var el = $('s-' + name); if (el && VIEW_STATUS[name]) el.classList.add('view-unverified'); }
+  function cancelViewRequests() {
+    Object.keys(viewRequests).forEach(function (name) {
+      var request = viewRequests[name];
+      delete viewRequests[name];
+      request.controller.abort();
+    });
+    if (linksRequest) { linksRequest.controller.abort(); linksRequest = null; state.linksGen++; }
+  }
   function purgeViews() {
     if (reportUI) reportUI.reset();
+    cancelViewRequests();
     viewEpoch++; viewCache.clear(); viewRequests = {}; viewShown = {}; viewChecked = {}; viewLegacy = {};
     state.gen++; state.inventoryGen++; state.reportsGen++; state.linksGen++; state.bellGen++;
     state.board = null; state.dashboard = null; state.inventory = null; state.reports = null; state.loadedDay = null;
@@ -247,18 +256,19 @@
     var context = syncContext(), key = context + '|' + path, gen = state.gen, epoch = viewEpoch, day = kstDay();
     var pending = viewRequests[name];
     if (pending && pending.key === key && pending.gen === gen) { pending.apply = apply; return pending.promise; }
+    if (pending) pending.controller.abort();
     var prior = viewCache.get(key);
     if (prior && Date.now() - prior.saved > VIEW_CACHE_AGE) { viewCache.delete(key); prior = null; }
     var visible = viewShown[name] === key && !$('s-' + name).classList.contains('view-unverified');
     var checked = prior ? prior.checked : visible ? viewChecked[name] : null;
     if (!visible) gateView(name);
-    var request = { key: key, gen: gen, apply: apply }, base = prior;
+    var request = { key: key, gen: gen, apply: apply, controller: new AbortController() }, base = prior;
     viewRequests[name] = request;
     function fresh() { return epoch === viewEpoch && gen === state.gen && state.screen === name &&
       viewRequests[name] === request && !!state.me && !!state.session && document.visibilityState !== 'hidden'; }
     viewStatus(name, 'checking', checked);
     function read(cursor, legacy, recovered) {
-      return api('GET', path + (legacy ? '' : '&view_sync=1' + (cursor ? '&view_cursor=' + encodeURIComponent(cursor) : ''))).then(function (response) {
+      return api('GET', path + (legacy ? '' : '&view_sync=1' + (cursor ? '&view_cursor=' + encodeURIComponent(cursor) : '')), undefined, request.controller.signal).then(function (response) {
         if (!fresh()) return null;
         if (day !== kstDay()) { syncContext(); route(); return null; }
         try {
@@ -648,7 +658,7 @@
     tick();   // 새로 고침 · 잠자기 뒤 바로 한 번(토큰이 곧 끝나면 지금 갱신)
   }
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState !== 'visible') { gateView(state.screen); return; }
+    if (document.visibilityState !== 'visible') { gateView(state.screen); cancelViewRequests(); return; }
     gateView(state.screen);
     renderRuntime();
     tick();
@@ -687,7 +697,12 @@
   window.addEventListener('popstate', function () { if (state.me) route(); });
   function route() {
     var r = parse(location.pathname);
-    syncContext();
+    var context = syncContext(), routeKey = context + '|' + location.pathname + location.search;
+    // 같은 탭의 연타만 진행 중 조회에 합친다. 재진입·범위 변경·완료 뒤 새로고침은 다시 검증한다.
+    var pending = viewRequests[r.screen];
+    if (state.routeKey === routeKey && state.screen === r.screen && pending && pending.gen === state.gen) return pending.promise;
+    cancelViewRequests();
+    state.routeKey = routeKey;
     state.gen++;
     state.links = null;
     state.linksPid = null;
@@ -1956,8 +1971,13 @@
     return '확정 차단 사유를 확인하지 못했습니다. 목록을 새로고침하고 현재 담당 권한·원천 자료를 확인해 주세요.';
   }
   function loadLinks() {
+    var path = linksPath();
+    if (linksRequest && linksRequest.gen === state.gen && linksRequest.path === path) return linksRequest.promise;
+    if (linksRequest) linksRequest.controller.abort();
     var gen = state.gen, selection = state.selection, linkGen = ++state.linksGen;
-    return api('GET', linksPath()).then(function (j) {
+    var request = {gen: gen, path: path, controller: new AbortController()};
+    linksRequest = request;
+    request.promise = api('GET', path, undefined, request.controller.signal).then(function (j) {
       if (gen !== state.gen || selection !== state.selection || linkGen !== state.linksGen) return;
       if (!linksShape(j)) {
         $('links-n').textContent = ''; $('confirmAuto').hidden = true;
@@ -1965,7 +1985,9 @@
         return;
       }
       state.links = j; renderLinks(); renderClientLinks();
-    }, function (e) { if (gen === state.gen && selection === state.selection && linkGen === state.linksGen) fail(e); });
+    }, function (e) { if (gen === state.gen && selection === state.selection && linkGen === state.linksGen) fail(e); })
+      .then(function () { if (linksRequest === request) linksRequest = null; });
+    return request.promise;
   }
   // 짝 목록 응답(옛 경로 = pairing_at · 전체 목록 경로 = source catalog)만 그린다 — 다른 모양은 짝으로 읽지 않는다
   function linksShape(j) {

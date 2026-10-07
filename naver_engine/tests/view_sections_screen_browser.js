@@ -162,17 +162,18 @@ const cfg = JSON.parse(process.argv[2]);
     assert.doesNotMatch(await page.locator('#managedCoverage').innerText(), /아래 계정 목록/);
     assert.doesNotMatch(await page.locator('#inventory-stat-balance').innerText(), /아래 목록/);
     checks.push('transfer-selection-survives-route-and-scope', 'hidden-panel-network-failure-stays-hidden');
-    let lateRelease, lateReceived, firstHeld = true;
+    let lateRelease, lateReceived, lateRequest, firstHeld = true;
     const lateHeld = new Promise(resolve => { lateReceived = resolve; });
     await page.route('**/api/naver-auto/accounts?**', async route => {
       const response = await route.fetch();
-      if (firstHeld) { firstHeld = false; await new Promise(resolve => { lateRelease = resolve; lateReceived(); }); }
+      if (firstHeld) { firstHeld = false; lateRequest = route.request(); await new Promise(resolve => { lateRelease = resolve; lateReceived(); }); }
       await route.fulfill({response});
     });
     await page.click('#inventoryReload'); await lateHeld;
+    // 다른 패널의 새 검증을 시작하면 이전 GET은 취소한다. 취소된 HTTP 응답을 기다리지 않는다.
+    const lateCancelled = page.waitForEvent('requestfailed', request => request === lateRequest);
     await accountAction(() => page.click('#inventoryAccountsTab'));
-    const lateReply = page.waitForResponse(accountsUrl);
-    lateRelease(); await (await lateReply).finished();
+    lateRelease(); await lateCancelled;
     await page.unroute('**/api/naver-auto/accounts?**');
     assert.equal(await page.locator('#managedCoverage').isVisible(), false);
     assert.equal(await page.locator('#inventoryCard').isVisible(), true);

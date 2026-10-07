@@ -2757,7 +2757,12 @@ class ManagedStorage:
         from . import management_store as MS
         decisions = MS.snapshot(self, now)
         attribution_changes = self.attribution_changes()
-        jobs = _rows(self._conn.execute("SELECT * FROM naver_auto_performance_job ORDER BY checked_at,job_key"))
+        # 목록에는 이어읽기/캠페인 JSON이 필요 없다. 큰 본문을 SQL 정렬·Python 행에 싣지 않는다.
+        jobs = _rows(self._conn.execute("""SELECT job_key,customer_id,kind,cycle_day,period_start,period_end,
+            snapshot_at,catalog_at,stage_revision,possibility_id,matching_fingerprint,status,checked_at,next_try_at,
+            attempts,error_code,progress_hash,bizmoney,bizmoney_at,last_success_at,last_bizmoney,last_bizmoney_at,
+            previous_bizmoney,previous_bizmoney_at,generation,source_wait_attempts
+            FROM naver_auto_performance_job ORDER BY checked_at,job_key"""))
         latest, success, balances, revalidations = {}, {}, {}, {}
         for job in jobs:
             cid = job["customer_id"]
@@ -2849,7 +2854,8 @@ class ManagedStorage:
 
     def latest_inventory_successes(self):
         """이전 버전 성공 자료도 실제 실적일과 함께 보존해 보여 준다."""
-        rows = _rows(self._conn.execute("""SELECT i.* FROM naver_auto_inventory_check i WHERE i.status='ok'
+        rows = _rows(self._conn.execute("""SELECT i.customer_id,i.day,i.checked_at,i.bizmoney,
+            i.yday_spend,i.yday_imp,i.yday_clk FROM naver_auto_inventory_check i WHERE i.status='ok'
             AND i.day=(SELECT MAX(p.day) FROM naver_auto_inventory_check p
                 WHERE p.customer_id=i.customer_id AND p.status='ok')"""))
         out = {}

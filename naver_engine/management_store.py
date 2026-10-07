@@ -68,6 +68,11 @@ def snapshot(store, now, *, stage_states=None) -> dict:
 
 def _matched(store, accounts, decisions, catalog, evidence):
     """``I._matching(…)[0]`` 과 같은 결과. 같은 입력이 이어지면 지난 계산을 다시 쓴다(위 설명)."""
+    return matching_result(store, accounts, decisions, catalog, evidence)[0]
+
+
+def matching_result(store, accounts, decisions, catalog, evidence, *, candidate_counts=None):
+    """현재 계정의 순수 매칭만 공유한다. 권한·단계·원천 신선도 판정은 호출자가 매번 한다."""
     from . import inventory as I   # snapshot 과 같은 까닭(inventory 가 store 를 참조)으로 부를 때 불러온다
     functions = (I._matching, I.M.match, I.M.loose_name)
     try:
@@ -80,14 +85,21 @@ def _matched(store, accounts, decisions, catalog, evidence):
         key = None
     memo = getattr(store, "_management_match_memo", None) if key is not None else None
     if memo is not None and memo[0] == key and all(a is b for a, b in zip(memo[1], functions)):
-        return memo[2]
-    result, _ = I._matching(SimpleNamespace(accounts=accounts, live_decisions=decisions), catalog, auto_evidence=evidence)
+        if candidate_counts is not None:
+            candidate_counts.update(memo[4])
+        return memo[2], set(memo[3])
+    counts = {}
+    result, possible = I._matching(SimpleNamespace(accounts=accounts, live_decisions=decisions), catalog,
+                                   auto_evidence=evidence, candidate_counts=counts)
     if key is not None:
         try:
-            store._management_match_memo = (key, functions, result)
+            # 목록이 집합/사전을 바꿔도 뒤의 관리 판정·후보 수가 오염되지 않는다.
+            store._management_match_memo = (key, functions, result, frozenset(possible), tuple(counts.items()))
         except AttributeError:   # 칸을 더할 수 없는 시험 저장소 — 기억 없이 계속
             pass
-    return result
+    if candidate_counts is not None:
+        candidate_counts.update(counts)
+    return result, possible
 
 
 def require_action(store, now, viewer_idx, customer_id, *, possibility_id=None, allow_unmatched=False) -> dict:

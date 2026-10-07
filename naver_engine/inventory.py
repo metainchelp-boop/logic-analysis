@@ -5,7 +5,7 @@ from decimal import Decimal
 import math
 
 from app.naver_auto import matching as M, scope as SC, org_snapshot as O
-from . import erp_read as E, handles as H, links as L, store as S, views as W
+from . import erp_read as E, handles as H, links as L, management_store as MS, store as S, views as W
 from .management import DAILY_STAGES
 
 WORKFLOWS = ("진행중", "전략관리", "사후관리", "재계약진행중", "환불중", "홀딩중", "환불완료", "계약만료", "미분류")
@@ -210,26 +210,15 @@ def _managed_coverage(ctx, companies, catalog, visible, owns, result, candidate_
             "matched": matched if ready else None, "missing": len(items)-matched if ready else None, "items": items}
 
 
-def board(ctx, store, scope, selection="all", workflow="all", mapping="all", view="current", *, _include_customer_ids=False):
-    if workflow not in ("all", *WORKFLOWS) or mapping not in ("all", *MAPPINGS) \
-            or view not in ("current", "lost", "balance_known"):
-        raise SC.SelectionRejected()
-    catalog, state = catalog_status(store, ctx.now)
-    companies = {} if catalog is None else {r["possibility_id"]: r for r in catalog["items"]}
-    owns = {pid: SC.ownership_for_client(ctx.org, pid, pid, SC.MATCH_PID) for pid in companies}
-    # 모든 요청에서 재판정. 잘못된 person/team 선택도 데이터가 0건이라고 조용히 허용하지 않는다.
-    visible = SC.clients_in(ctx.org, scope, owns, selection)
-    all_scope = SC.scope_of(ctx.org, scope.viewer_idx)
-    ceo = scope == all_scope and scope.kind == SC.ALL
-    at = store.accounts_read_at()
-    accounts_current = store.inventory_snapshot(ctx.now) is not None
+def _current_matches(ctx, store, catalog, state, accounts_current):
+    """목록과 직원 수가 공유하는 현재 계정 매칭 판정. 상세 점검 이력은 읽지 않는다."""
     pairs, ambiguous, candidate_counts = {}, set(), {}
     result = None
     match_ok = state == "accepted" and accounts_current
     if match_ok:
         try:
-            result, possible_accounts = _matching(ctx, catalog, candidate_counts=candidate_counts,
-                                                  auto_evidence=automatic_evidence(store))
+            result, possible_accounts = MS.matching_result(store, ctx.accounts, ctx.live_decisions, catalog,
+                automatic_evidence(store), candidate_counts=candidate_counts)
             for p in result.pairs:
                 if p.customer_id in pairs:
                     ambiguous.add(p.customer_id)
@@ -248,6 +237,24 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
                 ambiguous.update(c for c in (target, cid) if c in ctx.accounts and c not in pairs)
         except M.BadInput:
             match_ok = False
+    return result, pairs, ambiguous, candidate_counts, match_ok
+
+
+def board(ctx, store, scope, selection="all", workflow="all", mapping="all", view="current", *, _include_customer_ids=False):
+    if workflow not in ("all", *WORKFLOWS) or mapping not in ("all", *MAPPINGS) \
+            or view not in ("current", "lost", "balance_known"):
+        raise SC.SelectionRejected()
+    catalog, state = catalog_status(store, ctx.now)
+    companies = {} if catalog is None else {r["possibility_id"]: r for r in catalog["items"]}
+    owns = {pid: SC.ownership_for_client(ctx.org, pid, pid, SC.MATCH_PID) for pid in companies}
+    # 모든 요청에서 재판정. 잘못된 person/team 선택도 데이터가 0건이라고 조용히 허용하지 않는다.
+    visible = SC.clients_in(ctx.org, scope, owns, selection)
+    all_scope = SC.scope_of(ctx.org, scope.viewer_idx)
+    ceo = scope == all_scope and scope.kind == SC.ALL
+    at = store.accounts_read_at()
+    accounts_current = store.inventory_snapshot(ctx.now) is not None
+    result, pairs, ambiguous, candidate_counts, match_ok = _current_matches(
+        ctx, store, catalog, state, accounts_current)
     checks = store.inventory_checks_on(ctx.today)
     structure = store.structure_reason_summaries(ctx.accounts.keys(),ctx.now) \
         if callable(getattr(store,"structure_reason_summaries",None)) else {}
@@ -356,8 +363,20 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
 def staff_counts(ctx, store, scope):
     """직원에게는 본인 수만. 대표는 현재 이관 계정을 각 담당별로 중복 없이 센다."""
     out = {}
-    matched = [r for r in board(ctx, store, scope)["rows"] if r["mapping"] == "matched"]
-    per_pid = Counter(r["possibility_id"] for r in matched)
+    catalog, state = catalog_status(store, ctx.now)
+    companies = {} if catalog is None else {r["possibility_id"]: r for r in catalog["items"]}
+    owns = {pid: SC.ownership_for_client(ctx.org, pid, pid, SC.MATCH_PID) for pid in companies}
+    visible = SC.clients_in(ctx.org, scope, owns)
+    _result, pairs, ambiguous, _candidates, ready = _current_matches(
+        ctx, store, catalog, state, store.inventory_snapshot(ctx.now) is not None)
+    per_pid = Counter()
+    if ready:
+        for cid, pair in pairs.items():
+            company = companies.get(pair.possibility_id)
+            if cid in ambiguous or not company or company["stage_hidden"] or not company["stage_known"]:
+                continue
+            if pair.possibility_id in visible:
+                per_pid[pair.possibility_id] += 1
     owns = {pid: SC.ownership_for_client(ctx.org, pid, pid, SC.MATCH_PID) for pid in per_pid}
     for idx in scope.people:
         person = ctx.org.people.get(idx)
