@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import collections
+import errno
 import hashlib
 import hmac
 import http.client
@@ -33,6 +34,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from socket import SocketIO, gaierror
 from dataclasses import dataclass, field
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -108,6 +110,7 @@ class RunAbort(RuntimeError):
         self.code = code if type(code) is str and code in allowed else "REQUEST_BUDGET"
         causes = {KIND_SERVER, KIND_NETWORK, KIND_RATE}
         self.cause_code = cause_code if type(cause_code) is str and cause_code in causes else None
+        self.network_diagnostic = None
         super().__init__(*args)
 
 
@@ -151,6 +154,130 @@ def classify(status: Optional[int], code: Optional[int]) -> str:
 def path_shape(path: str) -> str:
     """오류·로그용 경로 모양 — 번호는 {no} 로 가린다."""
     return re.sub(r"/[0-9]+", "/{no}", path)
+
+
+_NETWORK_KINDS = frozenset({"DNS", "TLS_CERT", "TLS", "TIMEOUT", "DEADLINE", "RESET", "REFUSED",
+                           "ABORTED", "BROKEN_PIPE", "UNREACHABLE", "HTTP_INCOMPLETE", "HTTP_DISCONNECTED",
+                           "HTTP", "OTHER"})
+_NETWORK_PHASES = frozenset({"OPEN", "BODY", "TRANSPORT"})
+_REQUEST_STEPS = {"/manager-accounts": "MANAGERS", "/ncc/campaigns": "CAMPAIGNS",
+                  "/billing/bizmoney": "BIZMONEY", "/stats": "STATS", "/ncc/channels": "CHANNELS",
+                  "/ncc/adgroups": "ADGROUPS", "/ncc/ads": "ADS", "/ncc/keywords": "KEYWORDS",
+                  "/ncc/ad-extensions": "EXTENSIONS"}
+_STEP_NAMES = frozenset((*_REQUEST_STEPS.values(), "CHILD_ACCOUNTS", "NONE"))
+
+
+@dataclass(frozen=True)
+class NetworkDiagnostic:
+    """원문·URL·계정 없이 고정 분류와 시간만 전달한다. 로그 직전에도 다시 검증한다."""
+    kind: str
+    phase: str
+    step: str = "NONE"
+    elapsed_ms: int = 0
+    remaining_ms: int = 0
+
+
+def _milliseconds(seconds) -> int:
+    return int(max(0, min(3600, seconds)) * 1000) \
+        if type(seconds) in (int, float) and math.isfinite(seconds) else 0
+
+
+def safe_network_diagnostic(value) -> NetworkDiagnostic:
+    def enum(item, allowed):
+        return item if type(item) is str and item in allowed else "UNRECOGNIZED"
+
+    def milliseconds(item):
+        return max(0, min(3_600_000, item)) if type(item) is int else 0
+
+    if type(value) is not NetworkDiagnostic:
+        return NetworkDiagnostic("UNRECOGNIZED", "UNRECOGNIZED", "UNRECOGNIZED")
+    return NetworkDiagnostic(enum(value.kind, _NETWORK_KINDS), enum(value.phase, _NETWORK_PHASES),
+                             enum(value.step, _STEP_NAMES), milliseconds(value.elapsed_ms),
+                             milliseconds(value.remaining_ms))
+
+
+def _network_kind(error) -> str:
+    # URLError.reason 문자열에는 호스트·키가 섞일 수 있다. 예외 객체인 경우만 종류를 살핀다.
+    for _ in range(3):
+        if isinstance(error, TransportNetworkError):
+            return safe_network_diagnostic(error.diagnostic).kind
+        if isinstance(error, urllib.error.URLError) and isinstance(error.reason, BaseException):
+            error = error.reason
+        else:
+            break
+    if isinstance(error, _BodyDeadlineExceeded):
+        return "DEADLINE"
+    for exception, kind in ((gaierror, "DNS"), (ssl.SSLCertVerificationError, "TLS_CERT"),
+                            (ssl.SSLError, "TLS"), (TimeoutError, "TIMEOUT"),
+                            (http.client.IncompleteRead, "HTTP_INCOMPLETE"),
+                            (http.client.RemoteDisconnected, "HTTP_DISCONNECTED"),
+                            (ConnectionResetError, "RESET"), (ConnectionRefusedError, "REFUSED"),
+                            (ConnectionAbortedError, "ABORTED"), (BrokenPipeError, "BROKEN_PIPE")):
+        if isinstance(error, exception):
+            return kind
+    if isinstance(error, OSError) and error.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+        return "UNREACHABLE"
+    return "HTTP" if isinstance(error, http.client.HTTPException) else "OTHER"
+
+
+def _request_step(path: str) -> str:
+    if _PATHS[1].fullmatch(path):
+        return "CHILD_ACCOUNTS"
+    return _REQUEST_STEPS.get(path, "NONE")
+
+
+class TransportNetworkError(urllib.error.URLError):
+    def __init__(self, diagnostic: NetworkDiagnostic):
+        self.diagnostic = safe_network_diagnostic(diagnostic)
+        super().__init__("NETWORK")
+
+
+class _BodyDeadlineExceeded(TimeoutError):
+    pass
+
+
+def _body_remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _BodyDeadlineExceeded("body-deadline")
+    return remaining
+
+
+class _DeadlineSocket:
+    """이미 열린 소켓의 recv마다 남은 총시간을 적용한다. 새 연결을 만들지 않는다."""
+    def __init__(self, wrapped, deadline: float):
+        self._wrapped, self._deadline = wrapped, deadline
+
+    def recv_into(self, *args):
+        self._wrapped.settimeout(_body_remaining(self._deadline))
+        return self._wrapped.recv_into(*args)
+
+    def _decref_socketios(self):
+        return self._wrapped._decref_socketios()
+
+
+def _read_body(response, deadline: float) -> bytes:
+    _body_remaining(deadline)
+    # HTTPError.fp는 HTTPResponse, HTTPResponse.fp는 BufferedReader(SocketIO)다.
+    stream, raw = response, None
+    for _ in range(2):
+        stream = getattr(stream, "fp", None)
+        candidate = getattr(stream, "raw", None)
+        if isinstance(candidate, SocketIO) and candidate._sock is not None:
+            raw = candidate
+            break
+    wrapped = raw._sock if raw is not None else None
+    limited = _DeadlineSocket(wrapped, deadline) if wrapped is not None else None
+    if raw is not None:
+        raw._sock = limited
+    try:
+        body = response.read(MAX_BODY + 1)
+        _body_remaining(deadline)
+        return body
+    finally:
+        # HTTPResponse가 EOF에서 SocketIO를 닫았다면 닫힌 객체를 되살리지 않는다.
+        if raw is not None and raw._sock is limited:
+            raw._sock = wrapped
 
 
 def _sign(secret: str, ts: str, method: str, path: str) -> str:
@@ -198,14 +325,28 @@ class UrllibTransport:
             urllib.request.ProxyHandler({}), _NoRedirect(), urllib.request.HTTPSHandler(context=_verifying_context()))
 
     def send(self, req: urllib.request.Request, timeout: float) -> Tuple[int, bytes]:
+        started = time.monotonic()
+        deadline, phase = started + timeout, "OPEN"
         try:
-            with self._opener.open(req, timeout=timeout) as r:
-                return r.status, r.read(MAX_BODY + 1)
-        except urllib.error.HTTPError as e:
             try:
-                return e.code, e.read(MAX_BODY + 1)
-            finally:
-                e.close()
+                with self._opener.open(req, timeout=timeout) as r:
+                    _body_remaining(deadline)
+                    phase = "BODY"
+                    return r.status, _read_body(r, deadline)
+            except urllib.error.HTTPError as e:
+                try:
+                    _body_remaining(deadline)
+                    phase = "BODY"
+                    return e.code, _read_body(e, deadline)
+                finally:
+                    e.close()
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+            now = time.monotonic()
+            kind = _network_kind(e)
+            if phase == "BODY" and kind == "TIMEOUT" and now >= deadline:
+                kind = "DEADLINE"
+            raise TransportNetworkError(NetworkDiagnostic(kind, phase,
+                elapsed_ms=_milliseconds(now - started), remaining_ms=_milliseconds(deadline - now))) from None
 
 
 class SystemClock:
@@ -593,15 +734,31 @@ class NaverReader:
         shape = path_shape(path)
         tries = {KIND_RATE: 0, KIND_SERVER: 0, KIND_NETWORK: 0}
         last_cause = None
+        last_network_diagnostic = None
         try:
             while True:
                 status: Optional[int] = None
                 code: Optional[int] = None
+                attempt_started, wall_started = self._clock.monotonic(), time.monotonic()
                 try:
                     status, body = self._gate("GET", path, params, customer_id, ah)
                 except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
                     kind, detail = KIND_NETWORK, type(e).__name__
+                    if isinstance(e, TransportNetworkError):
+                        diagnostic = safe_network_diagnostic(e.diagnostic)
+                        detail = diagnostic.kind + ":" + diagnostic.phase
+                    else:
+                        try:
+                            remaining = self._remaining()
+                        except RunAbort:
+                            remaining = 0
+                        diagnostic = NetworkDiagnostic(_network_kind(e), "TRANSPORT", elapsed_ms=_milliseconds(max(
+                            self._clock.monotonic() - attempt_started, time.monotonic() - wall_started)),
+                            remaining_ms=_milliseconds(remaining))
+                    last_network_diagnostic = NetworkDiagnostic(diagnostic.kind, diagnostic.phase,
+                        _request_step(path), diagnostic.elapsed_ms, diagnostic.remaining_ms)
                 else:
+                    last_network_diagnostic = None
                     if status == 200:
                         return self._decode(body, shape, customer_id, status)
                     if 200 < status < 300:  # 206 · 203 등 — 온전한 응답이라 믿지 않는다
@@ -619,6 +776,11 @@ class NaverReader:
                     continue
                 if kind in (KIND_SERVER, KIND_NETWORK):
                     if tries[kind] >= len(RETRY_BACKOFF):
+                        if kind == KIND_NETWORK:
+                            diagnostic = safe_network_diagnostic(last_network_diagnostic)
+                            log.warning("naver_network_failure kind=%s phase=%s step=%s request_elapsed_ms=%d remaining_ms=%d",
+                                        diagnostic.kind, diagnostic.phase, diagnostic.step,
+                                        diagnostic.elapsed_ms, diagnostic.remaining_ms)
                         raise NaverApiError(kind, shape, status, code, customer_id, detail)
                     self._sleep(RETRY_BACKOFF[tries[kind]])
                     tries[kind] += 1
@@ -629,6 +791,7 @@ class NaverReader:
             # 중단 코드·예산은 유지하고 이 요청 안의 마지막 재시도 원인만 덧붙인다.
             # 요청이 성공하면 지역 변수도 끝나므로 다음 요청의 예산 종료로 번지지 않는다.
             exc.cause_code = last_cause
+            exc.network_diagnostic = last_network_diagnostic if last_cause == KIND_NETWORK else None
             raise
 
     @staticmethod

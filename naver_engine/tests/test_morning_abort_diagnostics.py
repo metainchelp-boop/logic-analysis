@@ -45,8 +45,12 @@ class MorningAbortDiagnosticsTests(unittest.TestCase):
                 with self.assertLogs(LOGGER, level="WARNING") as logs:
                     reader, outcome = self.run_bounded(fixture)
                 elapsed_ms = int((fixture.fc.now() - started).total_seconds() * 1000)
-                self.assertEqual(logs.output, [f"WARNING:{LOGGER}:morning_abort code=REQUEST_DEADLINE "
-                    f"cause={cause} calls=3 elapsed_ms={elapsed_ms}"])
+                expected = [f"WARNING:{LOGGER}:morning_abort code=REQUEST_DEADLINE "
+                    f"cause={cause} calls=3 elapsed_ms={elapsed_ms}"]
+                if cause == "NETWORK":
+                    expected.append(f"WARNING:{LOGGER}:morning_network_failure kind=TIMEOUT phase=TRANSPORT "
+                        "step=CAMPAIGNS request_elapsed_ms=8500 remaining_ms=1500")
+                self.assertEqual(logs.output, expected)
                 self.assertEqual(reader.calls, 3)
                 self.assertEqual(reader.rate_limited, cause == "RATE")
                 self.assertEqual((outcome.outcome, outcome.codes), (M.OUT_FAILED, (M.CODE_RUN_ABORT,)))
@@ -81,6 +85,41 @@ class MorningAbortDiagnosticsTests(unittest.TestCase):
                 reader, outcome = self.run_bounded(fixture, calls=2)
             self.assertEqual(reader.calls, 2)
             self.assertEqual((outcome.outcome, outcome.codes), (M.OUT_DONE, ("BUDGET_YIELD",)))
+
+    def test_successful_network_retry_does_not_label_a_later_budget_yield(self):
+        with scene() as fixture:
+            fixture.naver.script("/ncc/campaigns", TimeoutError("PRIVATE"))
+            with self.assertNoLogs(LOGGER, level="WARNING"):
+                reader, outcome = self.run_bounded(fixture, calls=2)
+            self.assertEqual(reader.calls, 2)
+            self.assertEqual((outcome.outcome, outcome.codes), (M.OUT_DONE, ("BUDGET_YIELD",)))
+
+    def test_wrapped_transport_diagnostic_keeps_its_stage_and_timing(self):
+        with scene() as fixture:
+            fixture.naver.tick = lambda call: fixture.fc.advance(8.5 if call.path == "/billing/bizmoney" else 0)
+            error = N.TransportNetworkError(N.NetworkDiagnostic("DNS", "OPEN", elapsed_ms=50, remaining_ms=150))
+            fixture.naver.script("/billing/bizmoney", *((error,) * 10))
+            with self.assertLogs(LOGGER, level="WARNING") as logs:
+                _, outcome = self.run_bounded(fixture)
+            self.assertEqual(logs.output[-1], f"WARNING:{LOGGER}:morning_network_failure kind=DNS phase=OPEN "
+                "step=BIZMONEY request_elapsed_ms=50 remaining_ms=150")
+            self.assertEqual(outcome.outcome, M.OUT_FAILED)
+
+    def test_mutated_network_diagnostic_is_sanitized_again_before_logging(self):
+        bad_values = [None, "PRIVATE", {}, N.NetworkDiagnostic("PRIVATE", "PRIVATE", "PRIVATE", "PRIVATE", True),
+                      N.NetworkDiagnostic("TIMEOUT", "BODY", "STATS", -1, 9_999_999)]
+        for value in bad_values:
+            with self.subTest(value_type=type(value).__name__), scene() as fixture:
+                error = N.RunAbort("PRIVATE", code="REQUEST_DEADLINE", cause_code="NETWORK")
+                error.network_diagnostic = value
+                with patch.object(M, "read_account", side_effect=error), self.assertLogs(LOGGER, level="WARNING") as logs:
+                    _, outcome = self.run_bounded(fixture)
+                self.assertNotIn("PRIVATE", "\n".join(logs.output))
+                self.assertEqual(outcome.outcome, M.OUT_FAILED)
+                expected = ("kind=TIMEOUT phase=BODY step=STATS request_elapsed_ms=0 remaining_ms=3600000"
+                    if value == bad_values[-1] else
+                    "kind=UNRECOGNIZED phase=UNRECOGNIZED step=UNRECOGNIZED request_elapsed_ms=0 remaining_ms=0")
+                self.assertEqual(logs.output[-1], f"WARNING:{LOGGER}:morning_network_failure {expected}")
 
     def test_legacy_call_cap_logs_none_cause_and_remains_a_failed_run(self):
         with scene() as fixture:

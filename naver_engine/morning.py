@@ -756,6 +756,11 @@ def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: da
             elapsed_ms = max(0, int((_need_time(clock()) - started_at).total_seconds() * 1000))
             log.warning("morning_abort code=%s cause=%s calls=%d elapsed_ms=%d",
                         abort_code, cause, reader.calls, elapsed_ms)
+            if cause == N.KIND_NETWORK:
+                diagnostic = N.safe_network_diagnostic(exc.network_diagnostic)
+                log.warning("morning_network_failure kind=%s phase=%s step=%s request_elapsed_ms=%d remaining_ms=%d",
+                            diagnostic.kind, diagnostic.phase, diagnostic.step,
+                            diagnostic.elapsed_ms, diagnostic.remaining_ms)
             if progress:
                 progress.discard()
             codes.append(CODE_RUN_ABORT)

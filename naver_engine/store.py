@@ -2752,10 +2752,10 @@ class ManagedStorage:
             row["conversion_complete"] = bool(row["conversion_complete"])
         return out if possibility_id is None else [row for row in out if row["possibility_id"] == possibility_id]
 
-    def performance_checks(self, now):
+    def performance_checks(self, now, *, _policies=None):
         """시도 상태와 마지막 성공 자료를 분리한다. 과거 값은 실제 기간을 함께 반환한다."""
         from . import management_store as MS
-        decisions = MS.snapshot(self, now)
+        decisions = MS.snapshot(self, now) if _policies is None else _policies
         attribution_changes = self.attribution_changes()
         # 목록에는 이어읽기/캠페인 JSON이 필요 없다. 큰 본문을 SQL 정렬·Python 행에 싣지 않는다.
         jobs = _rows(self._conn.execute("""SELECT job_key,customer_id,kind,cycle_day,period_start,period_end,
@@ -2806,7 +2806,7 @@ class ManagedStorage:
             revalidations[cid] = {"kind": request.get("request_kind") or ("manual_period" if request.get("period_start") else "manual"),
                 "status": "pending", "period_start": start, "period_end": end, "checked_at": None,
                 "requested_at": request["requested_at"], "error_code": None, "generation": request["requested_at"], "last_success_at": None}
-        result = {}
+        result, periods = {}, {}
         for cid, row in decisions.items():
             decision, attempt, good = row["decision"], latest.get(cid), success.get(cid)
             period = P.period_for(decision.cadence, now) if decision.cadence != "blocked" else None
@@ -2838,18 +2838,26 @@ class ManagedStorage:
                     if good["bizmoney"] is not None:
                         change = good["bizmoney"]-old_balance
                         item["bizmoney_change"] = change if math.isfinite(change) else None
-                rows = self.daily_performance([cid], date.fromisoformat(good["period_start"]),
-                                               date.fromisoformat(good["period_end"]))
-                if row["possibility_id"] is not None:
-                    rows = [r for r in rows if r["possibility_id"] == row["possibility_id"]]
-                count = (date.fromisoformat(good["period_end"])-date.fromisoformat(good["period_start"])).days+1
-                if len(rows) == count and all(r["basic_complete"] for r in rows):
-                    item.update({k: sum(r[k] for r in rows) for k in ("spend", "imp", "clk")})
-                    verified = [r.get("checked_at") for r in rows]
-                    if all(verified):
-                        item["source_rechecked_at"] = min(verified)
-                item["activity_observed"] = any(r.get("spend", 0) > 0 or r.get("imp", 0) > 0 or r.get("clk", 0) > 0 for r in rows)
+                periods.setdefault((good["period_start"], good["period_end"]), []).append(cid)
             result[cid] = item
+        # 기간별 원천은 기존 SQL 상한과 같은 400계정씩만 잡는다. 전체 계정의 일별 행을 메모리에 쌓지 않는다.
+        for (start, end), ids in periods.items():
+            start, end = date.fromisoformat(start), date.fromisoformat(end)
+            count = (end-start).days+1
+            for offset in range(0, len(ids), 400):
+                chunk, daily = ids[offset:offset+400], {}
+                for source in self.daily_performance(chunk, start, end):
+                    daily.setdefault(source["customer_id"], []).append(source)
+                for cid in chunk:
+                    item, pid, rows = result[cid], decisions[cid]["possibility_id"], daily.get(cid, [])
+                    if pid is not None:
+                        rows = [r for r in rows if r["possibility_id"] == pid]
+                    if len(rows) == count and all(r["basic_complete"] for r in rows):
+                        item.update({k: sum(r[k] for r in rows) for k in ("spend", "imp", "clk")})
+                        verified = [r.get("checked_at") for r in rows]
+                        if all(verified):
+                            item["source_rechecked_at"] = min(verified)
+                    item["activity_observed"] = any(r.get("spend", 0) > 0 or r.get("imp", 0) > 0 or r.get("clk", 0) > 0 for r in rows)
         return result
 
     def latest_inventory_successes(self):
@@ -3188,13 +3196,13 @@ class ManagedStorage:
                         "error_code":row["error_code"],"reasons":json.loads(row["reasons_json"] or "[]"),"stale":not current}
         return out
 
-    def _structure_reason_state(self, customer_ids, now):
+    def _structure_reason_state(self, customer_ids, now, *, _policies=None):
         """목록용 SQL은 사유 배열을 반환하지 않는다. 현재 귀속/회차와 개수만 읽는다."""
         from . import management_store as MS
         wanted = sorted({_customer_id(cid, "고객 번호") for cid in customer_ids})
         if not wanted:
             return {}
-        policies = MS.snapshot(self, now)
+        policies = MS.snapshot(self, now) if _policies is None else _policies
         latest = {}
         for offset in range(0, len(wanted), 400):
             chunk = wanted[offset:offset+400]
@@ -3227,9 +3235,10 @@ class ManagedStorage:
             out[cid] = (summary, None if row is None else row["row_id"])
         return out
 
-    def structure_reason_summaries(self, customer_ids, now):
+    def structure_reason_summaries(self, customer_ids, now, *, _policies=None):
         """상세 사유를 역직렬화하지 않는 계정별 목록 요약."""
-        return {cid: summary for cid, (summary, _) in self._structure_reason_state(customer_ids, now).items()}
+        return {cid: summary for cid, (summary, _) in self._structure_reason_state(
+            customer_ids, now, _policies=_policies).items()}
 
     def structure_reason_page(self, customer_id, now, page=0):
         """현재 원천의 단일 계정만 50개씩 읽는다. 호출자가 직원 열람 범위를 확인한다."""
@@ -3263,6 +3272,17 @@ class Store(ManagedStorage):
 
     def __repr__(self) -> str:   # 경로·값을 보이지 않는다
         return f"Store(writer={self.writer})"
+
+    def inventory_collection_summaries(self, customer_ids, now):
+        """한 목록 요청의 현재 관리 정책을 구조/실적 요약에 함께 쓴다. 요청 밖에 기억하지 않는다."""
+        from . import management_store as MS
+        structure, performance = self.structure_reason_summaries, self.performance_checks
+        share_structure = getattr(structure, "__func__", None) is ManagedStorage.structure_reason_summaries
+        share_performance = getattr(performance, "__func__", None) is ManagedStorage.performance_checks
+        policies = MS.snapshot(self, now) if share_structure or share_performance else None
+        # 사용자 정의 조회 어댑터는 공유 인자를 받는다고 가정하지 않는다.
+        return (structure(customer_ids, now, _policies=policies) if share_structure else structure(customer_ids, now),
+                performance(now, _policies=policies) if share_performance else performance(now))
 
     def read_snapshot(self):
         """한 화면의 현재 권한과 자료를 같은 읽기 거래에서 대조한다. 업무 쓰기는 하지 않는다."""

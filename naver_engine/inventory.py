@@ -257,9 +257,14 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
     result, pairs, ambiguous, candidate_counts, match_ok = _current_matches(
         ctx, store, catalog, state, accounts_current)
     checks = store.inventory_checks_on(ctx.today)
-    structure = store.structure_reason_summaries(ctx.accounts.keys(),ctx.now) \
-        if not _dashboard_only and callable(getattr(store,"structure_reason_summaries",None)) else {}
-    managed = store.performance_checks(ctx.now) if callable(getattr(store,"performance_checks",None)) else {}
+    summaries = getattr(store,"inventory_collection_summaries",None)
+    if not _dashboard_only and callable(summaries):
+        structure, managed = summaries(ctx.accounts.keys(),ctx.now)
+    else:
+        # 구형 조회 어댑터와 월간 집계는 기존 호출 모양/필요한 원천만 유지한다.
+        structure = store.structure_reason_summaries(ctx.accounts.keys(),ctx.now) \
+            if not _dashboard_only and callable(getattr(store,"structure_reason_summaries",None)) else {}
+        managed = store.performance_checks(ctx.now) if callable(getattr(store,"performance_checks",None)) else {}
     legacy = store.latest_inventory_successes() if managed else {}
     for cid, current in managed.items():
         if not current.get("attribution_changed") and not current.get("last_success_at") and cid in legacy:
