@@ -1,6 +1,7 @@
 """읽기 관문의 고정 진단 코드 — 응답 원문 없이 기존 예외 문구를 보존한다."""
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from naver_engine import handles as H, naver_read as R
 from naver_engine.tests.fake_naver import FakeClock, FakeNaver
@@ -109,6 +110,115 @@ class DiagnosticCodeTest(unittest.TestCase):
 
 
 class RequestAbortCodeTest(unittest.TestCase):
+    def reader_with_timeout(self):
+        class TimedTransport(FakeNaver):
+            def send(self, req, timeout):
+                self.timeout = timeout
+                return super().send(req, timeout)
+        transport, clock = TimedTransport(), FakeClock(NOW)
+        transport.route(r"/ncc/campaigns", lambda call: (200, []))
+        return R.NaverReader(creds(), transport=transport, clock=clock),transport,clock
+
+    def assert_pure_deadline_without_http(self, reader, transport, call):
+        with patch.object(R.urllib.request,"Request",wraps=R.urllib.request.Request) as make_request:
+            with self.assertRaises(R.RunAbort) as caught:
+                call()
+        self.assertEqual((str(caught.exception),caught.exception.code),('bounded-deadline','REQUEST_DEADLINE'))
+        self.assertIsNone(caught.exception.cause_code)
+        self.assertIsNone(caught.exception.network_diagnostic)
+        make_request.assert_not_called()
+        self.assertEqual(transport.calls,[])
+        self.assertEqual(reader.calls,0)
+        self.assertEqual(reader.called_customers,frozenset())
+
+    def test_short_remaining_budget_yields_before_request_creation_or_call_accounting(self):
+        for seconds in (0.042,0.072,0.249):
+            with self.subTest(seconds=seconds),patch.object(R.time,'monotonic',return_value=0):
+                reader,transport,clock=self.reader_with_timeout()
+                with reader.bounded_requests(max_calls=8,max_seconds=1):
+                    clock.advance(1-seconds)
+                    self.assert_pure_deadline_without_http(reader,transport,
+                        lambda:reader.get_campaigns(check_handle()))
+
+    def test_exact_minimum_and_one_second_budget_keep_actual_remaining_timeout(self):
+        for seconds in (0.25,1):
+            with self.subTest(seconds=seconds),patch.object(R.time,'monotonic',return_value=0):
+                reader,transport,clock=self.reader_with_timeout()
+                with reader.bounded_requests(max_calls=8,max_seconds=1):
+                    clock.advance(1-seconds)
+                    self.assertEqual(reader.get_campaigns(check_handle()),[])
+                self.assertEqual(transport.timeout,seconds)
+                self.assertEqual((reader.calls,len(transport.calls)),(1,1))
+
+    def test_subsecond_context_remains_valid_but_cannot_start_below_minimum(self):
+        for seconds in (0.1,0.249):
+            with self.subTest(seconds=seconds),patch.object(R.time,'monotonic',return_value=0):
+                reader,transport,clock=self.reader_with_timeout()
+                with reader.bounded_requests(max_calls=8,max_seconds=seconds):
+                    reader.check_budget()
+                    self.assert_pure_deadline_without_http(reader,transport,
+                        lambda:reader.get_campaigns(check_handle()))
+                self.assertEqual(clock.sleeps,[])
+
+    def test_pacing_can_leave_positive_time_but_no_request_start_budget(self):
+        with patch.object(R.time,'monotonic',return_value=0):
+            reader,transport,clock=self.reader_with_timeout()
+            reader._pacer.last_sent=clock.monotonic()
+            with reader.bounded_requests(max_calls=8,max_seconds=0.5):
+                self.assert_pure_deadline_without_http(reader,transport,
+                    lambda:reader.get_campaigns(check_handle()))
+            self.assertAlmostEqual(clock.sleeps[0],1/R.CALLS_PER_SEC)
+
+    def test_inventory_revalidation_can_leave_positive_time_but_no_request_start_budget(self):
+        reader,transport,clock=self.reader_with_timeout()
+        validations=[]
+        def validate(customer,snapshot,now):
+            validations.append(customer)
+            if len(validations)>1:
+                clock.advance(0.4)
+            return True
+        handle=H.issue_inventory_handle(customer_id=123,snapshot_at=NOW,now=NOW,validate=validate)
+        with patch.object(R.time,'monotonic',return_value=0):
+            with reader.bounded_requests(max_calls=8,max_seconds=1):
+                self.assert_pure_deadline_without_http(reader,transport,lambda:reader.get_campaigns(handle))
+        self.assertEqual(len(validations),3)
+
+    def test_nested_clock_and_wall_budgets_both_apply_before_request_creation(self):
+        for shortest in ('inner','outer','wall'):
+            with self.subTest(shortest=shortest):
+                reader,transport,clock=self.reader_with_timeout()
+                wall=[0.0]
+                with patch.object(R.time,'monotonic',side_effect=lambda:wall[0]):
+                    with reader.bounded_requests(max_calls=8,max_seconds=1 if shortest=='outer' else 30):
+                        with reader.bounded_requests(max_calls=8,max_seconds=30 if shortest=='outer' else 1):
+                            if shortest=='wall':wall[0]=0.9
+                            else:clock.advance(0.9)
+                            self.assert_pure_deadline_without_http(reader,transport,
+                                lambda:reader.get_campaigns(check_handle()))
+
+    def test_real_network_failure_is_preserved_when_retry_lacks_start_budget(self):
+        reader,transport,clock=self.reader_with_timeout()
+        transport.tick=lambda call:clock.advance(0.6)
+        diagnostic=R.NetworkDiagnostic('DNS','OPEN',elapsed_ms=600,remaining_ms=1100)
+        transport.script('/ncc/campaigns',R.TransportNetworkError(diagnostic))
+        with patch.object(R.time,'monotonic',return_value=0),patch.object(
+                R.urllib.request,'Request',wraps=R.urllib.request.Request) as make_request:
+            with reader.bounded_requests(max_calls=8,max_seconds=1.7):
+                with self.assertRaises(R.RunAbort) as caught:
+                    reader.get_campaigns(check_handle())
+        self.assertEqual(caught.exception.code,'REQUEST_DEADLINE')
+        self.assertEqual(caught.exception.cause_code,R.KIND_NETWORK)
+        self.assertEqual(caught.exception.network_diagnostic,
+            R.NetworkDiagnostic('DNS','OPEN','CAMPAIGNS',600,1100))
+        self.assertEqual((reader.calls,len(transport.calls),make_request.call_count),(1,1,1))
+        self.assertEqual(clock.sleeps,[1.0])
+
+    def test_unbounded_reader_keeps_twenty_second_transport_budget(self):
+        reader,transport,clock=self.reader_with_timeout()
+        self.assertEqual(reader.get_campaigns(check_handle()),[])
+        self.assertEqual(transport.timeout,20)
+        self.assertEqual(reader.calls,1)
+
     def test_inventory_revalidation_cannot_send_after_deadline(self):
         transport, clock = FakeNaver(), FakeClock(NOW)
         transport.route(r"/ncc/campaigns", lambda call: (200, []))
@@ -181,10 +291,10 @@ class RequestAbortCodeTest(unittest.TestCase):
                 transport, clock = FakeNaver(), FakeClock(NOW)
                 transport.route(r"/ncc/campaigns", lambda call: (200, []))
                 reader = R.NaverReader(creds(), transport=transport, clock=clock)
-                with reader.bounded_requests(max_calls=10, max_seconds=0.1):
+                with reader.bounded_requests(max_calls=10, max_seconds=0.3):
                     reader.get_campaigns(check_handle())
                     if expired:
-                        clock.advance(0.1)
+                        clock.advance(0.3)
                     with self.assertRaises(R.RunAbort) as caught:
                         reader.get_campaigns(check_handle())
                 self.assertEqual(caught.exception.code, "REQUEST_DEADLINE")

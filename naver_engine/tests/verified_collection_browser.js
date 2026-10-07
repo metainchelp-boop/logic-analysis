@@ -28,9 +28,10 @@ const cfg = JSON.parse(process.argv[2]);
     // 개편(2026-10-06): 짝 확인·일괄 확정은 이관 현황 · 복구 조회는 설정 › 시스템
     assert.equal(await page.locator('#s-watch #linksCard, #s-watch #collectionControls').count(), 0);
     await page.click('[data-go="/naver/transfers"]');
-    await page.waitForSelector('#s-transfers.on #confirmAuto:not([hidden])');
+    await page.waitForSelector('#s-transfers.on #linksToggle');
     await page.click('#linksToggle');
-    await page.waitForSelector('#linksBody:not([hidden]) > *');
+    // 접힌 카드는 조회하지 않는다. 펼친 뒤 실제 짝 응답이 그린 확정 버튼까지 기다린다.
+    await page.waitForSelector('#s-transfers.on #confirmAuto:not([hidden])');
     assert.equal(await page.getByRole('button', { name: '아님', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: '캠페인 이름 보기', exact: true }).count(), 0);
     await page.click('#confirmAuto');

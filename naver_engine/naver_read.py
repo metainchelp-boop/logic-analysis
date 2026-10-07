@@ -49,6 +49,9 @@ log = logging.getLogger("naver_engine.read")
 BASE_HOST = "api.searchad.naver.com"
 BASE_URL = "https://" + BASE_HOST
 TIMEOUT = 20
+# Bounded batches yield before HTTP when less than this start budget remains.
+# This is not a longer transport timeout or a promise that a request completes in 250ms.
+MIN_REQUEST_REMAINING = 0.25
 MAX_BODY = 16 * 1024 * 1024
 PAGE_SIZE = 1000
 MAX_PAGES = 50
@@ -642,7 +645,11 @@ class NaverReader:
 
     @contextmanager
     def bounded_requests(self, *, max_calls: int, max_seconds: float):
-        """재시도·쪽 넘김도 실제 HTTP 관문에서 예산을 쓴다. 기존 속도·읽기전용 규칙은 유지한다."""
+        """재시도·쪽 넘김도 HTTP 관문 예산을 쓴다. 잔여 250ms 미만은 요청 전 양보한다.
+
+        1초 미만 예산도 유효하지만 최소 요청 여유가 없으면 HTTP를 시작하지 않는다.
+        마지막 응답 뒤 check_budget은 기존 마감 시각만 검사한다.
+        """
         if type(max_calls) is not int or max_calls < 1 or type(max_seconds) not in (int, float) \
                 or not math.isfinite(max_seconds) or not 0 < max_seconds <= 60:
             raise ValueError("읽기 예산이 올바르지 않습니다")
@@ -687,6 +694,8 @@ class NaverReader:
         # 원천/권한 재검증도 회차 시간을 쓴다. 검증 전의 남은 시간으로
         # HTTP를 보내면 이미 마감된 회차에서 요청하거나 타임아웃을 넘긴다.
         timeout = self._remaining(request=True)
+        if self._request_limits and timeout < MIN_REQUEST_REMAINING:
+            raise RunAbort("bounded-deadline", code="REQUEST_DEADLINE")
         self.calls += 1
         self._called_customers.add(customer_id)
         ts = str(self._clock.epoch_ms())

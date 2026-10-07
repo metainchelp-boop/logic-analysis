@@ -71,12 +71,13 @@ async function enter(browser, code) {
     await page.click('[data-go="/naver/transfers"]');   // 짝 확인은 이관 현황 안(개편 2026-10-06)
     await page.waitForSelector('#s-transfers.on #linksToggle');
     await page.click('#linksToggle');
-    await page.waitForSelector('#linksBody:not([hidden]) > *');
+    // loading 자식만으로는 조회 완료가 아니다. 실제 대표 판단의 손잡이까지 기다린다.
+    const revokeButtons = page.locator('#linksBody button', { hasText: '거두기' });
+    await revokeButtons.first().waitFor({ state: 'visible' });
     for (const text of ['아님', '캠페인 이름 보기']) {
       assert.equal(await page.locator('#linksBody button', { hasText: text }).count(), 0, text);
     }
     // 거두기는 대표에게 보이고(D5) 사유 없이는 보내지 않는다 — 판단은 바꾸지 않고 창만 닫는다
-    const revokeButtons = page.locator('#linksBody button', { hasText: '거두기' });
     assert.ok(await revokeButtons.count() >= 1, '대표는 사람 판단을 거둘 수 있다');
     await revokeButtons.first().click();
     await page.waitForSelector('#m-revoke.on #mr-ok');
@@ -130,8 +131,14 @@ async function enter(browser, code) {
     assert.deepEqual([denied.status, denied.body.error], [403, 'ceo-only']);
     await page.click('[data-go="/naver/transfers"]');
     await page.waitForSelector('#s-transfers.on #linksToggle');
+    const staffLinks = page.waitForResponse(r => new URL(r.url()).pathname === API + '/links/pending');
     await page.click('#linksToggle');
-    await page.waitForSelector('#linksBody:not([hidden]) > *');
+    assert.equal((await staffLinks).status(), 200);
+    await page.waitForFunction(() => {
+      const body = document.querySelector('#linksBody:not([hidden])');
+      const count = document.getElementById('links-n');
+      return body && !body.querySelector('.loading') && count && /^[0-9]+건$/.test(count.textContent);
+    });
     assert.equal(await page.locator('#linksBody button', { hasText: '거두기' }).count(), 0, '직원 화면에는 거두기가 없다');
     const revokeDenied = await staff.call('POST', '/links/revoke', { decision_id: 1, reason: '틀림' });
     assert.deepEqual([revokeDenied.status, revokeDenied.body.error], [403, 'ceo-only'], '거두기는 대표만');
