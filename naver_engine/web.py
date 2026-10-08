@@ -31,7 +31,7 @@ import re
 import threading
 import time as _time
 import unicodedata
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
@@ -295,21 +295,24 @@ class App:
         self._untrusted_warned = -1e18                    # 믿지 않는 연결의 요청한 곳 머리 — 1분 한 줄
         self._quiet_audit: Dict[str, float] = {}   # 로그인 전 거절 코드 → 마지막으로 기록한 때(창마다 한 줄)
         self._lock = threading.Lock()
+        self._read_slots = threading.BoundedSemaphore(4)
 
     def __repr__(self) -> str:
         return "App(naver-auto)"
 
     # ── WSGI ──
     def __call__(self, environ, start_response):
-        status, body = self._respond(environ)
-        try:
-            payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        except (TypeError, ValueError, UnicodeEncodeError) as e:   # 글자로 못 바꾸는 값 — 머리는 그대로 · JSON 500
-            log.error("화면 API 응답 만들기 실패: %s", type(e).__name__)
-            status, payload = 500, b'{"error":"internal"}'
-        start_response(f"{status} {REASONS.get(status, 'Error')}",
-                       list(HEADERS) + [("Content-Length", str(len(payload)))])
-        return [payload]
+        # 읽기 저장소·현재 시각·권한은 차례가 온 뒤 연다. JSON 응답 준비까지 한 번에 네 요청만 진행한다.
+        with self._read_slots if environ.get("REQUEST_METHOD") == GET else nullcontext():
+            status, body = self._respond(environ)
+            try:
+                payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            except (TypeError, ValueError, UnicodeEncodeError) as e:   # 글자로 못 바꾸는 값 — 머리는 그대로 · JSON 500
+                log.error("화면 API 응답 만들기 실패: %s", type(e).__name__)
+                status, payload = 500, b'{"error":"internal"}'
+            start_response(f"{status} {REASONS.get(status, 'Error')}",
+                           list(HEADERS) + [("Content-Length", str(len(payload)))])
+            return [payload]
 
     def _respond(self, environ) -> Tuple[int, dict]:
         # 아래 기록 줄의 꼴(머리글 · 「: 종류 이름」으로 끝남)은 로직분석 공개 진단의 기록 분류기가 줄 전체로 맞춰 센다

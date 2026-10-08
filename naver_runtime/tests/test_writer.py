@@ -2,7 +2,9 @@ import threading
 import unittest
 import hashlib
 import tempfile
+import time
 from pathlib import Path
+from unittest import mock
 
 from naver_engine.tests import test_morning as TM
 from naver_engine import store as S, erp_read as E
@@ -105,6 +107,247 @@ class WriterTest(unittest.TestCase):
                 release.set()
                 blocker.join(2)
             self.assertEqual(writer.call(lambda st: st.values), [])
+
+    def test_cancelled_waiters_do_not_exhaust_admission_capacity(self):
+        entered, release, normal_done = threading.Event(), threading.Event(), threading.Event()
+        results, errors = [], []
+        with Writer("synthetic", factory=MemoryStore) as writer:
+            def paused(store):
+                entered.set()
+                self.assertTrue(release.wait(5))
+            def run_paused():
+                try:
+                    writer.call(paused)
+                except BaseException as error:
+                    errors.append(error)
+            blocker = threading.Thread(target=run_paused)
+            blocker.start()
+            normal_worker = None
+            try:
+                self.assertTrue(entered.wait(1))
+                for _ in range(32):
+                    with self.assertRaises(S.StoreBusy):
+                        writer.call(lambda st: st.values.append("cancelled"), wait=.01)
+                def normal(store):
+                    store.values.append("normal")
+                    return "normal"
+                def submit_normal():
+                    try:
+                        results.append(writer.call(normal))
+                    except BaseException as error:
+                        errors.append(error)
+                    finally:
+                        normal_done.set()
+                normal_worker = threading.Thread(target=submit_normal)
+                normal_worker.start()
+                until = time.monotonic() + 1
+                while not normal_done.is_set() and time.monotonic() < until:
+                    with writer._queue.mutex:
+                        queued = any(fn is normal for _, fn in writer._queue.queue)
+                    if queued:
+                        break
+                    time.sleep(.001)
+                else:
+                    self.assertTrue(normal_done.is_set(), "normal submission did not reach Writer")
+            finally:
+                release.set()
+                blocker.join(2)
+                if normal_worker is not None:
+                    normal_worker.join(2)
+            self.assertFalse(blocker.is_alive())
+            self.assertFalse(normal_worker.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(results, ["normal"])
+            self.assertEqual(writer.call(lambda st: list(st.values)), ["normal"])
+
+    def test_started_write_finishes_after_its_queue_deadline(self):
+        entered, release, done = threading.Event(), threading.Event(), threading.Event()
+        results, errors = [], []
+        with Writer("synthetic", factory=MemoryStore) as writer:
+            def work(store):
+                entered.set()
+                self.assertTrue(release.wait(3))
+                store.values.append("finished")
+                return "finished"
+            def submit():
+                try:
+                    results.append(writer.call(work, wait=.01))
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    done.set()
+            worker = threading.Thread(target=submit)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertFalse(done.wait(.04))
+            finally:
+                release.set()
+                worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(results, ["finished"])
+            self.assertEqual(writer.call(lambda st: list(st.values)), ["finished"])
+
+    def test_dequeue_or_close_can_win_cancelled_item_removal(self):
+        for remove_by in ("consumer", "close"):
+            with self.subTest(remove_by=remove_by):
+                entered, release = threading.Event(), threading.Event()
+                cancelling, allow_remove = threading.Event(), threading.Event()
+                errors = []
+                stores = []
+                def factory(path, clock=None):
+                    store = MemoryStore(path, clock=clock)
+                    stores.append(store)
+                    return store
+                with Writer("synthetic", factory=factory) as writer:
+                    def paused(store):
+                        entered.set()
+                        self.assertTrue(release.wait(3))
+                    def hold():
+                        try:
+                            writer.call(paused)
+                        except BaseException as error:
+                            errors.append(error)
+                    original_remove = writer._discard_cancelled
+                    def delay_remove(item):
+                        cancelling.set()
+                        self.assertTrue(allow_remove.wait(3))
+                        original_remove(item)
+                    def cancel_waiter():
+                        try:
+                            writer.call(lambda st: st.values.append("cancelled"), wait=.01)
+                        except BaseException as error:
+                            errors.append(error)
+                    def close_writer():
+                        try:
+                            writer.close()
+                        except BaseException as error:
+                            errors.append(error)
+                    blocker = threading.Thread(target=hold)
+                    waiter = None
+                    closer = None
+                    blocker.start()
+                    with mock.patch.object(writer, "_discard_cancelled", side_effect=delay_remove):
+                        try:
+                            self.assertTrue(entered.wait(1))
+                            waiter = threading.Thread(target=cancel_waiter)
+                            waiter.start()
+                            self.assertTrue(cancelling.wait(1))
+                            if remove_by == "close":
+                                closer = threading.Thread(target=close_writer)
+                                closer.start()
+                                self.assertTrue(writer._stopping.wait(1))
+                            release.set()
+                            blocker.join(2)
+                            if closer is not None:
+                                closer.join(2)
+                                self.assertFalse(closer.is_alive())
+                            else:
+                                # Waiting for this result proves the consumer passed
+                                # the cancelled item before removal is resumed.
+                                self.assertEqual(writer.call(lambda st: list(st.values)), [])
+                        finally:
+                            release.set()
+                            allow_remove.set()
+                            blocker.join(2)
+                            if waiter is not None:
+                                waiter.join(2)
+                            if closer is not None:
+                                closer.join(2)
+                    self.assertFalse(blocker.is_alive())
+                    self.assertFalse(waiter.is_alive())
+                    self.assertEqual(len(errors), 1)
+                    self.assertIsInstance(errors[0], S.StoreBusy)
+                    self.assertEqual(str(errors[0]), "저장 대기 시간을 넘었습니다")
+                    self.assertEqual(stores[0].values, [])
+                    if remove_by == "consumer":
+                        self.assertEqual(writer.call(lambda st: st.thresholds()), "thresholds")
+                self.assertTrue(stores[0].closed)
+
+    def test_live_waiters_keep_fifo_after_cancelled_middle_item(self):
+        entered, release = threading.Event(), threading.Event()
+        errors, workers = [], []
+        with Writer("synthetic", factory=MemoryStore) as writer:
+            def paused(store):
+                entered.set()
+                self.assertTrue(release.wait(3))
+            def submit(fn):
+                try:
+                    writer.call(fn)
+                except BaseException as error:
+                    errors.append(error)
+            blocker = threading.Thread(target=submit, args=(paused,))
+            blocker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                for label in ("first", "second", "third"):
+                    fn = lambda st, value=label: st.values.append(value)
+                    worker = threading.Thread(target=submit, args=(fn,))
+                    workers.append(worker)
+                    worker.start()
+                    until = time.monotonic() + 1
+                    while time.monotonic() < until:
+                        with writer._queue.mutex:
+                            queued = any(callback is fn for _, callback in writer._queue.queue)
+                        if queued:
+                            break
+                        time.sleep(.001)
+                    self.assertTrue(queued)
+                    if label == "first":
+                        with self.assertRaises(S.StoreBusy):
+                            writer.call(lambda st: st.values.append("cancelled"), wait=.01)
+            finally:
+                release.set()
+                blocker.join(2)
+                for worker in workers:
+                    worker.join(2)
+            self.assertFalse(blocker.is_alive())
+            self.assertTrue(all(not worker.is_alive() for worker in workers))
+            self.assertEqual(errors, [])
+            self.assertEqual(writer.call(lambda st: list(st.values)), ["first", "second", "third"])
+
+    def test_live_waiters_still_obey_capacity_32(self):
+        entered, release = threading.Event(), threading.Event()
+        errors, workers = [], []
+        with Writer("synthetic", factory=MemoryStore) as writer:
+            def paused(store):
+                entered.set()
+                self.assertTrue(release.wait(5))
+            def submit(fn):
+                try:
+                    writer.call(fn)
+                except BaseException as error:
+                    errors.append(error)
+            blocker = threading.Thread(target=submit, args=(paused,))
+            blocker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                for index in range(32):
+                    fn = lambda st, value=index: st.values.append(value)
+                    worker = threading.Thread(target=submit, args=(fn,))
+                    workers.append(worker)
+                    worker.start()
+                    until = time.monotonic() + 1
+                    while time.monotonic() < until:
+                        with writer._queue.mutex:
+                            queued = any(callback is fn for _, callback in writer._queue.queue)
+                        if queued:
+                            break
+                        time.sleep(.001)
+                    self.assertTrue(queued)
+                with self.assertRaises(S.StoreBusy) as caught:
+                    writer.call(lambda st: st.values.append("overflow"), wait=.01)
+                self.assertEqual(str(caught.exception), "저장 요청이 많습니다")
+            finally:
+                release.set()
+                blocker.join(2)
+                for worker in workers:
+                    worker.join(2)
+            self.assertFalse(blocker.is_alive())
+            self.assertTrue(all(not worker.is_alive() for worker in workers))
+            self.assertEqual(errors, [])
+            self.assertEqual(writer.call(lambda st: list(st.values)), list(range(32)))
 
 
 if __name__ == "__main__":

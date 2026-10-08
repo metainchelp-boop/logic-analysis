@@ -1,5 +1,6 @@
 """저장된 이관·전산·매칭 자료를 실관리 수집 정책으로 변환한다. 쓰기는 하지 않는다."""
 from types import SimpleNamespace
+from threading import Lock
 
 from app.naver_auto import org_snapshot as O, scope as SC
 
@@ -59,11 +60,15 @@ def snapshot(store, now, *, stage_states=None) -> dict:
 # 읽는 칸만** 같은 차례로 뽑아 글(repr — 1·1.0·참이 서로 다른 글)로 만든 열쇠가 지난번과 글자까지 같을 때만 지난 결과를 다시 쓴다.
 #   · 열쇠 = 계정(현재 계정만 · 광고 계정 번호 · 이름) · 사람 판단(가망 · 계정 · 판단) · 번호 행 4칸 · 업체 2칸 · 자동 근거.
 #     하나라도 다르면(목록 갱신 · 판단 · 동기화가 방금 쓴 근거 · 계정 동기화) 다시 계산한다 — 무효화 시점을 따로 두지 않는다.
-#   · 기억은 그 저장소 객체에만 둔다(쓰기 스레드의 저장소는 한 스레드만 쓴다 · 화면 요청마다 여는 읽기 저장소는 요청과 함께 버린다).
+#   · 완료한 순수 결과 한 개만 이 프로세스의 읽기/쓰기 저장소가 공유한다. 새 요청도 원천·권한·업무 단계는 다시 판정한다.
+#     열쇠 조회/게시만 잠그고 계산은 잠금 밖에서 한다. 다른 입력의 계산이 늦게 끝나도 다음 호출은 열쇠를 다시 견준다.
 #   · 계산 함수가 바뀌었으면(시험이 바꿔 끼움) 지난 결과를 쓰지 않는다. 열쇠를 못 만들면 기억 없이 원래대로 계산한다
 #     (오류도 원래 자리·원래 종류로 난다). 계산이 오류로 끝나면 기억하지 않는다.
 # 열쇠 만들기는 약 0.02초(짝 맞추기의 1/15 · 3.7만 줄 기준) — 결과는 원래 계산과 같은 객체 모양 · 같은 값이다.
-# 기억 칸 이름은 ``_management_match_memo`` 하나(가드레일 — getattr 은 글자 이름으로만).
+# 저장소·거래·요청 객체는 기억하지 않는다. 열쇠 원문은 로그나 파일로 내보내지 않는다.
+
+_MATCH_MEMO_LOCK = Lock()
+_MATCH_MEMO = None
 
 
 def _matched(store, accounts, decisions, catalog, evidence):
@@ -73,6 +78,7 @@ def _matched(store, accounts, decisions, catalog, evidence):
 
 def matching_result(store, accounts, decisions, catalog, evidence, *, candidate_counts=None):
     """현재 계정의 순수 매칭만 공유한다. 권한·단계·원천 신선도 판정은 호출자가 매번 한다."""
+    global _MATCH_MEMO
     from . import inventory as I   # snapshot 과 같은 까닭(inventory 가 store 를 참조)으로 부를 때 불러온다
     functions = (I._matching, I.M.match, I.M.loose_name)
     try:
@@ -83,7 +89,8 @@ def matching_result(store, accounts, decisions, catalog, evidence, *, candidate_
                     None if evidence is None else list(evidence.items())))
     except Exception:  # noqa: BLE001 — 열쇠를 못 만들면 기억 없이(원래 계산이 같은 입력으로 원래 오류를 낸다)
         key = None
-    memo = getattr(store, "_management_match_memo", None) if key is not None else None
+    with _MATCH_MEMO_LOCK:
+        memo = _MATCH_MEMO if key is not None else None
     if memo is not None and memo[0] == key and all(a is b for a, b in zip(memo[1], functions)):
         if candidate_counts is not None:
             candidate_counts.update(memo[4])
@@ -92,11 +99,10 @@ def matching_result(store, accounts, decisions, catalog, evidence, *, candidate_
     result, possible = I._matching(SimpleNamespace(accounts=accounts, live_decisions=decisions), catalog,
                                    auto_evidence=evidence, candidate_counts=counts)
     if key is not None:
-        try:
-            # 목록이 집합/사전을 바꿔도 뒤의 관리 판정·후보 수가 오염되지 않는다.
-            store._management_match_memo = (key, functions, result, frozenset(possible), tuple(counts.items()))
-        except AttributeError:   # 칸을 더할 수 없는 시험 저장소 — 기억 없이 계속
-            pass
+        # 목록이 집합/사전을 바꿔도 다른 요청의 관리 판정·후보 수가 오염되지 않는다.
+        completed = (key, functions, result, frozenset(possible), tuple(counts.items()))
+        with _MATCH_MEMO_LOCK:
+            _MATCH_MEMO = completed
     if candidate_counts is not None:
         candidate_counts.update(counts)
     return result, possible

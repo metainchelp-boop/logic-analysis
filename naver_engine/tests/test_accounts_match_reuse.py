@@ -3,6 +3,9 @@ import io
 import json
 import socket
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import astuple
+from threading import Event
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -91,18 +94,23 @@ class AccountsMatchReuseTest(unittest.TestCase):
             people = self.call("/me", actor)[1]["people"]
             self.assertEqual([(p["idx"], p["account_count"]) for p in people], [(actor, 1)])
 
-    def test_new_request_reader_does_not_reuse_the_previous_reader(self):
+    def test_new_reader_and_writer_share_completed_matching_for_same_input(self):
         with patch.object(I, "_matching", wraps=I._matching) as matching:
             self.assertEqual(self.call("/accounts")[0], 200)
             self.assertEqual(matching.call_count, 1)
             self.assertEqual(self.call("/me")[0], 200)
+            MS.snapshot(self.store, self.clock.now())
+            self.assertEqual(matching.call_count, 1)
+            self.clock.advance(1)
+            self.store.record_decision(11, self.store.accounts()[0]["customer_id"], "rejected", 0, self.clock.now())
+            changed = self.call("/accounts")
             self.assertEqual(matching.call_count, 2)
+        with patch.object(MS, "matching_result", side_effect=direct_matching):
+            self.assertEqual(changed, self.call("/accounts"))
 
     def test_management_then_board_and_board_then_management_keep_the_same_output(self):
         for first in ("management", "board"):
             with self.subTest(first=first):
-                if hasattr(self.store, "_management_match_memo"):
-                    del self.store._management_match_memo
                 with patch.object(I, "_matching", wraps=I._matching) as matching:
                     if first == "management":
                         policies = MS.snapshot(self.store, self.clock.now())
@@ -131,26 +139,26 @@ class AccountsMatchReuseTest(unittest.TestCase):
 
     def test_owner_stage_and_freshness_are_rechecked_when_pure_matching_is_reused(self):
         with patch.object(I, "_matching", wraps=I._matching) as matching:
-            self.assertEqual(len(self.board(100)["rows"]), 1)
+            self.assertEqual(len(self.call("/accounts", 100)[1]["rows"]), 1)
             self.clock.advance(1)
             now = self.clock.now()
             self.store.record_org(TA.org_body(now, owners=[TA.owner(11, 101), TA.owner(12, 101),
                                                           TA.owner(13, 100), TA.owner(14, 101)]), now)
-            self.assertEqual(self.board(100)["rows"], [])
-            self.assertEqual(len(self.board(101)["rows"]), 2)
+            self.assertEqual(self.call("/accounts", 100)[1]["rows"], [])
+            self.assertEqual(len(self.call("/accounts", 101)[1]["rows"]), 2)
             catalog = self.store.account_catalog()
             items = [{**r, "stage_hidden": True} if r["possibility_id"] == 11 else r for r in catalog["items"]]
             self.store.record_account_catalog({"generated_at": now.isoformat(), "total": len(items),
                 "complete": True, "items": items}, self.ids, now)
-            self.assertEqual({r["possibility_id"] for r in self.board(101)["rows"]}, {12})
+            self.assertEqual({r["possibility_id"] for r in self.call("/accounts", 101)[1]["rows"]}, {12})
             self.assertEqual(matching.call_count, 1)
             self.store.record_account_catalog_failure(now, "CATALOG_FAILED")
-            stale = self.board()
+            stale = self.call("/accounts")[1]
             self.assertFalse(stale["matching_ready"])
             self.assertTrue(all(not r["management"]["can_manage"] and not r["management"]["can_collect"]
                                 for r in stale["rows"]))
         with patch.object(MS, "matching_result", side_effect=direct_matching):
-            self.assertEqual(stale, self.board())
+            self.assertEqual(stale, self.call("/accounts")[1])
 
     def test_candidate_metadata_is_complete_and_cannot_be_mutated_by_callers(self):
         ctx, catalog = scene(["합성후보"], ["합성후보상점" + str(n) for n in range(8)])
@@ -166,11 +174,49 @@ class AccountsMatchReuseTest(unittest.TestCase):
             self.assertEqual(len(possible), 8)
             counts.clear()
             possible.clear()
-            result2, possible2 = MS.matching_result(store, ctx.accounts, [], catalog, {}, candidate_counts=counts)
+            result2, possible2 = MS.matching_result(SimpleNamespace(), ctx.accounts, [], catalog, {}, candidate_counts=counts)
             self.assertIs(result2, result)
             self.assertEqual(counts, {1: 8})
             self.assertEqual(len(possible2), 8)
             self.assertEqual(matching.call_count, 1)
+
+    def test_concurrent_different_input_completion_keeps_each_result_and_key(self):
+        first_ctx, first_catalog = scene(["합성첫상점"], ["합성첫상점"])
+        second_ctx, second_catalog = scene(["합성둘상점"], ["합성둘상점"])
+        original = I._matching
+        first_started, finish_first = Event(), Event()
+
+        def controlled(ctx, catalog, **kwargs):
+            if catalog["items"][0]["company_name"] == "합성첫상점":
+                first_started.set()
+                self.assertTrue(finish_first.wait(5), "첫 계산을 끝내지 못했습니다")
+            return original(ctx, catalog, **kwargs)
+
+        def calculate(ctx, catalog):
+            counts = {}
+            result, possible = MS.matching_result(SimpleNamespace(), ctx.accounts, [], catalog, {},
+                                                  candidate_counts=counts)
+            return astuple(result), possible, counts
+
+        def expected(ctx, catalog):
+            counts = {}
+            result, possible = original(ctx, catalog, auto_evidence={}, candidate_counts=counts)
+            return astuple(result), possible, counts
+
+        with patch.object(I, "_matching", side_effect=controlled) as matching:
+            with ThreadPoolExecutor(max_workers=2) as workers:
+                first = workers.submit(calculate, first_ctx, first_catalog)
+                try:
+                    self.assertTrue(first_started.wait(5))
+                    second = workers.submit(calculate, second_ctx, second_catalog)
+                    self.assertEqual(second.result(timeout=5), expected(second_ctx, second_catalog))
+                finally:
+                    finish_first.set()
+                self.assertEqual(first.result(timeout=5), expected(first_ctx, first_catalog))
+            self.assertEqual(matching.call_count, 2)
+            # 늦게 끝난 첫 입력이 last-1을 교체해도 둘째 입력은 자신의 값으로 다시 계산한다.
+            self.assertEqual(calculate(second_ctx, second_catalog), expected(second_ctx, second_catalog))
+            self.assertEqual(matching.call_count, 3)
 
     def test_lost_account_uses_separate_matching_and_keeps_staff_scope(self):
         accounts = self.store.accounts()[1:]

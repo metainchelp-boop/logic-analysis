@@ -71,7 +71,7 @@ class MatchMemoTest(unittest.TestCase):
         with patch.object(I, "_matching", wraps=I._matching) as spy:
             first = MS._matched(store, *self.inputs())
             # 값이 같은 새 객체(다음 회차가 다시 읽은 것)여도 다시 쓴다.
-            second = MS._matched(store, *self.inputs())
+            second = MS._matched(SimpleNamespace(), *self.inputs())
         self.assertIs(first, second)
         self.assertEqual(spy.call_count, 1)
         self.assertEqual(_plain(first), _plain(self.direct(*self.inputs())))

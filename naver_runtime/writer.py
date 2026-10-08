@@ -94,20 +94,31 @@ class Writer:
                 except Empty:
                     break
 
+    def _discard_cancelled(self, item):
+        # Queue에는 대기 항목 제거 API가 없다. get/put과 같은 잠금에서 제거한다.
+        with self._queue.mutex:
+            try:
+                self._queue.queue.remove(item)
+            except ValueError:
+                return  # 소비자나 종료 처리가 이미 가져간 항목이다.
+            self._queue.not_full.notify()
+
     def call(self, fn, *, wait=15):
         if threading.get_ident() == self._thread.ident:
             raise S.StoreRefused("저장 작업 안에서 다시 예약하지 않습니다")
         if self._stopping.is_set() or not self._thread.is_alive():
             raise S.StoreBusy("저장 연결이 닫혀 있습니다")
         future = Future()
+        item = (future, fn)
         try:
-            self._queue.put_nowait((future, fn))
+            self._queue.put_nowait(item)
         except Full:
             raise S.StoreBusy("저장 요청이 많습니다") from None
         try:
             return future.result(timeout=wait)
         except TimeoutError:
             if future.cancel():
+                self._discard_cancelled(item)
                 raise S.StoreBusy("저장 대기 시간을 넘었습니다") from None
             # 이미 시작한 저장의 결과를 모른 채 실패라고 답하지 않는다.
             return future.result()
