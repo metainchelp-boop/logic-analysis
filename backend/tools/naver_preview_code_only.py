@@ -49,6 +49,18 @@ REVIEWED_TRANSITION_V5 = (
 )
 
 
+# Reviewed collection-status reader correction: exact two-file scope, DB unchanged.
+REVIEWED_TRANSITION_V6 = (
+    '74b79ce6381178abf9b74fff43b0fcb03c5aa60b',
+    '383c8511964c13e24e884a4cee561fc9bee64102',
+    '7136119034645500fa31cd1afb85d72b70264144ab62d0181ada6e06ec0484cf',
+    'a55b8a3a4b87e69b936778298ef95be41241ebdbd322fe5fa467883543b2229e',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+)
+
+
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
         return 'naver_preview_code_upgrade'
@@ -58,6 +70,8 @@ def code_module_name(source_commit):
         return 'naver_preview_code_upgrade_v4'
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V5[1]:
         return 'naver_preview_code_upgrade_v5'
+    if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V6[1]:
+        return 'naver_preview_code_upgrade_v6'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -74,7 +88,9 @@ def require_review(code):
         {'backend/app/naver_auto/matching.py', 'naver_engine/inventory.py',
          'naver_engine/naver_read.py', 'naver_runtime/scheduler.py',
          'naver_engine/management_store.py', 'naver_runtime/writer.py', 'naver_engine/web.py'}
-        if transition == REVIEWED_TRANSITION_V5 else None)
+        if transition == REVIEWED_TRANSITION_V5 else
+        {'naver_engine/web.py', 'naver_runtime/scheduler.py'}
+        if transition == REVIEWED_TRANSITION_V6 else None)
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 

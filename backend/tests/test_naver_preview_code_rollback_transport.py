@@ -43,7 +43,7 @@ class RollbackTransportTest(unittest.TestCase):
         tools = Path(__file__).parents[1] / 'tools'
         self.assertEqual(bundle['operation'], 'preview-code-only-rollback')
         self.assertEqual(bundle['function'], 'run')
-        self.assertEqual(bundle['code_source'], (tools / 'naver_preview_code_upgrade_v5.py').read_text())
+        self.assertEqual(bundle['code_source'], (tools / (self.code.__name__ + '.py')).read_text())
         self.assertEqual(bundle['source'], (tools / 'naver_preview_code_rollback.py').read_text())
         self.assertEqual(bundle['code_only_source'], (tools / 'naver_preview_code_only.py').read_text())
         self.assertEqual(bundle['package'], self.package)

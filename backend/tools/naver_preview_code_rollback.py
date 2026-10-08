@@ -1,7 +1,7 @@
 """Explicit, separately reviewed rollback after a successful code-only apply.
 
-Only the reviewed operating49 -> final74 login/read-budget transition can roll
-back here. Pins and scope are static; request inputs cannot grant another release.
+Only the separately reviewed operating49 -> final74 and operating74 -> reader
+correction transitions can roll back here. Request inputs cannot grant another release.
 """
 import json
 import os
@@ -20,6 +20,16 @@ REVIEWED_ROLLBACKS = frozenset({(
     frozenset({'backend/app/naver_auto/matching.py', 'naver_engine/inventory.py',
         'naver_engine/naver_read.py', 'naver_runtime/scheduler.py',
         'naver_engine/management_store.py', 'naver_runtime/writer.py', 'naver_engine/web.py'}),
+
+), (
+    '74b79ce6381178abf9b74fff43b0fcb03c5aa60b',
+    '383c8511964c13e24e884a4cee561fc9bee64102',
+    '7136119034645500fa31cd1afb85d72b70264144ab62d0181ada6e06ec0484cf',
+    'a55b8a3a4b87e69b936778298ef95be41241ebdbd322fe5fa467883543b2229e',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+    frozenset({'naver_engine/web.py', 'naver_runtime/scheduler.py'}),
 )})
 STAGE = 'input'
 OPERATION = 'none'
