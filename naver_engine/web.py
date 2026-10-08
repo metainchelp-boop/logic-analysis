@@ -26,7 +26,6 @@
 from __future__ import annotations
 
 import json
-import inspect
 import logging
 import re
 import threading
@@ -283,12 +282,8 @@ class App:
         self._verified_linking = verified_linking
         self._owner_actions = owner_actions
         self._request_collection, self._collection_status = request_collection, collection_status
-        try:
-            parameter = inspect.signature(collection_status).parameters.get("read_store")
-        except (TypeError, ValueError):
-            parameter = None
-        self._collection_status_uses_reader = (parameter is not None and parameter.kind in
-            (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY))
+        # 요청 Reader를 받을 콜백은 명시적으로 선언한다. 기존 0인자 콜백은 그대로 둔다.
+        self._collection_status_uses_reader = getattr(collection_status, "read_store_supported", False) is True
         self._runtime_status = runtime_status
         self._view_sync = VS.ViewSync()
         self._clock = clock or (lambda: datetime.now(KST))

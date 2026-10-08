@@ -199,6 +199,7 @@ class Scheduler:
                 except Exception:
                     return {"id": None, "status": "failed", "codes": ["AUDIT_UNAVAILABLE"]}
             return deepcopy(self._collection_latest or {"id": None, "status": "idle", "codes": []})
+    collection_status.read_store_supported = True
 
     def _run_collection(self):
         with self._collection_lock:

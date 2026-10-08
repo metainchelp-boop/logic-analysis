@@ -6,7 +6,7 @@ import socket
 import sqlite3
 import threading
 import time
-from unittest.mock import Mock, call, patch
+from unittest.mock import Mock, patch
 
 from naver_engine import store as S, web as WEB
 from naver_engine.tests.test_web import WebBase
@@ -34,11 +34,13 @@ class CollectionStatusCallbackTest(WebBase):
                     def callback(read_store=None):
                         seen.append(read_store)
                         return {"status": "idle"}
+                    callback.read_store_supported = True
                 else:
                     class Callback:
                         def status(self, *, read_store=None):
                             seen.append(read_store)
                             return {"status": "idle"}
+                        status.read_store_supported = True
                     callback = Callback().status
                 self.status_app(callback)
                 self.assertTrue(self.app._collection_status_uses_reader)
@@ -59,31 +61,42 @@ class CollectionStatusCallbackTest(WebBase):
         def positional_only(read_store=None, /):
             calls.append(read_store)
             return {"status": "idle"}
+        def unmarked_keyword(read_store=None):
+            calls.append(read_store)
+            return {"status": "idle"}
         mock = Mock(return_value={"status": "idle"})
-        for callback in (legacy, mock, kwargs_only, positional_only):
+        for callback in (legacy, mock, kwargs_only, positional_only, unmarked_keyword):
             with self.subTest(callback=type(callback).__name__):
                 self.status_app(callback)
                 self.assertFalse(self.app._collection_status_uses_reader)
                 self.assertEqual(self.get("/collection/status", 0), (200, {"status": "idle"}))
-        self.assertEqual(calls, [(), {}, None])
+        self.assertEqual(calls, [(), {}, None, None])
         mock.assert_called_once_with()
 
-    def test_signature_inspection_failure_falls_back_once_at_construction(self):
-        callback = Mock(return_value={"status": "idle"})
-        for failure in (ValueError, TypeError):
-            with self.subTest(failure=failure.__name__):
-                with patch.object(WEB.inspect, "signature", side_effect=failure("synthetic signature")) as inspection:
-                    self.status_app(callback)
-                    self.assertFalse(self.app._collection_status_uses_reader)
-                inspection.assert_called_once_with(callback)
+    def test_explicit_protocol_ignores_signature_and_requires_strict_true_marker(self):
+        calls = []
+        class Legacy:
+            @property
+            def __signature__(self):
+                raise AssertionError("콜백 signature를 자동 검사하지 않는다")
+            def __call__(self):
+                calls.append(())
+                return {"status": "idle"}
+        callback = Legacy()
+        for marker in (False, None, 1, "True", {}, Mock()):
+            with self.subTest(marker=type(marker).__name__):
+                callback.read_store_supported = marker
+                self.status_app(callback)
+                self.assertFalse(self.app._collection_status_uses_reader)
                 self.assertEqual(self.get("/collection/status", 0), (200, {"status": "idle"}))
-        self.assertEqual(callback.call_args_list, [call(), call()])
+        self.assertEqual(calls, [()] * 6)
 
     def test_callback_internal_typeerror_is_not_retried_without_reader(self):
         calls = []
         def callback(*, read_store=None):
             calls.append(read_store)
             raise TypeError("synthetic internal failure")
+        callback.read_store_supported = True
         self.status_app(callback)
         status, body = self.get("/collection/status", 0)
         self.assertEqual((status, body), (500, {"error": "internal"}))
@@ -97,6 +110,7 @@ class CollectionStatusCallbackTest(WebBase):
         def callback(*, read_store=None):
             calls.append(read_store)
             return {"status": "idle"}
+        callback.read_store_supported = True
         self.status_app(callback)
         self.assertTrue(self.app._collection_status_uses_reader)
         for actor, options in ((1, {}), (100, {}), (0, {"narrowed": True})):
