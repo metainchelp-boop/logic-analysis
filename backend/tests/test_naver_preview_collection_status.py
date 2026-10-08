@@ -934,7 +934,7 @@ class CollectionTest(unittest.TestCase):
 
     def check_run_diagnostics(self, commit, extra=None, passive=False, logs=None, latency=False, dashboard=False):
         package = dict(baseline='a'*64, source_commit=commit, source_tar_gz_sha256='c'*64)
-        profile_pins=M.PROFILE_RELEASES.get(commit) if latency or dashboard else None
+        profile_pins=M.PROFILE_RELEASES.get(commit) if latency or dashboard else M.PASSIVE_RELEASES.get(commit)
         if profile_pins is not None:
             package.update(baseline=profile_pins[2],source_tar_gz_sha256=profile_pins[0])
         cid, image = 'd'*64, 'sha256:'+'e'*64
@@ -946,8 +946,10 @@ class CollectionTest(unittest.TestCase):
             source_store.write_bytes(b'SCHEMA_VERSION=11\n# synthetic reviewed store\n')
             source_store.chmod(0o644)
             fixture_profiles=dict(M.PROFILE_RELEASES)
+            fixture_passive=dict(M.PASSIVE_RELEASES)
             if profile_pins is not None:
-                fixture_profiles[commit]=(profile_pins[0],hashlib.sha256(source_store.read_bytes()).hexdigest(),profile_pins[2])
+                destination = fixture_passive if passive else fixture_profiles
+                destination[commit]=(profile_pins[0],hashlib.sha256(source_store.read_bytes()).hexdigest(),profile_pins[2])
             actual_verify=M.verify_profile_store
             files = {}
             for name in ('compose.naver-engine.yml', 'preview-engine.override.yml', 'deploy/naver-engine-backup.override.yml',
@@ -1124,6 +1126,7 @@ class CollectionTest(unittest.TestCase):
                     return dict(exit_code=0,reason=None,stdout=command(args, **kwargs),stderr=b'')
                 with self.subTest(failure=failure), patch.object(M.os, 'geteuid', return_value=0), \
                         patch.object(M,'PROFILE_RELEASES',fixture_profiles), \
+                        patch.object(M,'PASSIVE_RELEASES',fixture_passive), \
                         patch.object(M,'verify_profile_store',side_effect=lambda root,digest:
                             actual_verify(root,digest,uid=os.getuid(),gid=os.getgid())), \
                         patch.object(M, 'capture_process', side_effect=capture), \
@@ -1650,6 +1653,36 @@ class CollectionTest(unittest.TestCase):
         commit=load('naver_preview_code_upgrade_v4').TARGET_COMMIT
         self.assertEqual(commit,'49c42d645b90732071d0c61b8f9aaf7660e8b765')
         self.check_run_diagnostics(commit,passive=True)
+
+    def test_final74_passive_diagnostics_are_exactly_pinned_without_opening_database(self):
+        code=load('naver_preview_code_upgrade_v5')
+        self.assertEqual(M.PASSIVE_RELEASES,{code.TARGET_COMMIT:(
+            code.TARGET_SOURCE_SHA256,code.STORE_SHA256['target'],code.EXPECTED_BASELINE)})
+        self.assertNotIn(code.TARGET_COMMIT,M.PROFILE_RELEASES)
+        self.check_run_diagnostics(code.TARGET_COMMIT,passive=True)
+
+    def test_final74_passive_pin_mismatch_and_active_modes_refuse_before_host_or_process(self):
+        code=load('naver_preview_code_upgrade_v5')
+        good=dict(source_commit=code.TARGET_COMMIT,source_tar_gz_sha256=code.TARGET_SOURCE_SHA256,
+            baseline=code.EXPECTED_BASELINE,passive_runtime_only=True)
+        for field in ('source_tar_gz_sha256','baseline'):
+            host,release=Mock(),Mock()
+            with self.subTest(field=field),patch.object(M,'capture_process') as capture:
+                with self.assertRaisesRegex(ValueError,'^PASSIVE_SOURCE_PIN_CHANGED$'):
+                    M.run(dict(good,**{field:'0'*64}),host,release)
+                capture.assert_not_called()
+            self.assertFalse(host.mock_calls)
+            self.assertFalse(release.mock_calls)
+        for mode in (None,'latency_profile_only','dashboard_profile_only'):
+            package={k:v for k,v in good.items() if k!='passive_runtime_only'}
+            if mode: package[mode]=True
+            host,release=Mock(),Mock()
+            with self.subTest(mode=mode),patch.object(M,'capture_process') as capture:
+                with self.assertRaisesRegex(ValueError,'^(PASSIVE_RUNTIME_ONLY|PROFILE_SOURCE_UNREVIEWED)$'):
+                    M.run(package,host,release)
+                capture.assert_not_called()
+            self.assertFalse(host.mock_calls)
+            self.assertFalse(release.mock_calls)
 
     def test_reviewed_third_and_fourth_profiles_keep_bounded_readonly_guards_and_partial_results(self):
         for module in ('naver_preview_code_upgrade_v3','naver_preview_code_upgrade_v4'):

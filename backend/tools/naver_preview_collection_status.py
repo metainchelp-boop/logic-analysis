@@ -45,6 +45,14 @@ PROFILE_RELEASES = {
         'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
         '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'),
 }
+# New login/read-budget release allows only the existing no-DB passive path.
+# It does not extend PROFILE_RELEASES or ordinary collection readers.
+PASSIVE_RELEASES = {
+    '74b79ce6381178abf9b74fff43b0fcb03c5aa60b': (
+        '7136119034645500fa31cd1afb85d72b70264144ab62d0181ada6e06ec0484cf',
+        'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+        '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'),
+}
 MONITORING_COMMITS = frozenset((MONITORING_COMMIT, REPORTS_COMMIT, SHM_LOCK_FIX_COMMIT, OWNER_ACTIONS_COMMIT,
                                 SCREEN_OVERHAUL_COMMIT, WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT,
                                 DASHBOARD_LATENCY_FIX_COMMIT))
@@ -1653,7 +1661,13 @@ def run(package, host, release):
         raise ValueError('PROFILE_SOURCE_UNREVIEWED')
     if dashboard and package['source_commit'] not in (LATENCY_FIX_COMMIT, DASHBOARD_LATENCY_FIX_COMMIT, *PROFILE_RELEASES):
         raise ValueError('PROFILE_SOURCE_UNREVIEWED')
-    profile_pins = PROFILE_RELEASES.get(package['source_commit']) if latency or dashboard else None
+    passive_pins = PASSIVE_RELEASES.get(package['source_commit'])
+    if passive_pins is not None:
+        if not passive:
+            raise ValueError('PASSIVE_RUNTIME_ONLY')
+        if (package['source_tar_gz_sha256'], package['baseline']) != (passive_pins[0], passive_pins[2]):
+            raise ValueError('PASSIVE_SOURCE_PIN_CHANGED')
+    profile_pins = PROFILE_RELEASES.get(package['source_commit']) if latency or dashboard else passive_pins
     if profile_pins is not None and (package['source_tar_gz_sha256'],package['baseline']) != (
             profile_pins[0],profile_pins[2]):
         raise ValueError('PROFILE_SOURCE_PIN_CHANGED')

@@ -428,7 +428,7 @@ class ContractTest(unittest.TestCase):
     def scenario(self, failure=None, mode='apply', *, code_only=False, log_database=False,
                  code_module='naver_preview_code_upgrade'):
         code = sealed_code(code_module)
-        fourth_release = code_module == 'naver_preview_code_upgrade_v4'
+        fourth_release = code_module in ('naver_preview_code_upgrade_v4', 'naver_preview_code_upgrade_v5')
         target_store = StoreScopeTest.SOURCE if fourth_release else StoreScopeTest.TARGET_SOURCE
         policy = load('naver_preview_code_only') if code_only else None
         fixture = load('naver_preview_upgrade')
@@ -460,9 +460,7 @@ class ContractTest(unittest.TestCase):
                 'backend/requirements.txt': b'fixture', 'naver_runtime/bootstrap.py': b'# unchanged bootstrap',
                 'naver_engine/store.py': target_store}
             if fourth_release:
-                infrastructure.update({'backend/naver_page/app.js': b'new UI fixture',
-                                       'backend/naver_page/index.html': b'new HTML fixture',
-                                       'naver_engine/naver_read.py': b'new reader fixture'})
+                infrastructure.update({name: b'new product fixture' for name in code.CODE_PATHS})
             infrastructure.update({name: b'new fixture compose' for name in
                 ('compose.naver-engine.yml','compose.naver-relay.yml','deploy/naver-engine-backup.override.yml')})
             for path in (root/'releases').iterdir():
@@ -473,9 +471,8 @@ class ContractTest(unittest.TestCase):
                 if path.name == 'naver-'+code.OLD_COMMIT:
                     (path/'naver_engine/store.py').write_bytes(StoreScopeTest.SOURCE)
                     if fourth_release:
-                        (path/'backend/naver_page/app.js').write_bytes(b'old UI fixture')
-                        (path/'backend/naver_page/index.html').write_bytes(b'old HTML fixture')
-                        (path/'naver_engine/naver_read.py').write_bytes(b'old reader fixture')
+                        for name in code.CODE_PATHS:
+                            (path/name).write_bytes(b'old product fixture')
                 for name in ('engine','relay'):
                     # The UI update inherits all flags without adding or changing them.
                     body = ('image: '+code.OLD_COMMIT).encode()
@@ -622,8 +619,10 @@ class ContractTest(unittest.TestCase):
                     code.STORE_SHA256['old'], code.STORE_SHA256['target'], code.EXPECTED_BASELINE)
                 if code_module == 'naver_preview_code_upgrade_v3':
                     policy.REVIEWED_TRANSITION_V3 = transition
-                elif fourth_release:
+                elif code_module == 'naver_preview_code_upgrade_v4':
                     policy.REVIEWED_TRANSITION_V4 = transition
+                elif code_module == 'naver_preview_code_upgrade_v5':
+                    policy.REVIEWED_TRANSITION_V5 = transition
                 else:
                     policy.REVIEWED_TRANSITION = transition
             result = legacy_test.UpgradeTest().scenario(failure, mode, setup)

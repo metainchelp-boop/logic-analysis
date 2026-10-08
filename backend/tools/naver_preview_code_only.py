@@ -37,6 +37,16 @@ REVIEWED_TRANSITION_V4 = (
     'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
     '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
 )
+# Reviewed final login/read-budget release: exact Linux3.12 archive and product scope.
+REVIEWED_TRANSITION_V5 = (
+    '49c42d645b90732071d0c61b8f9aaf7660e8b765',
+    '74b79ce6381178abf9b74fff43b0fcb03c5aa60b',
+    '69b9f79ab243eac6d3d32fe67ce267b96bdd923323997fd2661934bc6a5459d4',
+    '7136119034645500fa31cd1afb85d72b70264144ab62d0181ada6e06ec0484cf',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+)
 
 
 def code_module_name(source_commit):
@@ -46,6 +56,8 @@ def code_module_name(source_commit):
         return 'naver_preview_code_upgrade_v3'
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V4[1]:
         return 'naver_preview_code_upgrade_v4'
+    if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V5[1]:
+        return 'naver_preview_code_upgrade_v5'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -58,7 +70,11 @@ def require_review(code):
         {'naver_engine/inventory.py', 'naver_engine/store.py', 'naver_engine/naver_read.py', 'naver_engine/morning.py'}
         if transition == REVIEWED_TRANSITION_V3 else
         {'backend/naver_page/app.js', 'backend/naver_page/index.html', 'naver_engine/naver_read.py'}
-        if transition == REVIEWED_TRANSITION_V4 else None)
+        if transition == REVIEWED_TRANSITION_V4 else
+        {'backend/app/naver_auto/matching.py', 'naver_engine/inventory.py',
+         'naver_engine/naver_read.py', 'naver_runtime/scheduler.py',
+         'naver_engine/management_store.py', 'naver_runtime/writer.py', 'naver_engine/web.py'}
+        if transition == REVIEWED_TRANSITION_V5 else None)
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
