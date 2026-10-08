@@ -399,7 +399,7 @@ class Scheduler:
             if not self.config.inventory_enabled:
                 return M.run_morning(reader, self.store, self.clock, th=self.store.thresholds())
             # 기존 경보/준비검사는 유지하되 상세 점검이 다음 성과 회차를 장시간 막지 않는다.
-            with reader.bounded_requests(max_calls=24, max_seconds=30):
+            with reader.bounded_requests(max_calls=24, max_seconds=30, yield_on_timeout=True):
                 excluded = self._inventory_customers | {cid for cid,at in self._morning_retry_at.items()
                                                         if at > self._monotonic()}
                 return M.run_continuous(reader, _ManagedMorningStore(self.store, self.clock(), excluded),

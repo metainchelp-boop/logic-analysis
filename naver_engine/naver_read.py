@@ -229,9 +229,15 @@ def _request_step(path: str) -> str:
     return _REQUEST_STEPS.get(path, "NONE")
 
 
+def _safe_http_status(value):
+    return value if type(value) is int and 100 <= value <= 599 else None
+
+
 class TransportNetworkError(urllib.error.URLError):
-    def __init__(self, diagnostic: NetworkDiagnostic):
+    def __init__(self, diagnostic: NetworkDiagnostic, http_status=None, timeout_exhausted=False):
         self.diagnostic = safe_network_diagnostic(diagnostic)
+        self.http_status = _safe_http_status(http_status)
+        self.timeout_exhausted = timeout_exhausted if type(timeout_exhausted) is bool else False
         super().__init__("NETWORK")
 
 
@@ -329,15 +335,17 @@ class UrllibTransport:
 
     def send(self, req: urllib.request.Request, timeout: float) -> Tuple[int, bytes]:
         started = time.monotonic()
-        deadline, phase = started + timeout, "OPEN"
+        deadline, phase, http_status = started + timeout, "OPEN", None
         try:
             try:
                 with self._opener.open(req, timeout=timeout) as r:
+                    http_status = _safe_http_status(r.status)
                     _body_remaining(deadline)
                     phase = "BODY"
                     return r.status, _read_body(r, deadline)
             except urllib.error.HTTPError as e:
                 try:
+                    http_status = _safe_http_status(e.code)
                     _body_remaining(deadline)
                     phase = "BODY"
                     return e.code, _read_body(e, deadline)
@@ -349,7 +357,8 @@ class UrllibTransport:
             if phase == "BODY" and kind == "TIMEOUT" and now >= deadline:
                 kind = "DEADLINE"
             raise TransportNetworkError(NetworkDiagnostic(kind, phase,
-                elapsed_ms=_milliseconds(now - started), remaining_ms=_milliseconds(deadline - now))) from None
+                elapsed_ms=_milliseconds(now - started), remaining_ms=_milliseconds(deadline - now)),
+                http_status=http_status, timeout_exhausted=now >= deadline) from None
 
 
 class SystemClock:
@@ -618,6 +627,7 @@ class NaverReader:
         self._pacer = pacer if pacer is not None else RequestPacer()
         self._rate_hits: collections.deque = collections.deque()
         self._request_limits = []
+        self._timeout_yield_bounds = []
 
     def __repr__(self) -> str:
         return f"NaverReader(calls={self.calls}, pauses={self.pauses})"
@@ -644,21 +654,33 @@ class NaverReader:
         return self
 
     @contextmanager
-    def bounded_requests(self, *, max_calls: int, max_seconds: float):
+    def bounded_requests(self, *, max_calls: int, max_seconds: float, yield_on_timeout: bool = False):
         """재시도·쪽 넘김도 HTTP 관문 예산을 쓴다. 잔여 250ms 미만은 요청 전 양보한다.
 
         1초 미만 예산도 유효하지만 최소 요청 여유가 없으면 HTTP를 시작하지 않는다.
-        마지막 응답 뒤 check_budget은 기존 마감 시각만 검사한다.
+        마지막 응답 뒤 check_budget은 기존 마감 시각만 검사한다. 명시한 회차만
+        자체 마감에 잘린 요청 타임아웃을 예산 종료로 돌려준다(이전 재시도 원인은 유지).
         """
         if type(max_calls) is not int or max_calls < 1 or type(max_seconds) not in (int, float) \
-                or not math.isfinite(max_seconds) or not 0 < max_seconds <= 60:
+                or not math.isfinite(max_seconds) or not 0 < max_seconds <= 60 \
+                or type(yield_on_timeout) is not bool:
             raise ValueError("읽기 예산이 올바르지 않습니다")
         bound = (self.calls + max_calls, self._clock.monotonic() + max_seconds, time.monotonic() + max_seconds)
         self._request_limits.append(bound)
+        if yield_on_timeout:
+            self._timeout_yield_bounds.append(bound)
         try:
             yield
         finally:
-            self._request_limits.remove(bound)
+            # Equal nested tuples can carry different policies. Remove this exact context.
+            self._request_limits.pop(next(i for i, b in enumerate(self._request_limits) if b is bound))
+            if yield_on_timeout:
+                self._timeout_yield_bounds.pop(next(i for i, b in enumerate(self._timeout_yield_bounds) if b is bound))
+
+    def _expired_timeout_yield_bounds(self):
+        clock_now, wall_now = self._clock.monotonic(), time.monotonic()
+        expired = [b for b in self._request_limits if b[1] <= clock_now or b[2] <= wall_now]
+        return bool(expired) and all(any(b is opted for opted in self._timeout_yield_bounds) for b in expired)
 
     def check_budget(self):
         """마지막 응답 뒤에도 호출자가 마감을 검증할 수 있다(요청 횟수는 추가하지 않는다)."""
@@ -716,7 +738,21 @@ class NaverReader:
         del headers
         try:
             return self._transport.send(req, timeout)
-        except (urllib.error.URLError, OSError, http.client.HTTPException):
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+            diagnostic = safe_network_diagnostic(exc.diagnostic) if isinstance(exc, TransportNetworkError) else None
+            phase = diagnostic.phase if diagnostic else "TRANSPORT"
+            http_status = _safe_http_status(exc.http_status) if isinstance(exc, TransportNetworkError) else None
+            eligible = (phase in ("OPEN", "TRANSPORT") and http_status is None) \
+                or (phase == "BODY" and http_status == 200) \
+                or (phase == "OPEN" and http_status == 200 and diagnostic is not None
+                    and diagnostic.kind == "DEADLINE")
+            if timeout < TIMEOUT and diagnostic and diagnostic.kind in ("TIMEOUT", "DEADLINE") \
+                    and diagnostic.remaining_ms == 0 and exc.timeout_exhausted is True and eligible:
+                try:
+                    self._remaining()
+                except RunAbort as abort:
+                    if abort.code == "REQUEST_DEADLINE" and self._expired_timeout_yield_bounds():
+                        raise abort from None
             raise  # 연결 실패 — _request 가 종류 이름만 남기고 다시 보낸다
         except Exception as e:  # 뜻밖의 오류 — 문구에 키가 섞일 수 있어 종류 이름만 남기고 가린다
             raise NaverApiError(KIND_OTHER, path_shape(path), None, None, customer_id, type(e).__name__) from None
