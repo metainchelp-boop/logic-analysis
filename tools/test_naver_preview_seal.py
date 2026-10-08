@@ -152,9 +152,34 @@ class SealTest(unittest.TestCase):
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_approved_full_source_and_max_runtime_lengths_fit_unchanged_wire_and_cipher_limits(self):
+        self._approved_full_source_roundtrip(P.ACCOUNT_FIRST_COMMIT)
+
+    def test_login_release_full_source_fits_unchanged_wire_and_cipher_limits(self):
+        self.assertEqual(P.ACCOUNT_FIRST_COMMIT, "49c42d645b90732071d0c61b8f9aaf7660e8b765")
+        self.assertEqual(P.LOGIN_RELEASE_COMMIT, "74b79ce6381178abf9b74fff43b0fcb03c5aa60b")
+        self._approved_full_source_roundtrip(P.LOGIN_RELEASE_COMMIT)
+
+    def test_collection_reader_release_full_source_fits_unchanged_wire_and_cipher_limits(self):
+        self.assertEqual(P.COLLECTION_READER_RELEASE_COMMIT, "5e134f2487222a6c7ee1f098102131473255e804")
+        self._approved_full_source_roundtrip(P.COLLECTION_READER_RELEASE_COMMIT)
+
+    def _approved_full_source_roundtrip(self, source_commit):
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
                               check=True, timeout=10).stdout.decode().strip()
-        source = P.source_archive(P.ACCOUNT_FIRST_COMMIT, checkout_commit=head)
+        source = P.source_archive(source_commit, checkout_commit=head)
+        if source_commit == P.LOGIN_RELEASE_COMMIT and sys.platform == "linux" and sys.version_info[:2] == (3, 12):
+            self.assertEqual(len(source), 1707713)
+            self.assertEqual(hashlib.sha256(source).hexdigest(),
+                             "7136119034645500fa31cd1afb85d72b70264144ab62d0181ada6e06ec0484cf")
+        if source_commit == P.COLLECTION_READER_RELEASE_COMMIT:
+            raw_source = gzip.decompress(source)
+            self.assertEqual(len(raw_source), 3778560)
+            self.assertEqual(hashlib.sha256(raw_source).hexdigest(),
+                             "e02046f6cd4e5d2c3fa6ba22c064a51070c2649a67954bbde0e3ac6c8b3c6fa2")
+            if sys.platform == "linux" and sys.version_info[:2] == (3, 12):
+                self.assertEqual(len(source), 1707872)
+                self.assertEqual(hashlib.sha256(source).hexdigest(),
+                                 "13e346b8e9f4ea25e99b35a44ad8ba4745d7242889cc4c0ff6fceb0ed54c0985")
         rng = random.Random(20261004)
         def text(size):
             return "".join(chr(rng.randrange(33, 127)) for _ in range(size))
@@ -162,7 +187,9 @@ class SealTest(unittest.TestCase):
                "NAVER_ENGINE_ERP_KEY": text(256), "NAVER_AUTO_TOKEN_SECRET": text(512),
                "NAVER_MGR_CUSTOMER_ID": "9" * 15, "NAVER_MGR_API_KEY": text(512),
                "NAVER_MGR_SECRET_KEY": text(512)}
-        receipt = self.seal(env=env, compress_payload=True, source_tar_gz=source)
+        with patch.object(P, "OPENSSL", OPENSSL):
+            receipt = P.seal_bundle(env, self.cert, self.output, source_commit=source_commit,
+                                    source_tar_gz=source, compress_payload=True)
         wire = self.decrypted_wire()
         raw = gzip.decompress(wire[len(P.PAYLOAD_GZIP_MAGIC):])
         payload = json.loads(raw)
@@ -338,6 +365,71 @@ class SealTest(unittest.TestCase):
         self.assertEqual(receipt["source_tar_gz_sha256"], hashlib.sha256(b"APPROVED_SOURCE").hexdigest())
         self.assertEqual(stderr.getvalue(), "")
         self.assertTrue(self.decrypted_wire().startswith(b"NAVER-PREVIEW-PAYLOAD-GZIP-1\n"))
+
+    def test_login_release_cli_pins_approved_ancestor_and_rejects_nearby_refs(self):
+        env = {**self.workflow_env(), "GITHUB_REF": P.LOGIN_RELEASE_BRANCH, "GITHUB_SHA": "c" * 40}
+        self.assertEqual(P.LOGIN_RELEASE_BRANCH, "refs/heads/codex/naver-login-read-limit-release-20261009")
+        for ref in ("refs/heads/codex/naver-login-read-limit-20261009", P.LOGIN_RELEASE_BRANCH + "-other",
+                    P.LOGIN_RELEASE_BRANCH + "/child", "refs/tags/codex/naver-login-read-limit-release-20261009"):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.dict(os.environ, {**env, "GITHUB_REF": ref}, clear=True), patch.object(sys, "argv", ["seal"]), \
+                 patch.object(P, "source_archive") as archive, contextlib.redirect_stdout(stdout), \
+                 contextlib.redirect_stderr(stderr):
+                self.assertEqual(P.main(), 1)
+            archive.assert_not_called()
+            self.assertEqual(stdout.getvalue() + stderr.getvalue(), "PREVIEW_SEAL_REFUSED:INVALID_WORKFLOW_CONTEXT\n")
+            self.assertFalse(self.output.exists())
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", ["seal"]), \
+             patch.object(P, "OPENSSL", OPENSSL), patch.object(P, "source_archive", return_value=b"LOGIN_SOURCE") as archive, \
+             contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            self.assertEqual(P.main(), 0)
+        archive.assert_called_once_with(P.LOGIN_RELEASE_COMMIT, checkout_commit="c" * 40)
+        receipt = json.loads(stdout.getvalue())
+        self.assertEqual(receipt["source_commit"], P.LOGIN_RELEASE_COMMIT)
+        self.assertEqual(receipt["source_tar_gz_sha256"], hashlib.sha256(b"LOGIN_SOURCE").hexdigest())
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertTrue(self.decrypted_wire().startswith(P.PAYLOAD_GZIP_MAGIC))
+
+    def test_collection_reader_release_cli_pins_product_and_refuses_similar_refs(self):
+        branch = "refs/heads/codex/naver-collection-status-reader-release-20261009"
+        self.assertEqual(P.COLLECTION_READER_RELEASE_BRANCH, branch)
+        env = {**self.workflow_env(), "GITHUB_REF": branch, "GITHUB_SHA": "c" * 40}
+        for ref in ("refs/heads/codex/naver-collection-status-reader-20261009", branch + "-other",
+                    branch + "/child", branch.replace("refs/heads/", "refs/tags/")):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.dict(os.environ, {**env, "GITHUB_REF": ref}, clear=True), patch.object(sys, "argv", ["seal"]), \
+                 patch.object(P, "source_archive") as archive, contextlib.redirect_stdout(stdout), \
+                 contextlib.redirect_stderr(stderr):
+                self.assertEqual(P.main(), 1)
+            archive.assert_not_called()
+            self.assertEqual(stdout.getvalue() + stderr.getvalue(), "PREVIEW_SEAL_REFUSED:INVALID_WORKFLOW_CONTEXT\n")
+            self.assertFalse(self.output.exists())
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", ["seal"]), \
+             patch.object(P, "OPENSSL", OPENSSL), patch.object(P, "source_archive", return_value=b"COLLECTION_SOURCE") as archive, \
+             contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            self.assertEqual(P.main(), 0)
+        archive.assert_called_once_with(P.COLLECTION_READER_RELEASE_COMMIT, checkout_commit="c" * 40)
+        receipt = json.loads(stdout.getvalue())
+        self.assertEqual(receipt["source_commit"], P.COLLECTION_READER_RELEASE_COMMIT)
+        self.assertEqual(receipt["source_tar_gz_sha256"], hashlib.sha256(b"COLLECTION_SOURCE").hexdigest())
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertTrue(self.decrypted_wire().startswith(P.PAYLOAD_GZIP_MAGIC))
+
+    def test_collection_reader_release_request_cannot_override_product_pin(self):
+        env = {**self.workflow_env(), "GITHUB_REF": P.COLLECTION_READER_RELEASE_BRANCH}
+        for value in (P.LOGIN_RELEASE_COMMIT, P.ACCOUNT_FIRST_COMMIT, "a" * 40):
+            inputs = json.loads(env["PREVIEW_SEAL_INPUTS"])
+            inputs["source_commit"] = value
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.dict(os.environ, {**env, "PREVIEW_SEAL_INPUTS": json.dumps(inputs)}, clear=True), \
+                 patch.object(sys, "argv", ["seal"]), patch.object(P, "source_archive") as archive, \
+                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(P.main(), 1)
+            archive.assert_not_called()
+            self.assertEqual(stdout.getvalue() + stderr.getvalue(), "PREVIEW_SEAL_REFUSED:INVALID_WORKFLOW_INPUTS\n")
+            self.assertFalse(self.output.exists())
 
     def test_cli_context_wrong_modes_and_subprocess_errors_never_leak(self):
         for field, value in (("GITHUB_EVENT_NAME", "push"), ("GITHUB_REF", "refs/heads/main"),

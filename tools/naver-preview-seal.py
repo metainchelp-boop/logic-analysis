@@ -34,6 +34,10 @@ OPENSSL = "/usr/bin/openssl"
 BRANCH = "refs/heads/codex/naver-ad-account-matching-20261001"
 ACCOUNT_FIRST_BRANCH = "refs/heads/codex/naver-account-first-20261002"
 ACCOUNT_FIRST_COMMIT = "49c42d645b90732071d0c61b8f9aaf7660e8b765"
+LOGIN_RELEASE_BRANCH = "refs/heads/codex/naver-login-read-limit-release-20261009"
+LOGIN_RELEASE_COMMIT = "74b79ce6381178abf9b74fff43b0fcb03c5aa60b"
+COLLECTION_READER_RELEASE_BRANCH = "refs/heads/codex/naver-collection-status-reader-release-20261009"
+COLLECTION_READER_RELEASE_COMMIT = "5e134f2487222a6c7ee1f098102131473255e804"
 # 승인된 관리 경로 생성 영수증 36806904207. 입력값으로 이 지문을 바꿀 수 없다.
 SERVER_CERT_PEM_SHA256 = "8edff7ceaa6538bc91df7ebd1723bc6889dbebb232e1955d8dfa4131c4a5acc7"
 MAX_BUNDLE = 2 * 1024 * 1024
@@ -185,7 +189,7 @@ def seal_bundle(env, certificate, output, *, source_commit, source_tar_gz, compr
                           "source_tar_gz_b64": base64.b64encode(source_tar_gz).decode("ascii")},
                          ensure_ascii=True, separators=(",", ":")).encode("ascii")
     if compress_payload:
-        if source_commit != ACCOUNT_FIRST_COMMIT:
+        if source_commit not in {ACCOUNT_FIRST_COMMIT, LOGIN_RELEASE_COMMIT, COLLECTION_READER_RELEASE_COMMIT}:
             raise SealError("UNAPPROVED_COMPRESSED_SOURCE")
         if len(payload) > MAX_PAYLOAD:
             raise SealError("PAYLOAD_TOO_LARGE")
@@ -231,15 +235,17 @@ def main():
     try:
         branch = os.environ.get("GITHUB_REF")
         if (len(sys.argv) != 1 or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
-                or branch not in {BRANCH, ACCOUNT_FIRST_BRANCH}):
+                or branch not in {BRANCH, ACCOUNT_FIRST_BRANCH, LOGIN_RELEASE_BRANCH, COLLECTION_READER_RELEASE_BRANCH}):
             raise SealError("INVALID_WORKFLOW_CONTEXT")
         inputs = json.loads(os.environ.get("PREVIEW_SEAL_INPUTS", "{}"))
         certificate = validate_workflow_inputs(inputs)
-        source_commit = ACCOUNT_FIRST_COMMIT if branch == ACCOUNT_FIRST_BRANCH else os.environ.get("GITHUB_SHA", "")
+        approved = {ACCOUNT_FIRST_BRANCH: ACCOUNT_FIRST_COMMIT, LOGIN_RELEASE_BRANCH: LOGIN_RELEASE_COMMIT,
+                    COLLECTION_READER_RELEASE_BRANCH: COLLECTION_READER_RELEASE_COMMIT}
+        source_commit = approved.get(branch, os.environ.get("GITHUB_SHA", ""))
         source = source_archive(source_commit, checkout_commit=os.environ.get("GITHUB_SHA", ""))
         receipt = seal_bundle(os.environ, certificate, os.environ.get("PREVIEW_SEAL_OUTPUT", ""),
                               source_commit=source_commit, source_tar_gz=source,
-                              compress_payload=branch == ACCOUNT_FIRST_BRANCH)
+                              compress_payload=branch in approved)
         print(json.dumps(receipt, sort_keys=True))
         return 0
     except SealError as error:
