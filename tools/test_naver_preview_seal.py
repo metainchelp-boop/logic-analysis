@@ -160,7 +160,7 @@ class SealTest(unittest.TestCase):
         self._approved_full_source_roundtrip(P.LOGIN_RELEASE_COMMIT)
 
     def test_collection_reader_release_full_source_fits_unchanged_wire_and_cipher_limits(self):
-        self.assertEqual(P.COLLECTION_READER_RELEASE_COMMIT, "5e134f2487222a6c7ee1f098102131473255e804")
+        self.assertEqual(P.COLLECTION_READER_RELEASE_COMMIT, "383c8511964c13e24e884a4cee561fc9bee64102")
         self._approved_full_source_roundtrip(P.COLLECTION_READER_RELEASE_COMMIT)
 
     def _approved_full_source_roundtrip(self, source_commit):
@@ -175,11 +175,11 @@ class SealTest(unittest.TestCase):
             raw_source = gzip.decompress(source)
             self.assertEqual(len(raw_source), 3778560)
             self.assertEqual(hashlib.sha256(raw_source).hexdigest(),
-                             "e02046f6cd4e5d2c3fa6ba22c064a51070c2649a67954bbde0e3ac6c8b3c6fa2")
+                             "69a61798eafd648dbc055d01fe551ce054b704e120b4ba47ca3d39ecaf379a08")
             if sys.platform == "linux" and sys.version_info[:2] == (3, 12):
-                self.assertEqual(len(source), 1707872)
+                self.assertEqual(len(source), 1707865)
                 self.assertEqual(hashlib.sha256(source).hexdigest(),
-                                 "13e346b8e9f4ea25e99b35a44ad8ba4745d7242889cc4c0ff6fceb0ed54c0985")
+                                 "a55b8a3a4b87e69b936778298ef95be41241ebdbd322fe5fa467883543b2229e")
         rng = random.Random(20261004)
         def text(size):
             return "".join(chr(rng.randrange(33, 127)) for _ in range(size))
