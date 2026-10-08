@@ -108,7 +108,8 @@ def _matching(ctx, catalog, *, include_absent=False, candidate_counts=None, auto
     ids = [M.ErpCredential(r["possibility_id"], r["vendor"], r["customer_id_raw"],
                            ad_account_no_raw=r["ad_account_no_raw"]) for r in catalog["ids"]]
     decisions = [M.HumanDecision(d.possibility_id, d.customer_id, d.decision) for d in ctx.live_decisions]
-    result = M.match(people, ids, current, decisions, accounts_complete=True, auto_evidence=auto_evidence)
+    result = M.match(people, ids, current, decisions, accounts_complete=True, auto_evidence=auto_evidence,
+                     _candidate_ids_by_name=related_cache)
     if candidate_counts is not None:
         paired_pids = {p.possibility_id for p in result.pairs}
         paired_cids = {p.customer_id for p in result.pairs}

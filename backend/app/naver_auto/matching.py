@@ -252,13 +252,16 @@ def _cid_like(v, what: str) -> int:
 def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential],
           accounts: Mapping[int, Mapping], decisions: Iterable[HumanDecision] = (),
           *, accounts_complete: bool, previous_ad_accounts: Optional[Mapping[int, int]] = None,
-          auto_evidence: Optional[Mapping[Tuple[int, int], str]] = None) -> PairingResult:
+          auto_evidence: Optional[Mapping[Tuple[int, int], str]] = None,
+          _candidate_ids_by_name: Optional[Mapping[Optional[str], Sequence[int]]] = None) -> PairingResult:
     """한 번에 전부 맞춘다. ``accounts`` = 읽기 관문의 ``ChildAccounts.accounts``(고객 번호 → 남길 칸).
 
     ``accounts_complete=True`` 는 관문이 **모든 관리계정의 모든 쪽을 받았을 때만** 넘긴다(반박 H1).
     ``previous_ad_accounts`` 는 현재 목록에서 빠진 계정의 옛 대응이며 이관 빠짐 표시에만 쓴다.
     ``auto_evidence`` 는 관제 저장소가 검증 후 남긴 숫자 근거다. 기본값은 기존 이름 검사를 유지한다.
     근거가 같아도 현재 이관·번호 유일성·사람 거절·다른 업체를 가리키는 이름 검사는 생략하지 않는다.
+    ``_candidate_ids_by_name`` 은 같은 입력에서 만든 내부 이름 색인(누락 없는 고유 고객 번호 tuple)이다.
+    현재 호출에서만 재사용하며 이름 키 누락·밀집 후보는 기존 전체 후보 순회를 유지한다.
     """
     if accounts_complete is not True:
         raise IncompleteAccounts("대행 연결 목록을 전부 받았을 때만 짝을 맞춘다")
@@ -479,7 +482,13 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
         if pk is None:
             continue
         found: List[Candidate] = []
-        for cid in free:
+        related = None if _candidate_ids_by_name is None else _candidate_ids_by_name.get(pk)
+        candidate_ids = free
+        if related is not None and len(related) < len(free):
+            # 색인은 순회 범위만 줄인다. 현재 계정/확정 짝 검사 후 아래 원래 판정을 모두 적용한다.
+            candidate_ids = (cid for cid in related
+                             if cid in cids and cid not in paired_cids and acc_loose[cid] is not None)
+        for cid in candidate_ids:
             if (pid, cid) in rejected:
                 continue
             ak = acc_loose[cid]
