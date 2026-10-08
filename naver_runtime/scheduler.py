@@ -190,11 +190,12 @@ class Scheduler:
             self._collection_latest = {"id": request_id, "status": "accepted", "codes": []}
             return deepcopy(self._collection_latest)
 
-    def collection_status(self):
+    def collection_status(self, *, read_store=None):
+        """현재 메모리 상태를 먼저 본다. HTTP 복구 조회는 요청의 읽기 연결만 사용한다."""
         with self._collection_lock:
             if self._collection_latest is None and self.collection_factory is not None:
                 try:
-                    return CR.recovered_status(self.store)
+                    return CR.recovered_status(self.store if read_store is None else read_store)
                 except Exception:
                     return {"id": None, "status": "failed", "codes": ["AUDIT_UNAVAILABLE"]}
             return deepcopy(self._collection_latest or {"id": None, "status": "idle", "codes": []})

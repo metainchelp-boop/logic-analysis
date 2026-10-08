@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import logging
 import re
 import threading
@@ -282,6 +283,12 @@ class App:
         self._verified_linking = verified_linking
         self._owner_actions = owner_actions
         self._request_collection, self._collection_status = request_collection, collection_status
+        try:
+            parameter = inspect.signature(collection_status).parameters.get("read_store")
+        except (TypeError, ValueError):
+            parameter = None
+        self._collection_status_uses_reader = (parameter is not None and parameter.kind in
+            (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY))
         self._runtime_status = runtime_status
         self._view_sync = VS.ViewSync()
         self._clock = clock or (lambda: datetime.now(KST))
@@ -898,6 +905,8 @@ class App:
             raise HttpError(403, "verification-read-only")
         if self._collection_status is None:
             raise HttpError(503, "collection-unavailable")
+        if self._collection_status_uses_reader:
+            return 200, self._collection_status(read_store=v.store)
         return 200, self._collection_status()
 
     def _h_ended(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
