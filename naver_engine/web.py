@@ -32,7 +32,7 @@ import threading
 import time as _time
 import unicodedata
 from contextlib import ExitStack, nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -104,6 +104,50 @@ HEADERS = (("Content-Type", "application/json; charset=utf-8"), ("Cache-Control"
            ("Pragma", "no-cache"), ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer"),
            ("X-Frame-Options", "DENY"))
 NOT_VISIBLE = {"error": "not-visible", "message": SC.CLIENT_NOT_VISIBLE}
+
+
+_TIMED_READ_METHODS = (
+    "prospects", "link_decisions", "accounts", "account_catalog", "account_catalog_status",
+    "accounts_read_at", "inventory_snapshot", "automatic_link_evidence", "inventory_checks_on",
+    "inventory_collection_summaries", "structure_reason_summaries", "performance_checks",
+    "latest_inventory_successes", "account_times", "monthly_checks_on", "daily_performance",
+)
+
+
+class _TimedReadStore:
+    """요청 하나의 기존 읽기 호출만 관측한다. 원문·인자·결과는 보관하지 않는다.
+
+    원래 bound method를 호출하므로 Store 내부 self 호출과 __func__ 공유 판정은 그대로다.
+    내부 호출 시간은 바깥 메서드에 포함되며 따로 더하지 않는다.
+    """
+    __slots__ = ("_store", "_timings")
+
+    def __init__(self, store, timings):
+        self._store, self._timings = store, timings
+
+    def __getattr__(self, name):
+        original = getattr(self._store, name)
+        if name not in _TIMED_READ_METHODS or not callable(original):
+            return original
+
+        def read(*args, **kwargs):
+            try:
+                started, cpu_started = _time.perf_counter(), _time.thread_time()
+            except Exception:  # 관측 실패는 기존 조회를 거절하거나 바꾸지 않는다.
+                return original(*args, **kwargs)
+            try:
+                return original(*args, **kwargs)
+            finally:
+                try:
+                    wall = (_time.perf_counter()-started)*1000
+                    cpu = (_time.thread_time()-cpu_started)*1000
+                    calls, old_wall, old_cpu = self._timings.get(name, (0.0, 0.0, 0.0))
+                    values = (calls+1.0, old_wall+wall, old_cpu+cpu)
+                    if wall >= 0 and cpu >= 0 and all(0 <= value <= 3600000 for value in values):
+                        self._timings[name] = values
+                except Exception:  # 원래 결과/예외를 관측 시계나 수치 오류가 가리지 않는다.
+                    pass
+        return read
 
 
 class HttpError(Exception):
@@ -336,6 +380,11 @@ class App:
                           "response_ms": (serialize_started-response_started)*1000,
                           "serialize_ms": (done-serialize_started)*1000,
                           "thread_cpu_ms": (_time.thread_time()-cpu_started)*1000}
+                reads = timing.get("store_reads", {})
+                for name in _TIMED_READ_METHODS:
+                    if name in reads:
+                        for suffix, value in zip(("calls", "wall_ms", "thread_cpu_ms"), reads[name]):
+                            values[f"store_{name}_{suffix}"] = value
                 if all(0 <= value <= 3600000 for value in values.values()):
                     # 큰 본문은 한 번만 직렬화한다. ViewSync의 원천/커서 밖에 숫자만 덧붙인다.
                     extra = (b"" if payload == b"{}" else b",") + b'"_request_timing":{' + ",".join(
@@ -428,6 +477,9 @@ class App:
             with ExitStack() as snapshot:
                 v = self._viewer(environ, now, snapshot=snapshot)
                 self._viewer_timing(timing, v, viewer_started)
+                if timing is not None and timing["export"] is True and view_sync:
+                    timing["store_reads"] = {}
+                    v = replace(v, store=_TimedReadStore(v.store, timing["store_reads"]))
                 handler_started = _time.perf_counter() if timing is not None else 0.0
                 status, payload = route.handler(self, req, v, now, **m.groupdict())
                 if timing is not None:
