@@ -553,7 +553,7 @@ def escalations(ctx: Ctx, store: S.Store, scope: SC.Scope, ids: Iterable[int],
 
 
 # ── 화면 자료 ────────────────────────────────────────────────────────
-def me(ctx: Ctx, scope: SC.Scope) -> dict:
+def me(ctx: Ctx | InventoryCtx, scope: SC.Scope, *, freshness: Optional[str] = None) -> dict:
     """나 — 대표는 재직 관리팀 명단, 직원은 본인만. 부서 계층은 제공하지 않는다."""
     idx = scope.viewer_idx
     person = ctx.org.people.get(idx)
@@ -562,7 +562,7 @@ def me(ctx: Ctx, scope: SC.Scope) -> dict:
     return {"idx": idx, "name": None if person is None else person.name, "scope": scope.kind,
             "narrowed": scope.narrowed, "team_idx": None if person is None else person.team_idx,
             "team_name": None if person is None else _team_name(ctx.org, person.team_idx),
-            "teams": [], "people": people, "org_freshness": ctx.freshness,
+            "teams": [], "people": people, "org_freshness": ctx.freshness if freshness is None else freshness,
             "org_generated_at": ctx.org.generated_at}
 
 

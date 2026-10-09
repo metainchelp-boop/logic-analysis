@@ -609,8 +609,8 @@ class App:
 
     # ── 읽기 ──
     def _h_me(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
-        ctx = v.ctx(now)
-        out = W.me(ctx, v.scope)
+        ctx = v.inventory_ctx(now)
+        out = W.me(ctx, v.scope, freshness=Y.org_freshness(v.store, now))
         counts = INV.staff_counts(ctx, v.store, v.scope)
         for person in out["people"]:
             person["account_count"] = counts.get(person["idx"], 0)

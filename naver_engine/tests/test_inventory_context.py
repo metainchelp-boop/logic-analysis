@@ -2,9 +2,11 @@
 import json
 import sqlite3
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
-from naver_engine import erp_read as E, naver_read as N, store as S, views as W
+from app.naver_auto import org_snapshot as O, scope as SC
+from naver_engine import erp_read as E, inventory as I, naver_read as N, store as S, sync as Y, views as W, web as WEB
 from naver_engine.tests import test_accounts_match_reuse as TM, test_alerts as TA
 from naver_engine.tests import test_morning as MORNING
 
@@ -23,12 +25,33 @@ class InventoryContextTest(unittest.TestCase):
 
     def legacy(self, path, actor=0, narrowed=False):
         # 수정 전 loader를 같은 요청/Store/시각/권한에서 실행한다.
+        if path.partition("?")[0] == "/me":
+            routes = tuple(replace(route, handler=self.legacy_me) if route.pattern.fullmatch("/me") else route
+                           for route in WEB.ROUTES)
+            with patch.object(WEB, "ROUTES", routes):
+                return self.fixture.call(path, actor, narrowed=narrowed)
         with patch.object(W, "load_inventory", side_effect=self.full_load, create=True):
             return self.fixture.call(path, actor, narrowed=narrowed)
 
+    def legacy_me(self, app, req, viewer, now):
+        # source277의 기존 /me 조립. 신선도 Store 읽기도 원래 Ctx에서 한 번만 수행한다.
+        ctx = viewer.ctx(now)
+        out = W.me(ctx, viewer.scope)
+        counts = I.staff_counts(ctx, viewer.store, viewer.scope)
+        for person in out["people"]:
+            person["account_count"] = counts.get(person["idx"], 0)
+        out["inventory_enabled"] = True
+        out["bell_unread"] = W.bell(viewer.store, viewer.idx, now)["unread"]
+        if app._owner_verification:
+            out["owner_verification"] = True
+        if app._owner_actions:
+            out["owner_actions"] = True
+        out["verified_linking"] = app._verified_linking and viewer.scope.kind in (SC.ALL, SC.MINE)
+        return 200, out
+
     def assert_legacy_parity(self):
         for actor, narrowed in ((0, False), (100, False), (101, False), (0, True)):
-            for path in ("/accounts", "/accounts?mapping=matched", "/accounts?view=lost",
+            for path in ("/me", "/me?as=100", "/accounts", "/accounts?mapping=matched", "/accounts?view=lost",
                          "/accounts?workflow=진행중", "/accounts?selection=person:100",
                          "/accounts?selection=person:101", "/accounts?selection=team:11",
                          "/dashboard", "/dashboard?selection=me",
@@ -65,6 +88,18 @@ class InventoryContextTest(unittest.TestCase):
         self.assertTrue({"naver_auto_account", "naver_auto_meta", "naver_auto_org",
                          "naver_auto_link_decision", "naver_auto_prospect"}.issubset(reads))
 
+    def test_real_me_never_reads_unused_legacy_tables(self):
+        expected = {actor: self.fixture.call("/me", actor) for actor in (0, 100, 101)}
+        guard, reads, refused = self.forbid_unused_sql()
+        with guard:
+            for actor, before in expected.items():
+                with self.subTest(actor=actor):
+                    self.assertEqual(before[0], 200)
+                    self.assertEqual(self.fixture.call("/me", actor), before)
+        self.assertFalse(refused)
+        self.assertTrue({"naver_auto_org", "naver_auto_account", "naver_auto_meta",
+                         "naver_auto_link_decision"}.issubset(reads))
+
     def heavy_unused_sources(self, count=1200):
         conn, now = self.store._conn, self.clock.now()
         at, today = now.isoformat(), str(now.date())
@@ -86,7 +121,7 @@ class InventoryContextTest(unittest.TestCase):
             VALUES(?,?,'ok',?,'[]','[]',1,?)""", ((900000+n, today, 900000+n, at) for n in range(count)))
 
     def test_heavy_legacy_sources_do_not_change_business_bytes_or_get_read(self):
-        before = {path: self.fixture.call(path) for path in ("/accounts", "/dashboard")}
+        before = {path: self.fixture.call(path) for path in ("/accounts", "/dashboard", "/me")}
         self.heavy_unused_sources()
         for path, expected in before.items():
             self.assertEqual(self.legacy(path), expected)
@@ -101,6 +136,94 @@ class InventoryContextTest(unittest.TestCase):
 
     def test_all_existing_scope_filter_and_narrowed_business_results_equal_full_loader(self):
         self.assert_legacy_parity()
+
+    def test_me_roster_flags_and_personal_bell_keep_full_legacy_payload(self):
+        self.clock.advance(1)
+        now = self.clock.now()
+        self.store.record_org(TA.org_body(now, owners=[TA.owner(11, 100), TA.owner(12, 101),
+            TA.owner(13, 100), TA.owner(14, 101)], extra_people=(TA.emp(102, "합성영업", 11, management=False),
+            TA.emp(103, "합성퇴사", 11, status="RESIGNED"))), now)
+        self.store.record_alert(S.ALERT_DIGEST, now.date(), "compose", "digest", (), "/naver/issues",
+            [{"emp_idx": who, "severity": "NORMAL", "params": {"red": 1, "yellow": 2}}
+             for who in (0, 100)], now)
+        for verification, actions, linking in ((False, False, False), (True, False, True), (True, True, True)):
+            with patch.object(self.fixture.app, "_owner_verification", verification), \
+                    patch.object(self.fixture.app, "_owner_actions", actions), \
+                    patch.object(self.fixture.app, "_verified_linking", linking):
+                for actor, narrowed in ((0, False), (100, False), (101, False), (0, True)):
+                    with self.subTest(actor=actor, narrowed=narrowed, verification=verification,
+                                      actions=actions, linking=linking):
+                        before = self.legacy("/me", actor, narrowed)
+                        actual = self.fixture.call("/me", actor, narrowed=narrowed)
+                        self.assertEqual(actual, before)
+                        self.assertEqual(actual[0], 200)
+                        body = actual[1]
+                        self.assertEqual(body["bell_unread"], int(actor in (0, 100)))
+                        self.assertNotIn(102, {person["idx"] for person in body["people"]})
+                        self.assertNotIn(103, {person["idx"] for person in body["people"]})
+                        self.assertEqual(json.dumps(actual, ensure_ascii=False, sort_keys=True).encode(),
+                                         json.dumps(before, ensure_ascii=False, sort_keys=True).encode())
+
+    def test_me_preserves_store_freshness_failures_and_missing_source_display(self):
+        original = self.fixture.app._open_read
+        def faulty_reader(mode, failing_at, persistent=False):
+            def open_read():
+                store = original()
+                current, last_sync, calls = store.org_current, store.last_sync, 0
+                def org_current():
+                    nonlocal calls
+                    calls += 1
+                    if calls < failing_at or (calls > failing_at and not persistent):
+                        return current()  # 권한 검증·뒤의 bell 읽기는 정상. 표시용 읽기만 실패한다.
+                    if mode == "read-error":
+                        raise S.StoreError("synthetic")
+                    if mode == "corrupt-body":
+                        return {**current(), "body": {}}
+                    def missing_history(*args):
+                        store.last_sync = last_sync  # 표시용 신선도 읽기 한 번에만 주입한다.
+                        if mode == "missing-never":
+                            return None
+                        if mode == "missing-accepted":
+                            return {"outcome": S.SYNC_ACCEPTED}
+                        raise S.StoreError("synthetic")
+                    store.last_sync = missing_history
+                    return None
+                store.org_current = org_current
+                return store
+            return open_read
+        for mode in ("read-error", "corrupt-body", "missing-never", "missing-accepted", "missing-history-error"):
+            for actor, narrowed in ((0, False), (100, False), (101, False), (0, True)):
+                failing_at = 2 if actor == 0 else 3  # 대표는 좁힌 토큰이어도 기존 SC.ALL이다.
+                with patch.object(self.fixture.app, "_open_read", side_effect=faulty_reader(mode, failing_at)):
+                    with self.subTest(mode=mode, actor=actor, narrowed=narrowed):
+                        before = self.legacy("/me", actor, narrowed)
+                        actual = self.fixture.call("/me", actor, narrowed=narrowed)
+                        self.assertEqual(actual, before)
+                        self.assertEqual(actual[0], 200)
+                        self.assertEqual(actual[1]["org_freshness"],
+                                         O.FRESH_NONE if mode == "missing-never" else O.FRESH_STALE)
+        # 조직 읽기가 계속 실패하면 bell의 필수 읽기도 거절한다. 기존503을 유지한다.
+        for actor, narrowed in ((0, False), (100, False), (0, True)):
+            failing_at = 2 if actor == 0 else 3
+            with patch.object(self.fixture.app, "_open_read", side_effect=faulty_reader("read-error", failing_at, True)):
+                self.assertEqual(self.fixture.call("/me", actor, narrowed=narrowed),
+                                 self.legacy("/me", actor, narrowed))
+                self.assertEqual(self.fixture.call("/me", actor, narrowed=narrowed),
+                                 (503, {"error": "org-unavailable"}))
+
+    def test_me_freshness_rule_is_request_local_and_other_lean_routes_do_not_read_it(self):
+        with patch.object(Y, "org_freshness", wraps=Y.org_freshness) as freshness:
+            for path in ("/accounts", "/dashboard"):
+                self.assertEqual(self.fixture.call(path)[0], 200)
+            self.assertEqual(freshness.call_count, 0)
+            for actor in (0, 100, 101):
+                before = freshness.call_count
+                self.assertEqual(self.fixture.call("/me", actor)[0], 200)
+                # 직원은 기존 viewer 권한 신선도 검사1회 + me 표시1회. 대표는 표시1회.
+                self.assertEqual(freshness.call_count-before, 1 if actor == 0 else 2)
+        ctx = self.full_load(self.store, self.clock.now())
+        scope = SC.scope_of(ctx.org, 0)
+        self.assertEqual(W.me(ctx, scope), W.me(ctx, scope, freshness=ctx.freshness))
 
     def test_current_owner_hidden_unknown_and_stale_org_keep_full_loader_rules(self):
         self.clock.advance(1)
@@ -149,7 +272,7 @@ class InventoryContextTest(unittest.TestCase):
                          for row in catalog["items"]]
                 self.store.record_account_catalog({"generated_at": now.isoformat(), "total": len(items),
                     "complete": True, "items": items}, self.fixture.ids, now)
-                for path in ("/accounts", "/dashboard"):
+                for path in ("/accounts", "/dashboard", "/me"):
                     for actor in (0, 100, 101):
                         self.assertEqual(self.fixture.call(path, actor), self.legacy(path, actor))
                 rows = self.fixture.call("/accounts")[1]["rows"]
@@ -170,6 +293,7 @@ class InventoryContextTest(unittest.TestCase):
         now = self.clock.now()
         self.store.record_org(TA.org_body(now, owners=[TA.owner(11, 101), TA.owner(12, 101)]), now)
         self.assertEqual(self.fixture.call("/accounts", 100)[1]["rows"], [])
+        self.assertEqual(self.fixture.call("/me?view_sync=1"), (400, {"error": "bad-query"}))
 
     def test_other_surfaces_keep_full_context_loader(self):
         with patch.object(W, "load", wraps=self.full_load) as full:
