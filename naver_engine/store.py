@@ -71,12 +71,21 @@ import pathlib
 import re
 import sqlite3 as _sqlite3
 import stat as _stat
+import sys as _sys
+from threading import Lock as _CatalogHeaderLock
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+# 같은 JSON 원문과 파서에서 나온 immutable 시각 칸 하나만 보관한다.
+# 상한은 보관 문자열의 Python 크기이며 전체 heap/RSS 상한을 뜻하지 않는다.
+_ACCOUNT_CATALOG_HEADER_KEY_BYTES = 16 * 1024 * 1024
+_ACCOUNT_CATALOG_HEADER_VALUE_BYTES = 4096
+_ACCOUNT_CATALOG_HEADER_LOCK = _CatalogHeaderLock()
+_ACCOUNT_CATALOG_HEADER_MEMO = None
 
 from . import erp_read as E
 from . import fields as F
@@ -2174,7 +2183,7 @@ class ManagedStorage:
         matching_fingerprint = self.decision_fingerprint()
         day, at = now.astimezone(S.KST).date(), S._kst_text(now, "현재")
         prior = {r["job_key"]: r for r in _rows(self._conn.execute(
-            """SELECT * FROM naver_auto_performance_job WHERE cycle_day>=?
+            """SELECT job_key,customer_id,kind,cycle_day,period_start,period_end,stage_revision,possibility_id,status,checked_at,next_try_at,attempts,error_code,generation FROM naver_auto_performance_job WHERE cycle_day>=?
                OR status IN ('reading','partial','retry','source_wait')""",
             ((day-timedelta(days=40)).isoformat(),)))}
         # 계정별 묶음(NV-S00) — 아래 두 곳이 계정마다 지난 작업 전체(40일치)를 훑어 계정 수 × 작업 수가 쓰기 줄 CPU 를 먹었다.
@@ -2373,7 +2382,7 @@ class ManagedStorage:
             return False
         if not self.inventory_account_valid(job["customer_id"], job["snapshot_at"], now):
             return False
-        catalog, state = I.catalog_status(self, now)
+        catalog, state = I.catalog_status(self, now, header_only=True)
         if state != "accepted" or catalog["generated_at"] != job.get("catalog_at"):
             return False
         if not O.allows_raising(Y.org_freshness(self, now)) \
@@ -2752,6 +2761,46 @@ class ManagedStorage:
             row["conversion_complete"] = bool(row["conversion_complete"])
         return out if possibility_id is None else [row for row in out if row["possibility_id"] == possibility_id]
 
+    def dashboard_checks(self, owners, now):
+        """현재 화면의 귀속 원천만 400계정씩 기존 월간 집계에 전달한다.
+
+        어느 귀속이든 원천이 있는 계정은 따로 반환해 월간 대체값 제거를 보존한다.
+        기존 공개 일별 조회와 재정의 adapter의 반환 계약은 바꾸지 않는다.
+        """
+        from . import dashboard as D, store as S
+        ids = sorted({S._customer_id(cid, "계정") for cid in owners})
+        start, end = now.astimezone(KST).date().replace(day=1), now.astimezone(KST).date()-timedelta(days=1)
+        if not ids or start > end:
+            return {}, set()
+        if getattr(self.daily_performance, "__func__", None) is not ManagedStorage.daily_performance:
+            raw = self.daily_performance(list(owners), start, end)
+            usable = [row for row in raw if row.get("possibility_id") == owners.get(row["customer_id"])]
+            return D.daily_checks(usable, now), {row["customer_id"] for row in raw}
+        for pid in owners.values():
+            if pid is not None:
+                S._pos_int(pid, "업체")
+        checks, source_ids = {}, set()
+        for offset in range(0, len(ids), 400):
+            chunk = ids[offset:offset+400]
+            marks = ",".join("?" for _ in chunk)
+            cursor = self._conn.execute(f"""SELECT customer_id,day,possibility_id,basic_complete,
+                    conversion_complete,imp,clk,spend,conversion_value,checked_at
+                FROM naver_auto_daily_performance WHERE customer_id IN ({marks}) AND day BETWEEN ? AND ?
+                ORDER BY customer_id,day""", (*chunk, str(start), str(end)))
+            names = tuple(column[0] for column in cursor.description)
+            def rows():
+                for values in cursor:
+                    # 다른 귀속 자료도 원천 존재 근거는 보존하되 큰 dict/list로 만들지 않는다.
+                    source_ids.add(values[0])
+                    if values[2] != owners.get(values[0]):
+                        continue
+                    row = dict(zip(names, values))
+                    row["basic_complete"] = bool(row["basic_complete"])
+                    row["conversion_complete"] = bool(row["conversion_complete"])
+                    yield row
+            checks.update(D.daily_checks(rows(), now))
+        return checks, source_ids
+
     def performance_checks(self, now, *, _policies=None):
         """시도 상태와 마지막 성공 자료를 분리한다. 과거 값은 실제 기간을 함께 반환한다."""
         from . import management_store as MS
@@ -3002,7 +3051,7 @@ class ManagedStorage:
         matching_fingerprint = self.decision_fingerprint()
         day, at = now.astimezone(KST).date(), _kst_text(now,"현재")
         prior = {r["job_key"]:r for r in _rows(self._conn.execute(
-            "SELECT * FROM naver_auto_structure_job WHERE cycle_day>=?", ((day-timedelta(days=8)).isoformat(),)))}
+            "SELECT job_key,stage_revision,status,checked_at,next_try_at,attempts,error_code FROM naver_auto_structure_job WHERE cycle_day>=?", ((day-timedelta(days=8)).isoformat(),)))}
         candidates = []
         def add(job, priority):
             job["job_key"] = "structure:"+job["job_key"]
@@ -4882,6 +4931,45 @@ class Store(ManagedStorage):
     def account_catalog(self):
         return self._meta_json(self._conn, "account_catalog")
 
+    def account_catalog_header(self):
+        """매번 최신 원문을 읽고, 같은 JSON의 시각 해석만 재사용한다. 권한 판정은 보관하지 않는다."""
+        global _ACCOUNT_CATALOG_HEADER_MEMO
+        readers = (self.account_catalog, self._meta_json, self._get_meta)
+        if any(getattr(read, "__func__", None) is not native
+               for read, native in zip(readers, _NATIVE_CATALOG_READERS)):
+            return self.account_catalog()
+        try:
+            raw = self._get_meta(self._conn, "account_catalog")
+        except Exception:
+            with _ACCOUNT_CATALOG_HEADER_LOCK:
+                _ACCOUNT_CATALOG_HEADER_MEMO = None
+            raise
+        decoder = json.loads
+        bounded = type(raw) is str and _sys.getsizeof(raw) <= _ACCOUNT_CATALOG_HEADER_KEY_BYTES
+        with _ACCOUNT_CATALOG_HEADER_LOCK:
+            memo = _ACCOUNT_CATALOG_HEADER_MEMO
+            if bounded and memo is not None and memo[0] == raw and memo[1] is decoder:
+                return {"generated_at": memo[3]} if memo[2] else {}
+            # 원문 변경·상한 초과·파서 교체·오류는 이전 결과를 남기지 않는다.
+            _ACCOUNT_CATALOG_HEADER_MEMO = None
+        if raw is None:
+            return None
+        try:
+            body = decoder(raw)
+        except (TypeError, ValueError, RecursionError):
+            raise StoreError("저장된 기준선을 읽지 못했습니다") from None
+        # 비객체·비scalar 값의 원래 오류/실패 순서는 catalog_status가 그대로 판정한다.
+        if type(body) is not dict:
+            return body
+        present = "generated_at" in body
+        value = body.get("generated_at")
+        scalar = not present or (type(value) in (str, int, float, bool, type(None))
+                                 and _sys.getsizeof(value) <= _ACCOUNT_CATALOG_HEADER_VALUE_BYTES)
+        if bounded and scalar:
+            with _ACCOUNT_CATALOG_HEADER_LOCK:
+                _ACCOUNT_CATALOG_HEADER_MEMO = (raw, decoder, present, value)
+        return {"generated_at": value} if present else {}
+
     def account_catalog_status(self):
         return self._meta_json(self._conn, "account_catalog_status")
 
@@ -5739,3 +5827,8 @@ class Store(ManagedStorage):
                  values.get("campaign_count"), values.get("campaign_fingerprint"), attempts,
                  _kst_text(next_at, "월간 재시도 시각"), customer_id, start.isoformat(), end.isoformat()))
             return status
+
+
+# 클래스/인스턴스의 공개 읽기 override를 native 최적화가 덮어쓰지 않게 원래 함수 identity를 고정한다.
+_NATIVE_CATALOG_READERS = (Store.account_catalog, Store._meta_json, Store._get_meta)
+_NATIVE_ACCOUNT_CATALOG_HEADER = Store.account_catalog_header

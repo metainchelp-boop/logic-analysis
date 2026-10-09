@@ -111,6 +111,7 @@ _TIMED_READ_METHODS = (
     "accounts_read_at", "inventory_snapshot", "automatic_link_evidence", "inventory_checks_on",
     "inventory_collection_summaries", "structure_reason_summaries", "performance_checks",
     "latest_inventory_successes", "account_times", "monthly_checks_on", "daily_performance",
+    "dashboard_checks",
 )
 
 
@@ -132,6 +133,7 @@ _TIMED_READ_ACCESSORS = {
     "account_times": lambda store: store.account_times,
     "monthly_checks_on": lambda store: store.monthly_checks_on,
     "daily_performance": lambda store: store.daily_performance,
+    "dashboard_checks": lambda store: store.dashboard_checks,
 }
 
 class _TimedReadStore:

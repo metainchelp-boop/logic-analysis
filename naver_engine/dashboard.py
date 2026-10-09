@@ -151,15 +151,20 @@ def board(ctx, store, scope, selection="all"):
     if callable(getattr(store,"daily_performance",None)):
         if start <= end:
             owners = {r["customer_id"]:r["possibility_id"] for r in rows}
-            raw = store.daily_performance(list(owners),start,end)
-            # 계정 재연결 이전의 업체 실적을 현재 업체 평균에 섞지 않는다.
-            usable = [r for r in raw if r.get("possibility_id") == owners.get(r["customer_id"])]
-            for cid in {r["customer_id"] for r in raw}:
+            compact = getattr(store,"dashboard_checks",None)
+            if callable(compact):
+                daily, source_ids = compact(owners,ctx.now)
+            else:
+                raw = store.daily_performance(list(owners),start,end)
+                # 계정 재연결 이전의 업체 실적을 현재 업체 평균에 섞지 않는다.
+                usable = [r for r in raw if r.get("possibility_id") == owners.get(r["customer_id"])]
+                daily, source_ids = daily_checks(usable,ctx.now), {r["customer_id"] for r in raw}
+            for cid in source_ids:
                 checks.pop(cid,None)
             for row in rows:
                 if row.get("collection",{}).get("attribution_changed"):
                     checks.pop(row["customer_id"],None)
-            checks.update(daily_checks(usable,ctx.now))
+            checks.update(daily)
     result = aggregate(rows, checks, ctx.now, ready=source["matching_ready"])
     return {**result, "selection": selection, "accounts_at": source["accounts_at"],
             "collection_scope":"visible_accounts",

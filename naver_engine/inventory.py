@@ -34,8 +34,13 @@ def sync_catalog(reader, store, now):
         return {"state": "failed", "code": "CATALOG_FAILED"}
 
 
-def catalog_status(store, now):
-    body, result = store.account_catalog(), store.account_catalog_status()
+def catalog_status(store, now, *, header_only=False):
+    read = store.account_catalog
+    if header_only is True:
+        header = getattr(store, "account_catalog_header", None)
+        if getattr(header, "__func__", None) is S._NATIVE_ACCOUNT_CATALOG_HEADER:
+            read = header
+    body, result = read(), store.account_catalog_status()
     if body is None:
         return body, "missing"
     if not result or result["state"] != "accepted":
