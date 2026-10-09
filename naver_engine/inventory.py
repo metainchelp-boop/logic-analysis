@@ -134,7 +134,7 @@ def _lost_rows(ctx, store, catalog, visible, owns, ceo, selection):
     if not absent:
         return []
     # 현재 번호 주장과 충돌하는 과거 계정을 직원 소유로 추정하지 않는다.
-    result, _ = _matching(ctx, catalog, include_absent=True)
+    result, _ = MS.absent_matching_result(ctx.accounts, ctx.live_decisions, catalog)
     pairs, duplicates = {}, set()
     for pair in result.pairs:
         if pair.customer_id in pairs:

@@ -17,8 +17,8 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
     # 공유 서버의 허용량이 아니라 초기 상한. 실제 여유·회차 시간 검증은 배포 게이트다.
-    cpus: "0.50"
-    mem_limit: 512m
+    cpus: "1.00"
+    mem_limit: 768m
     pids_limit: 64
     stop_grace_period: 45s
     env_file:

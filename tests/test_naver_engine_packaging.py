@@ -346,7 +346,7 @@ class ComposeAssertions:
     def assert_cpu_limit(self, engine):
         cpus = Decimal(str(engine["cpus"]))
         self.assertGreater(cpus, Decimal("0"))
-        self.assertLessEqual(cpus, Decimal("0.5"))
+        self.assertLessEqual(cpus, Decimal("1.0"))
 
     def assert_raw_environment(self, engine):
         if "env_file" in engine:
@@ -465,7 +465,7 @@ class ComposeNormalizationTest(ComposeAssertions, unittest.TestCase):
         self.assert_expanded_flags_off(engine)
         self.assert_no_created_host_path({"type": "bind", "bind": {}})
         self.assert_no_created_host_path({"type": "bind"})
-        for cpus in ("0.5", 0.5):
+        for cpus in ("0.5", 0.5, "1.00", 1.0):
             self.assert_cpu_limit({"cpus": cpus})
 
     def test_normalization_never_hides_interpolation_enabled_flags_or_created_paths(self):
@@ -477,7 +477,7 @@ class ComposeNormalizationTest(ComposeAssertions, unittest.TestCase):
             self.assert_expanded_flags_off({"environment": {"NAVER_ENGINE_BACKUP_ENABLED": "true"}})
         with self.assertRaises(AssertionError):
             self.assert_no_created_host_path({"bind": {"create_host_path": True}})
-        for cpus in ("0", 0, "0.50000000000000001", 0.51):
+        for cpus in ("0", 0, "1.00000000000000001", 1.01):
             with self.assertRaises(AssertionError):
                 self.assert_cpu_limit({"cpus": cpus})
 

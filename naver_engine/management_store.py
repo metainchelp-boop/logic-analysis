@@ -1,6 +1,7 @@
 """저장된 이관·전산·매칭 자료를 실관리 수집 정책으로 변환한다. 쓰기는 하지 않는다."""
 from types import SimpleNamespace
 from threading import Lock
+import sys
 
 from app.naver_auto import org_snapshot as O, scope as SC
 
@@ -70,6 +71,11 @@ def snapshot(store, now, *, stage_states=None) -> dict:
 _MATCH_MEMO_LOCK = Lock()
 _MATCH_MEMO = None
 
+# 부재 포함 매칭은 현재 계정 매칭과 입력/자동 근거가 다르므로 별도 결과 하나만 보관한다.
+# 문자열 자체의 실제 Python 크기만 제한한다. 결과를 포함한 전체 heap 상한을 뜻하지 않는다.
+_ABSENT_MATCH_KEY_BYTES = 4 * 1024 * 1024
+_ABSENT_MATCH_MEMO = None
+
 
 def _matched(store, accounts, decisions, catalog, evidence):
     """``I._matching(…)[0]`` 과 같은 결과. 같은 입력이 이어지면 지난 계산을 다시 쓴다(위 설명)."""
@@ -105,6 +111,36 @@ def matching_result(store, accounts, decisions, catalog, evidence, *, candidate_
             _MATCH_MEMO = completed
     if candidate_counts is not None:
         candidate_counts.update(counts)
+    return result, possible
+
+
+def absent_matching_result(accounts, decisions, catalog):
+    """현재·부재 계정의 순수 매칭만 재사용. 담당·단계·부재 기간은 호출자가 매번 판정한다."""
+    global _ABSENT_MATCH_MEMO
+    from . import inventory as I
+    functions = (I._matching, I.M.match, I.M.loose_name)
+    try:
+        # include_absent=True도 present 칸을 읽으므로 누락/형 변경을 정상 답으로 덮지 않는다.
+        key = repr(([(cid, a["present"], a["ad_account_no"], a["account_name"]) for cid, a in accounts.items()],
+                    [(d.possibility_id, d.customer_id, d.decision) for d in decisions],
+                    [(r["possibility_id"], r["vendor"], r["customer_id_raw"], r["ad_account_no_raw"])
+                     for r in catalog["ids"]],
+                    [(r["possibility_id"], r["company_name"]) for r in catalog["items"]]))
+        if sys.getsizeof(key) > _ABSENT_MATCH_KEY_BYTES:
+            key = None
+    except Exception:  # noqa: BLE001 — 오류는 원래 계산의 원래 자리에서 발생해야 한다.
+        key = None
+    with _MATCH_MEMO_LOCK:
+        memo = _ABSENT_MATCH_MEMO if key is not None else None
+    if memo is not None and memo[0] == key and all(a is b for a, b in zip(memo[1], functions)):
+        return memo[2], set(memo[3])
+    # 기존 _lost_rows와 똑같이 auto_evidence 없이 계산한다. 현재 매칭의 근거를 넘기지 않는다.
+    result, possible = I._matching(SimpleNamespace(accounts=accounts, live_decisions=decisions), catalog,
+                                   include_absent=True)
+    if key is not None:
+        completed = (key, functions, result, frozenset(possible))
+        with _MATCH_MEMO_LOCK:
+            _ABSENT_MATCH_MEMO = completed
     return result, possible
 
 
