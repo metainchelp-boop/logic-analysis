@@ -87,11 +87,14 @@ class PackagingSourceTest(unittest.TestCase):
         self.assertIn(login_branch + " && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''", jobs['linux-tests'])
         collection_reader_branch = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-collection-status-reader-release-20261009'"
         self.assertIn(collection_reader_branch + " && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''", jobs['linux-tests'])
+        observation_branch = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-next-observation-release-20261009'"
+        self.assertIn(observation_branch + " && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''", jobs['linux-tests'])
         seal_branch = ("github.event_name == 'workflow_dispatch' && "
                        "(github.ref == 'refs/heads/codex/naver-ad-account-matching-20261001' || "
                        "github.ref == 'refs/heads/codex/naver-account-first-20261002' || "
                        "github.ref == 'refs/heads/codex/naver-login-read-limit-release-20261009' || "
-                       "github.ref == 'refs/heads/codex/naver-collection-status-reader-release-20261009')")
+                       "github.ref == 'refs/heads/codex/naver-collection-status-reader-release-20261009' || "
+                       "github.ref == 'refs/heads/codex/naver-next-observation-release-20261009')")
         expected = {
             'backup-probe': {'NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY', 'NAVER_BACKUP_KNOWN_HOSTS'},
             'backup-transfer': {'NAVER_BACKUP_RECIPIENT_CERT_PEM', 'NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY', 'NAVER_BACKUP_KNOWN_HOSTS'},
@@ -256,8 +259,8 @@ class PackagingSourceTest(unittest.TestCase):
         self.assertIn("--user 10001:10001", workflow)
         self.assertIn("--read-only", workflow)
         self.assertNotRegex(workflow, r"docker\s+(?:push|system\s+prune|volume\s+prune)\b")
-        self.assertIn("fetch-depth: ${{ (github.ref == 'refs/heads/codex/naver-login-read-limit-release-20261009' || github.ref == 'refs/heads/codex/naver-collection-status-reader-release-20261009') && '0' || '1' }}", workflow)
-        self.assertIn("        if: github.ref == 'refs/heads/codex/naver-login-read-limit-release-20261009' || github.ref == 'refs/heads/codex/naver-collection-status-reader-release-20261009'\n", workflow)
+        self.assertIn("fetch-depth: ${{ (github.ref == 'refs/heads/codex/naver-login-read-limit-release-20261009' || github.ref == 'refs/heads/codex/naver-collection-status-reader-release-20261009' || github.ref == 'refs/heads/codex/naver-next-observation-release-20261009') && '0' || '1' }}", workflow)
+        self.assertIn("        if: github.ref == 'refs/heads/codex/naver-login-read-limit-release-20261009' || github.ref == 'refs/heads/codex/naver-collection-status-reader-release-20261009' || github.ref == 'refs/heads/codex/naver-next-observation-release-20261009'\n", workflow)
         self.assertIn("python -m unittest discover -s tools -p test_naver_preview_seal.py -v", workflow)
 
     def test_ci_guard_rejects_credentials_in_development_job_or_global_env(self):
@@ -286,6 +289,7 @@ class PackagingSourceTest(unittest.TestCase):
                         original.replace("github.ref == 'refs/heads/codex/naver-account-first-20261002'", 'true'),
                         original.replace("github.ref == 'refs/heads/codex/naver-login-read-limit-release-20261009'", 'true'),
                         original.replace("github.ref == 'refs/heads/codex/naver-collection-status-reader-release-20261009'", 'true'),
+                        original.replace("github.ref == 'refs/heads/codex/naver-next-observation-release-20261009'", 'true'),
                         original.replace('    environment: naver-backup-recovery\n', '')):
             with self.assertRaises(AssertionError):
                 self.assert_ci_job_isolation(changed)
@@ -310,6 +314,23 @@ class PackagingSourceTest(unittest.TestCase):
                      + "' && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''")
         for changed in (original.replace(condition, "github.ref == '" + branch + "'"),
                         original.replace('inputs.preview_seal == true', 'true')):
+            with self.assertRaises(AssertionError):
+                self.assert_ci_job_isolation(changed)
+
+    def test_observation_release_guard_keeps_exact_ref_closed_inputs_and_no_development_credentials(self):
+        original = source('.github/workflows/naver-runtime-tests.yml')
+        branch = 'refs/heads/codex/naver-next-observation-release-20261009'
+        self.assert_ci_job_isolation(original)
+        for replacement in (branch + '-other', branch + '/child', branch.replace('refs/heads/', 'refs/tags/')):
+            with self.subTest(replacement=replacement), self.assertRaises(AssertionError):
+                self.assert_ci_job_isolation(original.replace(branch, replacement))
+        condition = ("github.event_name == 'workflow_dispatch' && github.ref == '" + branch
+                     + "' && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''")
+        for changed in (original.replace(condition, "github.ref == '" + branch + "'"),
+                        original.replace(condition, condition.replace("inputs.backup_acceptance == 'none'", 'true')),
+                        original.replace(condition, condition.replace("inputs.received_synthetic_json == ''", 'true')),
+                        original.replace('  linux-tests:\n', '  linux-tests:\n'
+                                         + '    env:\n      BAD: ${{ secrets.NAVER_ENGINE_ERP_KEY }}\n')):
             with self.assertRaises(AssertionError):
                 self.assert_ci_job_isolation(changed)
 
