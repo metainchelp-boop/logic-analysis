@@ -172,6 +172,12 @@ class _TimedReadStore:
                         self._timings[name] = values
                 except Exception:  # 원래 결과/예외를 관측 시계나 수치 오류가 가리지 않는다.
                     pass
+        try:
+            # 함수 identity만 보존한다. 호출은 위 closure의 원래 bound receiver를 사용한다.
+            read.__func__ = original.__func__
+        except Exception:
+            # 선택적 관측 메타데이터가 사용자 정의 callable의 결과/예외를 바꾸지 않는다.
+            pass
         return read
 
 

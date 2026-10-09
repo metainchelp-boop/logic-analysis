@@ -2807,10 +2807,9 @@ class ManagedStorage:
         decisions = MS.snapshot(self, now) if _policies is None else _policies
         attribution_changes = self.attribution_changes()
         # 목록에는 이어읽기/캠페인 JSON이 필요 없다. 큰 본문을 SQL 정렬·Python 행에 싣지 않는다.
-        jobs = _rows(self._conn.execute("""SELECT job_key,customer_id,kind,cycle_day,period_start,period_end,
-            snapshot_at,catalog_at,stage_revision,possibility_id,matching_fingerprint,status,checked_at,next_try_at,
-            attempts,error_code,progress_hash,bizmoney,bizmoney_at,last_success_at,last_bizmoney,last_bizmoney_at,
-            previous_bizmoney,previous_bizmoney_at,generation,source_wait_attempts
+        jobs = _rows(self._conn.execute("""SELECT customer_id,kind,cycle_day,period_start,period_end,
+            stage_revision,possibility_id,status,checked_at,error_code,bizmoney,bizmoney_at,
+            last_success_at,last_bizmoney,last_bizmoney_at,previous_bizmoney,previous_bizmoney_at,generation
             FROM naver_auto_performance_job ORDER BY checked_at,job_key"""))
         latest, success, balances, revalidations = {}, {}, {}, {}
         for job in jobs:
@@ -2909,12 +2908,26 @@ class ManagedStorage:
                     item["activity_observed"] = any(r.get("spend", 0) > 0 or r.get("imp", 0) > 0 or r.get("clk", 0) > 0 for r in rows)
         return result
 
-    def latest_inventory_successes(self):
-        """이전 버전 성공 자료도 실제 실적일과 함께 보존해 보여 준다."""
-        rows = _rows(self._conn.execute("""SELECT i.customer_id,i.day,i.checked_at,i.bizmoney,
-            i.yday_spend,i.yday_imp,i.yday_clk FROM naver_auto_inventory_check i WHERE i.status='ok'
-            AND i.day=(SELECT MAX(p.day) FROM naver_auto_inventory_check p
-                WHERE p.customer_id=i.customer_id AND p.status='ok')"""))
+    def latest_inventory_successes(self, *, _customer_ids=None):
+        """이전 성공의 실제 실적일을 보존한다. 무인자 조회는 기존 전체 반환이다."""
+        if _customer_ids is None:
+            rows = _rows(self._conn.execute("""SELECT i.customer_id,i.day,i.checked_at,i.bizmoney,
+                i.yday_spend,i.yday_imp,i.yday_clk FROM naver_auto_inventory_check i WHERE i.status='ok'
+                AND i.day=(SELECT MAX(p.day) FROM naver_auto_inventory_check p
+                    WHERE p.customer_id=i.customer_id AND p.status='ok')"""))
+        else:
+            ids = sorted({_customer_id(cid, "계정") for cid in _customer_ids})
+            rows = []
+            for offset in range(0, len(ids), 400):
+                chunk = ids[offset:offset+400]
+                marks = ",".join("(?)" for _ in chunk)
+                # 기존 (customer_id, day) PK에서 필요한 계정의 마지막 성공만 찾는다.
+                # checked_at 순서나 금액·기간 해석은 바꾸지 않는다.
+                rows.extend(_rows(self._conn.execute(f"""WITH wanted(customer_id) AS (VALUES {marks}) SELECT
+                    i.customer_id,i.day,i.checked_at,i.bizmoney,i.yday_spend,i.yday_imp,i.yday_clk
+                    FROM wanted w JOIN naver_auto_inventory_check i ON i.customer_id=w.customer_id
+                    AND i.day=(SELECT p.day FROM naver_auto_inventory_check p
+                        WHERE p.customer_id=w.customer_id AND p.status='ok' ORDER BY p.day DESC LIMIT 1)""", chunk)))
         out = {}
         for row in rows:
             day = (date.fromisoformat(row["day"])-timedelta(days=1)).isoformat()
@@ -5845,3 +5858,4 @@ class Store(ManagedStorage):
 _NATIVE_CATALOG_READERS = (Store.account_catalog, Store._meta_json, Store._get_meta)
 _NATIVE_ACCOUNT_CATALOG_HEADER = Store.account_catalog_header
 _NATIVE_DAILY_PERFORMANCE = ManagedStorage.daily_performance
+_NATIVE_LATEST_INVENTORY_SUCCESSES = ManagedStorage.latest_inventory_successes

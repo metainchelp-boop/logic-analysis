@@ -271,7 +271,20 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
         structure = store.structure_reason_summaries(ctx.accounts.keys(),ctx.now) \
             if not _dashboard_only and callable(getattr(store,"structure_reason_summaries",None)) else {}
         managed = store.performance_checks(ctx.now) if callable(getattr(store,"performance_checks",None)) else {}
-    legacy = store.latest_inventory_successes() if managed else {}
+    legacy = {}
+    if managed:
+        read_legacy = store.latest_inventory_successes
+        if getattr(read_legacy, "__func__", None) is S._NATIVE_LATEST_INVENTORY_SUCCESSES:
+            missing = [cid for cid, current in managed.items()
+                       if not current.get("attribution_changed") and not current.get("last_success_at")]
+            if missing:
+                # 성공이 전혀 없거나 대부분을 다시 찾는 경우 PK 역순 반복이 더 비쌀 수 있다.
+                # 일부 400계정 이하만 좁히고, 나머지는 기존 전체 조회를 그대로 유지한다.
+                legacy = (read_legacy(_customer_ids=missing)
+                          if len(missing) < len(managed) and len(missing) <= 400 else read_legacy())
+        else:
+            # 사용자 정의·구형 읽기 어댑터에는 새 키워드를 요구하지 않는다.
+            legacy = read_legacy()
     for cid, current in managed.items():
         if not current.get("attribution_changed") and not current.get("last_success_at") and cid in legacy:
             current = {**current, **legacy[cid], "stale": True}
