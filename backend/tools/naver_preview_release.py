@@ -364,7 +364,7 @@ def compose(release,name):
 
 
 def unix_request(path, route, method='GET'):
-    assets = {'/naver/report-ui.js', '/naver/report-pdf.js'} | {
+    assets = {'/naver/report-ui.js', '/naver/report-pdf.js', '/naver/app.js', '/naver/app.css'} | {
         '/naver/vendor/report-pdf/'+name for name in (
             'NanumGothic-Regular.ttf.gz', 'pdf-lib-1.17.1.min.js',
             'fontkit-1.1.1.umd.min.js', 'sha256-1.0.0.min.js')}
