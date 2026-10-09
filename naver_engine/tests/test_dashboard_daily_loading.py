@@ -81,6 +81,16 @@ class DashboardDailyLoadingTest(unittest.TestCase):
   store,owners=self.fixture(count=5)
   for now,current in((NOW.replace(day=1),owners),(NOW,{}),(datetime(2026,10,8,16,tzinfo=timezone.utc),owners)):
    self.assertEqual(store.dashboard_checks(current,now),reference(store,current,now))
+ def test_class_override_keeps_original_reader_and_empty_source_result(self):
+  store,owners=self.fixture(count=5)
+  for klass in (S.ManagedStorage,S.Store):
+   calls=[]
+   def custom(instance,ids,start,end):
+    calls.append((ids,start,end));return []
+   with self.subTest(klass=klass.__name__),patch.object(klass,'daily_performance',custom):
+    self.assertEqual(reference(store,owners),({},set()))
+    self.assertEqual(store.dashboard_checks(owners,NOW),({},set()))
+   self.assertEqual(calls,[(list(owners),date(2026,10,1),date(2026,10,8))]*2)
  def test_overflow_and_invalid_text_keep_unknown(self):
   store,owners=self.fixture(count=5);ids=list(owners)
   store._conn.execute('UPDATE naver_auto_daily_performance SET spend=? WHERE customer_id=?',(D.MAX_NUMBER,ids[0]))

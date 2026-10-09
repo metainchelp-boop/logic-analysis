@@ -2772,7 +2772,7 @@ class ManagedStorage:
         start, end = now.astimezone(KST).date().replace(day=1), now.astimezone(KST).date()-timedelta(days=1)
         if not ids or start > end:
             return {}, set()
-        if getattr(self.daily_performance, "__func__", None) is not ManagedStorage.daily_performance:
+        if getattr(self.daily_performance, "__func__", None) is not _NATIVE_DAILY_PERFORMANCE:
             raw = self.daily_performance(list(owners), start, end)
             usable = [row for row in raw if row.get("possibility_id") == owners.get(row["customer_id"])]
             return D.daily_checks(usable, now), {row["customer_id"] for row in raw}
@@ -5832,3 +5832,4 @@ class Store(ManagedStorage):
 # 클래스/인스턴스의 공개 읽기 override를 native 최적화가 덮어쓰지 않게 원래 함수 identity를 고정한다.
 _NATIVE_CATALOG_READERS = (Store.account_catalog, Store._meta_json, Store._get_meta)
 _NATIVE_ACCOUNT_CATALOG_HEADER = Store.account_catalog_header
+_NATIVE_DAILY_PERFORMANCE = ManagedStorage.daily_performance
