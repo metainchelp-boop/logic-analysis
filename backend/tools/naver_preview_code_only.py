@@ -72,6 +72,18 @@ REVIEWED_TRANSITION_V7 = (
 )
 
 
+# Reviewed loading-read release: exact three product files, Store/schema unchanged.
+REVIEWED_TRANSITION_V8 = (
+    '96f10f05b0e92651e04b2076999fa6c6ace7291e',
+    '7985925dcc4ed9d75c28ae43a456964cdc78c63f',
+    'a58f46db0367b9b03deb6f141b080b10bbe1d51c7ce91b3265497e9b9c20856f',
+    '47632d4d3403c24dd4988b80c1a0ada25cc155fc6048a7f2413fb72d84ea73ff',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+)
+
+
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
         return 'naver_preview_code_upgrade'
@@ -85,6 +97,8 @@ def code_module_name(source_commit):
         return 'naver_preview_code_upgrade_v6'
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V7[1]:
         return 'naver_preview_code_upgrade_v7'
+    if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V8[1]:
+        return 'naver_preview_code_upgrade_v8'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -105,7 +119,9 @@ def require_review(code):
         {'naver_engine/web.py', 'naver_runtime/scheduler.py'}
         if transition == REVIEWED_TRANSITION_V6 else
         {'naver_engine/web.py', 'naver_runtime/scheduler.py', 'naver_runtime/runtime_status.py'}
-        if transition == REVIEWED_TRANSITION_V7 else None)
+        if transition == REVIEWED_TRANSITION_V7 else
+        {'backend/naver_page/app.js', 'naver_engine/views.py', 'naver_engine/web.py'}
+        if transition == REVIEWED_TRANSITION_V8 else None)
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 

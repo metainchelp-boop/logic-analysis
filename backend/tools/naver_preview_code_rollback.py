@@ -1,7 +1,8 @@
 """Explicit, separately reviewed rollback after a successful code-only apply.
 
 Only the separately reviewed operating49 -> final74, operating74 -> reader
-correction and reader -> progress-observation transitions can roll back here.
+correction, reader -> progress-observation and observation -> loading-read transitions
+can roll back here.
 Request inputs cannot grant another release.
 """
 import json
@@ -40,6 +41,15 @@ REVIEWED_ROLLBACKS = frozenset({(
     'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
     '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
     frozenset({'naver_engine/web.py', 'naver_runtime/scheduler.py', 'naver_runtime/runtime_status.py'}),
+), (
+    '96f10f05b0e92651e04b2076999fa6c6ace7291e',
+    '7985925dcc4ed9d75c28ae43a456964cdc78c63f',
+    'a58f46db0367b9b03deb6f141b080b10bbe1d51c7ce91b3265497e9b9c20856f',
+    '47632d4d3403c24dd4988b80c1a0ada25cc155fc6048a7f2413fb72d84ea73ff',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+    frozenset({'backend/naver_page/app.js', 'naver_engine/views.py', 'naver_engine/web.py'}),
 )})
 STAGE = 'input'
 OPERATION = 'none'
