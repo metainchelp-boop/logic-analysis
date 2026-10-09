@@ -40,6 +40,7 @@
     var h = env.h, put = env.put, $ = env.$;
     var filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}, anchors = {}, epoch = 0, searchTimer;
     var selected = null, displayed = null, initialized = false, chartMetric = 'spend', lastList = null, listReady = false, listContext = null;
+    var displayedMark = null, displayedContext = null;
     var sharedView = false, drafts = {}, savingNotes = {};
     function noteKey(report) { return report.report_id + '|' + report.scope.account_key + '|' + report.revision_fingerprint; }
     function dirty() { return Object.keys(drafts).some(function (key) { return drafts[key].dirty; }); }
@@ -47,6 +48,14 @@
     if (window.addEventListener) window.addEventListener('beforeunload',function (event) { if (dirty()) { event.preventDefault(); event.returnValue = ''; } });
     function context() { return env.context(); }
     function fresh(mark, ctx) { return mark === epoch && ctx === context() && env.active(); }
+    function notesCapability(body) {
+      if (!body || !displayed || !fresh(displayedMark,displayedContext)) return false;
+      var a = displayed.annotations || {};
+      if (body.report_id !== displayed.report_id || body.account_key !== displayed.scope.account_key ||
+          body.revision_fingerprint !== displayed.revision_fingerprint || !Number.isSafeInteger(body.expected_version) || body.expected_version !== a.version) return false;
+      if (body.action === 'save') return a.can_edit === true && !!body.document && typeof body.document === 'object' && !Array.isArray(body.document);
+      return body.action === 'approve' && body.document === undefined && a.can_approve === true && a.state === 'draft' && !(drafts[noteKey(displayed)] && drafts[noteKey(displayed)].dirty);
+    }
     function stateLabel(status) { return STATUS[status] || '집계 상태 미확인'; }
     function value(payload, key) {
       var n = metric(payload, key);
@@ -383,6 +392,7 @@
         notesHistory(a));
     }
     function renderDetail(report,mark,ctx) {
+      displayedMark = mark; displayedContext = ctx;
       var p = report.payload || {}, period = p.period || {}, scope = report.scope || {}, detail = p.details || {}, comparison = detail.comparison || {};
       var available = p.format_version === 2 && Array.isArray(detail.daily);
       var chosen = selected, shared = approvedShared(report), extra = enrichment(report);
@@ -438,7 +448,7 @@
       if (Object.prototype.hasOwnProperty.call(payload,'missing_count')) count = rows && Number.isSafeInteger(payload.missing_count) &&
         payload.missing_count >= rows.length ? payload.missing_count : null;
       var reasons = {day_missing:'해당 날짜 미수집',source_unverified:'원천 확인 전',metrics_incomplete:'일부 지표 미수신'};
-      var metrics = {imp:'노출',impressions:'노출',clk:'클릭',clicks:'클릭',spend:'광고비',conversions:'전환',conversion_value:'전환 매출'};
+      var metrics = {imp:'노출',impressions:'노출',clk:'클릭',clicks:'클릭',spend:'광고비',conversions:'전환',conversion_value:'광고 전환가치'};
       function label(labels,key,fallback) { return typeof key === 'string' && Object.prototype.hasOwnProperty.call(labels,key) ? labels[key] : fallback; }
       var shown = (rows || []).slice(0,100);
       return h('details',{class:'report-missing'},h('summary',null,count === null ? '누락 상세 미보관·미확인' : '누락 ' + env.num(count) + '건 · 날짜·지표 확인'),
@@ -494,7 +504,7 @@
       }).then(function () { if (fresh(mark,ctx) && displayed === report) { button.disabled = !exportReady(report); button.textContent = 'PDF 내려받기'; } });
     }
     return {load:load,company:function (pid) { filter.pid = pid; filter.q = ''; filter.page = 0; selected = null; displayed = null; },
-      hasUnsaved:dirty,reset:function () { epoch++; clearTimeout(searchTimer); selected = null; displayed = null; lastList = null; listReady = false; listContext = null; drafts = {}; savingNotes = {}; sharedView = false; filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}; anchors = {}; if (initialized) controls(); put($('reportDetail')); put($('reportUnlinked')); }};
+      notesCapability:notesCapability,hasUnsaved:dirty,reset:function () { epoch++; clearTimeout(searchTimer); selected = null; displayed = null; displayedMark = null; displayedContext = null; lastList = null; listReady = false; listContext = null; drafts = {}; savingNotes = {}; sharedView = false; filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}; anchors = {}; if (initialized) controls(); put($('reportDetail')); put($('reportUnlinked')); }};
   }
   window.NaverReports = {create:create,model:{query:query,changeText:changeText,sameEdition:sameEdition,metric:metric}};
 }());

@@ -1528,6 +1528,8 @@
   }
   var reportEdit = null;
   function reportCapability(path, body) {
+    if (path === '/reports/notes') return !!body && !!state.me && parse(location.pathname).screen === 'reports' &&
+      !!reportUI && typeof reportUI.notesCapability === 'function' && reportUI.notesCapability(body);
     if (path !== '/reports/review' || !body || !state.me || !state.reports || parse(location.pathname).screen !== 'reports') return false;
     var row = (state.reports.rows || []).filter(function (r) { return r.report_id === body.report_id; })[0];
     return !!row && row.can_review === true && (body.decision === 'held' || body.decision === 'approved' && row.status === 'ready' &&

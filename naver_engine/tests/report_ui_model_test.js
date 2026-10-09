@@ -187,7 +187,7 @@ test('누락 목록은 날짜·계정순번과 알려진 한국어 사유·지�
   assert.match(section.textContent, /누락 125건/);
   assert.match(section.textContent, /2026-09-21 · 계정 순번 1 · 해당 날짜 미수집 · 노출·클릭·광고비/);
   assert.match(section.textContent, /원천 확인 전/);
-  assert.match(section.textContent, /일부 지표 미수신 · 전환·전환 매출/);
+  assert.match(section.textContent, /일부 지표 미수신 · 전환·광고 전환가치/);
   assert.match(section.textContent, /사유 미확인 · 지표 미확인/);
   assert.match(section.textContent, /앞 100건 표시 · 전체 누락 125건/);
   assert.doesNotMatch(section.textContent, /PRIVATE_|계정 순번 101/);
@@ -536,4 +536,26 @@ test('전환·ROAS 차트는 부분 날짜를 끊고 탭 전환으로 서버 요
   findButton(fixture.$('reportChart'),'전환수').fire('click');
   assert.equal(fixture.requests.length,count);
   assert.equal(allNodes(fixture.$('reportChart')).filter(node=>node.classList.contains('nr-dot')).length,2);
+});
+
+test('notes capability는 현재 상세의 판·범위·문안판·권한·화면 문맥만 허용한다', async () => {
+  const report=expandedData(), fixture=await renderReportFixture(report);
+  const save={report_id:7,account_key:'account-a',revision_fingerprint:'fixed-source',expected_version:1,action:'save',document:{shared_comment:'검토 초안'}};
+  assert.equal(fixture.ui.notesCapability(save),true);
+  const approve={...save,action:'approve'}; delete approve.document;
+  assert.equal(fixture.ui.notesCapability(approve),true);
+  for (const patch of [{report_id:8},{account_key:'company'},{revision_fingerprint:'other'},{expected_version:0},{expected_version:true},{action:'unknown'},{document:[]}]) {
+    assert.equal(fixture.ui.notesCapability({...save,...patch}),false,JSON.stringify(patch));
+  }
+  fixture.$('reportNote-shared_comment').value='입력 중'; fixture.$('reportNote-shared_comment').fire('input');
+  assert.equal(fixture.ui.notesCapability(approve),false,'미저장 입력을 승인할 수 없다');
+  assert.equal(fixture.ui.notesCapability(save),true,'입력된 초안 저장은 가능하다');
+  fixture.context.state.gen++;
+  assert.equal(fixture.ui.notesCapability(save),false,'화면 세대가 바뀐 상세는 허용하지 않는다');
+  fixture.ui.reset(); assert.equal(fixture.ui.notesCapability(save),false);
+  const limited=expandedData(); limited.annotations.can_edit=false; limited.annotations.can_approve=false;
+  const denied=await renderReportFixture(limited);
+  assert.equal(denied.ui.notesCapability(save),false); assert.equal(denied.ui.notesCapability(approve),false);
+  const approved=expandedData(); approved.annotations.state='approved';
+  assert.equal((await renderReportFixture(approved)).ui.notesCapability(approve),false);
 });
