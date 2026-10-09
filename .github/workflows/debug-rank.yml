@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -51,7 +51,7 @@ on:
 
 jobs:
   preview-ops:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-backup' || inputs.ad_prepare == 'preview-inspect' || inputs.ad_prepare == 'preview-plan' || inputs.ad_prepare == 'preview-publish' || inputs.ad_prepare == 'preview-rollback' || inputs.ad_prepare == 'preview-lifecycle' || inputs.ad_prepare == 'preview-status' || inputs.ad_prepare == 'preview-data-audit' || inputs.ad_prepare == 'preview-collection-status' || inputs.ad_prepare == 'preview-link-audit' || inputs.ad_prepare == 'preview-legacy-audit' || inputs.ad_prepare == 'preview-upgrade' || inputs.ad_prepare == 'preview-code-upgrade' || inputs.ad_prepare == 'preview-code-diagnose' || inputs.ad_prepare == 'preview-code-only-upgrade' || inputs.ad_prepare == 'preview-code-only-rollback') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-backup' || inputs.ad_prepare == 'preview-inspect' || inputs.ad_prepare == 'preview-plan' || inputs.ad_prepare == 'preview-publish' || inputs.ad_prepare == 'preview-rollback' || inputs.ad_prepare == 'preview-lifecycle' || inputs.ad_prepare == 'preview-status' || inputs.ad_prepare == 'preview-data-audit' || inputs.ad_prepare == 'preview-collection-status' || inputs.ad_prepare == 'preview-link-audit' || inputs.ad_prepare == 'preview-legacy-audit' || inputs.ad_prepare == 'preview-upgrade' || inputs.ad_prepare == 'preview-code-upgrade' || inputs.ad_prepare == 'preview-code-diagnose' || inputs.ad_prepare == 'preview-code-only-upgrade' || inputs.ad_prepare == 'preview-code-only-rollback' || inputs.ad_prepare == 'preview-resource-trial') }}
     permissions:
       contents: read
     concurrency:
@@ -75,7 +75,7 @@ jobs:
           import base64,gzip,json,os,pathlib
           def encode_ops(bundle):
               raw=json.dumps(bundle).encode()
-              if bundle['operation'] not in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status','preview-code-only-upgrade','preview-code-only-rollback'):
+              if bundle['operation'] not in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status','preview-code-only-upgrade','preview-code-only-rollback','preview-resource-trial'):
                   return base64.b64encode(raw).decode()
               if len(raw)>196608:
                   raise ValueError('CODE_OPS_JSON_SIZE')
@@ -89,6 +89,7 @@ jobs:
             'preview-status':('naver_preview_status','run'),
             'preview-data-audit':('naver_preview_data_audit','run'),
             'preview-collection-status':('naver_preview_collection_status','run'),
+            'preview-resource-trial':('naver_preview_resource_trial','run'),
             'preview-link-audit':('naver_preview_link_audit','run'),
             'preview-legacy-audit':('naver_preview_legacy_audit','run'),
             'preview-upgrade':('naver_preview_upgrade','apply'),
@@ -103,6 +104,11 @@ jobs:
             'preview-lifecycle':('naver_preview_lifecycle','install')}[operation]
           package=json.loads(inputs.pop('ad_expected_baseline'))
           assert all(v=='off' for v in inputs.values())
+          if operation=='preview-resource-trial':
+              import sys
+              sys.path.insert(0,'backend/tools')
+              import naver_preview_resource_trial
+              naver_preview_resource_trial.validate_package(package)
           code_module='naver_preview_code_upgrade'
           if operation in ('preview-code-only-upgrade','preview-code-only-rollback'):
               import importlib,sys
@@ -148,7 +154,7 @@ jobs:
             def decode_ops(encoded):
                 if not encoded.startswith('code-gzip-v1:'):
                     bundle=json.loads(base64.b64decode(encoded,validate=True))
-                    if bundle.get('operation') in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status','preview-code-only-upgrade','preview-code-only-rollback'):
+                    if bundle.get('operation') in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status','preview-code-only-upgrade','preview-code-only-rollback','preview-resource-trial'):
                         raise ValueError('CODE_OPS_ENCODING')
                     return bundle
                 if len(encoded)>65536:
@@ -159,7 +165,7 @@ jobs:
                 if len(raw)>196608 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
                     raise ValueError('CODE_OPS_GZIP')
                 bundle=json.loads(raw)
-                if (bundle.get('operation'),bundle.get('function')) not in (('preview-code-upgrade','apply'),('preview-code-diagnose','run'),('preview-collection-status','run'),('preview-code-only-upgrade','apply'),('preview-code-only-rollback','run')):
+                if (bundle.get('operation'),bundle.get('function')) not in (('preview-code-upgrade','apply'),('preview-code-diagnose','run'),('preview-collection-status','run'),('preview-code-only-upgrade','apply'),('preview-code-only-rollback','run'),('preview-resource-trial','run')):
                     raise ValueError('CODE_OPS_OPERATION')
                 return bundle
             module=None
@@ -168,7 +174,7 @@ jobs:
             try:
                 bundle=decode_ops(os.environ['PREVIEW_OPS_B64'])
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
-                allowed={'preview-backup':'run','preview-status':'run','preview-data-audit':'run','preview-collection-status':'run','preview-link-audit':'run','preview-legacy-audit':'run','preview-upgrade':'apply','preview-code-upgrade':'apply','preview-code-only-upgrade':'apply','preview-code-only-rollback':'run','preview-code-diagnose':'run','preview-inspect':'inspect','preview-plan':'plan','preview-publish':'apply','preview-rollback':'rollback','preview-lifecycle':'install'}
+                allowed={'preview-backup':'run','preview-status':'run','preview-data-audit':'run','preview-collection-status':'run','preview-resource-trial':'run','preview-link-audit':'run','preview-legacy-audit':'run','preview-upgrade':'apply','preview-code-upgrade':'apply','preview-code-only-upgrade':'apply','preview-code-only-rollback':'run','preview-code-diagnose':'run','preview-inspect':'inspect','preview-plan':'plan','preview-publish':'apply','preview-rollback':'rollback','preview-lifecycle':'install'}
                 assert allowed[bundle['operation']]==bundle['function']
                 host=types.ModuleType('approved_host');exec(bundle['host_source'],host.__dict__)
                 module=types.ModuleType('approved_preview');exec(bundle['source'],module.__dict__)
@@ -193,7 +199,7 @@ jobs:
                         result=module.run(bundle['package'],host.NativeHost(),release,lifecycle,upgrade,code)
                     else:
                         result=module.apply(bundle['package'],host.NativeHost(),release,lifecycle)
-                elif bundle['operation'] in ('preview-lifecycle','preview-status','preview-data-audit','preview-collection-status','preview-link-audit','preview-legacy-audit'):
+                elif bundle['operation'] in ('preview-lifecycle','preview-status','preview-data-audit','preview-collection-status','preview-link-audit','preview-legacy-audit','preview-resource-trial'):
                     release=types.ModuleType('approved_release');exec(bundle['release_source'],release.__dict__)
                     result=getattr(module,bundle['function'])(bundle['package'],host.NativeHost(),release)
                 else:
@@ -201,7 +207,11 @@ jobs:
             except Exception as error:
                 result={'ok':False,'stage':getattr(module,'STAGE','preflight'),'error_kind':type(error).__name__,
                         'error_code':str(error) if re.fullmatch('[A-Z_]{1,64}',str(error)) else None}
-                if bundle.get('operation') in ('preview-code-only-upgrade','preview-code-only-rollback'):
+                if bundle.get('operation')=='preview-resource-trial':
+                    result={'ok':False,'stage':'preflight','error_kind':'OtherError','error_code':'UNRECOGNIZED','database_opened':False}
+                    if hasattr(module,'failure_report'):
+                        result={'ok':False,**module.failure_report(error)}
+                elif bundle.get('operation') in ('preview-code-only-upgrade','preview-code-only-rollback'):
                     result={'ok':False,'stage':'preflight','error_kind':'OtherError','error_code':'UNRECOGNIZED'}
                     if hasattr(module,'failure_report') and code is not None:
                         result={'ok':False,**module.failure_report(error,code)}
