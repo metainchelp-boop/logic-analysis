@@ -1,11 +1,14 @@
 /* 저장된 같은 판만 표시하는 계정별 보고서. API/권한/캐시는 기존 관제 입구가 제공한다. */
 (function () {
   'use strict';
-  var LABEL = {spend:'광고비',conversion_value:'전환 매출',roas:'ROAS',cpa:'전환당 비용',impressions:'노출',clicks:'클릭',ctr:'클릭률',cpc:'클릭당 비용',conversions:'전환',cvr:'전환율'};
+  var LABEL = {spend:'광고비',conversion_value:'광고 전환가치',roas:'ROAS',cpa:'CPA',impressions:'노출수',clicks:'클릭수',ctr:'CTR',cpc:'CPC',conversions:'전환수',cvr:'CVR',cpm:'CPM',value_per_conversion:'전환당 전환가치',spend_per_day:'일평균 광고비',clicks_per_day:'일평균 클릭수',impressions_per_day:'일평균 노출수',conversions_per_day:'일평균 전환수',value_per_day:'일평균 전환가치'};
   var STATUS = {ready:'생성 완료',partial:'부분 집계',collecting:'수집 중',not_generated:'아직 생성되지 않음'};
   function finite(value) { return typeof value === 'number' && isFinite(value); }
   function round(value) { return Number(value.toFixed(2)).toLocaleString('ko-KR'); }
   function metric(payload, key) {
+    var enriched = payload && payload.details && payload.details.enrichment;
+    var item = enriched && Array.isArray(enriched.metrics) && enriched.metrics.find(function (row) { return row.key === key; });
+    if (item) return finite(item.current) ? item.current : null;
     var values = ['ctr','cpc','roas','cvr','cpa'].indexOf(key) >= 0 ? payload.ratios : payload.totals;
     return values && finite(values[key]) ? values[key] : null;
   }
@@ -30,12 +33,18 @@
     return !!a && !!b && a.report_id === b.report_id && a.revision_no === b.revision_no &&
       a.revision_fingerprint === b.revision_fingerprint && JSON.stringify(a.scope) === JSON.stringify(b.scope) &&
       JSON.stringify(a.payload) === JSON.stringify(b.payload) &&
+      JSON.stringify(a.annotations) === JSON.stringify(b.annotations) &&
       ['company_name','owner','generated_at','period_key','status','possibility_id'].every(function (key) { return JSON.stringify(a[key]) === JSON.stringify(b[key]); });
   }
   function create(env) {
     var h = env.h, put = env.put, $ = env.$;
     var filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}, anchors = {}, epoch = 0, searchTimer;
     var selected = null, displayed = null, initialized = false, chartMetric = 'spend', lastList = null, listReady = false, listContext = null;
+    var sharedView = false, drafts = {}, savingNotes = {};
+    function noteKey(report) { return report.report_id + '|' + report.scope.account_key + '|' + report.revision_fingerprint; }
+    function dirty() { return Object.keys(drafts).some(function (key) { return drafts[key].dirty; }); }
+    function exportReady(report) { var key = noteKey(report); return !savingNotes[key] && !(drafts[key] && drafts[key].dirty); }
+    if (window.addEventListener) window.addEventListener('beforeunload',function (event) { if (dirty()) { event.preventDefault(); event.returnValue = ''; } });
     function context() { return env.context(); }
     function fresh(mark, ctx) { return mark === epoch && ctx === context() && env.active(); }
     function stateLabel(status) { return STATUS[status] || '집계 상태 미확인'; }
@@ -46,6 +55,22 @@
       return round(n) + (['ctr','roas','cvr'].indexOf(key) >= 0 ? '%' : '');
     }
     function statusChip(status) { return h('span',{class:'pill ' + (status === 'ready' ? 'p-green' : status === 'partial' ? 'p-amber' : 'p-gray')},stateLabel(status)); }
+    function format(n,unit,signed) {
+      if (!finite(n)) return '—';
+      var result = unit === 'money' ? env.won(n) : round(n) + (unit === 'percent' ? '%' : '');
+      return signed && n > 0 ? '+' + result : result;
+    }
+    function enrichment(report) { return report.payload && report.payload.details && report.payload.details.enrichment || {}; }
+    function scopeText(scope) {
+      scope = scope || {};
+      return (scope.family === 'paired' ? '공동 ' : '') + (finite(scope.account_days) ? env.num(scope.account_days) : '—') + '/' +
+        (finite(scope.expected_account_days) ? env.num(scope.expected_account_days) : '—') + ' 계정×일' + (scope.complete === true ? ' · 완결' : ' · 확인분');
+    }
+    function approvedShared(report) {
+      var a = report.annotations || {}, s = a.shared, m = s && s.metadata;
+      return a.state === 'approved' && s && s.state === 'approved' && s.version === a.version && m &&
+        m.report_id === report.report_id && m.account_key === report.scope.account_key && m.revision_fingerprint === report.revision_fingerprint ? s : null;
+    }
     function init() {
       if (initialized) return;
       initialized = true;
@@ -163,6 +188,11 @@
     }
     function metricCard(report,key) {
       var p = report.payload, coverage = p.coverage || {}, comparison = p.details && p.details.comparison || {};
+      var row = (enrichment(report).metrics || []).find(function (item) { return item.key === key; });
+      if (row) return h('div',{class:'nr-kpi','data-metric':key},h('dt',null,LABEL[key]),h('dd',null,format(row.current,row.unit)),
+        h('span',{class:'nr-delta'},row.status === 'ready' || row.status === 'zero_denominator' ?
+          (row.percentage_points && finite(row.absolute) ? format(row.absolute,'decimal',true) + '%p' : finite(row.percent) ? format(row.percent,'percent',true) : row.comparison_reason || '증감률 산출 불가') : row.comparison_reason || '비교 자료 부족'),
+        h('span',{class:'nr-kpi-note'},scopeText(row.scope)));
       var conversion = ['conversion_value','roas','cpa','conversions','cvr'].indexOf(key) >= 0;
       var partial = conversion ? coverage.conversion_complete !== true || ['roas','cpa','cvr'].indexOf(key) >= 0 && coverage.basic_complete !== true : coverage.basic_complete !== true;
       return h('div',{class:'nr-kpi','data-metric':key},h('dt',null,LABEL[key]),h('dd',null,value(p,key)),
@@ -175,7 +205,9 @@
     }
     function drawChart(report,key) {
       var detail = report.payload.details || {}, days = detail.daily || [], comparison = detail.comparison || {};
-      var prior = comparison.status === 'ready' || comparison.basic_status === 'ready' ? comparison.daily || [] : [];
+      var conversion = key === 'conversions' || key === 'roas';
+      var comparable = conversion ? comparison.conversion_status === 'ready' && (key !== 'roas' || comparison.basic_status === 'ready') : comparison.basic_status === 'ready';
+      var prior = comparison.status === 'ready' || comparable ? comparison.daily || [] : [];
       var values = days.concat(prior).map(function (day) { return metric(day,key); }).filter(finite);
       if (!days.length || !values.length) return h('p',{class:'empty'},'일별 자료가 아직 저장되지 않았습니다. 누락은 0으로 표시하지 않습니다.');
       var max = Math.max.apply(null,values.concat([1])), width = 960, height = 220, left = 62, right = 16, top = 16, bottom = 32;
@@ -191,9 +223,11 @@
         function flush() { if (points.length) graph.appendChild(svg('polyline',{points:points.join(' '),class:priorLine ? 'nr-line nr-prior' : 'nr-line'})); points = []; }
         series.forEach(function (day,index) {
           var n = metric(day,key), cov = day.coverage || {};
-          if (n === null || cov.basic_complete !== true) { flush(); return; }
+          var complete = conversion ? cov.conversion_complete === true && (key !== 'roas' || cov.basic_complete === true) : cov.basic_complete === true;
+          if (n === null || !complete) { flush(); return; }
+          if (index && Date.parse(day.day) - Date.parse(series[index-1].day) !== 86400000) flush();
           var x = left + index*(width-left-right)/(size-1), y = top+(1-n/max)*(height-top-bottom);
-          points.push(x + ',' + y); if (!priorLine) dots.push(svg('circle',{cx:x,cy:y,r:3,class:'nr-dot'}));
+          points.push(x + ',' + y); if (!priorLine) { var dot = svg('circle',{cx:x,cy:y,r:3,class:'nr-dot'}), title = svg('title'); title.textContent = day.day + ' · ' + LABEL[key] + ' ' + value(day,key); dot.appendChild(title); dots.push(dot); }
         });
         flush(); dots.forEach(function (dot) { graph.appendChild(dot); });
       }
@@ -205,23 +239,164 @@
       return h('div',{class:'nr-chart'},graph,h('p',{class:'hint'},'실선: 선택 기간' + (prior.length ? ' · 점선: 전기간(날짜 순서 비교)' : ' · 전기간 비교 자료 부족') +
         (prior.length && prior.length !== days.length ? ' · 선택 ' + days.length + '일 / 비교 ' + prior.length + '일로 기간 길이가 다릅니다.' : '') + ' · 미확인 날짜는 선을 잇지 않습니다.'));
     }
-    function renderChart(report) {
-      put($('reportChart'),h('div',{class:'nr-section-heading'},h('div',null,h('h3',null,'일별 성과 흐름'),h('p',{class:'hint'},'광고비·노출·클릭의 날짜별 변화를 확인하세요.')),
-        h('div',{class:'chips','aria-label':'일별 차트 지표'},['spend','impressions','clicks'].map(function (key) { return h('button',{type:'button',class:'chip' + (chartMetric === key ? ' on' : ''),'aria-pressed':String(chartMetric === key),onclick:function () { chartMetric = key; renderChart(report); }},LABEL[key]); }))),drawChart(report,chartMetric));
+    function renderChart(report,mark,ctx) {
+      put($('reportChart'),h('div',{class:'nr-section-heading'},h('div',null,h('h3',null,'일별 성과 흐름'),h('p',{class:'hint'},'저장된 일별 수치입니다. 전환·ROAS의 미완결 날짜는 선으로 잇지 않습니다.')),
+        h('div',{class:'chips','aria-label':'일별 차트 지표'},['spend','impressions','clicks','conversions','roas'].map(function (key) { return h('button',{type:'button',class:'chip' + (chartMetric === key ? ' on' : ''),'aria-pressed':String(chartMetric === key),onclick:function () { if (!fresh(mark,ctx) || displayed !== report) return; chartMetric = key; renderChart(report,mark,ctx); }},LABEL[key]); }))),drawChart(report,chartMetric));
+    }
+    function qualityCards(report) {
+      var q = enrichment(report).quality || {};
+      return h('section',{class:'nr-quality-cards','aria-label':'자료 완결 범위'},[['basic','기본 자료 완결','노출 · 클릭 · 광고비'],['conversion','전환 자료 완결','전환 · 광고 전환가치'],['paired','효율 계산 공동 범위','기본과 전환이 함께 확인된 계정×일']].map(function (item) {
+        var block = q[item[0]] || {};
+        return h('article',{class:'nr-quality-card'},h('h3',null,item[1]),h('strong',null,(finite(block.count) ? env.num(block.count) : '—') + '/' +
+          (finite(q.expected_account_days) ? env.num(q.expected_account_days) : '—') + ' 계정×일'),h('span',null,format(block.percent,'percent') + ' · ' + (block.complete === true ? '완결' : '미완결·미확인')),h('p',{class:'hint'},item[2]));
+      }));
+    }
+    function comparisonTable(metrics) {
+      return h('div',{class:'nr-scroll-table'},h('table',{class:'nr-metric-table'},h('thead',null,h('tr',null,['지표','현재','이전','절대 변화','상대 변화','차이(%p)','계산·비교 범위'].map(function (label) { return h('th',null,label); }))),
+        h('tbody',null,(metrics || []).filter(function (item) { return Object.prototype.hasOwnProperty.call(LABEL,item.key); }).map(function (item) {
+          var comparable = item.status === 'ready' || item.status === 'zero_denominator';
+          return h('tr',{'data-metric':item.key},h('th',{scope:'row'},LABEL[item.key]),h('td',{class:'num'},format(item.current,item.unit)),h('td',{class:'num'},format(item.previous,item.unit)),
+            h('td',{class:'num'},comparable && !item.percentage_points ? format(item.absolute,item.unit,true) : '—'),h('td',{class:'num'},comparable ? format(item.percent,'percent',true) : '—'),
+            h('td',{class:'num'},comparable && item.percentage_points && finite(item.absolute) ? format(item.absolute,'decimal',true) + '%p' : '—'),
+            h('td',null,scopeText(item.scope),item.comparison_reason ? h('span',{class:'w'},item.comparison_reason) : null));
+        }))));
+    }
+    function metricKeys(keys) { return Array.isArray(keys) && keys.length ? h('p',{class:'nr-evidence'},'근거 지표: ' + keys.filter(function (key) { return LABEL[key]; }).map(function (key) { return LABEL[key]; }).join(' · ')) : null; }
+    function feedback(report) {
+      var f = enrichment(report).feedback || {};
+      return h('section',{class:'nr-feedback'},h('h3',null,'수치 근거와 확인할 내용'),h('p',{class:'hint'},'관측 사실, 원인 가설, 예정 행동을 구분합니다. 가설이나 권장 행동은 완료된 업무가 아닙니다.'),
+        h('div',{class:'nr-feedback-grid'},[['facts','관측 사실'],['hypotheses','원인 가설 · 추가 확인'],['actions','권장 행동']].map(function (group) {
+          return h('article',null,h('h4',null,group[1]),(f[group[0]] || []).length ? h('ul',null,f[group[0]].map(function (item) {
+            var e = item.evidence || {};
+            return h('li',null,h('p',null,item.text || ''),metricKeys(item.metric_keys),group[0] === 'facts' && e.scope ? h('p',{class:'nr-evidence'},'근거 범위: ' + e.scope + ' · ' + (finite(e.account_days) ? env.num(e.account_days) : '—') + '/' + (finite(e.expected_account_days) ? env.num(e.expected_account_days) : '—') + ' 계정×일') : null,
+              group[0] === 'hypotheses' ? [item.alternative ? h('p',{class:'hint'},'다른 가능성: ' + item.alternative) : null,item.required_evidence ? h('p',{class:'hint'},'필요 근거: ' + (Array.isArray(item.required_evidence) ? item.required_evidence.join(' · ') : item.required_evidence)) : null,item.verification ? h('p',{class:'hint'},'확인 방법: ' + item.verification) : null] : null,
+              group[0] === 'actions' ? [item.reason ? h('p',{class:'hint'},'이유: ' + item.reason) : null,h('p',{class:'hint'},'담당 ' + (item.owner || '미정') + ' · 기한 ' + (item.due_date || '미정') + ' · 우선순위 ' + ({high:'높음',medium:'보통',low:'낮음'}[item.priority] || '미정') + ' · ' + (item.approval_status === 'approved' ? '승인됨' : '검토 필요') + ' · ' + (item.status === 'completed' ? '완료' : '예정·미완료'))] : null);
+          })) : h('p',{class:'hint'},'이 판에 저장된 내용이 없습니다.'));
+        })));
+    }
+    function contributions(report) {
+      var rows = report.scope.kind === 'company' ? report.scope.contributions : null;
+      if (!Array.isArray(rows)) return null;
+      function find(row,key) { return (row.metrics || []).find(function (item) { return item.key === key; }) || {}; }
+      return h('section',{class:'nr-contributions'},h('h3',null,'업체 합산 · 계정별 기여'),h('p',{class:'hint'},'동일 보고서 판에 포함된 계정입니다. 효율은 공동 합계로 계산하며 계정 비율의 단순평균이 아닙니다. 미완결 기여 비중은 —로 표시합니다.'),
+        h('div',{class:'nr-scroll-table'},h('table',null,h('thead',null,h('tr',null,['계정','광고비','광고비 비중','전환수','전환 비중','광고 전환가치','ROAS','CPA'].map(function (label) { return h('th',null,label); }))),h('tbody',null,rows.map(function (row) {
+          return h('tr',null,h('th',{scope:'row'},row.account_name || '계정 이름 미확인',h('span',{class:'w'},'ID ' + (row.ad_account_no || '미확인'))),
+            h('td',{class:'num'},format(find(row,'spend').current,'money')),h('td',{class:'num'},format((row.shares || {}).spend,'percent')),
+            h('td',{class:'num'},format(find(row,'conversions').current,'number')),h('td',{class:'num'},format((row.shares || {}).conversions,'percent')),
+            h('td',{class:'num'},format(find(row,'conversion_value').current,'money')),h('td',{class:'num'},format(find(row,'roas').current,'percent')),h('td',{class:'num'},format(find(row,'cpa').current,'money')));
+        })))),rows.map(function (row) { return h('details',null,h('summary',null,(row.account_name || '계정') + ' · 17개 지표와 범위'),comparisonTable(row.metrics)); }));
+    }
+    function targetSection(report,doc) {
+      var targets = doc && doc.targets || {}, metrics = enrichment(report).metrics || [];
+      return h('section',{class:'nr-targets'},h('h3',null,'저장된 목표 대비'),h('p',{class:'hint'},targets.source ? '목표 출처: ' + targets.source : '목표 출처가 저장되지 않아 판정을 보류합니다. 임의 목표를 설정하지 않습니다.'),
+        h('div',{class:'nr-target-grid'},['spend_per_day','cpa','roas'].map(function (key) {
+          var item = metrics.find(function (m) { return m.key === key; }) || {}, target = targets[key], ready = finite(target) && !!targets.source && item.scope && item.scope.complete === true && finite(item.current);
+          var description = !finite(target) ? '목표 미설정' : !ready ? '자료·목표 출처 미확인 · 판정 보류' : key === 'roas' ? (item.current >= target ? '목표 이상' : '목표 미달') : (item.current <= target ? '목표 이내' : '목표 초과');
+          return h('article',null,h('h4',null,LABEL[key]),h('strong',null,format(item.current,key === 'roas' ? 'percent' : 'money')),h('p',null,'목표 ' + format(target,key === 'roas' ? 'percent' : 'money') + ' · ' + description),h('span',{class:'hint'},scopeText(item.scope)));
+        })));
+    }
+    function noteDocument(raw) {
+      raw = raw || {}; var targets = raw.targets || {};
+      return {internal_note:raw.internal_note || '',client_feedback:raw.client_feedback || '',shared_comment:raw.shared_comment || '',next_plan:raw.next_plan || '',plan_due:raw.plan_due || null,
+        targets:{cpa:finite(targets.cpa) ? targets.cpa : null,roas:finite(targets.roas) ? targets.roas : null,spend_per_day:finite(targets.spend_per_day) ? targets.spend_per_day : null,source:targets.source || ''}};
+    }
+    function sharedContent(report,doc,candidate) {
+      return h('section',{class:'nr-shared-content'},h('h3',null,candidate ? '저장 후 승인할 공유 문안 미리보기' : '승인된 공유 문안'),
+        doc ? [h('p',{class:'nr-preserve'},doc.shared_comment || '공유 코멘트가 없습니다.'),h('h4',null,'다음 관리 계획'),h('p',{class:'nr-preserve'},doc.next_plan || '확정된 다음 계획이 없습니다.'),h('p',{class:'hint'},'계획 기한: ' + (doc.plan_due || '미정') + ' · 계획 기록은 업무 완료를 뜻하지 않습니다.')] : h('div',{class:'nr-notice'},'현재 수치판·문안판에 승인된 공유 문안이 없습니다. PDF에도 미확정 상태로 표시합니다.'),
+        !candidate && doc ? h('p',{class:'hint'},'공유 문안 ' + env.num(doc.version) + '판 · 승인 시각 ' + env.datedTime(doc.approved_at)) : null);
+    }
+    function notesHistory(a) {
+      var rows = Array.isArray(a.history) ? a.history : a.history && a.history.items || [];
+      return h('details',{class:'nr-note-history'},h('summary',null,'문안 변경·승인 이력 · 내부용'),rows.slice(0,20).map(function (item) {
+        var doc = noteDocument(item.document), author = item.author || {};
+        return h('details',null,h('summary',null,'문안 ' + env.num(item.version) + '판 · ' + (item.state === 'approved' ? '공유 승인' : '저장·초안') + ' · ' + env.datedTime(author.at || item.approved_at)),
+          h('p',null,'작성자 ID ' + (author.actor == null ? '미보관' : env.num(author.actor)) + ' · 작성 ' + env.datedTime(author.at)),
+          h('p',null,'승인자 ID ' + (item.approved_by == null ? '미승인' : env.num(item.approved_by)) + ' · 승인 ' + env.datedTime(item.approved_at)),
+          h('h4',null,'당시 내부 메모'),h('p',{class:'nr-preserve'},doc.internal_note || '미작성'),h('h4',null,'당시 광고주 질문·요청 · 내부 기록'),h('p',{class:'nr-preserve'},doc.client_feedback || '미작성'),
+          h('h4',null,'당시 공유 코멘트'),h('p',{class:'nr-preserve'},doc.shared_comment || '미작성'),h('h4',null,'당시 다음 계획'),h('p',{class:'nr-preserve'},doc.next_plan || '미작성'),h('p',null,'계획 기한 ' + (doc.plan_due || '미정')),
+          h('p',null,'목표: CPA ' + format(doc.targets.cpa,'money') + ' · ROAS ' + format(doc.targets.roas,'percent') + ' · 일평균 광고비 ' + format(doc.targets.spend_per_day,'money')),
+          h('p',{class:'nr-preserve'},'목표 출처: ' + (doc.targets.source || '미작성')));
+      }),a.history && a.history.next_before_version ? h('p',{class:'hint'},'최근 20개 문안 이력을 표시합니다.') : null);
+    }
+    function annotations(report,mark,ctx) {
+      var a = report.annotations || {}, key = noteKey(report), saved = noteDocument(a.document), draft = drafts[key];
+      if (!draft) draft = drafts[key] = {document:noteDocument(a.document),baseVersion:a.version || 0,dirty:false};
+      if (!draft.dirty) { draft.document = noteDocument(a.document); draft.baseVersion = a.version || 0; }
+      var stale = draft.baseVersion !== (a.version || 0), busy = !!savingNotes[key];
+      function current() { return fresh(mark,ctx) && displayed === report; }
+      function update() {
+        if (!current()) return;
+        draft.dirty = JSON.stringify(draft.document) !== JSON.stringify(saved);
+        var pdfButton = $('reportPdfDownload'); if (pdfButton) pdfButton.disabled = report.payload.format_version !== 2 || !Array.isArray(report.payload.details.daily) || !exportReady(report);
+        if (!$('reportNotesStatus')) return;
+        var invalid = Object.keys(draft.invalidTargets || {}).some(function (key) { return draft.invalidTargets[key]; }), missingSource = ['cpa','roas','spend_per_day'].some(function (key) { return finite(draft.document.targets[key]); }) && !draft.document.targets.source.trim();
+        $('reportNotesStatus').textContent = stale ? '다른 변경이 저장되었습니다. 입력 초안을 버리고 최신 문안을 확인해 주세요.' : draft.dirty ? '저장하지 않은 입력 초안입니다. 공유·PDF에는 포함되지 않습니다.' : a.state === 'approved' ? '현재 문안이 공유 승인되었습니다.' : '저장된 문안은 공유 승인 전입니다.';
+        if (invalid || missingSource) $('reportNotesStatus').textContent = invalid ? '목표는 0 이상의 유효한 숫자로 입력해 주세요.' : '목표 수치를 저장하려면 목표 출처·합의 기준을 입력해 주세요.';
+        $('reportNotesSave').disabled = busy || !a.can_edit || !draft.dirty || stale || invalid || missingSource;
+        $('reportNotesApprove').disabled = busy || !a.can_approve || draft.dirty || stale || a.state !== 'draft';
+        ['internal_note','client_feedback','shared_comment','next_plan','plan_due'].forEach(function (field) { $('reportNote-' + field).disabled = busy || !a.can_edit || stale; });
+        ['cpa','roas','spend_per_day','source'].forEach(function (field) { $('reportTarget-' + field).disabled = busy || !a.can_edit || stale; });
+        put($('reportNotesCandidate'),sharedContent(report,draft.document,true));
+      }
+      function field(key,label,max,type) {
+        var attrs = {id:'reportNote-' + key,maxlength:max,'aria-label':label,disabled:busy || !a.can_edit || stale,oninput:function () { if (!current() || savingNotes[noteKey(report)] || !a.can_edit || stale) return; draft.document[key] = this.value || (key === 'plan_due' ? null : ''); update(); }};
+        var input = h(type === 'date' ? 'input' : 'textarea',Object.assign(attrs,type === 'date' ? {type:'date'} : {rows:4})); input.value = draft.document[key] || '';
+        return h('label',{class:'nr-note-field'},h('span',null,label),input);
+      }
+      function targetField(key,label) {
+        var input = h('input',{id:'reportTarget-' + key,type:'number',min:0,step:'any','aria-label':label,disabled:busy || !a.can_edit || stale,oninput:function () {
+          if (!current() || savingNotes[noteKey(report)] || !a.can_edit || stale) return;
+          var n = this.value === '' ? null : Number(this.value); draft.invalidTargets = draft.invalidTargets || {}; draft.invalidTargets[key] = this.value !== '' && (!finite(n) || n < 0 || n > Number.MAX_SAFE_INTEGER); draft.document.targets[key] = n; update();
+        }}); input.value = draft.document.targets[key] === null ? '' : draft.document.targets[key];
+        return h('label',{class:'nr-note-field'},h('span',null,label),input);
+      }
+      var source = h('textarea',{id:'reportTarget-source',maxlength:500,rows:2,'aria-label':'목표 출처·합의 기준',disabled:busy || !a.can_edit || stale,oninput:function () { if (current() && !savingNotes[key] && a.can_edit && !stale) { draft.document.targets.source = this.value; update(); } }}); source.value = draft.document.targets.source;
+      function mutate(action) {
+        if (!current() || busy || savingNotes[key] || stale || action === 'save' && (!a.can_edit || !draft.dirty || $('reportNotesSave').disabled) || action === 'approve' && (!a.can_approve || draft.dirty || a.state !== 'draft')) return;
+        var body = {report_id:report.report_id,account_key:report.scope.account_key,revision_fingerprint:report.revision_fingerprint,expected_version:a.version || 0,action:action};
+        if (action === 'save') body.document = noteDocument(draft.document);
+        busy = true; savingNotes[key] = true; update(); $('reportNotesStatus').textContent = action === 'save' ? '문안을 저장하고 같은 판을 다시 확인 중입니다…' : '공유 승인 후 같은 판을 다시 확인 중입니다…';
+        env.api('POST','/reports/notes',body).then(function () {
+          if (!current()) return;
+          return env.api('GET',detailPath(report.report_id,report.scope.account_key)).then(function (verified) {
+            if (!current()) return;
+            if (verified.report_id !== report.report_id || verified.revision_fingerprint !== report.revision_fingerprint || verified.scope.account_key !== report.scope.account_key) throw new Error('report-changed');
+            delete drafts[key]; delete savingNotes[key]; displayed = verified; renderDetail(verified,mark,ctx); env.onDetailVerified(verified);
+            env.toast(action === 'save' ? '문안을 저장했습니다. 공유하려면 내용을 검토해 승인해 주세요.' : '현재 수치판·문안판의 공유를 승인했습니다.');
+          });
+        }).catch(function (error) {
+          if (!current()) return;
+          busy = false; delete savingNotes[key]; if (env.denied(error)) { env.purge(error); return; } update();
+          var message = error.status === 409 || error.message === 'report-changed' ? '수치판 또는 문안판이 변경되었습니다. 새로 확인한 뒤 저장해 주세요. 입력 초안은 이 브라우저에 남아 있습니다.' : '문안을 저장·승인하지 못했습니다. 입력 내용과 연결 상태를 확인해 주세요.';
+          if ($('reportNotesStatus')) $('reportNotesStatus').textContent = message; else env.toast(message);
+        }).then(function () { delete savingNotes[key]; });
+      }
+      return h('section',{class:'nr-annotations'},h('h3',null,'담당자 메모 · 공유 코멘트 · 다음 계획'),h('p',{class:'hint'},'수치판 ' + env.num(report.revision_no) + '판 / 문안 ' + env.num(a.version || 0) + '판 · ' + ({empty:'작성 전',draft:'공유 검토 전',approved:'공유 승인'}[a.state] || '상태 미확인') + ' · 수치나 문안을 바꾸면 새 공유 승인이 필요합니다.'),
+        a.author ? h('p',{class:'hint'},'작성자 ID ' + env.num(a.author.actor) + ' · 작성 ' + env.datedTime(a.author.at) + (a.approved_by != null ? ' · 승인자 ID ' + env.num(a.approved_by) + ' · 승인 ' + env.datedTime(a.approved_at) : ' · 공유 미승인')) : null,
+        h('div',{class:'nr-note-grid'},field('internal_note','담당자 내부 메모 · 공유/PDF 제외',1000),field('client_feedback','광고주에게 받은 질문·요청(내부 기록)',1000),field('shared_comment','공유용 코멘트',2000),field('next_plan','다음 관리 계획',1000)),field('plan_due','계획 기한',10,'date'),
+        h('div',{class:'nr-target-inputs'},targetField('spend_per_day','일평균 광고비 목표(원)'),targetField('cpa','CPA 목표(원 이하)'),targetField('roas','ROAS 목표(% 이상)')),h('label',{class:'nr-note-field'},h('span',null,'목표 출처·합의 기준'),source),
+        h('p',{id:'reportNotesStatus',class:'nr-notice','aria-live':'polite'},stale ? '다른 변경이 저장되었습니다. 입력 초안을 버리고 최신 문안을 확인해 주세요.' : draft.dirty ? '저장하지 않은 입력 초안입니다. 공유·PDF에는 포함되지 않습니다.' : a.state === 'approved' ? '현재 문안이 공유 승인되었습니다.' : '저장 후 공유할 내용과 목표 출처를 검토하고 승인해 주세요.'),
+        h('div',{class:'nr-note-actions'},h('button',{id:'reportNotesSave',type:'button',class:'btn primary',disabled:busy || !a.can_edit || !draft.dirty || stale,onclick:function () { mutate('save'); }},'문안 저장'),
+          h('button',{id:'reportNotesApprove',type:'button',class:'btn',disabled:busy || !a.can_approve || draft.dirty || stale || a.state !== 'draft',onclick:function () { mutate('approve'); }},'검토 후 공유 승인'),
+          h('button',{type:'button',class:'btn',disabled:busy,onclick:function () { if (!current() || savingNotes[key]) return; delete drafts[key]; renderDetail(report,mark,ctx); }},'입력 초안 버리기')),
+        h('div',{id:'reportNotesCandidate'},sharedContent(report,draft.document,true)),
+        notesHistory(a));
     }
     function renderDetail(report,mark,ctx) {
       var p = report.payload || {}, period = p.period || {}, scope = report.scope || {}, detail = p.details || {}, comparison = detail.comparison || {};
       var available = p.format_version === 2 && Array.isArray(detail.daily);
-      var chosen = selected;
+      var chosen = selected, shared = approvedShared(report), extra = enrichment(report);
       function switchScope(account) { if (fresh(mark,ctx) && displayed === report) open(chosen,account); }
       put($('reportDetail'),
         h('div',{class:'nr-detail-top'},h('button',{type:'button',class:'link',id:'reportBack',onclick:function () { selected = null; load(filter.page); }},'← 보고서 목록'),
-          h('span',{class:'hint'},'광고주에게 보내기 전 내용과 집계 범위를 확인하세요.')),
+          h('div',{class:'nr-preview-controls'},h('span',{class:'hint'},'현재 로그인 사용자의 공유용 내부 미리보기'),h('button',{id:'reportSharePreview',type:'button',class:'btn sm','aria-pressed':String(sharedView),onclick:function () {
+            if (!fresh(mark,ctx) || displayed !== report) return; sharedView = !sharedView; renderDetail(report,mark,ctx);
+          }},sharedView ? '담당자 편집 보기' : '공유용 검토 보기'))),
         h('article',{class:'card nr-report'},
           h('header',{class:'nr-report-header'},h('div',null,h('p',{class:'nr-eyebrow'},'META I&C · NAVER ADS REPORT'),
             h('h2',{id:'reportDetailTitle'},report.company_name + ' ' + (period.kind === 'monthly' ? '월간' : '주간') + ' 보고서'),
             h('p',{class:'nr-subtitle'},env.periodText(period.start,period.end) + ' · 담당 ' + (report.owner && report.owner.name || '미확인'))),
-            h('button',{type:'button',class:'btn primary',id:'reportPdfDownload',disabled:!available,onclick:function () { download(report,this,mark,ctx); }},'PDF 내려받기')),
+            h('button',{type:'button',class:'btn primary',id:'reportPdfDownload',disabled:!available || !exportReady(report),onclick:function () { download(report,this,mark,ctx); }},'PDF 내려받기')),
           h('div',{class:'nr-scope-row'},h('div',{class:'chips','aria-label':'보고서 집계 범위'},
             h('button',{type:'button',class:'chip' + (scope.kind === 'account' ? ' on' : ''),'aria-pressed':String(scope.kind === 'account'),onclick:function () { switchScope(chosen.account_key); }},'이 광고 계정'),
             h('button',{type:'button',class:'chip' + (scope.kind === 'company' ? ' on' : ''),'aria-pressed':String(scope.kind === 'company'),onclick:function () { switchScope('company'); }},'업체 전체 합산')),
@@ -230,27 +405,32 @@
               (scope.accounts || []).map(function (account) { return (account.account_name || '계정') + ' (' + (account.ad_account_no || '번호 미확인') + ')'; }).join(', ') :
               (scope.account_name || '계정 이름 미확인') + ' · 광고 계정 ID ' + (scope.ad_account_no || '미확인')),
           h('p',{class:'report-meta'},'저장된 ' + env.num(report.revision_no) + '판 · 자료 기준 ' + env.datedTime(report.generated_at)),
+          h('p',{class:'hint'},'열람 확인 ' + env.datedTime(report.checked_at) + ' · 원천 재확인 상태는 집계 완결과 별도입니다.'),
           report.status !== 'ready' ? h('div',{class:'nr-notice'},stateLabel(report.status) + '입니다. 아래 숫자는 확인된 자료의 합계이며 전체 기간 성과와 다를 수 있습니다. 미수집 항목은 —로 표시합니다.') : null,
           !available ? h('div',{class:'nr-notice'},'이전 형식으로 저장된 판입니다. 계정별 상세·일별 추이는 보관되지 않았습니다. 다음 보고서 재집계 때 새 판으로 확인할 수 있으며 이 판의 값을 현재 자료로 바꾸지 않습니다.') : null,
+          qualityCards(report),
+          (extra.period_caveats || []).length ? h('div',{class:'nr-notice'},(extra.period_caveats || []).map(function (line) { return h('p',null,line); })) : null,
           h('section',{class:'nr-brief'},h('h3',null,'이번 기간, 세 줄로 보기'),
             (detail.briefing || []).length ? h('ol',null,detail.briefing.map(function (line) { return h('li',null,line); })) :
               h('p',null,'검증된 상세 자료가 부족해 요약을 작성하지 않았습니다.'),h('p',{class:'hint'},'저장된 숫자로 만든 요약입니다. 성과 원인이나 향후 매출을 추정하지 않습니다.')),
-          h('dl',{class:'nr-kpis'},['spend','conversion_value','roas','cpa'].map(function (key) { return metricCard(report,key); })),
+          h('dl',{class:'nr-kpis'},['spend','conversion_value','conversions','roas','cpa','cvr'].map(function (key) { return metricCard(report,key); })),
           h('p',{class:'nr-compare-note'},'비교 기간: ' + (comparison.period ? env.periodText(comparison.period.start,comparison.period.end) : '자료 미보관') +
             ' · 전주/전월 비교이며 이전 판 정정과 다릅니다. 비율 차이는 %p로 표시합니다.'),
+          h('section',{class:'nr-comparison'},h('h3',null,'17개 지표 · 현재와 직전 기간'),Array.isArray(extra.metrics) ? comparisonTable(extra.metrics) : h('p',{class:'hint'},'이 저장판의 추가 지표·비교 범위는 미보관입니다. 현재 자료로 채우지 않습니다.')),
           h('section',{id:'reportChart',class:'nr-chart-panel'}),
           h('dl',{class:'nr-secondary'},['impressions','clicks','ctr','cpc','conversions','cvr'].map(function (key) { return metricCard(report,key); })),
           h('p',{class:'hint'},'전환은 수집된 전환 지표이며 구매 건수와 다를 수 있습니다. ROAS·전환율·전환당 비용은 기본·전환이 함께 확인된 범위로 계산합니다.'),
-          h('div',{class:'nr-notes-grid'},h('section',null,h('h3',null,'실제 관리 기록'),h('p',null,'이 기간·계정에 연결된 검증 가능한 관리 기록이 저장되지 않았습니다.'),h('span',{class:'hint'},'광고 설정을 바꿨거나 업무를 완료한 것으로 표시하지 않습니다.')),
-            h('section',null,h('h3',null,'다음 관리 계획 · 광고주 확인 요청'),h('p',null,'담당자가 검토해 확정한 계획은 아직 없습니다.'),h('span',{class:'hint'},'추후 담당자 브리핑 기능에서 작성할 수 있도록 확장할 영역입니다.'))),
+          h('details',{class:'nr-day-table'},h('summary',null,'일별 숫자 보기'),dailyTable(detail.daily || [])),
+          contributions(report),feedback(report),targetSection(report,sharedView ? shared : report.annotations && report.annotations.document),
+          sharedContent(report,shared,false),sharedView ? null : annotations(report,mark,ctx),
           h('details',{class:'nr-quality'},h('summary',null,'집계 범위 · 누락 · 정정 이력 확인'),
             env.validation(report),env.changes(report),
             h('p',{class:'report-meta'},'기본 지표 ' + env.num((p.coverage || {}).basic_complete_account_days) + '/' + env.num((p.coverage || {}).expected_account_days) +
               ' 계정×일 · 전환 지표 ' + env.num((p.coverage || {}).conversion_complete_account_days) + '/' + env.num((p.coverage || {}).expected_account_days) + ' 계정×일'),
             h('p',{class:'hint'},'누락된 일자나 지표는 0이 아닙니다. 부분 집계 PDF에도 미확인 범위를 표시합니다.'),
-            missingDetails(p),h('details',{class:'nr-day-table'},h('summary',null,'일별 숫자 보기'),dailyTable(detail.daily || [])),history(report,mark,ctx)),
+            missingDetails(p),history(report,mark,ctx)),
           h('footer',{class:'nr-report-footer'},'META I&C · 네이버 광고 성과 보고서',h('span',null,'다운로드는 발송이 아닙니다. 사본은 이후 정정되어도 자동 변경되지 않습니다.'))));
-      renderChart(report);
+      renderChart(report,mark,ctx);
     }
     function missingDetails(payload) {
       var rows = Array.isArray(payload.missing) ? payload.missing : null;
@@ -273,8 +453,8 @@
         count !== null && count > shown.length ? h('p',{class:'hint'},'앞 ' + env.num(shown.length) + '건 표시 · 전체 누락 ' + env.num(count) + '건') : null);
     }
     function dailyTable(days) {
-      return days.length ? h('table',null,h('thead',null,h('tr',null,['날짜','광고비','노출','클릭','전환','상태'].map(function (name) { return h('th',null,name); }))),
-        h('tbody',null,days.map(function (day) { return h('tr',null,h('td',null,day.day),['spend','impressions','clicks','conversions'].map(function (key) { return h('td',{class:'num'},value(day,key)); }),h('td',null,stateLabel(day.status))); }))) : h('p',{class:'hint'},'저장된 일별 숫자가 없습니다.');
+      return days.length ? h('div',{class:'nr-scroll-table'},h('table',null,h('thead',null,h('tr',null,['날짜','광고비','노출수','클릭수','전환수','광고 전환가치','ROAS','CPA','자료 범위'].map(function (name) { return h('th',null,name); }))),
+        h('tbody',null,days.map(function (day) { var cov = day.coverage || {}; return h('tr',null,h('th',{scope:'row'},day.day),['spend','impressions','clicks','conversions','conversion_value','roas','cpa'].map(function (key) { return h('td',{class:'num'},value(day,key)); }),h('td',null,(cov.basic_complete === true ? '기본 완결' : '기본 확인분·미확인') + ' · ' + (cov.conversion_complete === true ? '전환 완결' : '전환 확인분·미확인'))); })))) : h('p',{class:'hint'},'저장된 일별 숫자가 없습니다.');
     }
     function history(report,mark,ctx) {
       var content = h('div'), loaded = false, section;
@@ -297,24 +477,24 @@
       return section;
     }
     function download(report,button,mark,ctx) {
-      if (!fresh(mark,ctx) || displayed !== report || button.disabled) return;
+      if (!fresh(mark,ctx) || displayed !== report || button.disabled || !exportReady(report)) return;
       button.disabled = true; button.textContent = '권한·보고서 확인 중…';
       env.api('GET',detailPath(report.report_id,report.scope.account_key)).then(function (verified) {
         if (!fresh(mark,ctx) || displayed !== report) return;
         if (!sameEdition(report,verified)) throw new Error('report-changed');
         if (!window.NaverReportPDF) throw new Error('pdf-unavailable');
         button.textContent = 'PDF 파일 생성 중…';
-        return window.NaverReportPDF.download(verified,{isCurrent:function () { return fresh(mark,ctx) && displayed === report; }}).then(function () {
+        return window.NaverReportPDF.download(verified,{isCurrent:function () { return fresh(mark,ctx) && displayed === report && exportReady(report); }}).then(function () {
           if (fresh(mark,ctx) && displayed === report) env.toast('PDF 파일을 내려받았습니다. 광고주에게 자동 발송하지 않았습니다.');
         });
       }).catch(function (error) {
         if (!fresh(mark,ctx)) return;
         if (env.denied(error)) { env.purge(error); return; }
         env.toast(error.message === 'report-changed' ? '보고서 정보가 바뀌었습니다. 새로고침 후 다시 내려받아 주세요.' : 'PDF를 만들지 못했습니다. 파일·글꼴 연결과 로그인 상태를 확인한 뒤 다시 시도해 주세요.');
-      }).then(function () { if (fresh(mark,ctx) && displayed === report) { button.disabled = false; button.textContent = 'PDF 내려받기'; } });
+      }).then(function () { if (fresh(mark,ctx) && displayed === report) { button.disabled = !exportReady(report); button.textContent = 'PDF 내려받기'; } });
     }
     return {load:load,company:function (pid) { filter.pid = pid; filter.q = ''; filter.page = 0; selected = null; displayed = null; },
-      reset:function () { epoch++; clearTimeout(searchTimer); selected = null; displayed = null; lastList = null; listReady = false; listContext = null; filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}; anchors = {}; if (initialized) controls(); put($('reportDetail')); put($('reportUnlinked')); }};
+      hasUnsaved:dirty,reset:function () { epoch++; clearTimeout(searchTimer); selected = null; displayed = null; lastList = null; listReady = false; listContext = null; drafts = {}; savingNotes = {}; sharedView = false; filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}; anchors = {}; if (initialized) controls(); put($('reportDetail')); put($('reportUnlinked')); }};
   }
   window.NaverReports = {create:create,model:{query:query,changeText:changeText,sameEdition:sameEdition,metric:metric}};
 }());

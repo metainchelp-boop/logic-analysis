@@ -66,7 +66,7 @@ _VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/accounts/reasons
 _VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
 _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/request"),
                                 (GET, "/collection/status"), (POST, "/management/update"),
-                                (POST, "/management/collect"), (POST, "/reports/review")})
+                                (POST, "/management/collect"), (POST, "/reports/review"), (POST, "/reports/notes")})
 _VERIFICATION_CLIENT = re.compile(r"/clients/[0-9]{1,18}")
 # 실사용 손길(2026-10-05 대표 지시) — 제한판 위에서 이름 붙인 것만 연다. 누가 하는지는 각 handler 판정 그대로.
 # 거두기는 대표만 · 사유 한 줄(2026-10-06 대표 결정 D5 — handler 가 제한판에서 대표 아님을 403 으로 막는다).
@@ -938,6 +938,35 @@ class App:
         self._control_write(v, now, "report-review", review)
         return 200, {"report_id": report_id, "review_status": body["decision"]}
 
+    def _h_report_notes(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        required = frozenset({"report_id", "account_key", "revision_fingerprint", "expected_version", "action"})
+        body = _body(req, required | {"document"}, required)
+        report_id = _pos(body["report_id"])
+        key, fingerprint, version, action = (body[field] for field in
+            ("account_key", "revision_fingerprint", "expected_version", "action"))
+        if (not isinstance(key, str) or (key != "company" and not re.fullmatch(r"[0-9a-f]{64}", key))
+                or not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+                or type(version) is not int or not 0 <= version <= 2**53-1
+                or action not in ("save", "approve")
+                or (action == "save" and not isinstance(body.get("document"), dict))
+                or (action == "approve" and "document" in body)):
+            raise HttpError(400, "bad-body")
+
+        def record(st):
+            current = self._now()
+            fresh = self._fresh_for_write(v, st, current)
+            ctx, owns, _names, _catalog_current = self._report_context(fresh, current)
+            try:
+                selected = REPORTS.detail(ctx, st, fresh.scope, owns,
+                    {"report_id": str(report_id), "account_key": key})
+            except REPORTS.SourceUnavailable:
+                raise HttpError(409, "source-stale") from None
+            SC.require_client(ctx.org, fresh.scope, owns, selected["possibility_id"], SC.ACT_APPROVE)
+            return st.record_report_notes(report_id, key, fingerprint, v.idx, current,
+                expected_version=version, action=action, document=body.get("document"))
+
+        return 200, self._control_write(v, now, "report-notes-"+action, record)
+
     def _h_board(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         sel = req.query.get("selection", "all")
         att = req.query.get("attention", "1")
@@ -1368,6 +1397,7 @@ ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a i
     (GET, r"/reports/detail", App._h_report_detail, True),
     (GET, r"/reports/history", App._h_report_history, True),
     (POST, r"/reports/review", App._h_report_review, True),
+    (POST, r"/reports/notes", App._h_report_notes, True),
     (GET, r"/clients/(?P<pid>[0-9]{1,18})", App._h_client, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/ack", App._h_issue_ack, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/resolve", App._h_issue_resolve, True),

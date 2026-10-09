@@ -87,10 +87,10 @@ function harness() {
     children.forEach(child => add(element, child));
     return element;
   }
-  function api(method, path) {
+  function api(method, path, body) {
     let resolve, reject;
     const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
-    requests.push({method, path, promise, resolve, reject});
+    requests.push({method, path, body, promise, resolve, reject});
     return promise;
   }
   const context = {
@@ -423,4 +423,117 @@ test('동일 판 검사는 범위·고정 내용·표시 소유자를 모두 비
   assert.equal(model.sameEdition(null, current), false);
   assert.equal(model.sameEdition(current, undefined), false);
   assert.equal(model.sameEdition(current, {...current, checked_at: '2026-10-04T11:00:00+09:00'}), true);
+});
+
+function expandedData() {
+  const report = detailData(), keys = ['spend','conversion_value','conversions','roas','cpa','cvr','impressions','clicks','ctr','cpc','cpm','value_per_conversion','spend_per_day','clicks_per_day','impressions_per_day','conversions_per_day','value_per_day'];
+  report.payload.details.enrichment = {version: 1, metrics: keys.map((key, i) => ({key, label:key,
+    unit: ['roas','ctr','cvr'].includes(key) ? 'percent' : ['spend','conversion_value','cpa','cpc','cpm','value_per_conversion','spend_per_day','value_per_day'].includes(key) ? 'money' : 'number',
+    current: 20 + i, previous: i ? 10 + i : 0, absolute: i ? 10 : 20, percent: i ? 50 : null,
+    percentage_points: ['roas','ctr','cvr'].includes(key), status:i ? 'ready' : 'zero_denominator', value_status:'ready',
+    scope:{family:['roas','cpa','cvr'].includes(key)?'paired':'basic',account_days:7,expected_account_days:7,complete:true},
+    comparison_reason:i ? null : '직전 값 0 · 상대 변화 산출 불가'})), quality:{expected_account_days:7,
+      basic:{count:7,percent:100,complete:true}, conversion:{count:5,percent:71.43,complete:false}, paired:{count:5,percent:71.43,complete:false}},
+    feedback:{facts:[{text:'고정 수치 사실',metric_keys:['spend'],evidence:{scope:'기본 성과',account_days:7,expected_account_days:7}}],
+      hypotheses:[{text:'원인 가설',alternative:'다른 원인',required_evidence:['변경 기록'],verification:'기록 확인',metric_keys:['roas']}],
+      actions:[{text:'확인할 계획',reason:'검증 필요',owner:'담당자 확인 필요',priority:'high',approval_status:'proposed',status:'proposed',metric_keys:['roas']}]}, period_caveats:['전환가치는 실제 주문매출과 별도']};
+  report.annotations = {version:1,state:'draft',metadata:{report_id:7,account_key:'account-a',revision_fingerprint:'fixed-source',period:report.payload.period},
+    document:{internal_note:'PRIVATE_MEMO',client_feedback:'PRIVATE_CLIENT',shared_comment:'검토할 공유 문안',next_plan:'실행 전 계획',plan_due:null,targets:{cpa:null,roas:null,spend_per_day:null,source:''}},
+    shared:null,history:{items:[{version:1,state:'draft',created_at:'2026-09-28T10:01:00+09:00'}],next_before_version:null},can_edit:true,can_approve:true};
+  return report;
+}
+function allNodes(element) { return [element,...element.children.flatMap(allNodes)]; }
+
+test('17개 서버 지표·품질·기여·가설은 표시하되 임의 목표를 만들지 않는다', async () => {
+  const report = expandedData(); report.scope.kind = 'company'; report.scope.account_key = 'company';
+  report.scope.contributions = [{account_name:'포함 계정',ad_account_no:'123',metrics:report.payload.details.enrichment.metrics,shares:{spend:100,conversions:null}}];
+  const fixture = await renderReportFixture(report), root = fixture.$('reportDetail');
+  const table = findClass(root,'nr-metric-table');
+  assert.equal(table.children[1].children.length,17);
+  assert.match(table.textContent,/직전 값 0 · 상대 변화 산출 불가/);
+  assert.match(table.textContent,/\+10%p/);
+  assert.equal(findClass(root,'nr-quality-cards').children.length,3);
+  assert.match(findClass(root,'nr-feedback').textContent,/고정 수치 사실.*원인 가설.*다른 원인.*확인할 계획.*검토 필요/s);
+  assert.match(findClass(root,'nr-targets').textContent,/목표 미설정/);
+  assert.match(findClass(root,'nr-contributions').textContent,/포함 계정/);
+  assert.equal(fixture.$('reportTarget-cpa').value,'');
+});
+
+test('공유용 검토 전환은 요청 없이 승인 문안만 표시하고 내부 입력을 제거한다', async () => {
+  const report = expandedData(); report.annotations.state = 'approved';
+  report.annotations.shared = {version:1,state:'approved',metadata:report.annotations.metadata,shared_comment:'승인 공유문안 <img src=x onerror=alert(1)>',next_plan:'승인 계획',plan_due:null,targets:{},approved_at:'2026-09-28T11:00:00+09:00'};
+  const fixture = await renderReportFixture(report), count = fixture.requests.length;
+  fixture.$('reportSharePreview').fire('click');
+  assert.equal(fixture.requests.length,count);
+  const rendered = fixture.$('reportDetail'), nodes = allNodes(rendered);
+  assert.match(rendered.textContent,/승인 공유문안 <img src=x onerror=alert\(1\)>/);
+  assert.doesNotMatch(rendered.textContent,/담당자 내부 메모|광고주에게 받은 질문|검토할 공유 문안/);
+  assert.equal(nodes.some(node => ['script','img','textarea'].includes(node.tag)),false);
+  assert.equal(nodes.some(node => /PRIVATE/.test(node.value)),false);
+});
+
+test('문안 수정은 PDF와 승인 버튼을 막고 저장·승인 뒤 exact detail을 재조회한다', async () => {
+  const report = expandedData(), fixture = await renderReportFixture(report);
+  fixture.$('reportNote-shared_comment').value = '수정한 공유 문안'; fixture.$('reportNote-shared_comment').fire('input');
+  assert.equal(fixture.ui.hasUnsaved(),true);
+  assert.equal(fixture.$('reportPdfDownload').disabled,true);
+  assert.equal(fixture.$('reportNotesApprove').disabled,true);
+  fixture.$('reportNotesSave').fire('click');
+  const request = fixture.requests[2];
+  assert.equal(request.method,'POST'); assert.equal(request.path,'/reports/notes');
+  assert.equal(request.body.expected_version,1); assert.equal(request.body.document.shared_comment,'수정한 공유 문안');
+  request.resolve({version:2,state:'draft'}); await flush();
+  assert.match(fixture.requests[3].path,/report_id=7&account_key=account-a$/);
+  const saved = expandedData(); saved.annotations.version=2; saved.annotations.document.shared_comment='수정한 공유 문안';
+  fixture.requests[3].resolve(saved); await flush();
+  assert.equal(fixture.ui.hasUnsaved(),false); assert.equal(fixture.$('reportNotesApprove').disabled,false);
+  fixture.$('reportNotesApprove').fire('click');
+  assert.equal(fixture.requests[4].body.action,'approve'); assert.equal(fixture.requests[4].body.document,undefined);
+  fixture.requests[4].resolve({version:3,state:'approved'}); await flush();
+  assert.equal(fixture.requests[5].method,'GET');
+  const approved=expandedData(); approved.annotations.version=3; approved.annotations.state='approved';
+  approved.annotations.shared={version:3,state:'approved',metadata:approved.annotations.metadata,shared_comment:'확정 공유 문안',next_plan:'계획',targets:{},approved_at:'2026-09-28T11:00:00+09:00'};
+  fixture.requests[5].resolve(approved); await flush();
+  assert.match(fixture.$('reportDetail').textContent,/확정 공유 문안/);
+});
+
+test('목표 출처가 없는 입력과 늦은 저장 응답은 적용하지 않으며 권한은 서버 플래그를 따른다', async () => {
+  const fixture = await renderReportFixture(expandedData());
+  fixture.$('reportTarget-cpa').value='100'; fixture.$('reportTarget-cpa').fire('input');
+  assert.equal(fixture.$('reportNotesSave').disabled,true);
+  fixture.$('reportTarget-source').value='광고주 합의'; fixture.$('reportTarget-source').fire('input');
+  assert.equal(fixture.$('reportNotesSave').disabled,false);
+  fixture.$('reportNotesSave').fire('click'); fixture.context.state.gen++;
+  fixture.requests[2].resolve({version:2,state:'draft'}); await flush();
+  assert.equal(fixture.requests.length,3,'문맥이 바뀐 저장 응답으로 새 상세를 요청하지 않는다');
+  assert.equal(fixture.toasts.length,0);
+  const readonly=expandedData(); readonly.annotations.can_edit=false; readonly.annotations.can_approve=false;
+  const limited=await renderReportFixture(readonly);
+  assert.equal(limited.$('reportNote-shared_comment').disabled,true);
+  assert.equal(limited.$('reportNotesApprove').disabled,true);
+  assert.equal(model.sameEdition(readonly,{...readonly,annotations:{...readonly.annotations,version:2}}),false);
+});
+
+test('대표 ID 0 승인과 author.at 이력을 표시하고 내부 이력 원문은 공유 화면에서 제거한다', async () => {
+  const report=expandedData(); report.annotations.state='approved'; report.annotations.author={actor:0,at:'2026-09-28T10:01:00+09:00'};
+  report.annotations.approved_by=0; report.annotations.approved_at='2026-09-28T10:30:00+09:00';
+  report.annotations.history.items=[{version:1,state:'approved',author:report.annotations.author,approved_by:0,approved_at:report.annotations.approved_at,document:{internal_note:'HISTORY_PRIVATE',client_feedback:'QUESTION_PRIVATE',shared_comment:'HISTORY_SHARED',targets:{cpa:3000,source:'과거 합의'}}}];
+  const fixture=await renderReportFixture(report), history=findClass(fixture.$('reportDetail'),'nr-note-history');
+  assert.match(history.textContent,/작성자 ID 0.*2026-09-28T10:01:00.*승인자 ID 0/s);
+  assert.match(history.textContent,/HISTORY_PRIVATE.*QUESTION_PRIVATE.*HISTORY_SHARED.*과거 합의/s);
+  assert.match(findClass(fixture.$('reportDetail'),'nr-annotations').textContent,/승인자 ID 0/);
+  fixture.$('reportSharePreview').fire('click');
+  assert.doesNotMatch(fixture.$('reportDetail').textContent,/HISTORY_|QUESTION_PRIVATE|작성자 ID 0/);
+});
+
+test('전환·ROAS 차트는 부분 날짜를 끊고 탭 전환으로 서버 요청을 만들지 않는다', async () => {
+  const report=expandedData(); report.payload.details.daily=[1,2,3].map(n=>({day:'2026-09-'+(20+n),totals:{spend:100,clicks:20,impressions:500,conversions:10},ratios:{roas:500},coverage:{basic_complete:true,conversion_complete:n!==2}}));
+  const fixture=await renderReportFixture(report), count=fixture.requests.length;
+  findButton(fixture.$('reportChart'),'ROAS').fire('click');
+  const nodes=allNodes(fixture.$('reportChart'));
+  assert.equal(nodes.filter(node=>node.classList.contains('nr-dot')).length,2);
+  assert.equal(nodes.filter(node=>node.tag==='polyline').length,2);
+  findButton(fixture.$('reportChart'),'전환수').fire('click');
+  assert.equal(fixture.requests.length,count);
+  assert.equal(allNodes(fixture.$('reportChart')).filter(node=>node.classList.contains('nr-dot')).length,2);
 });

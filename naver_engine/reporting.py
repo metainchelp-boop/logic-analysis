@@ -246,6 +246,8 @@ def aggregate(report_period, expected_customers, daily_rows, now, *, has_open_is
     totals.update({key: _sum(row[key] for row in conversion) if conversion else None for key in CONVERSION_FIELDS})
     roas_spend = _sum(row["spend"] for row in roas) if roas else None
     roas_value = _sum(row["conversion_value"] for row in roas) if roas else None
+    roas_clicks = _sum(row["clk"] for row in roas) if roas else None
+    roas_conversions = _sum(row["conversions"] for row in roas) if roas else None
     blocked = ([] if expected else ["no_confirmed_accounts"])+([] if now >= report_period.due_at else ["not_due"])
     ready = not blocked and not missing
     review_required = report_period.kind == "monthly" or has_open_issues
@@ -265,7 +267,8 @@ def aggregate(report_period, expected_customers, daily_rows, now, *, has_open_is
             "ratios": {"ctr": _ratio(totals["clicks"], totals["impressions"], 100),
                        "cpc": _ratio(totals["spend"], totals["clicks"]),
                        "roas": _ratio(roas_value, roas_spend, 100), "roas_account_days": len(roas),
-                       "roas_spend": roas_spend, "roas_conversion_value": roas_value}}
+                       "roas_spend": roas_spend, "roas_conversion_value": roas_value,
+                       "roas_clicks": roas_clicks, "roas_conversions": roas_conversions}}
 
 
 def public_payload(value):
@@ -284,7 +287,8 @@ def _detail_ratios(report, rows, now):
     conversions = _sum(row["conversions"] for row in paired) if paired else None
     clicks = _sum(row["clk"] for row in paired) if paired else None
     spend = _sum(row["spend"] for row in paired) if paired else None
-    report["ratios"].update(cvr=_ratio(conversions, clicks, 100), cpa=_ratio(spend, conversions))
+    report["ratios"].update(cvr=_ratio(conversions, clicks, 100), cpa=_ratio(spend, conversions),
+                            roas_clicks=clicks, roas_conversions=conversions)
 
 
 def _daily_details(report_period, expected, rows, now):
@@ -379,13 +383,14 @@ def _briefing(report):
             change["status"], "비교 자료 부족")
         second = f"직전 기간 광고비 증감은 {reason} 상태입니다."
     if coverage["conversion_complete"]:
-        third = f"전환 {number(totals['conversions'])}건, 전환매출 {number(totals['conversion_value'], money=True)}원입니다. "
+        third = f"전환 {number(totals['conversions'])}건, 광고 전환가치 {number(totals['conversion_value'], money=True)}원입니다. "
         if coverage["basic_complete"] and report["ratios"]["roas"] is not None:
-            third += f"광고비 대비 전환매출은 {number(report['ratios']['roas'])}%입니다."
+            third += f"광고비 대비 광고 전환가치는 {number(report['ratios']['roas'])}%입니다."
         else:
-            third += "기본 성과 부족 또는 광고비 분모 0으로 광고비 대비 전환매출을 확정하지 않았습니다."
+            third += "기본 성과 부족 또는 광고비 분모 0으로 광고비 대비 광고 전환가치를 확정하지 않았습니다."
     else:
-        third = "전환 성과가 완결되지 않아 전환매출과 광고비 대비 전환매출을 확정하지 않았습니다."
+        third = "전환 성과가 완결되지 않아 광고 전환가치와 광고비 대비 광고 전환가치를 확정하지 않았습니다."
+    third += " 광고 전환가치는 실제 주문·결제 매출과 별도입니다."
     return [first, second, third]
 
 

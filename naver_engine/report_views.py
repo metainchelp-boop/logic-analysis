@@ -4,7 +4,7 @@ import hashlib
 import re
 
 from app.naver_auto import matching as M, org_snapshot as O, scope as SC
-from . import inventory as INV, management as MG, reporting as R, views as W
+from . import inventory as INV, management as MG, reporting as R, report_enrichment as ENR, views as W
 
 
 PAGE_SIZE = 20
@@ -222,6 +222,30 @@ def detail(ctx, store, scope, owns, query):
     if "details" not in cleaned:
         cleaned["details"] = {"status": "legacy_unavailable", "daily": [], "briefing": [],
                               "comparison": {"status": "insufficient_data"}, "management_records": [], "next_actions": []}
+    # 선택한 불변 수치판에서만 계산한다. 목록 조회·탭 이동은 수집이나 보고서 갱신을 시작하지 않는다.
+    cleaned["details"]["enrichment"] = public_payload(ENR.enrich(selected))
+    scope_info = {"kind": "company" if key == "company" else "account", **chosen,
+                  "accounts": included if key == "company" else [chosen]}
+    if key == "company":
+        scope_info["contributions"] = []
+        for member_key, cid in sorted(members.items(), key=lambda item: item[1]):
+            account = _account_payload(payload, member_key)
+            if (not isinstance(account, dict) or account.get("period") != payload.get("period")
+                    or account.get("period_key") != report["period_key"]
+                    or account.get("_expected_customers") != [cid]):
+                continue
+            scope_info["contributions"].append({**identity(member_key, cid),
+                **public_payload(ENR.contribution(payload, account))})
+    # 現 권한 확인 후에만 내부 문안과 이력을 읽는다. 과거 수치판의 승인을 최신판으로 넘기지 않는다.
+    annotations = None
+    if (report.get("revision_fingerprint")
+            and cleaned["details"].get("status") != "legacy_unavailable"):
+        annotations = store.report_notes(rid, key, report["revision_fingerprint"])
+        annotations["history"] = store.report_notes_history(rid, key, report["revision_fingerprint"], limit=20)
+        editable = (cleaned["details"].get("status") != "legacy_unavailable"
+                    and SC.ACT_APPROVE in SC.allowed_actions(ctx.org, scope, owns[pid])
+                    and store.report_latest_ids(report["period_key"], [pid]).get(pid) == rid)
+        annotations.update(can_edit=editable, can_approve=editable)
     return {**{field: public_payload(report[field]) for field in ("report_id", "period_key", "revision_no",
                 "revision_fingerprint", "generated_at", "review_status", "validation", "change_summary") if field in report},
             "possibility_id": pid, "company_name": companies[pid]["company_name"], "owner": W._owner(ctx, owns[pid]),
@@ -230,5 +254,4 @@ def detail(ctx, store, scope, owns, query):
                           public_payload(selected.get("validation", {"status": "unknown", "scope": "account"})),
             "change_summary": public_payload(report.get("change_summary")) if key == "company" else
                               public_payload(selected.get("change_summary")),
-            "scope": {"kind": "company" if key == "company" else "account", **chosen,
-                      "accounts": included if key == "company" else [chosen]}}
+            "scope": scope_info, "annotations": public_payload(annotations)}

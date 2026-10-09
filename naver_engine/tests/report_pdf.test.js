@@ -225,3 +225,36 @@ test('HTTP without SubtleCrypto still verifies the fixed compressed and original
     delete require.cache[modulePath];
   }
 });
+
+function expandedReport() {
+  const input=report(); input.revision_fingerprint='edition-proof'; input.scope.account_key='account-a';
+  const specs=[['spend','광고비','money'],['conversion_value','광고 전환가치','money'],['conversions','전환수','number'],['roas','ROAS','percent'],['cpa','CPA','money'],['cvr','CVR','percent'],['impressions','노출수','number'],['clicks','클릭수','number'],['ctr','CTR','percent'],['cpc','CPC','money'],['cpm','CPM','money'],['value_per_conversion','전환당 전환가치','money'],['spend_per_day','일평균 광고비','money'],['clicks_per_day','일평균 클릭수','decimal'],['impressions_per_day','일평균 노출수','decimal'],['conversions_per_day','일평균 전환수','decimal'],['value_per_day','일평균 전환가치','money']];
+  input.payload.details.enrichment={version:1,metrics:specs.map(([key,label,unit],i)=>({key,label,unit,current:100+i,previous:50+i,absolute:50,percent:100,percentage_points:unit==='percent',status:'ready',value_status:'partial',scope:{family:'paired',account_days:5,expected_account_days:7,complete:false}})),
+    quality:{expected_account_days:7,basic:{count:6,percent:85.71,complete:false},conversion:{count:5,percent:71.43,complete:false},paired:{count:5,percent:71.43,complete:false}},
+    feedback:{facts:[{text:'고정 수치 근거',metric_keys:['roas'],evidence:{scope:'공동 범위',account_days:5,expected_account_days:7}}],hypotheses:[{text:'원인 확인 전 가설',alternative:'다른 원인',required_evidence:['변경 기록'],verification:'기록 확인',metric_keys:['roas']}],actions:[{text:'완료 전 권장 행동',reason:'추가 검증',owner:'담당자 확인 필요',priority:'high',approval_status:'proposed',status:'proposed',metric_keys:['roas']}]},period_caveats:['부분 전환 비교와 목표 평가를 보류합니다.']};
+  const metadata={report_id:input.report_id,account_key:'account-a',revision_fingerprint:input.revision_fingerprint,period:input.payload.period};
+  input.annotations={version:3,state:'approved',document:{internal_note:'PRIVATE_NOTE',client_feedback:'PRIVATE_QUESTION',shared_comment:'PRIVATE_DRAFT'},history:{items:[{document:{internal_note:'PRIVATE_HISTORY'}}]},
+    shared:{version:3,state:'approved',metadata,shared_comment:'승인된 광고주 코멘트',next_plan:'다음 관리 예정 계획',plan_due:'2026-10-10',targets:{cpa:3000,roas:500,spend_per_day:17000,source:'광고주와 확인한 목표'},approved_at:'2026-10-04T10:30:00+09:00',internal_note:'PRIVATE_SHARED_EXTRA'}};
+  return input;
+}
+
+test('expanded PDF reads all 17 fixed metrics and only exact approved shared notes; partial goals stay pending', async () => {
+  const input=expandedReport(), original=JSON.stringify(input), pdf=require('../../backend/naver_page/report-pdf.js');
+  const content=await extracted(await pdf.build(input));
+  for (const label of input.payload.details.enrichment.metrics.map(row=>row.label)) assert.ok(content.includes(label),label);
+  for (const expected of ['효율 계산 공동 범위','5/7','고정 수치 근거','원인 확인 전 가설','완료 전 권장 행동','승인된 광고주 코멘트','다음 관리 예정 계획','2026-10-10','광고주와 확인한 목표','판정 보류','+50%p']) assert.ok(content.includes(expected),expected);
+  assert.ok(!content.includes('PRIVATE'));
+  assert.equal(JSON.stringify(input),original);
+  for (const mutate of [r=>r.annotations.state='draft',r=>r.annotations.shared.version=2,r=>r.annotations.shared.metadata.revision_fingerprint='other']) {
+    const stale=expandedReport(); mutate(stale); const text=await extracted(await pdf.build(stale));
+    assert.ok(!text.includes('승인된 광고주 코멘트')); assert.ok(!text.includes('광고주와 확인한 목표')); assert.ok(text.includes('공유 문안 미확정'));
+  }
+});
+
+test('company contribution shares are fixed response values; incomplete shares remain unknown', async () => {
+  const input=expandedReport(); input.scope.kind='company'; input.scope.account_key='company';
+  input.annotations.shared.metadata.account_key='company'; input.scope.accounts=[{account_name:'기여 계정',ad_account_no:'123'}];
+  input.scope.contributions=[{account_name:'기여 계정',ad_account_no:'123',shares:{spend:61.5,conversions:null},metrics:input.payload.details.enrichment.metrics}];
+  const content=await extracted(await require('../../backend/naver_page/report-pdf.js').build(input));
+  for (const expected of ['계정별 기여','기여 계정','61.5%','미완결 기여 비중은 —']) assert.ok(content.includes(expected),expected);
+});

@@ -3016,6 +3016,75 @@ class ManagedStorage:
         return _report_history(self, possibility_id, actor, now, period_key=period_key,
                                     before_report_id=before_report_id, limit=limit)
 
+    def _report_notes_scope(self, connection, report_id, account_key, revision_fingerprint):
+        from . import report_notes as N
+        row = connection.execute("""SELECT possibility_id,period_key,revision_fingerprint,payload_json
+            FROM naver_auto_report_snapshot WHERE report_id=?""", (report_id,)).fetchone()
+        return N._scope(row, report_id, account_key, revision_fingerprint)
+
+    def _report_notes_head(self, connection, report_id, account_key, metadata):
+        from . import report_notes as N
+        # SQL에서 길이부터 제한한다. 손상된 큰 meta 문서를 전부 읽지 않는다.
+        row = connection.execute("SELECT length(value),substr(value,1,?) FROM naver_auto_meta WHERE key=?",
+            (N.MAX_RECORD_CHARS + 1, N._head_key(report_id, account_key))).fetchone()
+        return N._head(row, metadata)
+
+    def report_notes(self, report_id, account_key, revision_fingerprint):
+        from . import report_notes as RN
+        RN._identity(report_id, account_key, revision_fingerprint)
+        with _report_read_snapshot(self):
+            _, _, metadata = self._report_notes_scope(self._conn, report_id, account_key, revision_fingerprint)
+            return RN._present(self._report_notes_head(self._conn, report_id, account_key, metadata))
+
+    def report_notes_history(self, report_id, account_key, revision_fingerprint, *, before_version=None, limit=20):
+        from . import report_notes as RN
+        prefix, end = RN.history_query(report_id, account_key, revision_fingerprint, before_version=before_version, limit=limit)
+        with _report_read_snapshot(self):
+            _, _, metadata = self._report_notes_scope(self._conn, report_id, account_key, revision_fingerprint)
+            rows = self._conn.execute("""SELECT key,length(value),substr(value,1,?) FROM naver_auto_meta
+                WHERE key>=? AND key<? ORDER BY key DESC LIMIT ?""",
+                (RN.MAX_RECORD_CHARS + 1, prefix, end, limit + 1)).fetchall()
+            return RN.history(rows, prefix, metadata, limit)
+
+    def record_report_notes(self, report_id, account_key, revision_fingerprint, actor, now, *,
+                            expected_version, action, document=None):
+        from . import report_notes as N
+        self._need_writer()
+        N._identity(report_id, account_key, revision_fingerprint)
+        N._version(expected_version)
+        if not isinstance(action, str) or action not in ("save", "approve") or (action == "approve" and document is not None):
+            raise StoreRefused("문안 저장·승인 요청을 확인해 주세요")
+        clean = N._document(document) if action == "save" else None
+        at = _kst_text(now, "문안 작성 시각")
+        self._not_future(now, "문안 작성 시각")
+        with self._tx() as c:
+            pid, period_key, metadata = self._report_notes_scope(c, report_id, account_key, revision_fingerprint)
+            N._require_actor(self, pid, actor, now)
+            latest = c.execute("""SELECT MAX(report_id) FROM naver_auto_report_snapshot
+                WHERE possibility_id=? AND period_key=?""", (pid, period_key)).fetchone()[0]
+            if latest != report_id:
+                raise N.NotesConflict("보고서가 변경되었습니다. 최신 판에서 다시 작성해 주세요")
+            current = self._report_notes_head(c, report_id, account_key, metadata)
+            if current["version"] != expected_version or expected_version == N.MAX_VERSION:
+                raise N.NotesConflict("문안이 변경되었습니다. 최신 문안을 다시 확인해 주세요")
+            if action == "approve":
+                dirty = c.execute("SELECT pending FROM naver_auto_report_dirty WHERE possibility_id=? AND period_key=?",
+                                  (pid, period_key)).fetchone()
+                if current["state"] != "draft" or (dirty and dirty[0]):
+                    raise StoreRefused("문안 초안과 보고서 재대조 상태를 확인한 뒤 승인해 주세요")
+                clean, author = current["document"], current["author"]
+            else:
+                author = {"actor": actor, "at": at}
+            saved = {"version": current["version"] + 1, "state": "approved" if action == "approve" else "draft",
+                     "metadata": metadata, "document": clean, "author": author,
+                     "approved_by": actor if action == "approve" else None,
+                     "approved_at": at if action == "approve" else None}
+            raw = json.dumps(saved, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+            c.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?)",
+                      (N._version_prefix(report_id, account_key) + f"{saved['version']:016d}", raw))
+            self._set_meta(c, N._head_key(report_id, account_key), raw)
+        return N._present(saved)
+
     def record_report_review(self, report_id, actor, now, decision, note):
         from . import store as S, views as W, sync as Y, inventory as I
         from app.naver_auto import scope as SC, org_snapshot as O

@@ -89,8 +89,8 @@
   const METRICS = [
     ['spend', '광고비', '원'], ['impressions', '노출', '회'], ['clicks', '클릭', '회'],
     ['ctr', '클릭률', '%'], ['cpc', '클릭당 비용', '원'], ['conversions', '전환', '건'],
-    ['conversion_value', '전환매출', '원'], ['cvr', '전환율', '%'],
-    ['cpa', '전환당 비용', '원'], ['roas', '광고비 대비 전환매출', '%']
+    ['conversion_value', '광고 전환가치', '원'], ['cvr', '전환율', '%'],
+    ['cpa', '전환당 비용', '원'], ['roas', 'ROAS', '%']
   ];
   function numeric(value) {
     if (value == null) return null;
@@ -121,6 +121,17 @@
     const absolute = amount(value.absolute, value.unit === 'currency' ? '원' : '', true);
     return absolute + ' / ' + (value.status === 'zero_denominator' || value.percent == null ? '증감률 산출 불가' : amount(value.percent, '%', true));
   }
+  function unitName(unit) { return unit === 'money' ? '원' : unit === 'percent' ? '%' : ''; }
+  function enrichedAmount(value, unit, signed = false) { return value == null ? '—' : amount(value, unitName(unit), signed); }
+  function scopeDescription(scope = {}) {
+    return (scope.family === 'paired' ? '공동 ' : '') + amount(scope.account_days) + '/' + amount(scope.expected_account_days) +
+      ' 계정×일 · ' + (scope.complete === true ? '완결' : '확인분·미확인');
+  }
+  function approvedShared(report) {
+    const a = report.annotations || {}, s = a.shared, m = s && s.metadata;
+    return a.state === 'approved' && s && s.state === 'approved' && s.version === a.version && m &&
+      m.report_id === report.report_id && m.account_key === report.scope.account_key && m.revision_fingerprint === report.revision_fingerprint ? s : null;
+  }
   async function build(report) {
     report = structuredClone(report); // Freeze the selected revision before asynchronous asset loading.
     const view = pinned(report), bytes = await dependencies();
@@ -132,7 +143,9 @@
     doc.setTitle(view.company + ' ' + view.kind + ' 광고 성과 보고서');
     doc.setProducer('네이버 관제 - 로컬 보고서');
     doc.setCreationDate(new Date(report.generated_at)); doc.setModificationDate(new Date(report.generated_at));
-    const {p} = view, coverage = p.coverage || {}, detail = p.details || {};
+    const {p} = view, coverage = p.coverage || {}, detail = p.details || {}, enrichment = detail.enrichment || {}, shared = approvedShared(report);
+    const enriched = Array.isArray(enrichment.metrics) ? enrichment.metrics : null;
+    if (enriched && enriched.length > 17) fail('REPORT_PDF_DATA');
     const ink = root.PDFLib.rgb(0.13, 0.19, 0.27), muted = root.PDFLib.rgb(0.36, 0.42, 0.48);
     const accent = root.PDFLib.rgb(0.04, 0.40, 0.43), pale = root.PDFLib.rgb(0.94, 0.96, 0.97);
     const supported = new Set(font.getCharacterSet());
@@ -204,18 +217,30 @@
     if (partial) {
       paragraph(p.status === 'collecting' ? '수집 중 - 확정 보고서가 아닙니다.' : '부분 집계 - 확인된 자료만 포함합니다.', 12, accent);
       if (coverage.basic_complete !== true) paragraph('기본 성과 부분 집계: 광고비·노출·클릭에 누락 자료가 있습니다.', 9);
-      if (coverage.conversion_complete !== true) paragraph('전환 성과 부분 집계: 전환·전환매출·전환율·전환당 비용·ROAS는 미확인 또는 일부 자료입니다.', 9);
+      if (coverage.conversion_complete !== true) paragraph('전환 성과 부분 집계: 전환·광고 전환가치·전환율·전환당 비용·ROAS는 미확인 또는 일부 자료입니다.', 9);
     } else paragraph('생성 완료 - 해당 판의 집계 범위 기준', 10, accent);
     paragraph('기본 성과 ' + amount(coverage.basic_complete_account_days) + ' / ' + amount(coverage.expected_account_days) +
       ' 계정일 | 전환 성과 ' + amount(coverage.conversion_complete_account_days) + ' / ' + amount(coverage.expected_account_days) + ' 계정일', 9, muted);
+    if (enrichment.quality) {
+      heading('자료 완결 범위');
+      const q = enrichment.quality;
+      table(['자료', '완결 계정×일', '완결률'], [['basic', '기본 자료'], ['conversion', '전환 자료'], ['paired', '효율 계산 공동 범위']].map(([key, label]) => {
+        const block = q[key] || {};
+        return [label, amount(block.count) + '/' + amount(q.expected_account_days), enrichedAmount(block.percent, 'percent') + ' · ' + (block.complete === true ? '완결' : '미완결·미확인')];
+      }), [170, 170, 171.28]);
+    }
+    if (Array.isArray(enrichment.period_caveats)) enrichment.period_caveats.slice(0, 20).forEach(item => paragraph(text(item, 1000), 9, muted));
     if (coverage.newest_collected_at) paragraph('자료 기준시각: ' + text(coverage.newest_collected_at, 60), 9, muted);
     if (detail.status === 'legacy_unavailable' || p.format_version !== 2) paragraph('옛 판 상세 미보관 - 현재 자료로 보충하지 않았습니다.', 10, accent);
     if (detail.status === 'reconstructed') paragraph('상세 재구성 - 원천을 확인하여 생성한 새 판입니다.', 10, accent);
     heading('핵심 성과');
-    table(['항목', '해당 판 수치', '항목', '해당 판 수치'],
+    if (enriched) table(['지표', '현재 수치', '계산 범위'], enriched.map(item =>
+      [text(item.label, 80), enrichedAmount(item.current, item.unit), scopeDescription(item.scope)]), [145, 145, 221.28]);
+    else table(['항목', '해당 판 수치', '항목', '해당 판 수치'],
       Array.from({length: 5}, (_, i) => [METRICS[i], METRICS[i + 5]].flatMap(([key, label, unit]) =>
         [label, amount(metric(p, key), unit)])), [110, 146, 125, 130.28]);
-    if (metric(p, 'conversions') === null) paragraph('전환 미확인 - 전환매출이나 ROAS를 0으로 간주하지 않습니다.', 9, muted);
+    if (metric(p, 'conversions') === null) paragraph('전환 미확인 - 광고 전환가치나 ROAS를 0으로 간주하지 않습니다.', 9, muted);
+    paragraph('전환은 광고 플랫폼의 이벤트 수이며 주문·구매자 수와 다를 수 있습니다. 광고 전환가치는 실제 주문·결제 매출과 별도입니다.', 9, muted);
     paragraph('금액은 화면과 같이 원 미만을 버림 표시하며 계산 원본은 해당 판에 보존됩니다. 비율은 서버에 고정된 합산 기준 수치입니다.', 8, muted);
     heading('성과 요약');
     const briefing = detail.briefing || [];
@@ -227,11 +252,60 @@
     if (comparison.period) paragraph(day(comparison.period.start) + ' ~ ' + day(comparison.period.end), 10);
     paragraph(comparisonState(comparison.status) + ' | 기본 성과: ' + comparisonState(comparison.basic_status) +
       ' | 전환 성과: ' + comparisonState(comparison.conversion_status), 9, accent);
-    table(['항목', '직전 기간', '증감'], METRICS.map(([key, label, unit]) =>
+    if (enriched) table(['지표', '이전', '절대 변화', '상대 변화', '차이(%p)', '비교 범위'], enriched.map(item => {
+      const comparable = ['ready', 'zero_denominator'].includes(item.status);
+      return [text(item.label, 80), enrichedAmount(item.previous, item.unit), comparable && !item.percentage_points ? enrichedAmount(item.absolute, item.unit, true) : '—',
+        comparable ? enrichedAmount(item.percent, 'percent', true) : '—', comparable && item.percentage_points && item.absolute != null ? amount(item.absolute, '%p', true) : '—',
+        item.comparison_reason ? text(item.comparison_reason, 200) : scopeDescription(item.scope)];
+    }), [84, 73, 73, 73, 70, 138.28]);
+    else table(['항목', '직전 기간', '증감'], METRICS.map(([key, label, unit]) =>
       [label, amount(metric(comparison, key), unit), change(comparison.changes && comparison.changes[key])]), [140, 145, 226.28]);
     paragraph('직전 주·월의 비교이며 같은 기간의 정정 전후 차이가 아닙니다. 비율의 차이는 %p로 표시합니다.', 8, muted);
-    heading('기간 관리 기록 / 다음 계획');
-    paragraph('기간과 계정 귀속이 확인된 광고주용 관리 기록은 미보관입니다. 다음 계획은 별도 확인이 필요합니다.', 10, muted);
+    heading('수치 근거와 확인할 내용');
+    paragraph('관측 사실, 원인 가설, 예정 행동을 구분합니다. 원인 가설과 권장 행동은 완료된 업무가 아닙니다.', 9, muted);
+    const feedback = enrichment.feedback || {};
+    for (const [key, label] of [['facts', '관측 사실'], ['hypotheses', '원인 가설 · 추가 확인'], ['actions', '권장 행동']]) {
+      paragraph(label, 11, accent);
+      const items = feedback[key] || [];
+      if (!Array.isArray(items) || items.length > 20) fail('REPORT_PDF_DATA');
+      if (!items.length) paragraph('이 판에 저장된 내용이 없습니다.', 9, muted);
+      items.forEach(item => {
+        paragraph(text(item.text || '', 2000), 10);
+        if (key === 'facts' && item.evidence && item.evidence.scope) {
+          const e = item.evidence;
+          paragraph('근거 범위: ' + text(e.scope, 200) + ' · ' + amount(e.account_days) + '/' + amount(e.expected_account_days) + ' 계정×일', 8, muted);
+        }
+        if (Array.isArray(item.metric_keys) && item.metric_keys.length) paragraph('근거 지표: ' + item.metric_keys.map(key => {
+          const metric = enriched && enriched.find(row => row.key === key); return metric ? text(metric.label, 80) : '';
+        }).filter(Boolean).join(' · '), 8, muted);
+        if (key === 'hypotheses') {
+          if (item.alternative) paragraph('다른 가능성: ' + text(item.alternative, 1000), 9, muted);
+          if (item.required_evidence) paragraph('필요 근거: ' + text(Array.isArray(item.required_evidence) ? item.required_evidence.join(' · ') : item.required_evidence, 1500), 9, muted);
+          if (item.verification) paragraph('확인 방법: ' + text(item.verification, 1000), 9, muted);
+        }
+        if (key === 'actions') {
+          if (item.reason) paragraph('이유: ' + text(item.reason, 1000), 9, muted);
+          paragraph('담당 ' + (item.owner == null ? '미정' : text(item.owner, 120)) + ' · 기한 ' + (item.due_date ? day(item.due_date) : '미정') + ' · ' +
+            '우선순위 ' + ({high:'높음',medium:'보통',low:'낮음'}[item.priority] || '미정') + ' · ' + (item.approval_status === 'approved' ? '승인됨' : '검토 필요') + ' · ' + (item.status === 'completed' ? '완료' : '예정·미완료'), 9, muted);
+        }
+      });
+    }
+    heading('승인된 공유 문안 / 다음 계획');
+    if (shared) {
+      paragraph('공유 문안 ' + shared.version + '판 · 승인 시각 ' + text(shared.approved_at, 60), 9, muted);
+      paragraph(text(shared.shared_comment || '공유 코멘트가 없습니다.', 2000), 10);
+      paragraph('다음 관리 계획', 11, accent); paragraph(text(shared.next_plan || '확정된 다음 계획이 없습니다.', 1000), 10);
+      paragraph('계획 기한: ' + (shared.plan_due ? day(shared.plan_due) : '미정') + ' · 계획 기록은 업무 완료를 뜻하지 않습니다.', 9, muted);
+    } else paragraph('현재 수치판·문안판에 승인된 공유 문안이 없습니다. 공유 문안 미확정 상태입니다.', 10, muted);
+    heading('승인된 목표 대비');
+    const targets = shared && shared.targets || {};
+    paragraph(targets.source ? '목표 출처: ' + text(targets.source, 500) : '목표 출처가 저장되지 않아 판정을 보류합니다. 임의 목표를 설정하지 않습니다.', 9, muted);
+    table(['지표', '현재', '목표', '판정'], [['spend_per_day', '일평균 광고비', 'money'], ['cpa', 'CPA', 'money'], ['roas', 'ROAS', 'percent']].map(([key, label, unit]) => {
+      const item = enriched && enriched.find(row => row.key === key) || {}, target = numeric(targets[key]);
+      const ready = target != null && !!targets.source && item.scope && item.scope.complete === true && item.current != null;
+      const verdict = target == null ? '목표 미설정' : !ready ? '자료·목표 출처 미확인 · 판정 보류' : key === 'roas' ? (item.current >= target ? '목표 이상' : '목표 미달') : (item.current <= target ? '목표 이내' : '목표 초과');
+      return [label, enrichedAmount(item.current, unit), enrichedAmount(target, unit), verdict];
+    }), [125, 110, 110, 166.28]);
     const daily = detail.daily || [];
     if (!Array.isArray(daily) || daily.length > 31) fail('REPORT_PDF_DATA');
     newPage(); heading('일별 추이');
@@ -244,10 +318,14 @@
       seenDays.add(item.day);
     }
     const sortedDays = [...daily].sort((a, b) => a.day.localeCompare(b.day));
-    for (const [key, label, unit] of METRICS.slice(0, 3)) {
+    for (const [key, label, unit] of [...METRICS.slice(0, 3), ['conversions', '전환수', '건'], ['roas', 'ROAS', '%']]) {
       if (!daily.length) break;
       ensure(112); paragraph(label, 10, accent, 1);
-      const points = sortedDays.map(item => item.coverage && item.coverage.basic_complete === true ? metric(item, key) : null);
+      const points = sortedDays.map(item => {
+        const cov = item.coverage || {}, conversion = key === 'conversions' || key === 'roas';
+        const complete = conversion ? cov.conversion_complete === true && (key !== 'roas' || cov.basic_complete === true) : cov.basic_complete === true;
+        return complete ? metric(item, key) : null;
+      });
       const max = Math.max(1, ...points.filter(n => n !== null)), plotTop = y, plotBottom = y - 48;
       const plotX = i => MARGIN + 8 + (Date.parse(sortedDays[i].day) - Date.parse(p.period.start)) /
         Math.max(86400000, Date.parse(p.period.end) - Date.parse(p.period.start)) * (WIDTH - 2 * MARGIN - 16);
@@ -266,14 +344,31 @@
       const known = points.filter(n => n !== null);
       paragraph(p.period.start + ' ~ ' + p.period.end + ' | 최대 ' + amount(known.length ? Math.max(...known) : null, unit), 8, muted, 5);
     }
-    if (daily.length) table(['실적일', '광고비', '노출', '클릭', '기본 성과'], sortedDays.map(item =>
-      [item.day, amount(metric(item, 'spend'), '원'), amount(metric(item, 'impressions')),
-        amount(metric(item, 'clicks')), item.coverage && item.coverage.basic_complete === true ? '집계' : '부분/미확인']),
-    [95, 115, 105, 86, 110.28]);
+    if (daily.length) {
+      heading('일별 수치표');
+      table(['실적일', '광고비', '노출', '클릭', '전환', '전환가치', 'ROAS', '범위'], sortedDays.map(item => {
+        const cov = item.coverage || {};
+        return [item.day, amount(metric(item, 'spend'), '원'), amount(metric(item, 'impressions')),
+          amount(metric(item, 'clicks')), amount(metric(item, 'conversions')), amount(metric(item, 'conversion_value'), '원'), amount(metric(item, 'roas'), '%'),
+          (cov.basic_complete === true ? '기본 완결' : '기본 확인분') + ' · ' + (cov.conversion_complete === true ? '전환 완결' : '전환 확인분·미확인')];
+      }), [73, 69, 60, 45, 43, 75, 57, 89.28]);
+    }
     if (scope.kind === 'company') {
       heading('업체 합산에 포함된 광고 계정');
       table(['광고 계정 ID', '광고 계정 이름'], scope.accounts.map(account =>
         [text(account.ad_account_no || '미보관', 40), text(account.account_name || '미보관')]), [150, 361.28]);
+      if (Array.isArray(scope.contributions)) {
+        if (scope.contributions.length > 500) fail('REPORT_PDF_DATA');
+        heading('계정별 기여');
+        paragraph('동일 보고서 판에 포함된 계정입니다. 효율은 공동 합계로 계산하며 계정 비율의 단순평균이 아닙니다. 미완결 기여 비중은 —로 표시합니다.', 9, muted);
+        table(['계정', '광고비', '비중', '전환', '전환 비중', '전환가치', 'ROAS', 'CPA'], scope.contributions.map(account => {
+          function current(key) { const item = (account.metrics || []).find(row => row.key === key); return item && item.current; }
+          const shares = account.shares || {};
+          return [text(account.account_name || '미보관', 240) + ' · ' + text(account.ad_account_no || '미보관', 40),
+            enrichedAmount(current('spend'), 'money'), enrichedAmount(shares.spend, 'percent'), enrichedAmount(current('conversions'), 'number'), enrichedAmount(shares.conversions, 'percent'),
+            enrichedAmount(current('conversion_value'), 'money'), enrichedAmount(current('roas'), 'percent'), enrichedAmount(current('cpa'), 'money')];
+        }), [100, 70, 45, 40, 60, 75, 56, 65.28]);
+      }
     }
     if (replaced) paragraph('지원되지 않는 일부 특수문자는 ?로 표시했습니다.', 8, muted);
     const pages = doc.getPages();
