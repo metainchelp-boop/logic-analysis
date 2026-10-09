@@ -13,12 +13,12 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 OLD_COMMIT = 'bd08fd07281ae5448bffb3de3d7c405887bfecd9'
-TARGET_COMMIT = '6b3e1632f35a50c62064f524e1f9e74c4e85d0cb'  # Independently reviewed diagnostics source.
+TARGET_COMMIT = '3fa096d3d383123fdd3469c5dc68404171a6f076'  # Independently reviewed diagnostics source.
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 # Operating bd08 archive, using the same Linux Python3.12 seal encoder.
 OLD_SOURCE_SHA256 = '6b1618ab9dd47eca6030d1092bdbce1d451d30ce8fdf103e448a96f3ac9da3f1'
-# Canonical Linux3.12 source archive: 1710213 gzip bytes, 103 files.
-TARGET_SOURCE_SHA256 = '462dc5e0ba95cb3658b6edd1ac18424e61007fc6a63ffba6dc1397c98919c684'  # Exact Linux3.12 canonical archive.
+# Canonical Linux3.12 source archive: 1710446 gzip bytes, 103 files.
+TARGET_SOURCE_SHA256 = '1a528165dae3f2e896d98e950f1b92369f997af2ce4e2d823febb7b18c86a6de'  # Exact Linux3.12 canonical archive.
 # Store bytes are identical on both sides; schema 11 remains unchanged.
 STORE_SHA256 = {'old':'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
                 'target':'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862'}
