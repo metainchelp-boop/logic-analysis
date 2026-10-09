@@ -32,7 +32,7 @@ def digest(nodes):
 
 
 class V8PreservationTest(unittest.TestCase):
-    def test_shared_business_functions_are_unchanged_after_removing_exact_v8_dispatch(self):
+    def test_shared_business_functions_are_unchanged_after_exact_passive_metadata_delta(self):
         class OldDispatch(ast.NodeTransformer):
             def visit_If(self,node):
                 if any(isinstance(n,ast.Name) and n.id=="REVIEWED_TRANSITION_V8" for n in ast.walk(node.test)):
@@ -49,6 +49,61 @@ class V8PreservationTest(unittest.TestCase):
         for module,wanted in expected.items():
             value=tree(module)
             if module=="naver_preview_code_only":value=OldDispatch().visit(value)
+            if module=="naver_preview_collection_status":
+                # Reconstruct the pre-resource controller only from these exact,
+                # reviewed passive hooks. A different run/reader/guard change fails.
+                helpers={"kernel_number","kernel_directory","kernel_read","host_memory_metadata",
+                         "resource_process_directory","engine_cgroup_resources","resource_identity_unchanged"}
+                statements=(
+                    'out["host_memory"] = host_memory_metadata(deadline=started+4.0)',
+                    'out["engine_cgroup"] = engine_cgroup_resources(identity,engine_state,identity_guard if identity_guard is not None else {},deadline=started+4.0)',
+                    'if passive:\n    fmt=fmt.replace(\'"running":\',\'"pid":{{json .State.Pid}},"running":\',1)',
+                    'resource_identity = {}',
+                    'resource_same = not resource_identity or resource_identity_unchanged(identity,after,resource_identity)',
+                )
+                hooks={digest(ast.parse(source).body[0]):index for index,source in enumerate(statements)}
+                seen=set(); removed=set()
+                tail=digest(ast.parse("'POST_RESOURCE_IDENTITY' if not resource_same else None",mode="eval").body)
+                class PassiveHooks(ast.NodeTransformer):
+                    def visit(self,node):
+                        key=digest(node)
+                        if key in hooks:
+                            self_index=hooks[key]
+                            if self_index in seen:raise AssertionError('duplicate passive hook')
+                            seen.add(self_index)
+                            return None
+                        return super().visit(node)
+                    def visit_FunctionDef(self,node):
+                        if node.name in helpers:
+                            removed.add(node.name)
+                            return None
+                        if node.name=="runtime_resource_sample":
+                            if [n.arg for n in node.args.kwonlyargs]!=["engine_state","identity_guard"]:
+                                raise AssertionError('resource arguments')
+                            if any(digest(n)!=digest(ast.Constant(value=None)) for n in node.args.kw_defaults):
+                                raise AssertionError('resource defaults')
+                            node.args.kwonlyargs=[];node.args.kw_defaults=[]
+                            node.body[0].value.value='''Only docker stats for identity-verified engine/relay; four seconds plus one cleanup.
+
+    CPU percentage uses one logical CPU as 100%; this sample does not measure the
+    configured quota or attribute time to an HTTP request, SQLite or writer queue.
+    '''
+                        return self.generic_visit(node)
+                    def visit_IfExp(self,node):
+                        if digest(node)==tail:
+                            seen.add('postflight-tail')
+                            return ast.Constant(value=None)
+                        return self.generic_visit(node)
+                    def visit_Call(self,node):
+                        if isinstance(node.func,ast.Name) and node.func.id=="runtime_resource_sample":
+                            if digest(node.keywords)!=digest(ast.parse(
+                                'f(engine_state=before,identity_guard=resource_identity)',mode='eval').body.keywords):
+                                raise AssertionError('passive resource call')
+                            node.keywords=[];seen.add('passive-call')
+                        return self.generic_visit(node)
+                value=PassiveHooks().visit(value)
+                self.assertEqual(removed,helpers)
+                self.assertEqual(seen,set(range(len(statements)))|{'postflight-tail','passive-call'})
             functions=[n for n in value.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))]
             with self.subTest(module=module):self.assertEqual(digest(functions),wanted)
 

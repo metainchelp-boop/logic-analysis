@@ -1208,6 +1208,172 @@ def host_resources():
         return dict(available=False,code='HOST_RESOURCE_UNAVAILABLE')
 
 
+def kernel_number(raw):
+    if not isinstance(raw,bytes) or not re.fullmatch(rb'[0-9]{1,19}',raw) or int(raw)>2**63-1:
+        raise ValueError('KERNEL_NUMBER')
+    return int(raw)
+
+
+def kernel_directory(root, parts=()):
+    """Fixed host procfs/cgroupfs roots, opened component by component without links."""
+    if root not in ('/proc','/sys/fs/cgroup') or not isinstance(parts,tuple):
+        raise ValueError('KERNEL_ROOT')
+    components = tuple(root.strip('/').split('/'))+parts
+    if any(not isinstance(part,str) or part in ('.','..') or
+           not re.fullmatch('[A-Za-z0-9_.-]{1,255}',part) for part in components):
+        raise ValueError('KERNEL_PATH')
+    flags = os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+    fd = os.open('/',flags)
+    try:
+        for part in components:
+            following = os.open(part,flags,dir_fd=fd)
+            os.close(fd)
+            fd = following
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def kernel_read(fd, name, limit, deadline):
+    if (name not in ('meminfo','stat','cgroup','cpu.stat','cpu.max','memory.current',
+                     'memory.max','memory.events') or type(limit) is not int or not 0<limit<=16384 or
+            time.monotonic()>=deadline):
+        raise ValueError('KERNEL_READ')
+    # O_NONBLOCK also prevents a malicious FIFO from blocking before the type check.
+    file = os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK,dir_fd=fd)
+    try:
+        if not stat.S_ISREG(os.fstat(file).st_mode):
+            raise ValueError('KERNEL_FILE')
+        raw = os.read(file,limit+1)
+        if not 0<len(raw)<=limit:
+            raise ValueError('KERNEL_SIZE')
+        raw.decode('ascii')
+        return raw
+    finally:
+        os.close(file)
+
+
+def host_memory_metadata(*, deadline):
+    """Three kernel kB values only; failure does not discard CPU/load or Docker stats."""
+    fd = None
+    try:
+        if time.monotonic()>=deadline:
+            raise ValueError('KERNEL_DEADLINE')
+        fd = kernel_directory('/proc')
+        raw = kernel_read(fd,'meminfo',16384,deadline)
+        names = {b'MemTotal':'mem_total_bytes',b'MemAvailable':'mem_available_bytes',b'SwapFree':'swap_free_bytes'}
+        values = {}
+        for line in raw.splitlines():
+            key,sep,value = line.partition(b':')
+            if key not in names:
+                continue
+            match = re.fullmatch(rb'\s*([0-9]{1,19})\s+kB\s*',value)
+            if not sep or match is None or names[key] in values:
+                raise ValueError('HOST_MEMORY_FIELDS')
+            values[names[key]] = kernel_number(str(kernel_number(match.group(1))*1024).encode())
+        if set(values)!=set(names.values()) or values['mem_available_bytes']>values['mem_total_bytes']:
+            raise ValueError('HOST_MEMORY_FIELDS')
+        return dict(available=True,**values)
+    except Exception:
+        return dict(available=False,code='HOST_MEMORY_UNAVAILABLE')
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def resource_process_directory(identity, state, *, deadline):
+    """Resolve only the verified engine's host PID and Docker cgroup v2 membership.
+
+    PID/starttime/path/inode stay internal and are rechecked after the passive read.
+    A root namespace or unsupported driver never falls back to the host cgroup.
+    """
+    pid = state.get('pid') if isinstance(state,dict) else None
+    if (not isinstance(identity,str) or not re.fullmatch('[0-9a-f]{64}',identity) or
+            not isinstance(state,dict) or state.get('running') is not True or
+            type(pid) is not int or not 0<pid<2**31 or time.monotonic()>=deadline):
+        raise ValueError('RESOURCE_PROCESS')
+    proc = kernel_directory('/proc',(str(pid),))
+    try:
+        raw = kernel_read(proc,'stat',4096,deadline)
+        head,sep,tail = raw.rpartition(b')')
+        fields = tail.split()
+        if not sep or not head.startswith(str(pid).encode()+b' (') or len(fields)<20:
+            raise ValueError('RESOURCE_PROCESS_STAT')
+        started = kernel_number(fields[19])
+        raw = kernel_read(proc,'cgroup',4096,deadline)
+    finally:
+        os.close(proc)
+    lines = raw.decode('ascii').splitlines()
+    if len(lines)!=1 or not lines[0].startswith('0::/'):
+        raise ValueError('RESOURCE_CGROUP_V2')
+    parts = tuple(lines[0][4:].split('/'))
+    if not (parts[-1]=='docker-'+identity+'.scope' or
+            len(parts)>=2 and parts[-2:] == ('docker',identity)):
+        raise ValueError('RESOURCE_CGROUP_TARGET')
+    directory = kernel_directory('/sys/fs/cgroup',parts)
+    try:
+        info = os.fstat(directory)
+    except Exception:
+        os.close(directory)
+        raise
+    return directory,dict(pid=pid,started=started,parts=parts,device=info.st_dev,inode=info.st_ino)
+
+
+def engine_cgroup_resources(identity, state, guard, *, deadline):
+    """One cumulative counter snapshot, not a request profile or a throttling cause."""
+    directory = None
+    try:
+        directory, observed = resource_process_directory(identity,state,deadline=deadline)
+        guard.update(observed)
+        def fields(name, allowed):
+            values = {}
+            for line in kernel_read(directory,name,4096,deadline).splitlines():
+                parts = line.split()
+                if len(parts)!=2:
+                    raise ValueError('CGROUP_FIELDS')
+                key = parts[0].decode('ascii')
+                if key not in allowed:
+                    continue
+                if key in values:
+                    raise ValueError('CGROUP_FIELDS')
+                values[key] = kernel_number(parts[1])
+            if set(values)!=set(allowed):
+                raise ValueError('CGROUP_FIELDS')
+            return values
+        cpu = fields('cpu.stat',('usage_usec','nr_periods','nr_throttled','throttled_usec'))
+        quota = kernel_read(directory,'cpu.max',4096,deadline).split()
+        if len(quota)!=2:
+            raise ValueError('CGROUP_QUOTA')
+        quota_value = None if quota[0]==b'max' else kernel_number(quota[0])
+        period = kernel_number(quota[1])
+        if period==0 or quota_value==0:
+            raise ValueError('CGROUP_QUOTA')
+        current = kernel_number(kernel_read(directory,'memory.current',4096,deadline).strip())
+        maximum = kernel_read(directory,'memory.max',4096,deadline).strip()
+        maximum = None if maximum==b'max' else kernel_number(maximum)
+        events = fields('memory.events',('low','high','max','oom','oom_kill'))
+        return dict(available=True,cpu_quota_usec=quota_value,cpu_period_usec=period,**cpu,
+                    memory_current_bytes=current,memory_max_bytes=maximum,memory_events=events)
+    except Exception:
+        return dict(available=False,code='CGROUP_RESOURCE_UNAVAILABLE')
+    finally:
+        if directory is not None:
+            os.close(directory)
+
+
+def resource_identity_unchanged(identity, state, guard):
+    directory = None
+    try:
+        directory, observed = resource_process_directory(identity,state,deadline=float('inf'))
+        return observed==guard
+    except Exception:
+        return False
+    finally:
+        if directory is not None:
+            os.close(directory)
+
+
 def resource_projection(raw, targets):
     """Docker's rounded display numbers only, mapped to verified fixed service labels."""
     if (not isinstance(targets,dict) or not {'engine'} <= set(targets) <= {'engine','relay'} or
@@ -1256,11 +1422,12 @@ def resource_projection(raw, targets):
     return result
 
 
-def runtime_resource_sample(identity, relay):
-    """Only docker stats for identity-verified engine/relay; four seconds plus one cleanup.
+def runtime_resource_sample(identity, relay, *, engine_state=None, identity_guard=None):
+    """Fixed kernel metadata and Docker stats; four-second CLI budget plus one cleanup.
 
-    CPU percentage uses one logical CPU as 100%; this sample does not measure the
-    configured quota or attribute time to an HTTP request, SQLite or writer queue.
+    CPU percentage uses one logical CPU as 100%. Cgroup counters are cumulative;
+    they do not attribute time to an HTTP request, SQLite or writer queue. File reads
+    check the shared deadline and byte limits but are not preempted mid-syscall.
     """
     started = time.monotonic()
     out = dict(scope='single_sample_not_request_profile',cpu_percent_basis='one_logical_cpu',
@@ -1268,6 +1435,9 @@ def runtime_resource_sample(identity, relay):
                                                 for name in ('engine','relay')})
     if not isinstance(identity,str) or not re.fullmatch('[0-9a-f]{64}',identity):
         return out
+    out['host_memory'] = host_memory_metadata(deadline=started+4.0)
+    out['engine_cgroup'] = engine_cgroup_resources(identity,engine_state,
+        identity_guard if identity_guard is not None else {},deadline=started+4.0)
     targets = {'engine':identity}
     if isinstance(relay,str) and re.fullmatch('[0-9a-f]{64}',relay) and relay != identity:
         targets['relay'] = relay
@@ -1717,6 +1887,8 @@ def run(package, host, release):
     if not re.fullmatch('[0-9a-f]{64}', identity):
         raise ValueError('PREVIEW_CONTAINER_ID')
     fmt = '{"id":{{json .Id}},"image":{{json .Image}},"running":{{json .State.Running}},"user":{{json .Config.User}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"started":{{json .State.StartedAt}},"oom_killed":{{json .State.OOMKilled}},"restarts":{{json .RestartCount}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"data":[{{range .Mounts}}{{if eq .Destination "/var/lib/naver-engine"}}{{json .}}{{end}}{{end}}]}'
+    if passive:
+        fmt = fmt.replace('"running":','"pid":{{json .State.Pid}},"running":',1)
     def container():
         return json.loads(release.command(['docker', 'inspect', '--format', fmt, identity]))
     before = container()
@@ -1730,6 +1902,7 @@ def run(package, host, release):
                 'Destination': '/var/lib/naver-engine', 'Source': '/var/lib/metainc/naver-engine'}.items())):
         raise ValueError('PREVIEW_DATA_MOUNT')
     relay, relay_state = relay_container(release, path, prepared, commit)
+    resource_identity = {}
     STAGE = 'read_only_status'
     def context():
         return {'lifecycle':lifecycle_status(release), 'compose_version':compose_version(release),
@@ -1748,12 +1921,14 @@ def run(package, host, release):
             except ValueError:
                 source_unchanged = False
         same = after == before
+        resource_same = not resource_identity or resource_identity_unchanged(identity,after,resource_identity)
         # Preserve failure evidence without accepting a changed runtime as a valid data read.
         return {'existing_app_baseline_unchanged':unchanged,
                 'postflight':{'container_unchanged':same,
                     **({'profile_source_store_unchanged':source_unchanged} if profile_pins is not None else {}),
                     'code':'POST_BASELINE' if not same or not unchanged else
-                           'POST_SOURCE_CHANGED' if not source_unchanged else None},
+                           'POST_SOURCE_CHANGED' if not source_unchanged else
+                           'POST_RESOURCE_IDENTITY' if not resource_same else None},
                 'engine_state_after':{
                     'started_at':docker_stamp(after.get('started')),
                     'oom_killed':after.get('oom_killed') if type(after.get('oom_killed')) is bool else None,
@@ -1761,7 +1936,8 @@ def run(package, host, release):
                     'container_restarts':number(after.get('restarts'))}}
     if passive:
         details = context()
-        details['resource_sample'] = runtime_resource_sample(identity, relay)
+        details['resource_sample'] = runtime_resource_sample(identity, relay,
+            engine_state=before,identity_guard=resource_identity)
         details['storage_metadata'] = storage_metadata()
         checked = postflight()
         return {'ok':checked['postflight']['code'] is None,'mode':'runtime-diagnostics',

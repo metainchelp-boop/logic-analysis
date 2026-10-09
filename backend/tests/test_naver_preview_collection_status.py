@@ -22,6 +22,13 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
+    def setUp(self):
+        # Existing synthetic runner tests never read this machine's /proc metadata.
+        metadata = patch.object(M,'host_memory_metadata',return_value=dict(
+            available=False,code='HOST_MEMORY_UNAVAILABLE'))
+        metadata.start()
+        self.addCleanup(metadata.stop)
+
     def resource_raw(self, engine='d'*64, relay='7'*64):
         return b'\n'.join(json.dumps(row).encode() for row in (
             dict(id=engine,cpu='49.73%',memory='128.5MiB / 512MiB',memory_percent='25.10%'),
@@ -1002,7 +1009,8 @@ class CollectionTest(unittest.TestCase):
                 failures += ['daily_limited_missing','managed_catalog_links_missing']
             if passive:
                 failures = [None,'image','mount','rootfs','restart','host_changed','relay_changed','relay_image',
-                            'resource_timeout','resource_invalid','host_resources_unavailable']
+                            'resource_timeout','resource_invalid','host_resources_unavailable',
+                            'pid_changed','resource_identity_changed']
             if latency or dashboard:
                 failures = [None,'image','mount','rootfs','restart','host_changed','exec_failed','profile_partial','output']
                 if profile_pins is not None:
@@ -1038,6 +1046,7 @@ class CollectionTest(unittest.TestCase):
                         inspections.append(1)
                         return json.dumps(dict(id=cid,image=image,running=True,user='10001:10001',project='naver-engine',
                             service='naver-engine',started='2026-10-01T13:00:00+09:00',oom_killed=False,restarts=int(failure in ('restart','diagnostic_restart') and len(inspections)>1),
+                            **({'pid':1234+int(failure=='pid_changed' and len(inspections)>1)} if passive else {}),
                             readonly=failure!='rootfs',data=[dict(Type='bind',Destination='/var/lib/naver-engine',
                             Source='/legacy' if failure=='mount' else '/var/lib/metainc/naver-engine')])).encode()
                     if args[1] == 'exec':
@@ -1093,6 +1102,12 @@ class CollectionTest(unittest.TestCase):
                         return json.dumps(dict(values, secret='SECRET') if failure=='output' else values).encode()
                     self.fail('unexpected command')
                 release.command.side_effect = command
+                def cgroup_resources(identity,state,guard,**kwargs):
+                    self.assertTrue(passive)
+                    self.assertEqual(identity,cid)
+                    self.assertEqual(state['pid'],1234)
+                    guard.update(synthetic_guard='PRIVATE')
+                    return dict(available=True,cpu_quota_usec=50000,cpu_period_usec=100000)
                 def capture(args, **kwargs):
                     if passive:
                         self.assertNotEqual(args[:2],['docker','exec'])
@@ -1130,6 +1145,8 @@ class CollectionTest(unittest.TestCase):
                         patch.object(M,'verify_profile_store',side_effect=lambda root,digest:
                             actual_verify(root,digest,uid=os.getuid(),gid=os.getgid())), \
                         patch.object(M, 'capture_process', side_effect=capture), \
+                        patch.object(M,'engine_cgroup_resources',side_effect=cgroup_resources), \
+                        patch.object(M,'resource_identity_unchanged',return_value=failure!='resource_identity_changed') as identity_check, \
                         patch.object(M.os,'cpu_count',return_value=None if failure=='host_resources_unavailable' else 8), \
                         patch.object(M.os,'getloadavg',return_value=(1.,2.,3.)):
                     if failure == 'profile_store_changed':
@@ -1180,6 +1197,16 @@ class CollectionTest(unittest.TestCase):
                         self.assertEqual(result['engine_state_after']['container_restarts'],int(failure!='host_changed'))
                         self.assertNotIn('collection',result)
                         self.assertEqual(result['postflight']['code'],'POST_BASELINE')
+                    elif failure in ('pid_changed','resource_identity_changed'):
+                        result=M.run(package,host,release)
+                        self.assertFalse(result['ok'])
+                        self.assertFalse(result['database_opened'])
+                        self.assertEqual(result['mutations'],0)
+                        self.assertEqual(result['postflight']['code'],
+                            'POST_BASELINE' if failure=='pid_changed' else 'POST_RESOURCE_IDENTITY')
+                        self.assertEqual(result['postflight']['container_unchanged'],failure!='pid_changed')
+                        self.assertEqual(identity_check.call_count,1)
+                        self.assertNotIn('PRIVATE',json.dumps(result))
                     elif failure in ('relay_changed','relay_image'):
                         # Relay evidence is optional: an unverified relay never blocks the engine diagnosis.
                         result = M.run(package, host, release)
