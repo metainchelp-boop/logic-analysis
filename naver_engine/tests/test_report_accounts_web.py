@@ -52,7 +52,7 @@ class ReportAccountsWebTest(unittest.TestCase):
     def test_current_owned_account_without_report_remains_visible_and_unlinked_count_is_scoped(self):
         status, body, _, raw = self.get()
         self.assertEqual(status, 200, body)
-        self.assertEqual((body["total"], body["unlinked_companies"], body["page_size"]), (1, 1, 20))
+        self.assertEqual((body["total"], body["unlinked_companies"], body["page_size"]), (1, 1, 100))
         row = body["rows"][0]
         self.assertEqual((row["possibility_id"], row["status"], row["report_id"]), (11, "not_generated", None))
         self.assertEqual(row["account_key"], hashlib.sha256(str(TW.A).encode()).hexdigest())
@@ -132,10 +132,10 @@ class ReportAccountsWebTest(unittest.TestCase):
         self.store._conn.execute("UPDATE naver_auto_report_snapshot SET payload_json=?", ("not-json",))
         period = R.period("weekly", date(2026, 9, 21)).key
         before = self.store._conn.total_changes
-        self.assertEqual(self.store.report_latest_ids(period, list(range(11, 31))), {11: 2, 12: 4})
+        self.assertEqual(self.store.report_latest_ids(period, list(range(11, 111))), {11: 2, 12: 4})
         self.assertEqual(self.store.report_latest_ids(period, [11, 11]), {11: 2})
         self.assertEqual(self.store._conn.total_changes, before)
-        for invalid in (list(range(11, 32)), [0], [True], ["11) OR 1=1 --"]):
+        for invalid in (list(range(11, 112)), [0], [True], ["11) OR 1=1 --"]):
             with self.subTest(ids=invalid), self.assertRaises(S.StoreRefused):
                 self.store.report_latest_ids(period, invalid)
         with self.assertRaises(S.StoreRefused):
@@ -239,30 +239,34 @@ class ReportAccountsWebTest(unittest.TestCase):
     def test_search_matches_beyond_first_page_and_does_not_count_other_staff(self):
         self.clock.advance(1)
         now = self.clock.now()
-        children = {TW.A+n: {"customerId": TW.A+n, "adAccountNo": 8000000+n, "adAccountName": f"광고계정{n:02d}"}
-                    for n in range(25)}
-        self.store.record_accounts(TW.TM.N.ChildAccounts(children, {1: 25}, ()), now)
-        items = [TC.company(11+n, "진행중", company_name=f"업체{n:02d}") for n in range(25)]
-        self.store.record_account_catalog({"generated_at": now.isoformat(), "complete": True, "total": 25, "items": items},
-            [TW.E.NaverIdRow(11+n, TW.M.VENDOR_NAVER, str(TW.A+n)) for n in range(25)], now)
-        self.store.record_org(TA.org_body(now, owners=[TA.owner(11+n, 101 if n == 24 else 100) for n in range(25)]), now)
-        for n in range(2, 25):
+        children = {TW.A+n: {"customerId": TW.A+n, "adAccountNo": 8000000+n, "adAccountName": f"광고계정{n:03d}"}
+                    for n in range(105)}
+        self.store.record_accounts(TW.TM.N.ChildAccounts(children, {1: 105}, ()), now)
+        items = [TC.company(11+n, "진행중", company_name=f"업체{n:03d}") for n in range(105)]
+        self.store.record_account_catalog({"generated_at": now.isoformat(), "complete": True, "total": 105, "items": items},
+            [TW.E.NaverIdRow(11+n, TW.M.VENDOR_NAVER, str(TW.A+n)) for n in range(105)], now)
+        self.store.record_org(TA.org_body(now, owners=[TA.owner(11+n, 101 if n == 104 else 100) for n in range(105)]), now)
+        for n in range(2, 105):
             self.store.record_decision(11+n, TW.A+n, "confirmed", 0, now)
         first = self.get(actor=0)[1]
-        self.assertEqual((first["total"], len(first["rows"]), first["next_page"]), (25, 20, 1))
+        self.assertEqual((first["total"], first["page_size"], len(first["rows"]), first["next_page"]), (105, 100, 100, 1))
         last = self.get(query="kind=weekly&anchor=2026-09-21&page=1", actor=0)[1]
         self.assertEqual(len(last["rows"]), 5)
+        self.assertIsNone(last["next_page"])
+        self.assertTrue(set(row["account_key"] for row in first["rows"]).isdisjoint(
+            row["account_key"] for row in last["rows"]))
+        self.assertEqual(self.get(query="kind=weekly&anchor=2026-09-21&page=2", actor=0)[0], 400)
         self.seed_report(1)
-        self.seed_report(2, pid=35, cid=TW.A+24)
+        self.seed_report(2, pid=115, cid=TW.A+104)
         self.store._conn.execute("UPDATE naver_auto_report_snapshot SET payload_json=? WHERE report_id=1",
                                  ("not-json-outside-page",))
         status, last, _, _ = self.get(query="kind=weekly&anchor=2026-09-21&page=1", actor=0)
         self.assertEqual(status, 200, last)
-        self.assertEqual(next(row["report_id"] for row in last["rows"] if row["possibility_id"] == 35), 2)
-        found = self.get(query="kind=weekly&anchor=2026-09-21&q=8000024", actor=0)[1]
-        self.assertEqual((found["total"], found["rows"][0]["ad_account_no"]), (1, "8000024"))
+        self.assertEqual(next(row["report_id"] for row in last["rows"] if row["possibility_id"] == 115), 2)
+        found = self.get(query="kind=weekly&anchor=2026-09-21&q=8000104", actor=0)[1]
+        self.assertEqual((found["total"], found["rows"][0]["ad_account_no"]), (1, "8000104"))
         self.assertEqual(found["rows"][0]["report_id"], 2)
-        hidden = self.get(query="kind=weekly&anchor=2026-09-21&q=8000024")[1]
+        hidden = self.get(query="kind=weekly&anchor=2026-09-21&q=8000104")[1]
         self.assertEqual((hidden["total"], hidden["rows"]), (0, []))
 
     def test_strict_queries_current_stage_and_source_fail_closed(self):

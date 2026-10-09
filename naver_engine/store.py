@@ -1910,8 +1910,8 @@ def _report_latest_ids(store, period_key, possibility_ids):
     """현재 목록 한 페이지의 최신 판 ID만 읽으며 상세 JSON은 파싱하지 않는다."""
     _report_period(period_key)
     ids = tuple(possibility_ids)
-    if len(ids) > 20:
-        raise StoreRefused("보고서 목록은 최대 20개 업체씩 조회합니다")
+    if len(ids) > 100:
+        raise StoreRefused("보고서 목록은 최대 100개 업체씩 조회합니다")
     for pid in ids:
         _pos_int(pid, "업체")
     if not ids:

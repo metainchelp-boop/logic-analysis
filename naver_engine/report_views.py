@@ -7,7 +7,7 @@ from app.naver_auto import matching as M, org_snapshot as O, scope as SC
 from . import inventory as INV, management as MG, reporting as R, report_enrichment as ENR, views as W
 
 
-PAGE_SIZE = 20
+PAGE_SIZE = 100
 SCHEDULE = {"timezone": "Asia/Seoul", "weekly": "월요일 10:00", "monthly": "매월 3일 10:00"}
 PRIVATE_FIELDS = frozenset({"customer_id", "source_account_ids", "expected_customers_json",
     "source_manifest", "comparison_source_manifest", "matching_fingerprint", "campaign_fingerprint", "source_generation"})
