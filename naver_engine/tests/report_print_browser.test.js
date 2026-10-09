@@ -70,13 +70,14 @@ const csp="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'sel
       const state=await page.evaluate(()=>{
         const root=document.querySelector('#naver-report-print-root'),paper=root.querySelector('.nr-report-paper'),table=paper.querySelector('.nr-metric-table');
         return {rootCount:document.querySelectorAll('#naver-report-print-root').length,display:getComputedStyle(root).display,
-          editorDisplay:getComputedStyle(document.getElementById('editor')).display,layout:paper.getAttribute('data-layout'),text:paper.textContent,
+          editorDisplay:getComputedStyle(document.getElementById('editor')).display,canvasColor:getComputedStyle(document.documentElement).backgroundColor,layout:paper.getAttribute('data-layout'),text:paper.textContent,
           caveatDisplay:getComputedStyle(paper.querySelector('.nr-public-caveat')).display,
           privateCount:paper.querySelectorAll('textarea,input,select,button,.nr-annotations,.nr-note-history').length,
           closedDetails:paper.querySelectorAll('details:not([open])').length,metricRows:table?.querySelectorAll('tbody tr').length,
           overflow:paper.scrollWidth>paper.clientWidth+1,violations:window.printViolations};
       });
       assert.equal(state.rootCount,1);assert.notEqual(state.display,'none');assert.equal(state.editorDisplay,'none');assert.equal(state.layout,layout);
+      assert.equal(state.canvasColor,'rgb(255, 255, 255)');
       assert.equal(state.privateCount,0);assert.equal(state.closedDetails,0);assert.equal(state.metricRows,17);assert.equal(state.overflow,false);
       assert.ok(state.text.includes('합성 검증용 승인 코멘트'));assert.ok(state.text.includes('실제 주문·결제 매출'),state.text.slice(-1500));assert.notEqual(state.caveatDisplay,'none');assert.ok(!state.text.includes('PRIVATE'));
       assert.deepEqual(state.violations,[]);

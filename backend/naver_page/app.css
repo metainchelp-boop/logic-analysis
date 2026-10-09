@@ -230,6 +230,7 @@ h1.pt{font-size:20px;font-weight:800;margin-bottom:4px;text-wrap:balance}
 @media(max-width:760px){.nr-a-review-grid,.nr-strategy-grid,.nr-analysis-grid{grid-template-columns:1fr;gap:16px}.nr-layout-a .nr-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.nr-analysis-meta .nr-quality-cards{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.nr-analysis-meta .nr-quality-card strong{font-size:14px}.nr-layout-label{white-space:normal}.nr-layout-b .nr-report-header{align-items:flex-start;flex-wrap:wrap}.nr-layout-b .nr-feedback-grid{grid-template-columns:1fr}}
 @media(max-width:420px){.nr-analysis-meta .nr-quality-cards{grid-template-columns:1fr}.nr-layout-c .nr-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.nr-layout-c .nr-kpi{border-right:0}.nr-layout-c .nr-kpi:nth-child(odd){border-right:1px solid var(--line)}.nr-layout-c .nr-kpi:nth-child(n+3){border-top:1px solid var(--line)}.nr-layout-c .nr-kpi dd{font-size:20px}.nr-layout-tools{gap:6px}.nr-layout-tools .chip{white-space:normal}.nr-paper-meta{font-size:11px}}
 @media print{
+  html{background:#fff}
   @page{size:A4 portrait;margin:12mm}
   /* 브라우저 직접 인쇄도 내부 메모·초안·이력·편집 도구를 출력하지 않는다. */
   .nr-internal-review,.nr-annotations,.nr-note-history,.report-history,.nr-report-controls,.nr-detail-top,.nr-preview-controls,.nr-note-grid,.nr-target-inputs,.nr-note-actions,
