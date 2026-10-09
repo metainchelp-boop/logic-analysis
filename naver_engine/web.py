@@ -304,17 +304,48 @@ class App:
 
     # ── WSGI ──
     def __call__(self, environ, start_response):
+        # 관측 값은 이 요청만 보관한다. HTTP_가 아닌 서버 내부 키이며 외부 입력은 덮어쓴다.
+        measured = (environ.get("REQUEST_METHOD") == GET and environ.get("PATH_INFO") in
+                    (PREFIX + "/accounts", PREFIX + "/dashboard"))
+        timing = {"export": False} if measured else None
+        environ["naver_engine.request_timing"] = timing
+        entered = _time.perf_counter() if measured else 0.0
+        cpu_started = _time.thread_time() if measured else 0.0
         # 읽기 저장소·현재 시각·권한은 차례가 온 뒤 연다. JSON 응답 준비까지 한 번에 네 요청만 진행한다.
         with self._read_slots if environ.get("REQUEST_METHOD") == GET else nullcontext():
+            response_started = _time.perf_counter() if measured else 0.0
             status, body = self._respond(environ)
+            serialize_started = _time.perf_counter() if measured else 0.0
             try:
                 payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             except (TypeError, ValueError, UnicodeEncodeError) as e:   # 글자로 못 바꾸는 값 — 머리는 그대로 · JSON 500
                 log.error("화면 API 응답 만들기 실패: %s", type(e).__name__)
                 status, payload = 500, b'{"error":"internal"}'
+            if (measured and status == 200 and timing["export"] is True and timing.get("view_sync") is True
+                    and isinstance(body, dict) and body.get("version") == 1
+                    and body.get("mode") in ("full", "delta", "unchanged") and "_request_timing" not in body):
+                done = _time.perf_counter()
+                values = {"gate_ms": (response_started-entered)*1000,
+                          "viewer_ms": timing["viewer_ms"], "handler_ms": timing["handler_ms"],
+                          "response_ms": (serialize_started-response_started)*1000,
+                          "serialize_ms": (done-serialize_started)*1000,
+                          "thread_cpu_ms": (_time.thread_time()-cpu_started)*1000}
+                if all(0 <= value <= 3600000 for value in values.values()):
+                    # 큰 본문은 한 번만 직렬화한다. ViewSync의 원천/커서 밖에 숫자만 덧붙인다.
+                    extra = (b"" if payload == b"{}" else b",") + b'"_request_timing":{' + ",".join(
+                        f'"{key}":{value:.3f}' for key, value in values.items()).encode("ascii") + b"}"
+                    if len(payload) + len(extra) <= VS.RESPONSE_MAX_BYTES:
+                        payload = payload[:-1] + extra + b"}"
             start_response(f"{status} {REASONS.get(status, 'Error')}",
                            list(HEADERS) + [("Content-Length", str(len(payload)))])
             return [payload]
+
+    @staticmethod
+    def _viewer_timing(timing, viewer, started):
+        if timing is not None:
+            timing["viewer_ms"] = (_time.perf_counter()-started)*1000
+            # 신선한 요청 권한으로만 관측 수치 열람을 결정한다. 직원/좁힌 세션에는 내보내지 않는다.
+            timing["export"] = viewer.scope.kind == SC.ALL and not viewer.claims.narrowed
 
     def _respond(self, environ) -> Tuple[int, dict]:
         # 아래 기록 줄의 꼴(머리글 · 「: 종류 이름」으로 끝남)은 로직분석 공개 진단의 기록 분류기가 줄 전체로 맞춰 센다
@@ -383,10 +414,18 @@ class App:
         now = self._now()
         if not route.auth:
             return route.handler(self, req, None, now, environ=environ, **m.groupdict())
+        timing = environ.get("naver_engine.request_timing")
+        if timing is not None:
+            timing["view_sync"] = view_sync
+        viewer_started = _time.perf_counter() if timing is not None else 0.0
         if view_sync or sub in {"/reports/accounts", "/reports/detail"}:
             with ExitStack() as snapshot:
                 v = self._viewer(environ, now, snapshot=snapshot)
+                self._viewer_timing(timing, v, viewer_started)
+                handler_started = _time.perf_counter() if timing is not None else 0.0
                 status, payload = route.handler(self, req, v, now, **m.groupdict())
+                if timing is not None:
+                    timing["handler_ms"] = (_time.perf_counter()-handler_started)*1000
                 context = VS.context_key({"version": 1, "viewer": v.idx, "login_at": v.claims.login_at,
                     "narrowed": v.claims.narrowed, "scope": SC.view_cache_identity(v.org, v.scope),
                     "path": sub, "query": query, "date": now.astimezone(KST).date()})
@@ -395,10 +434,14 @@ class App:
                 payload = self._view_sync.respond(sub, payload, context=context, view_cursor=view_cursor, now=now)
             return status, payload
         v = self._viewer(environ, now)
+        self._viewer_timing(timing, v, viewer_started)
+        handler_started = _time.perf_counter() if timing is not None else 0.0
         try:
             return route.handler(self, req, v, now, **m.groupdict())
         finally:
             v.store.close()
+            if timing is not None:
+                timing["handler_ms"] = (_time.perf_counter()-handler_started)*1000
 
     def _now(self) -> datetime:
         now = self._clock()
