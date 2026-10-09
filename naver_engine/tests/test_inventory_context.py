@@ -30,7 +30,9 @@ class InventoryContextTest(unittest.TestCase):
                            for route in WEB.ROUTES)
             with patch.object(WEB, "ROUTES", routes):
                 return self.fixture.call(path, actor, narrowed=narrowed)
-        with patch.object(W, "load_inventory", side_effect=self.full_load, create=True):
+        # 구형 reference는 계측 adapter를 거치지 않고 원래 Reader로 full loader를 실행한다.
+        with patch.object(W, "load_inventory", side_effect=self.full_load, create=True), \
+                patch.object(WEB, "_TimedReadStore", side_effect=lambda store, timings: store):
             return self.fixture.call(path, actor, narrowed=narrowed)
 
     def legacy_me(self, app, req, viewer, now):

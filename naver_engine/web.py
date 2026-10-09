@@ -114,6 +114,26 @@ _TIMED_READ_METHODS = (
 )
 
 
+# 공개 조회 이름은 코드에 고정한다. 다른 속성·내부 연결·쓰기 함수로 위임하지 않는다.
+_TIMED_READ_ACCESSORS = {
+    "prospects": lambda store: store.prospects,
+    "link_decisions": lambda store: store.link_decisions,
+    "accounts": lambda store: store.accounts,
+    "account_catalog": lambda store: store.account_catalog,
+    "account_catalog_status": lambda store: store.account_catalog_status,
+    "accounts_read_at": lambda store: store.accounts_read_at,
+    "inventory_snapshot": lambda store: store.inventory_snapshot,
+    "automatic_link_evidence": lambda store: store.automatic_link_evidence,
+    "inventory_checks_on": lambda store: store.inventory_checks_on,
+    "inventory_collection_summaries": lambda store: store.inventory_collection_summaries,
+    "structure_reason_summaries": lambda store: store.structure_reason_summaries,
+    "performance_checks": lambda store: store.performance_checks,
+    "latest_inventory_successes": lambda store: store.latest_inventory_successes,
+    "account_times": lambda store: store.account_times,
+    "monthly_checks_on": lambda store: store.monthly_checks_on,
+    "daily_performance": lambda store: store.daily_performance,
+}
+
 class _TimedReadStore:
     """요청 하나의 기존 읽기 호출만 관측한다. 원문·인자·결과는 보관하지 않는다.
 
@@ -126,8 +146,11 @@ class _TimedReadStore:
         self._store, self._timings = store, timings
 
     def __getattr__(self, name):
-        original = getattr(self._store, name)
-        if name not in _TIMED_READ_METHODS or not callable(original):
+        accessor = _TIMED_READ_ACCESSORS.get(name)
+        if accessor is None:
+            raise AttributeError(name)
+        original = accessor(self._store)
+        if not callable(original):
             return original
 
         def read(*args, **kwargs):

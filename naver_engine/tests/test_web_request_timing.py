@@ -246,7 +246,7 @@ class RequestTimingTest(WebBase):
 
 
 class TimedReadDelegationTest(unittest.TestCase):
-    def test_exact_args_result_identity_and_optional_attributes_are_preserved(self):
+    def test_fixed_adapter_args_result_identity_and_optional_read_attributes_are_preserved(self):
         sentinel, calls = object(), []
         class Original:
             value = sentinel
@@ -258,7 +258,8 @@ class TimedReadDelegationTest(unittest.TestCase):
         proxy = WEB._TimedReadStore(original, observations)
         self.assertIs(proxy.accounts('marker', options=sentinel),sentinel)
         self.assertEqual(calls,[(original,('marker',),{'options':sentinel})])
-        self.assertIs(proxy.value,sentinel)
+        with self.assertRaises(AttributeError):
+            proxy.value
         self.assertIsNone(proxy.performance_checks)
         self.assertIsNone(getattr(proxy,'missing_optional',None))
         self.assertEqual(set(observations),{'accounts'})
@@ -287,5 +288,21 @@ class TimedReadDelegationTest(unittest.TestCase):
             with self.subTest(clock=clock),patch.object(WEB._time,'perf_counter',side_effect=clock):
                 proxy = WEB._TimedReadStore(Original(),observations)
                 self.assertIs(proxy.accounts(),sentinel)
-                self.assertIs(proxy.unrelated_private_name(),sentinel)
+                with self.assertRaises(AttributeError):
+                    proxy.unrelated_private_name()
             self.assertEqual(observations,{})
+
+    def test_unknown_store_attributes_never_reach_original_adapter(self):
+        self.assertEqual(tuple(WEB._TIMED_READ_ACCESSORS), WEB._TIMED_READ_METHODS)
+        resolved = []
+        class Original:
+            def __getattr__(self, name):
+                resolved.append(name)
+                return lambda: object()
+        proxy = WEB._TimedReadStore(Original(), {})
+        for name in ('value', 'unrelated_private_name', 'record_access', '_conn', 'close', 'read_snapshot'):
+            with self.subTest(name=name), self.assertRaises(AttributeError):
+                getattr(proxy, name)
+        self.assertEqual(resolved, [])
+        self.assertIsNone(getattr(proxy, 'missing_optional', None))
+        self.assertEqual(resolved, [])
