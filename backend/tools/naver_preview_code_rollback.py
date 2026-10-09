@@ -85,6 +85,13 @@ if (type(REVIEWED_ROLLBACK_V11[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIE
             and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V11[index]) for index in (3, 4, 5))):
     REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V11})
 
+# V12 exact 8-value reverse transition; pending pins are never admitted.
+REVIEWED_ROLLBACK_V12 = ('9bfcace1c6ba2a49807c5ec8feb69fde11de73bf', '3145da9e3021aed0c06d17f2e51525fc866f8799', '1acf8f5d9f54d075655ed263026a77745b75548bbee8fd66a2286aeee404628e', '14a72af0ee951d54ea05a0c176bb3c2ffdd5e14fdd4380aafd8ba6ad5e31ee7d', 'de9d1fe5886055d07261bc41687666cfe5f800fe582a02057910026ef564ca53', '055106d6811a998b1265b893f4150c2590a3fbaea4b7a48d8fd48d1a78462431', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_engine/store.py', 'naver_engine/web.py', 'naver_engine/views.py', 'backend/naver_page/app.js', 'naver_runtime/writer.py', 'naver_runtime/__main__.py', 'naver_engine/collection_diagnostics.py'}))
+if (type(REVIEWED_ROLLBACK_V12[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V12[1])
+        and all(type(REVIEWED_ROLLBACK_V12[index]) is str
+            and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V12[index]) for index in (3, 4, 5))):
+    REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V12})
+
 STAGE = 'input'
 OPERATION = 'none'
 
@@ -100,7 +107,8 @@ def require_review(policy, code):
     policy.require_review(code)
     if (transition(code) not in REVIEWED_ROLLBACKS
             or (code.STORE_SHA256.get('old') != code.STORE_SHA256.get('target')
-                and transition(code) != REVIEWED_ROLLBACK_V11)):
+                and transition(code) != REVIEWED_ROLLBACK_V11
+                and transition(code) != REVIEWED_ROLLBACK_V12)):
         raise ValueError('CODE_ROLLBACK_NOT_REVIEWED')
 
 
