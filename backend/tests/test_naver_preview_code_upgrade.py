@@ -431,8 +431,10 @@ class ContractTest(unittest.TestCase):
         fourth_release = code_module in ('naver_preview_code_upgrade_v4', 'naver_preview_code_upgrade_v5',
                                        'naver_preview_code_upgrade_v6', 'naver_preview_code_upgrade_v7',
                                        'naver_preview_code_upgrade_v8', 'naver_preview_code_upgrade_v9',
-                                       'naver_preview_code_upgrade_v10')
-        target_store = StoreScopeTest.SOURCE if fourth_release else StoreScopeTest.TARGET_SOURCE
+                                       'naver_preview_code_upgrade_v10', 'naver_preview_code_upgrade_v11')
+        target_store = (StoreScopeTest.SOURCE+b'\n# synthetic V11 read performance change\n'
+            if code_module == 'naver_preview_code_upgrade_v11' else
+            StoreScopeTest.SOURCE if fourth_release else StoreScopeTest.TARGET_SOURCE)
         policy = load('naver_preview_code_only') if code_only else None
         fixture = load('naver_preview_upgrade')
         fixture.OLD_COMMIT = code.OLD_COMMIT
@@ -463,7 +465,8 @@ class ContractTest(unittest.TestCase):
                 'backend/requirements.txt': b'fixture', 'naver_runtime/bootstrap.py': b'# unchanged bootstrap',
                 'naver_engine/store.py': target_store}
             if fourth_release:
-                infrastructure.update({name: b'new product fixture' for name in code.CODE_PATHS})
+                infrastructure.update({name: b'new product fixture' for name in code.CODE_PATHS
+                    if code_module != 'naver_preview_code_upgrade_v11' or name != 'naver_engine/store.py'})
             infrastructure.update({name: b'new fixture compose' for name in
                 ('compose.naver-engine.yml','compose.naver-relay.yml','deploy/naver-engine-backup.override.yml')})
             for path in (root/'releases').iterdir():
@@ -475,6 +478,8 @@ class ContractTest(unittest.TestCase):
                     (path/'naver_engine/store.py').write_bytes(StoreScopeTest.SOURCE)
                     if fourth_release:
                         for name in code.CODE_PATHS:
+                            if code_module == 'naver_preview_code_upgrade_v11' and name == 'naver_engine/store.py':
+                                continue
                             (path/name).write_bytes(b'old product fixture')
                 for name in ('engine','relay'):
                     # The UI update inherits all flags without adding or changing them.
@@ -498,7 +503,7 @@ class ContractTest(unittest.TestCase):
                         value['files']={name:release.sha(Path(name).read_bytes()) for name in value['files']}
                         receipt.write_text(json.dumps(value))
                 infrastructure['compose.naver-engine.yml'] = new_compose
-            if code_module == 'naver_preview_code_upgrade_v10':
+            if code_module in ('naver_preview_code_upgrade_v10','naver_preview_code_upgrade_v11'):
                 # Exact compose bytes from the immutable reviewed V9 fixture, with
                 # its already approved CPU1.0/memory768 values in both releases.
                 old_compose=json.loads((Path(__file__).parent/'fixtures/v9-engine-compose-old.json').read_text())['compose'].encode()
@@ -659,6 +664,8 @@ class ContractTest(unittest.TestCase):
                     policy.REVIEWED_TRANSITION_V8 = transition
                 elif code_module == 'naver_preview_code_upgrade_v10':
                     policy.REVIEWED_TRANSITION_V10 = transition
+                elif code_module == 'naver_preview_code_upgrade_v11':
+                    policy.REVIEWED_TRANSITION_V11 = transition
                 elif code_module == 'naver_preview_code_upgrade_v9':
                     policy.REVIEWED_TRANSITION_V9 = transition
                     policy.REVIEWED_RESOURCE_LIMITS_V9 = True

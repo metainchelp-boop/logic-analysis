@@ -99,6 +99,12 @@ REVIEWED_TRANSITION_V10 = (
     'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862', 'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
 )
 
+# V11 exact read performance transition: parent target/archive/Store pins are closed placeholders.
+REVIEWED_TRANSITION_V11 = (
+    '3fa096d3d383123fdd3469c5dc68404171a6f076', '9bfcace1c6ba2a49807c5ec8feb69fde11de73bf', '1a528165dae3f2e896d98e950f1b92369f997af2ce4e2d823febb7b18c86a6de', '1acf8f5d9f54d075655ed263026a77745b75548bbee8fd66a2286aeee404628e',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862', 'de9d1fe5886055d07261bc41687666cfe5f800fe582a02057910026ef564ca53', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+)
+
 
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
@@ -128,6 +134,12 @@ def code_module_name(source_commit):
             and type(REVIEWED_TRANSITION_V10[3]) is str
             and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V10[3])):
         return 'naver_preview_code_upgrade_v10'
+    if (type(source_commit) is str and type(REVIEWED_TRANSITION_V11[1]) is str
+            and source_commit == REVIEWED_TRANSITION_V11[1]
+            and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V11[1])
+            and all(type(REVIEWED_TRANSITION_V11[index]) is str
+                and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V11[index]) for index in (3, 4, 5))):
+        return 'naver_preview_code_upgrade_v11'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -161,7 +173,12 @@ def require_review(code):
         {'naver_engine/web.py'}
         if (transition == REVIEWED_TRANSITION_V10
             and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
-            and type(transition[3]) is str and re.fullmatch('[0-9a-f]{64}', transition[3])) else None)
+            and type(transition[3]) is str and re.fullmatch('[0-9a-f]{64}', transition[3])) else
+        {'naver_engine/store.py', 'naver_engine/inventory.py', 'naver_engine/dashboard.py', 'naver_engine/web.py'}
+        if (transition == REVIEWED_TRANSITION_V11
+            and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
+            and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
+                for index in (3, 4, 5))) else None)
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 

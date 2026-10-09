@@ -25,17 +25,21 @@ class PostSuccessRollbackTest(unittest.TestCase):
         code = shared.load(code_module)
         # V6/V7/V8 retain their reviewed commit/archive pins. Older fixtures
         # preserve their original test-only later release returning to source 49.
-        if code_module not in ('naver_preview_code_upgrade_v6', 'naver_preview_code_upgrade_v7', 'naver_preview_code_upgrade_v8', 'naver_preview_code_upgrade_v9', 'naver_preview_code_upgrade_v10'):
+        if code_module not in ('naver_preview_code_upgrade_v6', 'naver_preview_code_upgrade_v7', 'naver_preview_code_upgrade_v8', 'naver_preview_code_upgrade_v9', 'naver_preview_code_upgrade_v10', 'naver_preview_code_upgrade_v11'):
             code.OLD_COMMIT = '49c42d645b90732071d0c61b8f9aaf7660e8b765'
             code.OLD_SOURCE_SHA256 = '69b9f79ab243eac6d3d32fe67ce267b96bdd923323997fd2661934bc6a5459d4'
             if code_module != 'naver_preview_code_upgrade_v5':
                 code.TARGET_COMMIT = 'b' * 40
                 code.TARGET_SOURCE_SHA256 = 'd' * 64
+        if code_module.endswith('v11') and code.TARGET_COMMIT is None:
+            code.TARGET_COMMIT,code.TARGET_SOURCE_SHA256='b'*40,'d'*64
         store = shared.StoreScopeTest.SOURCE
         digest = hashlib.sha256(store).hexdigest()
-        code.STORE_SHA256 = {'old': digest, 'target': digest}
+        target_store=store+b'\n# synthetic V11 read performance change\n' if code_module.endswith('v11') else store
+        code.STORE_SHA256 = {'old':digest,'target':hashlib.sha256(target_store).hexdigest()}
         # Existing forward review validation is real, with synthetic in-memory pins.
-        setattr(policy, 'REVIEWED_TRANSITION_V10' if code_module.endswith('v10')
+        setattr(policy, 'REVIEWED_TRANSITION_V11' if code_module.endswith('v11')
+                else 'REVIEWED_TRANSITION_V10' if code_module.endswith('v10')
                 else 'REVIEWED_TRANSITION_V9' if code_module.endswith('v9')
                 else 'REVIEWED_TRANSITION_V8' if code_module.endswith('v8')
                 else 'REVIEWED_TRANSITION_V7' if code_module.endswith('v7')
@@ -44,6 +48,7 @@ class PostSuccessRollbackTest(unittest.TestCase):
                 else 'REVIEWED_TRANSITION_V4', helper.transition(code)[:-1])
         if code_module.endswith('v9'): policy.REVIEWED_RESOURCE_LIMITS_V9 = True
         helper.REVIEWED_ROLLBACKS = frozenset({helper.transition(code)})
+        if code_module.endswith('v11'):helper.REVIEWED_ROLLBACK_V11=helper.transition(code)
         release = Mock()
         original_release = shared.load('naver_preview_release')
         release.ROOT = root
@@ -62,8 +67,9 @@ class PostSuccessRollbackTest(unittest.TestCase):
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_bytes(b'unchanged')
             (path / 'naver_engine').mkdir(exist_ok=True)
-            (path / 'naver_engine/store.py').write_bytes(store)
+            (path / 'naver_engine/store.py').write_bytes(store if path==old else target_store)
             for name in code.CODE_PATHS:
+                if code_module.endswith('v11') and name=='naver_engine/store.py':continue
                 file = path / name
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_bytes(b'old' if path == old else b'new')
@@ -75,7 +81,7 @@ class PostSuccessRollbackTest(unittest.TestCase):
             new_compose=old_compose.replace(b'    cpus: "0.50"\n',b'    cpus: "1.00"\n').replace(b'    mem_limit: 512m\n',b'    mem_limit: 768m\n')
             (old/'compose.naver-engine.yml').write_bytes(old_compose)
             (new/'compose.naver-engine.yml').write_bytes(new_compose)
-        if code_module.endswith('v10'):
+        if code_module.endswith(('v10','v11')):
             old_compose=json.loads((Path(__file__).parent/'fixtures/v9-engine-compose-old.json').read_text())['compose'].encode()
             compose=old_compose.replace(b'    cpus: "0.50"\n',b'    cpus: "1.00"\n').replace(b'    mem_limit: 512m\n',b'    mem_limit: 768m\n')
             assert hashlib.sha256(compose).hexdigest()==code.ENGINE_COMPOSE_SHA256
@@ -209,10 +215,11 @@ class PostSuccessRollbackTest(unittest.TestCase):
 
     def test_only_final74_transition_is_enabled_and_prior_release_refuses_before_any_adapter(self):
         helper = shared.load('naver_preview_code_rollback')
-        self.assertEqual(helper.REVIEWED_ROLLBACKS,frozenset(
-            helper.transition(shared.load(name)) for name in
-            ('naver_preview_code_upgrade_v5','naver_preview_code_upgrade_v6','naver_preview_code_upgrade_v7',
-             'naver_preview_code_upgrade_v8','naver_preview_code_upgrade_v9','naver_preview_code_upgrade_v10')))
+        names=['naver_preview_code_upgrade_v5','naver_preview_code_upgrade_v6','naver_preview_code_upgrade_v7',
+             'naver_preview_code_upgrade_v8','naver_preview_code_upgrade_v9','naver_preview_code_upgrade_v10']
+        if shared.load('naver_preview_code_upgrade_v11').TARGET_COMMIT is not None:
+            names.append('naver_preview_code_upgrade_v11')
+        self.assertEqual(helper.REVIEWED_ROLLBACKS,frozenset(helper.transition(shared.load(name)) for name in names))
         for code_name in ('naver_preview_code_upgrade', 'naver_preview_code_upgrade_v3',
                           'naver_preview_code_upgrade_v4'):
             adapters = [Mock() for _ in range(4)]
