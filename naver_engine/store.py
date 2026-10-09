@@ -5404,6 +5404,18 @@ class Store(ManagedStorage):
             "SELECT customer_id, status, possibility_id FROM naver_auto_account_day WHERE day = ?",
             (_day_text(day, "날짜"),))}
 
+    def detailed_collection_status(self, now: datetime) -> dict:
+        """현재 일일 상세점검의 숫자만. 원천 수집·거래 쓰기·큰 조각 본문 읽기 없음."""
+        from . import management_store as MS, collection_diagnostics as CD
+        day = now.astimezone(KST).date()
+        policies = MS.snapshot(self, now)
+        marks = self._conn.execute("""SELECT customer_id,possibility_id,status,
+            CASE WHEN length(CAST(rules_not_run AS BLOB))<=65536 THEN rules_not_run ELSE NULL END
+            FROM naver_auto_account_day WHERE day=?""", (_day_text(day, "날짜"),)).fetchall()
+        progress = self._conn.execute("""SELECT customer_id,possibility_id,day,binding,status
+            FROM naver_auto_morning_progress WHERE status IN ('reading','blocked')""").fetchall()
+        return CD.project(policies, marks, progress, self.current_decisions(), now)
+
     def account_day_checks_on(self, day: date) -> dict:
         """그 날 계정 하루치의 판정 재료 {고객 번호: {status · possibility_id · rules_not_run · bizmoney · yday_spend ·
         yday_imp · yday_clk}} — 관제 화면(S11)이 가망마다 판정(``verdict.judge``)을 만들 때 한 번에 읽는다(계정마다 따로 읽지

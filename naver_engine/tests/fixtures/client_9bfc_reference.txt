@@ -1,0 +1,34 @@
+def client(ctx: Ctx, store: S.Store, scope: SC.Scope, pid) -> dict:
+    """광고주 한 장 — 판정 · 계정별 14일 · 이슈 기록 · 연결 · 보고서(4차 준비 중) · 할 수 있는 일. 범위 밖 = 없음(404)."""
+    own = SC.require_client(ctx.org, scope, ctx.owns, pid, SC.ACT_VIEW)
+    p = ctx.prospects[pid]
+    v = judge(ctx, pid)
+    accounts = []
+    for r in ctx.rows_by_pid.get(pid, ()):
+        if r["state"] not in LINK_ROW_STATES or r["customer_id"] is None:
+            continue
+        a = ctx.accounts.get(r["customer_id"])
+        accounts.append({"tail": tail4(r["customer_id"]), "account_name": None if a is None else a["account_name"],
+                         "link": _link_of(r), "state": r["state"],
+                         "history": _history(store, ctx, r["customer_id"], pid)})
+    since = ctx.today - timedelta(days=HISTORY_DAYS)
+    shown = [i for i in store.issues(pid)
+             if i["state"] in ("new", "ack", "exception") or (_day(i["last_seen_on"]) or ctx.today) >= since]
+    hand = hands(ctx, store, (i["issue_id"] for i in shown))
+    issues = [{**_issue_out(ctx, store, i), "state_now": counting_state(i, ctx.today), "can": issue_can(ctx, scope, own, i),
+               "hand": hand_now(ctx, i, hand.get(i["issue_id"]))} for i in shown]
+    allowed = SC.allowed_actions(ctx.org, scope, own)
+    actor = SC.issue_actor(ctx.org, scope, own)
+    return {"possibility_id": pid, "name": p["name"], "stage": p["stage_key"], "managed": p["present"] == 1,
+            "today": ctx.today.isoformat(),   # 화면이 예외 기간을 서버의 「오늘」로 세게(S13)
+            "latest_end_date": p["latest_end_date"], "relation": SC.relation(ctx.org, scope, own),
+            "owner": _owner(ctx, own), "verdict": _verdict_out(v), "accounts": accounts, "issues": issues,
+            "link": link_state(ctx, pid), "account_unconfirmed": _auto_link(ctx, pid), "unlinked": has_unlinked(ctx, pid),
+            "white_detail": white_detail(ctx, pid, v),
+            **today_numbers(ctx, pid, CLIENT_NUMBER_KEYS), "days": day_totals(accounts),
+            "report": REPORT_PREPARING,
+            "actions": {"handle_issue": SC.ACT_HANDLE_ISSUE in allowed, "confirm_link": SC.ACT_CONFIRM_LINK in allowed,
+                        "exception_actor": actor,
+                        "exception_max_days": {"red": 7 if actor == "lead" else 0,
+                                               "yellow": 30 if actor is not None else 0},
+                        "raising_allowed": O.allows_raising(ctx.freshness)}}

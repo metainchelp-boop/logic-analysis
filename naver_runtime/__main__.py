@@ -20,7 +20,7 @@ from naver_runtime.scheduler import Scheduler
 from naver_runtime.runtime_status import RuntimeStatus
 from naver_runtime.collection_requests import CollectionClock
 from naver_runtime.server import UnixServer, health_app
-from naver_runtime.writer import Writer
+from naver_runtime.writer import Writer, PHASE_WEB_WRITE
 from naver_runtime import bootstrap as B
 
 log = logging.getLogger("naver_runtime")
@@ -193,7 +193,8 @@ def run(config, env, *, stop=None):
                               monotonic_clock=clock.monotonic, collection_factory=collection_factory,
                               runtime_state=runtime, **options)
         # 읽기 연결은 요청 스레드에서 열고 닫으며, 쓰기는 기존 단일 소유자 큐만 지난다.
-        web = WEB.App(open_read=lambda: S.open_reader(config.db), write=writer.call,
+        web = WEB.App(open_read=lambda: S.open_reader(config.db), write=lambda fn: writer.call(fn, _phase=PHASE_WEB_WRITE),
+                      writer_diagnostics=writer.diagnostics,
                       signer=signer, profiles=profiles, owner_verification=True, verified_linking=True,
                       owner_actions=True,
                       request_collection=scheduler.request_collection,

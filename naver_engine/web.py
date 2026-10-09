@@ -340,7 +340,7 @@ class App:
                  login_window: float = LOGIN_WINDOW, monotonic: Optional[Callable[[], float]] = None,
                  login_source_max: int = LOGIN_SOURCE_MAX, login_token_max: int = LOGIN_TOKEN_MAX,
                  owner_verification: bool = False, verified_linking: bool = False, owner_actions: bool = False,
-                 request_collection=None, collection_status=None, runtime_status=None) -> None:
+                 request_collection=None, collection_status=None, runtime_status=None, writer_diagnostics=None) -> None:
         if not isinstance(signer, SE.TokenSigner):
             raise TypeError("signer 는 TokenSigner 여야 합니다(비밀값 없이 시작하지 않는다)")
         if type(owner_verification) is not bool:
@@ -360,6 +360,7 @@ class App:
         # 요청 Reader를 받을 콜백은 명시적으로 선언한다. 기존 0인자 콜백은 그대로 둔다.
         self._collection_status_uses_reader = getattr(collection_status, "read_store_supported", False) is True
         self._runtime_status = runtime_status
+        self._writer_diagnostics = writer_diagnostics
         self._view_sync = VS.ViewSync()
         self._clock = clock or (lambda: datetime.now(KST))
         self._previewer = previewer
@@ -941,7 +942,7 @@ class App:
     def _h_client(self, req: Request, v: Viewer, now: datetime, pid: str) -> Tuple[int, dict]:
         n = int(pid)
         try:
-            out = W.client(v.ctx(now), v.store, v.scope, n)
+            out = W.client(v.ctx(now), v.store, v.scope, n, account_key=req.query.get("account_key"))
         except (SC.ClientNotVisible, SC.ActionNotAllowed):
             self._audit(v.idx, "view", "client", n, "not-visible", now, required=False)
             raise SC.ClientNotVisible() from None
@@ -1045,6 +1046,19 @@ class App:
         return 200, W.settings(v.ctx(now), v.store, v.scope)
 
     def _h_health(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if "collection" in req.query:
+            if req.query != {"collection": "1"}:
+                raise HttpError(400, "bad-query")
+            if v.scope.kind != SC.ALL or v.claims.narrowed or not self._verified_linking:
+                raise HttpError(403, "verification-read-only")
+            with v.store.read_snapshot():
+                if not O.allows_raising(Y.org_freshness(v.store, now)):
+                    raise HttpError(409, "org-stale")
+                out = {"collection": v.store.detailed_collection_status(now)}
+            if self._writer_diagnostics is not None:
+                from . import collection_diagnostics as CD
+                out['writer'] = CD.writer_status(self._writer_diagnostics)
+            return 200, out
         if "runtime" in req.query:
             if req.query != {"runtime": "1"}:
                 raise HttpError(400, "bad-query")

@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, time, timedelta
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
@@ -107,6 +107,7 @@ class Ctx:
     lost_decisions: Tuple[S.LinkDecision, ...]   # 밀린 확인(뒤 확인을 거두면 다시 산다)
     name_owners: Mapping[str, frozenset]     # 느슨한 상호 → 지금 목록에 있는 가망 번호(계정 이름이 가리키는 가망)
     continuous: bool = False                 # 연속 점검인가(이관 현황 원천이 있다 — 매일 4단계만 매일 읽는다)
+    catalog: Optional[dict] = None            # 선택 조회만 현재 ERP 번호를 검증한다. 이미 읽은 요청 원천을 재사용한다.
 
     def __repr__(self) -> str:
         return f"Ctx(prospects={len(self.prospects)})"
@@ -188,7 +189,7 @@ def load(store: S.Store, now: datetime, org: Optional[O.Org] = None) -> Ctx:
                {k: tuple(v) for k, v in rows.items()}, {a["customer_id"]: a for a in store.accounts()},
                store.account_day_checks_on(today), {k: tuple(v) for k, v in issues.items()},
                tuple(winners), tuple(lost), {k: frozenset(v) for k, v in names.items()},
-               continuous=catalog is not None)
+               continuous=catalog is not None, catalog=catalog)
 
 
 # ── 작은 도구 ────────────────────────────────────────────────────────
@@ -774,9 +775,81 @@ def _issue_out(ctx: Ctx, store: S.Store, i: dict) -> dict:
             "facts": i["facts"], "target_tail": tail4(i["customer_id"]), "events": events}
 
 
-def client(ctx: Ctx, store: S.Store, scope: SC.Scope, pid) -> dict:
+def _client_account_key(customer_id: int) -> str:
+    # report_views.account_key와 같은 표시 식별자. 권한 토큰이 아니며 현재 업체의 짝을 아래에서 다시 확인한다.
+    return hashlib.sha256(str(customer_id).encode("ascii")).hexdigest()
+
+
+def _client_current_decision(ctx: Ctx, pid: int, row: dict) -> bool:
+    cid = row["customer_id"]
+    decisions = tuple(d for d in ctx.live_decisions if d.customer_id == cid)
+    if any((d.decision == "confirmed" and d.possibility_id != pid) or
+           (d.decision == "rejected" and d.possibility_id == pid) for d in decisions):
+        return False
+    # 수락 pairing이 아직 갱신되지 않았어도 회수한 수동 연결은 선택 조회를 열지 않는다.
+    return _link_of(row) != "confirmed" or any(d.decision == "confirmed" and d.possibility_id == pid for d in decisions)
+
+
+def _client_current_mapping(ctx: Ctx, store: S.Store, pid: int, row: dict) -> bool:
+    from .inventory import CATALOG_INTERVAL  # 기존 catalog의 유효기간을 재사용(전체 재조회 없음).
+    cid = row["customer_id"]
+    # 현재 살아 있는 사람 확인은 ERP 자동 입력보다 우선한다(기존 matching 규칙).
+    if any(d.customer_id == cid and d.possibility_id == pid and d.decision == "confirmed" for d in ctx.live_decisions):
+        return True
+    catalog = ctx.catalog
+    status = store.account_catalog_status()
+    if catalog is None or not status or status["state"] != "accepted":
+        return False
+    at = datetime.fromisoformat(catalog["generated_at"])
+    if not -timedelta(minutes=5) <= ctx.now - at <= CATALOG_INTERVAL * 2:
+        return False
+    company = next((p for p in catalog["items"] if p["possibility_id"] == pid), None)
+    if company is None:
+        return False
+    # 계정 전체와 모든 업체의 번호 주장은 남긴다. 번호 공간 충돌/중복 주장을 줄여서 풀지 않는다.
+    current = {k: {"customerId": k, "adAccountNo": a["ad_account_no"], "adAccountName": a["account_name"]}
+               for k, a in ctx.accounts.items() if a["present"] == 1}
+    ids = [M.ErpCredential(r["possibility_id"], r["vendor"], r["customer_id_raw"], ad_account_no_raw=r["ad_account_no_raw"])
+           for r in catalog["ids"]]
+    decisions = [M.HumanDecision(d.possibility_id, d.customer_id, d.decision) for d in ctx.live_decisions]
+    try:
+        result = M.match((M.ErpProspect(pid, company["company_name"]),), ids, current, decisions,
+                         accounts_complete=True, auto_evidence=store.automatic_link_evidence())
+    except M.BadInput:
+        return False
+    if not any(p.possibility_id == pid and p.customer_id == cid for p in result.pairs):
+        return False                       # 자동 missing/broken을 임의의 과거 관계로 열지 않는다.
+    # 선택 업체만 후보 탐색했어도 현재 prospect와 새 catalog의 다른 업체 이름 주장은 남긴다.
+    name = ctx.accounts[cid]["account_name"]
+    key = M.loose_name(name)
+    if M.name_relation(company["company_name"], name) == M.REL_SAME or key is None:
+        return True
+    return not (ctx.name_owners.get(key, frozenset()) - {pid}) and not any(
+        p["possibility_id"] != pid and M.loose_name(p["company_name"]) == key for p in catalog["items"])
+
+
+def client(ctx: Ctx, store: S.Store, scope: SC.Scope, pid, account_key: Optional[str] = None) -> dict:
     """광고주 한 장 — 판정 · 계정별 14일 · 이슈 기록 · 연결 · 보고서(4차 준비 중) · 할 수 있는 일. 범위 밖 = 없음(404)."""
     own = SC.require_client(ctx.org, scope, ctx.owns, pid, SC.ACT_VIEW)
+    linked = tuple(r for r in ctx.rows_by_pid.get(pid, ())
+                   if r["state"] in LINK_ROW_STATES and r["customer_id"] is not None)
+    choices = []
+    for r in linked:
+        a = ctx.accounts.get(r["customer_id"])
+        choices.append({"account_key": _client_account_key(r["customer_id"]), "tail": tail4(r["customer_id"]),
+                        "account_name": None if a is None else a["account_name"], "link": _link_of(r), "state": r["state"]})
+    selected_cid = None
+    if account_key is not None:
+        if not isinstance(account_key, str) or len(account_key) != 64 or any(c not in "0123456789abcdef" for c in account_key):
+            raise SC.ClientNotVisible()
+        selected = tuple(r for r in linked if _client_account_key(r["customer_id"]) == account_key)
+        if not selected or any(not _client_current_decision(ctx, pid, r) or
+                               not _client_current_mapping(ctx, store, pid, r) for r in selected):
+            raise SC.ClientNotVisible()
+        selected_cid = selected[0]["customer_id"]
+        ctx = replace(ctx, rows_by_pid={**ctx.rows_by_pid, pid: selected},
+                      open_issues={**ctx.open_issues, pid: tuple(i for i in ctx.open_issues.get(pid, ())
+                                                               if i["customer_id"] == selected_cid)})
     p = ctx.prospects[pid]
     v = judge(ctx, pid)
     accounts = []
@@ -784,12 +857,13 @@ def client(ctx: Ctx, store: S.Store, scope: SC.Scope, pid) -> dict:
         if r["state"] not in LINK_ROW_STATES or r["customer_id"] is None:
             continue
         a = ctx.accounts.get(r["customer_id"])
-        accounts.append({"tail": tail4(r["customer_id"]), "account_name": None if a is None else a["account_name"],
+        accounts.append({"account_key": _client_account_key(r["customer_id"]),
+                         "tail": tail4(r["customer_id"]), "account_name": None if a is None else a["account_name"],
                          "link": _link_of(r), "state": r["state"],
                          "history": _history(store, ctx, r["customer_id"], pid)})
     since = ctx.today - timedelta(days=HISTORY_DAYS)
     shown = [i for i in store.issues(pid)
-             if i["state"] in ("new", "ack", "exception") or (_day(i["last_seen_on"]) or ctx.today) >= since]
+             if (selected_cid is None or i["customer_id"] == selected_cid) and (i["state"] in ("new", "ack", "exception") or (_day(i["last_seen_on"]) or ctx.today) >= since)]
     hand = hands(ctx, store, (i["issue_id"] for i in shown))
     issues = [{**_issue_out(ctx, store, i), "state_now": counting_state(i, ctx.today), "can": issue_can(ctx, scope, own, i),
                "hand": hand_now(ctx, i, hand.get(i["issue_id"]))} for i in shown]
@@ -799,6 +873,8 @@ def client(ctx: Ctx, store: S.Store, scope: SC.Scope, pid) -> dict:
             "today": ctx.today.isoformat(),   # 화면이 예외 기간을 서버의 「오늘」로 세게(S13)
             "latest_end_date": p["latest_end_date"], "relation": SC.relation(ctx.org, scope, own),
             "owner": _owner(ctx, own), "verdict": _verdict_out(v), "accounts": accounts, "issues": issues,
+            "account_choices": choices,
+            "account_selection": {"kind": "company" if account_key is None else "account", "account_key": account_key},
             "link": link_state(ctx, pid), "account_unconfirmed": _auto_link(ctx, pid), "unlinked": has_unlinked(ctx, pid),
             "white_detail": white_detail(ctx, pid, v),
             **today_numbers(ctx, pid, CLIENT_NUMBER_KEYS), "days": day_totals(accounts),

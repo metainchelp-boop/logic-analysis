@@ -22,7 +22,7 @@
 
   var state = {
     session: null, me: null, selection: 'all', filter: 'need', q: '', board: null, links: null,
-    client: null, clientId: null, ctab: 'now', spane: 'th', settings: null, health: null, bell: null,
+    client: null, clientId: null, clientAccountKey: null, clientAccountChoices: [], clientRequest: 0, clientLoading: false, ctab: 'now', spane: 'th', settings: null, health: null, bell: null,
     linksOpen: false, doneOpen: false, upOpen: false, gen: 0, timer: null, focus: null,
     lastInput: Date.now(), refreshing: false, retryAt: 0, refreshRetryTimer: null, warned: false, bellGen: 0,
     filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
@@ -176,7 +176,8 @@
     viewEpoch++; viewCache.clear(); viewRequests = {}; viewShown = {}; viewChecked = {}; viewLegacy = {};
     state.gen++; state.inventoryGen++; state.reportsGen++; state.linksGen++; state.bellGen++;
     state.board = null; state.dashboard = null; state.inventory = null; state.reports = null; state.loadedDay = null;
-    state.links = null; state.client = null;
+    state.links = null; state.client = null; state.clientAccountKey = null; state.clientAccountChoices = []; state.clientRequest++; state.clientLoading = false;
+    if ($('c-account-scope')) put($('c-account-scope'));
     state.inventoryPage = 0; state.coveragePage = 0; inventoryNodes.clear();
     Object.keys(VIEW_STATUS).forEach(function (name) { gateView(name); put($(VIEW_STATUS[name])); });
     $('upbox').hidden = true; $('ceoBox').hidden = true; $('peopleCard').hidden = true; $('staffTodo').hidden = true;
@@ -2304,44 +2305,76 @@
   }
 
   // ── 광고주 한 장 ───────────────────────────────────────────────────
-  function openClient(id) {
-    var gen = state.gen;
-    show('client');
-    if (String(state.clientId) !== String(id)) {
-      // 다른 광고주로 — 앞 광고주의 이름·칸·단추가 남아 눌리지 않게 먼저 비운다(검토 client-switch-stale)
-      state.client = null;
-      $('c-crumb').textContent = '';
-      $('c-name').textContent = '';
-      $('c-sub').textContent = '';
-      $('c-sig').className = 'sig white';
-      put($('c-badges'));
-      ['p-hist', 'p-rep', 'p-conn'].forEach(function (p) { put($(p)); });
-      put($('p-now'), h('div', { class: 'loading' }, '불러오는 중…'));
-      setCtab('now');
+  function clientAccountScope() {
+    var box = $('c-account-scope');
+    if (!box) {
+      box = h('div', { id: 'c-account-scope', class: 'card' });
+      var tabs = document.querySelector('#s-client .tabs');
+      tabs.parentNode.insertBefore(box, tabs);
     }
-    state.clientId = id;
-    api('GET', '/clients/' + id).then(function (c) {
-      if (gen !== state.gen) return;
-      state.client = c;
+    var key = state.clientAccountKey, choices = state.clientAccountChoices, selected = null;
+    choices.forEach(function (a) { if (a.account_key === key) selected = a; });
+    function option(accountKey, label) {
+      return h('button', { type: 'button', class: 'chip' + (key === accountKey ? ' on' : ''),
+        'aria-pressed': String(key === accountKey), 'data-account-key': accountKey || 'company',
+        disabled: state.clientLoading && key === accountKey,
+        onclick: function () { if (state.client && key === accountKey) return; openClient(state.clientId, accountKey); }
+      }, label);
+    }
+    put(box, h('div', { class: 'kh' }, h('h2', null, '조회 계정'),
+      h('span', { class: 'n', role: 'status', 'aria-live': 'polite' }, key === null ? '회사 전체 합계' :
+        selected ? '개별 계정 · •••• ' + selected.tail : state.clientLoading ? '선택한 계정 확인 중' : '선택한 계정을 확인할 수 없습니다')),
+      h('div', { class: 'chips', role: 'group', 'aria-label': '고객 상세 조회 계정' },
+        option(null, '회사 전체 합계'), choices.map(function (a) {
+          return option(a.account_key, '•••• ' + (a.tail || '') + (a.account_name ? ' · ' + a.account_name : ''));
+        })), h('p', { class: 'hint' }, '현황·14일 광고비·이슈 기록을 선택한 범위로 봅니다. 계정 연결과 계약 단계는 유지됩니다.'));
+    box.setAttribute('aria-busy', String(state.clientLoading));
+  }
+  function openClient(id, accountKey) {
+    var same = String(state.clientId) === String(id);
+    var key = accountKey === undefined ? (same && state.screen === 'client' ? state.clientAccountKey : null) : accountKey;
+    var gen = state.gen, request = ++state.clientRequest;
+    if (!same) state.clientAccountChoices = [];
+    state.clientId = id; state.clientAccountKey = key; state.client = null; state.clientLoading = true;
+    show('client');
+    // 선택 전환과 새로고침 모두 이전 범위의 숫자·이슈·동작 단추를 먼저 비운다.
+    $('c-crumb').textContent = ''; $('c-name').textContent = ''; $('c-sub').textContent = '';
+    $('c-sig').className = 'sig white'; put($('c-badges'));
+    ['p-hist', 'p-rep', 'p-conn'].forEach(function (p) { put($(p)); });
+    put($('p-now'), h('div', { class: 'loading', role: 'status' }, '선택한 범위를 불러오는 중…'));
+    if (!same) setCtab('now');
+    clientAccountScope();
+    function current() {
+      return gen === state.gen && request === state.clientRequest && state.screen === 'client' &&
+        String(state.clientId) === String(id) && state.clientAccountKey === key;
+    }
+    function failed(e) {
+      if (e.status === 401 || !current()) return;
+      state.client = null; state.clientAccountChoices = []; state.clientLoading = false;
+      $('c-name').textContent = '없거나 볼 수 없는 광고주 또는 계정입니다';
+      $('c-crumb').textContent = ''; $('c-sub').textContent = ''; $('c-sig').className = 'sig white';
+      put($('c-badges'));
+      ['p-now', 'p-hist', 'p-rep', 'p-conn'].forEach(function (p) { put($(p)); });
+      put($('p-now'), h('div', { class: 'empty', role: 'status' }, errText(e)),
+        h('button', { type: 'button', class: 'btn', onclick: function () { openClient(id, null); } }, '회사 전체 다시 조회'));
+      clientAccountScope(); setCtab('now');
+    }
+    api('GET', '/clients/' + id + (key === null ? '' : '?account_key=' + encodeURIComponent(key))).then(function (c) {
+      if (!current()) return;
+      if (key !== null && (!c.account_selection || c.account_selection.kind !== 'account' || c.account_selection.account_key !== key)) {
+        failed({ status: 404, message: '선택한 계정의 응답을 확인할 수 없습니다. 회사 전체를 다시 조회해 주세요.' });
+        return;
+      }
+      state.client = c; state.clientLoading = false;
+      state.clientAccountChoices = c.account_choices || [];
       state.loadedDay = kstDay();
       renderClient();
       if (!state.links) loadLinks(); else renderClientLinks();
-    }, function (e) {
-      if (e.status === 401) return;
-      if (gen !== state.gen) return;
-      state.client = null;
-      $('c-name').textContent = '없거나 볼 수 없는 광고주입니다';
-      $('c-crumb').textContent = '';
-      $('c-sub').textContent = '';
-      $('c-sig').className = 'sig white';
-      put($('c-badges'));
-      ['p-now', 'p-hist', 'p-rep', 'p-conn'].forEach(function (p) { put($(p)); });
-      put($('p-now'), h('div', { class: 'empty' }, errText(e)));
-      setCtab('now');
-    });
+    }, failed);
   }
   function renderClient() {
     var c = state.client, v = c.verdict;
+    clientAccountScope();
     $('c-crumb').textContent = c.name;
     $('c-name').textContent = c.name;
     $('c-sig').className = 'sig ' + v.color;
@@ -2358,7 +2391,7 @@
     renderNow();
     renderHist();
     put($('p-rep'), h('div', { class: 'auto-soon' }, h('b', null, '이 업체의 주간·월간 보고서'),
-      ' 현재 실관리 단계의 연결된 광고 계정을 확인할 수 있습니다. ',
+      ' 회사 기준 보고서 목록에서 연결된 개별 광고 계정의 보고서를 확인할 수 있습니다. ',
       h('button', { type: 'button', class: 'btn', onclick: function () {
         reportsUI().company(Number(state.clientId)); go('/naver/reports');
       } }, '이 업체 보고서 보기')));
@@ -2404,7 +2437,7 @@
     if (!c.accounts || !c.accounts.length) {
       out.push(h('div', { class: 'note warn' }, '이 광고주에 이어진 네이버 계정이 없습니다(' + (LINK[c.link] || LINK.none)[1] + '). 「연결」 칸에서 짝을 확인합니다.'));
     } else if (!read) {
-      out.push(h('div', { class: 'note ' + (c.link === 'broken' ? 'bad' : 'warn') }, '오늘 점검에서 모든 계정의 숫자를 읽지 못했습니다' +
+      out.push(h('div', { class: 'note ' + (c.link === 'broken' ? 'bad' : 'warn') }, '오늘 점검에서 선택한 범위의 숫자를 모두 읽지 못했습니다' +
         (c.verdict.color === 'white' ? '(' + statusText(c.verdict) + ')' : '') + ' — 일부만 더한 값은 보이지 않습니다. 「연결」 칸에서 이관 상태를 봅니다.'));
     }
     checkpointNotes(c.accounts).forEach(function (note) { out.push(h('div', { class: 'note warn' }, note)); });
@@ -2466,7 +2499,7 @@
           h('span', { class: 'n' }, '대행 연결 목록 기준 · 이관 = 광고주 광고계정이 우리 회사에 연결된 상태')),
           h('p', { class: 'sub' }, CONN[c.link] || CONN.none)),
         h('div', { class: 'card flat' }, h('div', { class: 'kh' }, h('h2', null, '이어진 계정'), h('span', { class: 'n' }, '고객 번호는 끝 4자리만 보입니다')),
-          (c.accounts || []).length ? c.accounts.map(function (a) {
+          (c.account_choices || c.accounts || []).length ? (c.account_choices || c.accounts).map(function (a) {
             return h('div', { class: 'line' }, h('div', { class: 'tx' }, h('span', { class: 'masked' }, '•••• ' + (a.tail || '')),
               a.account_name ? ' · 「' + a.account_name + '」' : '',
               h('span', { class: 'w' }, a.link === 'confirmed' ? '사람이 확인한 짝' : '전산 고침 번호로 이어진 자동 짝 — 계정 확인 전', ' · ', PAIR[a.state] || (a.state === 'confirmed' ? '확인됨' : a.state))));
@@ -2633,7 +2666,44 @@
                    h('div', { class: 'act' }, readOnly() && !ownerActions() ? null : h('button', { type: 'button', class: 'btn blue sm', onclick: function (ev) { confirmHold(x, ev.currentTarget); } }, '대표 확인하고 받기')));
         }) : h('div', { class: 'empty' }, '붙잡아 둔 목록이 없습니다.')));
     }
+    if (fullCollectionAllowed()) {
+      var detailOutput = h('p', { class: 'sub' }, '누르면 현재 일일 대상의 오늘 상세점검 기록을 조회합니다. 수집을 새로 요청하지 않습니다.');
+      out.push(h('div', { class: 'card flat' }, h('div', { class: 'kh' }, h('h2', null, '상세점검 완료 확인'),
+        h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { loadCollectionDiagnostics(ev.currentTarget, detailOutput); } }, '현재 상태 조회')), detailOutput));
+    }
     put($('sysBody'), out);
+  }
+  function loadCollectionDiagnostics(button, output) {
+    if (!fullCollectionAllowed() || state.busy.collectionDiagnostics) return;
+    var gen = state.gen;
+    state.busy.collectionDiagnostics = true;
+    button.disabled = true;
+    output.textContent = '상세점검 기록을 조회하고 있습니다.';
+    api('GET', '/health?collection=1').then(function (body) {
+      if (gen !== state.gen) return;
+      var d = body.collection || {}, c = d.counts || {}, p = d.checkpoints || {};
+      if (d.ready !== true) { output.textContent = '현재 조직·업체·이관 원천이 준비되지 않아 전체 완료를 판단할 수 없습니다.'; return; }
+      output.textContent = d.day + ' · 일일 대상 ' + num(d.targets) + '계정 · 오늘 결과 기록 ' + num(c.recorded) +
+        ' · 원장 정상 기록 ' + num(c.ok) + ' · 미기록·대기 ' + num(c.pending) + ' · 부분 ' + num(c.partial) +
+        ' · 자료 늦음 ' + num(c.data_late) + ' · 권한 거절 ' + num(c.key_rejected) +
+        ' · 기타 판정 ' + num((c.system_gap || 0) + (c.link_broken || 0) + (c.link_missing || 0) + (c.not_eligible || 0) + (c.not_checked || 0)) +
+        ' · 기록 읽기 불가 ' + num(c.unreadable) + ' · 현재 업체 불일치 ' + num(c.pid_mismatch) +
+        ' · 못 돌린 규칙 있음 ' + num(c.rules_not_run) + ' · 이어읽기 ' + num(p.reading) +
+        ' · 한도 대기 ' + num(p.blocked) + ' · 이전·변경된 이어읽기 ' + num(p.binding_mismatch) +
+        ' · ' + (d.ledger_complete === true ? '오늘 상세점검 원장이 완결됐습니다.' : '오늘 상세점검 원장은 아직 미완결입니다.') +
+        ' 결과가 기록됐어도 부분 수집·거절·자료 늦음은 정상 수집 완료가 아닙니다. 현재 계약·캠페인의 원천 재대조를 보증하지 않습니다. 전일 성과·전환 확인 상태는 별도입니다.';
+      var writer = body.writer, phases = { 29: '보고서 생성', 57: '성과 원천 재검증', 58: '성과 상태 조회',
+        61: '성과 수집 후보 준비', 63: '접속·조작 감사 기록', 93: '백업', 100: '구조 조회 후보 준비',
+        101: '관리 단계 동기화', 104: '화면 쓰기 요청' };
+      if (writer) output.textContent += writer.available === true ? ' 저장 처리 대기 ' + num(writer.queue_depth) +
+        '건 · 현재 처리 ' + (phases[writer.active_phase] || (writer.busy_duration_ms > 0 ? '기타 작업' : '대기')) +
+        ' · 점유 ' + num(writer.busy_duration_ms) + 'ms. 이 시점의 관측값입니다.' : ' 저장 처리 상태는 관측하지 못했습니다.';
+    }, function (e) {
+      if (gen === state.gen) output.textContent = '상세점검 상태 조회 실패 · ' + errText(e);
+    }).then(function () {
+      delete state.busy.collectionDiagnostics;
+      button.disabled = false;
+    });
   }
   function setSpane(p) {
     state.spane = p;
