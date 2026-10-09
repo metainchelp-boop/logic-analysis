@@ -110,6 +110,10 @@ REVIEWED_TRANSITION_V11 = (
 REVIEWED_TRANSITION_V12 = ('9bfcace1c6ba2a49807c5ec8feb69fde11de73bf', '3145da9e3021aed0c06d17f2e51525fc866f8799', '1acf8f5d9f54d075655ed263026a77745b75548bbee8fd66a2286aeee404628e', '14a72af0ee951d54ea05a0c176bb3c2ffdd5e14fdd4380aafd8ba6ad5e31ee7d', 'de9d1fe5886055d07261bc41687666cfe5f800fe582a02057910026ef564ca53', '055106d6811a998b1265b893f4150c2590a3fbaea4b7a48d8fd48d1a78462431', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
 
 
+# V13 exact history-read release: pending pins do not confer authority.
+REVIEWED_TRANSITION_V13 = ('3145da9e3021aed0c06d17f2e51525fc866f8799', 'ecb26ccee4aa8d85b0101e0d59aeafe48de1166b', '14a72af0ee951d54ea05a0c176bb3c2ffdd5e14fdd4380aafd8ba6ad5e31ee7d', '6c0f7382676584a5d2c01fd0d54b169210293a58c654c70e5638e4fad2cbfcad', '055106d6811a998b1265b893f4150c2590a3fbaea4b7a48d8fd48d1a78462431', 'be894a56d4b548700b14c2d8ffd95669ebfac73ead8e6521fb50a5bc9add14af', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
+
+
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
         return 'naver_preview_code_upgrade'
@@ -150,6 +154,12 @@ def code_module_name(source_commit):
             and all(type(REVIEWED_TRANSITION_V12[index]) is str
                 and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V12[index]) for index in (3, 4, 5))):
         return 'naver_preview_code_upgrade_v12'
+    if (type(source_commit) is str and type(REVIEWED_TRANSITION_V13[1]) is str
+            and source_commit == REVIEWED_TRANSITION_V13[1]
+            and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V13[1])
+            and all(type(REVIEWED_TRANSITION_V13[index]) is str
+                and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V13[index]) for index in (3, 4, 5))):
+        return 'naver_preview_code_upgrade_v13'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -190,6 +200,10 @@ def require_review(code):
             and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
                 for index in (3, 4, 5))) else {'naver_engine/store.py', 'naver_engine/web.py', 'naver_engine/views.py', 'backend/naver_page/app.js', 'naver_runtime/writer.py', 'naver_runtime/__main__.py', 'naver_engine/collection_diagnostics.py'}
         if (transition == REVIEWED_TRANSITION_V12
+            and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
+            and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
+                for index in (3, 4, 5))) else {'naver_engine/store.py', 'naver_engine/inventory.py', 'naver_engine/web.py'}
+        if (transition == REVIEWED_TRANSITION_V13
             and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
             and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
                 for index in (3, 4, 5))) else None)

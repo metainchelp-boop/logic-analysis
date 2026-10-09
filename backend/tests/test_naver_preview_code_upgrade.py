@@ -431,9 +431,9 @@ class ContractTest(unittest.TestCase):
         fourth_release = code_module in ('naver_preview_code_upgrade_v4', 'naver_preview_code_upgrade_v5',
                                        'naver_preview_code_upgrade_v6', 'naver_preview_code_upgrade_v7',
                                        'naver_preview_code_upgrade_v8', 'naver_preview_code_upgrade_v9',
-                                       'naver_preview_code_upgrade_v10', 'naver_preview_code_upgrade_v11', 'naver_preview_code_upgrade_v12')
+                                       'naver_preview_code_upgrade_v10', 'naver_preview_code_upgrade_v11', 'naver_preview_code_upgrade_v12', 'naver_preview_code_upgrade_v13')
         target_store = (StoreScopeTest.SOURCE+b'\n# synthetic V11 read performance change\n'
-            if code_module in ('naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12') else
+            if code_module in ('naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12','naver_preview_code_upgrade_v13') else
             StoreScopeTest.SOURCE if fourth_release else StoreScopeTest.TARGET_SOURCE)
         policy = load('naver_preview_code_only') if code_only else None
         fixture = load('naver_preview_upgrade')
@@ -466,7 +466,7 @@ class ContractTest(unittest.TestCase):
                 'naver_engine/store.py': target_store}
             if fourth_release:
                 infrastructure.update({name: b'new product fixture' for name in code.CODE_PATHS
-                    if code_module not in ('naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12') or name != 'naver_engine/store.py'})
+                    if code_module not in ('naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12','naver_preview_code_upgrade_v13') or name != 'naver_engine/store.py'})
             infrastructure.update({name: b'new fixture compose' for name in
                 ('compose.naver-engine.yml','compose.naver-relay.yml','deploy/naver-engine-backup.override.yml')})
             for path in (root/'releases').iterdir():
@@ -478,7 +478,7 @@ class ContractTest(unittest.TestCase):
                     (path/'naver_engine/store.py').write_bytes(StoreScopeTest.SOURCE)
                     if fourth_release:
                         for name in code.CODE_PATHS:
-                            if code_module in ('naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12') and name == 'naver_engine/store.py':
+                            if code_module in ('naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12','naver_preview_code_upgrade_v13') and name == 'naver_engine/store.py':
                                 continue
                             (path/name).write_bytes(b'old product fixture')
                 for name in ('engine','relay'):
@@ -503,7 +503,7 @@ class ContractTest(unittest.TestCase):
                         value['files']={name:release.sha(Path(name).read_bytes()) for name in value['files']}
                         receipt.write_text(json.dumps(value))
                 infrastructure['compose.naver-engine.yml'] = new_compose
-            if code_module in ('naver_preview_code_upgrade_v10','naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12'):
+            if code_module in ('naver_preview_code_upgrade_v10','naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12','naver_preview_code_upgrade_v13'):
                 # Exact compose bytes from the immutable reviewed V9 fixture, with
                 # its already approved CPU1.0/memory768 values in both releases.
                 old_compose=json.loads((Path(__file__).parent/'fixtures/v9-engine-compose-old.json').read_text())['compose'].encode()
@@ -664,6 +664,8 @@ class ContractTest(unittest.TestCase):
                     policy.REVIEWED_TRANSITION_V8 = transition
                 elif code_module == 'naver_preview_code_upgrade_v10':
                     policy.REVIEWED_TRANSITION_V10 = transition
+                elif code_module == 'naver_preview_code_upgrade_v13':
+                    policy.REVIEWED_TRANSITION_V13 = transition
                 elif code_module == 'naver_preview_code_upgrade_v12':
                     policy.REVIEWED_TRANSITION_V12 = transition
                 elif code_module == 'naver_preview_code_upgrade_v11':
