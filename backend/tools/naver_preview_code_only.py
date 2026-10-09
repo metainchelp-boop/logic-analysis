@@ -60,6 +60,17 @@ REVIEWED_TRANSITION_V6 = (
     '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
 )
 
+# Reviewed observation-only release: normal authenticated timing and actual completed report slices.
+REVIEWED_TRANSITION_V7 = (
+    '383c8511964c13e24e884a4cee561fc9bee64102',
+    '96f10f05b0e92651e04b2076999fa6c6ace7291e',
+    'a55b8a3a4b87e69b936778298ef95be41241ebdbd322fe5fa467883543b2229e',
+    'a58f46db0367b9b03deb6f141b080b10bbe1d51c7ce91b3265497e9b9c20856f',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+    '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+)
+
 
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
@@ -72,6 +83,8 @@ def code_module_name(source_commit):
         return 'naver_preview_code_upgrade_v5'
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V6[1]:
         return 'naver_preview_code_upgrade_v6'
+    if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V7[1]:
+        return 'naver_preview_code_upgrade_v7'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -90,7 +103,9 @@ def require_review(code):
          'naver_engine/management_store.py', 'naver_runtime/writer.py', 'naver_engine/web.py'}
         if transition == REVIEWED_TRANSITION_V5 else
         {'naver_engine/web.py', 'naver_runtime/scheduler.py'}
-        if transition == REVIEWED_TRANSITION_V6 else None)
+        if transition == REVIEWED_TRANSITION_V6 else
+        {'naver_engine/web.py', 'naver_runtime/scheduler.py', 'naver_runtime/runtime_status.py'}
+        if transition == REVIEWED_TRANSITION_V7 else None)
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 

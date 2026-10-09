@@ -45,7 +45,7 @@ PROFILE_RELEASES = {
         'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
         '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'),
 }
-# New login/read-budget release allows only the existing no-DB passive path.
+# New login/read-budget and observation releases allow only the existing no-DB passive path.
 # It does not extend PROFILE_RELEASES or ordinary collection readers.
 PASSIVE_RELEASES = {
     '74b79ce6381178abf9b74fff43b0fcb03c5aa60b': (
@@ -54,6 +54,10 @@ PASSIVE_RELEASES = {
         '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'),
     '383c8511964c13e24e884a4cee561fc9bee64102': (
         'a55b8a3a4b87e69b936778298ef95be41241ebdbd322fe5fa467883543b2229e',
+        'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
+        '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'),
+    '96f10f05b0e92651e04b2076999fa6c6ace7291e': (
+        'a58f46db0367b9b03deb6f141b080b10bbe1d51c7ce91b3265497e9b9c20856f',
         'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862',
         '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'),
 }

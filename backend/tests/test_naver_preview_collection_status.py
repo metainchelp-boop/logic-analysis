@@ -1656,7 +1656,7 @@ class CollectionTest(unittest.TestCase):
 
     def test_final74_passive_diagnostics_are_exactly_pinned_without_opening_database(self):
         code=load('naver_preview_code_upgrade_v5')
-        codes=[load(name) for name in ('naver_preview_code_upgrade_v5','naver_preview_code_upgrade_v6')]
+        codes=[load(name) for name in ('naver_preview_code_upgrade_v5','naver_preview_code_upgrade_v6','naver_preview_code_upgrade_v7')]
         self.assertEqual(M.PASSIVE_RELEASES,{item.TARGET_COMMIT:(
             item.TARGET_SOURCE_SHA256,item.STORE_SHA256['target'],item.EXPECTED_BASELINE) for item in codes})
         self.assertNotIn(code.TARGET_COMMIT,M.PROFILE_RELEASES)
@@ -1691,6 +1691,36 @@ class CollectionTest(unittest.TestCase):
             code.TARGET_SOURCE_SHA256,code.STORE_SHA256['target'],code.EXPECTED_BASELINE))
         self.assertNotIn(code.TARGET_COMMIT,M.PROFILE_RELEASES)
         self.check_run_diagnostics(code.TARGET_COMMIT,passive=True)
+
+    def test_v7_passive_diagnostics_keep_exact_pins_and_do_not_open_database(self):
+        code=load('naver_preview_code_upgrade_v7')
+        self.assertEqual(M.PASSIVE_RELEASES[code.TARGET_COMMIT],(
+            code.TARGET_SOURCE_SHA256,code.STORE_SHA256['target'],code.EXPECTED_BASELINE))
+        self.assertNotIn(code.TARGET_COMMIT,M.PROFILE_RELEASES)
+        self.check_run_diagnostics(code.TARGET_COMMIT,passive=True)
+
+    def test_v7_passive_pin_mismatch_and_every_active_mode_refuse_before_host_or_process(self):
+        code=load('naver_preview_code_upgrade_v7')
+        good=dict(source_commit=code.TARGET_COMMIT,source_tar_gz_sha256=code.TARGET_SOURCE_SHA256,
+            baseline=code.EXPECTED_BASELINE,passive_runtime_only=True)
+        for field in ('source_tar_gz_sha256','baseline'):
+            host,release=Mock(),Mock()
+            with self.subTest(field=field),patch.object(M,'capture_process') as capture:
+                with self.assertRaisesRegex(ValueError,'^PASSIVE_SOURCE_PIN_CHANGED$'):
+                    M.run(dict(good,**{field:'0'*64}),host,release)
+                capture.assert_not_called()
+            self.assertFalse(host.mock_calls)
+            self.assertFalse(release.mock_calls)
+        for mode in (None,'latency_profile_only','dashboard_profile_only'):
+            package={k:v for k,v in good.items() if k!='passive_runtime_only'}
+            if mode: package[mode]=True
+            host,release=Mock(),Mock()
+            with self.subTest(mode=mode),patch.object(M,'capture_process') as capture:
+                with self.assertRaisesRegex(ValueError,'^(PASSIVE_RUNTIME_ONLY|PROFILE_SOURCE_UNREVIEWED)$'):
+                    M.run(package,host,release)
+                capture.assert_not_called()
+            self.assertFalse(host.mock_calls)
+            self.assertFalse(release.mock_calls)
 
     def test_v6_passive_pin_mismatch_and_every_active_mode_refuse_before_host_or_process(self):
         code=load('naver_preview_code_upgrade_v6')

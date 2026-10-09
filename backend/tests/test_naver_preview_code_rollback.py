@@ -1,7 +1,7 @@
 """Synthetic post-success rollback only; no server, DB or operating credentials.
 
 The future OLD=49 / TARGET=b fixture is enabled solely in in-memory test modules;
-the production helper admits only the separate final74 and V6 tuples.
+the production helper admits only the separate final74, V6 and V7 tuples.
 """
 import hashlib
 import json
@@ -23,9 +23,9 @@ class PostSuccessRollbackTest(unittest.TestCase):
         helper = shared.load('naver_preview_code_rollback')
         policy = shared.load('naver_preview_code_only')
         code = shared.load(code_module)
-        # V6 retains its reviewed 74 -> 5e commit/archive pins. Older fixtures
+        # V6/V7 retain their reviewed commit/archive pins. Older fixtures
         # preserve their original test-only later release returning to source 49.
-        if code_module != 'naver_preview_code_upgrade_v6':
+        if code_module not in ('naver_preview_code_upgrade_v6', 'naver_preview_code_upgrade_v7'):
             code.OLD_COMMIT = '49c42d645b90732071d0c61b8f9aaf7660e8b765'
             code.OLD_SOURCE_SHA256 = '69b9f79ab243eac6d3d32fe67ce267b96bdd923323997fd2661934bc6a5459d4'
             if code_module != 'naver_preview_code_upgrade_v5':
@@ -35,7 +35,8 @@ class PostSuccessRollbackTest(unittest.TestCase):
         digest = hashlib.sha256(store).hexdigest()
         code.STORE_SHA256 = {'old': digest, 'target': digest}
         # Existing forward review validation is real, with synthetic in-memory pins.
-        setattr(policy, 'REVIEWED_TRANSITION_V6' if code_module.endswith('v6')
+        setattr(policy, 'REVIEWED_TRANSITION_V7' if code_module.endswith('v7')
+                else 'REVIEWED_TRANSITION_V6' if code_module.endswith('v6')
                 else 'REVIEWED_TRANSITION_V5' if code_module.endswith('v5')
                 else 'REVIEWED_TRANSITION_V4', helper.transition(code)[:-1])
         helper.REVIEWED_ROLLBACKS = frozenset({helper.transition(code)})
@@ -195,7 +196,7 @@ class PostSuccessRollbackTest(unittest.TestCase):
         helper = shared.load('naver_preview_code_rollback')
         self.assertEqual(helper.REVIEWED_ROLLBACKS,frozenset(
             helper.transition(shared.load(name)) for name in
-            ('naver_preview_code_upgrade_v5','naver_preview_code_upgrade_v6')))
+            ('naver_preview_code_upgrade_v5','naver_preview_code_upgrade_v6','naver_preview_code_upgrade_v7')))
         for code_name in ('naver_preview_code_upgrade', 'naver_preview_code_upgrade_v3',
                           'naver_preview_code_upgrade_v4'):
             adapters = [Mock() for _ in range(4)]

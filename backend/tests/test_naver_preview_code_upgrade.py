@@ -429,7 +429,7 @@ class ContractTest(unittest.TestCase):
                  code_module='naver_preview_code_upgrade'):
         code = sealed_code(code_module)
         fourth_release = code_module in ('naver_preview_code_upgrade_v4', 'naver_preview_code_upgrade_v5',
-                                       'naver_preview_code_upgrade_v6')
+                                       'naver_preview_code_upgrade_v6', 'naver_preview_code_upgrade_v7')
         target_store = StoreScopeTest.SOURCE if fourth_release else StoreScopeTest.TARGET_SOURCE
         policy = load('naver_preview_code_only') if code_only else None
         fixture = load('naver_preview_upgrade')
@@ -626,6 +626,8 @@ class ContractTest(unittest.TestCase):
                     policy.REVIEWED_TRANSITION_V5 = transition
                 elif code_module == 'naver_preview_code_upgrade_v6':
                     policy.REVIEWED_TRANSITION_V6 = transition
+                elif code_module == 'naver_preview_code_upgrade_v7':
+                    policy.REVIEWED_TRANSITION_V7 = transition
                 else:
                     policy.REVIEWED_TRANSITION = transition
             result = legacy_test.UpgradeTest().scenario(failure, mode, setup)
