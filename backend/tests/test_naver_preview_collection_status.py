@@ -1697,6 +1697,8 @@ class CollectionTest(unittest.TestCase):
             codes.append(load('naver_preview_code_upgrade_v13'))
         if M.PASSIVE_COMMIT_V14 is not None:
             codes.append(load('naver_preview_code_upgrade_v14'))
+        if M.PASSIVE_COMMIT_V15 in M.PASSIVE_RELEASES:
+            codes.append(load('naver_preview_code_upgrade_v15'))
         self.assertEqual(M.PASSIVE_RELEASES,{item.TARGET_COMMIT:(
             item.TARGET_SOURCE_SHA256,item.STORE_SHA256['target'],item.EXPECTED_BASELINE) for item in codes})
         self.assertNotIn(code.TARGET_COMMIT,M.PROFILE_RELEASES)

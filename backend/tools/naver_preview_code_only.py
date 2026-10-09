@@ -117,6 +117,9 @@ REVIEWED_TRANSITION_V13 = ('3145da9e3021aed0c06d17f2e51525fc866f8799', 'ecb26cce
 # V14 is closed until target/archive/Store pins are reviewed.
 REVIEWED_TRANSITION_V14 = ('ecb26ccee4aa8d85b0101e0d59aeafe48de1166b', '153c9a3a89585b00f2973a694a963ae9227ce19d', '6c0f7382676584a5d2c01fd0d54b169210293a58c654c70e5638e4fad2cbfcad', 'd9be1b9e6225c856d06b8b6e2d5f1e91edfa46a2cb0aa94d4f17497877eceaf8', 'be894a56d4b548700b14c2d8ffd95669ebfac73ead8e6521fb50a5bc9add14af', 'ccb0474dd764d06bb375cd298eb01b333a6503d8db06d3784f2f7599d19afe97', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
 
+# Reviewed V15 page-size transition; only the exact target/archive/Store pins are admitted.
+REVIEWED_TRANSITION_V15 = ('153c9a3a89585b00f2973a694a963ae9227ce19d', '702bc6ed3f224638524511a6ef7d43b6dd825343', 'd9be1b9e6225c856d06b8b6e2d5f1e91edfa46a2cb0aa94d4f17497877eceaf8', '5ad8a0e90e37c9025cf2e3e91ccb1c7db9f3fa6b05b17668a4b873ed6983723f', 'ccb0474dd764d06bb375cd298eb01b333a6503d8db06d3784f2f7599d19afe97', 'cc050c8c3d8c0d2a8e4977ec0e8e5b271ff7fc932a8d35a6c0f10dadc11ddb56', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
+
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
         return 'naver_preview_code_upgrade'
@@ -169,6 +172,12 @@ def code_module_name(source_commit):
             and all(type(REVIEWED_TRANSITION_V14[index]) is str
                 and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V14[index]) for index in (3, 4, 5))):
         return 'naver_preview_code_upgrade_v14'
+    if (type(source_commit) is str and type(REVIEWED_TRANSITION_V15[1]) is str
+            and source_commit == REVIEWED_TRANSITION_V15[1]
+            and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V15[1])
+            and all(type(REVIEWED_TRANSITION_V15[index]) is str
+                and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V15[index]) for index in (3, 4, 5))):
+        return 'naver_preview_code_upgrade_v15'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -219,10 +228,22 @@ def require_review(code):
         if (transition == REVIEWED_TRANSITION_V14
             and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
             and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
+                for index in (3, 4, 5))) else {'naver_engine/report_views.py', 'naver_engine/store.py'}
+        if (transition == REVIEWED_TRANSITION_V15
+            and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
+            and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
                 for index in (3, 4, 5))) else None)
     if transition == REVIEWED_TRANSITION_V14 and (
             getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset({'naver_engine/report_enrichment.py', 'naver_engine/report_notes.py'})
             or getattr(code, 'TARGET_ACTION_ROUTES', None) != ('/reports/notes',)):
+        raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
+    if transition == REVIEWED_TRANSITION_V15 and (
+            getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset()
+            or getattr(code, 'TARGET_ACTION_ROUTES', None) != ('/reports/notes',)
+            or getattr(code, 'OWNER_ACTION_ROUTES', None) != (
+                '/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all',
+                '/settings/thresholds', '/holds/org/confirm', '/holds/stages/confirm', '/holds/accounts/confirm', '/links/revoke')
+            or getattr(code, 'CLOSED_LINK_ROUTES', None) != ('/links/reject', '/links/preview')):
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')

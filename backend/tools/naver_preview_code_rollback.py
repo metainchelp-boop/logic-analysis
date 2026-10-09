@@ -106,6 +106,13 @@ if (type(REVIEWED_ROLLBACK_V14[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIE
             and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V14[index]) for index in (3, 4, 5))):
     REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V14})
 
+# Reviewed V15 exact inverse to the current report-enrichment release.
+REVIEWED_ROLLBACK_V15 = ('153c9a3a89585b00f2973a694a963ae9227ce19d', '702bc6ed3f224638524511a6ef7d43b6dd825343', 'd9be1b9e6225c856d06b8b6e2d5f1e91edfa46a2cb0aa94d4f17497877eceaf8', '5ad8a0e90e37c9025cf2e3e91ccb1c7db9f3fa6b05b17668a4b873ed6983723f', 'ccb0474dd764d06bb375cd298eb01b333a6503d8db06d3784f2f7599d19afe97', 'cc050c8c3d8c0d2a8e4977ec0e8e5b271ff7fc932a8d35a6c0f10dadc11ddb56', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_engine/report_views.py', 'naver_engine/store.py'}))
+if (type(REVIEWED_ROLLBACK_V15[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V15[1])
+        and all(type(REVIEWED_ROLLBACK_V15[index]) is str
+            and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V15[index]) for index in (3, 4, 5))):
+    REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V15})
+
 STAGE = 'input'
 OPERATION = 'none'
 
@@ -124,7 +131,8 @@ def require_review(policy, code):
                 and transition(code) != REVIEWED_ROLLBACK_V11
                 and transition(code) != REVIEWED_ROLLBACK_V12
                 and transition(code) != REVIEWED_ROLLBACK_V13
-                and transition(code) != REVIEWED_ROLLBACK_V14)):
+                and transition(code) != REVIEWED_ROLLBACK_V14
+                and transition(code) != REVIEWED_ROLLBACK_V15)):
         raise ValueError('CODE_ROLLBACK_NOT_REVIEWED')
 
 
@@ -154,7 +162,7 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
         if (value['package'].get('baseline') != prepared['baseline']
                 or value['package'].get('source_tar_gz_sha256') != digest):
             raise ValueError('CODE_ROLLBACK_SOURCE')
-    if transition(code) == REVIEWED_ROLLBACK_V14:
+    if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15):
         code.compatible_inverse_source(path, old_path, upgrade)
     code.compatible_source(old_path, path, upgrade)
     files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)
@@ -207,7 +215,7 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
         if (upgrade.manifest(release, code.OLD_COMMIT, started=True) != (old_path, old_receipt)
                 or upgrade.manifest(release, code.TARGET_COMMIT, prepared, started=True) != (path, receipt)):
             raise ValueError('CODE_ROLLBACK_SOURCE')
-        if transition(code) == REVIEWED_ROLLBACK_V14:
+        if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15):
             code.compatible_inverse_source(path, old_path, upgrade)
         code.compatible_source(old_path, path, upgrade)
 
