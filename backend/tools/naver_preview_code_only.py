@@ -93,6 +93,13 @@ REVIEWED_TRANSITION_V9 = (
 REVIEWED_RESOURCE_LIMITS_V9 = True
 
 
+# Reviewed V10 diagnostics: exact source/archive and one product path only.
+REVIEWED_TRANSITION_V10 = (
+    'bd08fd07281ae5448bffb3de3d7c405887bfecd9', '6b3e1632f35a50c62064f524e1f9e74c4e85d0cb', '6b1618ab9dd47eca6030d1092bdbce1d451d30ce8fdf103e448a96f3ac9da3f1', '462dc5e0ba95cb3658b6edd1ac18424e61007fc6a63ffba6dc1397c98919c684',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862', 'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+)
+
+
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
         return 'naver_preview_code_upgrade'
@@ -115,6 +122,12 @@ def code_module_name(source_commit):
             and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V9[3])
             and type(REVIEWED_RESOURCE_LIMITS_V9) is bool):
         return 'naver_preview_code_upgrade_v9'
+    if (type(source_commit) is str and type(REVIEWED_TRANSITION_V10[1]) is str
+            and source_commit == REVIEWED_TRANSITION_V10[1]
+            and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V10[1])
+            and type(REVIEWED_TRANSITION_V10[3]) is str
+            and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V10[3])):
+        return 'naver_preview_code_upgrade_v10'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -143,6 +156,10 @@ def require_review(code):
         if (transition == REVIEWED_TRANSITION_V9
             and type(REVIEWED_RESOURCE_LIMITS_V9) is bool
             and getattr(code, 'RESOURCE_LIMITS_APPROVED', None) is REVIEWED_RESOURCE_LIMITS_V9
+            and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
+            and type(transition[3]) is str and re.fullmatch('[0-9a-f]{64}', transition[3])) else
+        {'naver_engine/web.py'}
+        if (transition == REVIEWED_TRANSITION_V10
             and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
             and type(transition[3]) is str and re.fullmatch('[0-9a-f]{64}', transition[3])) else None)
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():

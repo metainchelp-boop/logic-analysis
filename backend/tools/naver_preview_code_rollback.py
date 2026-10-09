@@ -65,6 +65,15 @@ if (type(REVIEWED_ROLLBACK_V9[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEW
         and type(REVIEWED_RESOURCE_LIMITS_V9) is bool):
     REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V9})
 
+# Reviewed V10 reverse transition: exact source/archive; Store and compose unchanged.
+REVIEWED_ROLLBACK_V10 = (
+    'bd08fd07281ae5448bffb3de3d7c405887bfecd9', '6b3e1632f35a50c62064f524e1f9e74c4e85d0cb', '6b1618ab9dd47eca6030d1092bdbce1d451d30ce8fdf103e448a96f3ac9da3f1', '462dc5e0ba95cb3658b6edd1ac18424e61007fc6a63ffba6dc1397c98919c684',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862', 'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_engine/web.py'}),
+)
+if (type(REVIEWED_ROLLBACK_V10[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V10[1])
+        and type(REVIEWED_ROLLBACK_V10[3]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V10[3])):
+    REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V10})
+
 STAGE = 'input'
 OPERATION = 'none'
 
