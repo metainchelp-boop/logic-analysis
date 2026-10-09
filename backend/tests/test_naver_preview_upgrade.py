@@ -28,6 +28,21 @@ class RequestTest(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 M.validate_request(dict(good, **changes), NOW)
 
+    def test_expiry_crossing_kst_midnight_is_rejected_within_three_hour_window(self):
+        for now, accepted in ((NOW.replace(hour=23, minute=39, second=59), True),
+                              (NOW.replace(hour=23, minute=40), False),
+                              ((NOW+timedelta(days=1)).replace(hour=0, minute=0), True)):
+            for expiry_timezone in (now.tzinfo, timezone.utc):
+                request = {'request_id': 'a'*32, 'hold_id': 1, 'hold_sha256': 'b'*64,
+                           'expected_rows': 1437, 'approved_by': 0, 'max_seconds': 300,
+                           'expires_at': (now+timedelta(minutes=20)).astimezone(expiry_timezone).isoformat()}
+                with self.subTest(now=now.isoformat(), expiry_timezone=expiry_timezone):
+                    if accepted:
+                        self.assertEqual(M.validate_request(request, now), request)
+                    else:
+                        with self.assertRaisesRegex(ValueError, '^REQUEST_EXPIRY$'):
+                            M.validate_request(request, now)
+
     def test_invalid_apply_never_calls_host_or_release(self):
         host, release, lifecycle = Mock(), Mock(), Mock()
         with self.assertRaises(ValueError):
@@ -207,7 +222,7 @@ class UpgradeTest(unittest.TestCase):
                 if failure=='source_extra': (path/'extra').write_bytes(b'not sealed')
                 if failure=='source_missing': (path/'compose.naver-engine.yml').unlink()
                 if failure=='override_changed': (path/'preview-engine.override.yml').write_bytes(b'changed')
-            now=datetime.now(timezone.utc)
+            now=NOW
             request_data={'request_id':'9'*32,'hold_id':42,'hold_sha256':'8'*64,'expected_rows':1437,
                           'approved_by':0,'expires_at':(now+timedelta(minutes=20)).isoformat(),'max_seconds':300}
             host=Mock();host.baseline.return_value=baseline
@@ -216,7 +231,9 @@ class UpgradeTest(unittest.TestCase):
             with patch.object(M,'REQUEST',request_file),patch.object(M.os,'geteuid',return_value=0), \
                     patch.object(M,'ENVELOPE_KEY',root/'envelope/private.pem'), \
                     patch.object(M,'read_file',side_effect=lambda path,**kwargs:Path(path).read_bytes()), \
-                    patch.object(M.pwd,'getpwnam',return_value=types.SimpleNamespace(pw_gid=33)):
+                    patch.object(M.pwd,'getpwnam',return_value=types.SimpleNamespace(pw_gid=33)), \
+                    patch.object(M,'datetime',wraps=datetime) as clock:
+                clock.now.return_value=now.astimezone(timezone.utc)
                 try:
                     result=M.prepare(package,host,release,life) if mode in ('prepare','retry') else M.apply({'release':package,'request':request_data},host,release,life)
                 except Exception as error:
