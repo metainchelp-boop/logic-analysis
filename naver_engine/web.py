@@ -130,11 +130,17 @@ class Viewer:
     store: S.Store = field(repr=False)
     org: O.Org = field(repr=False)
     _ctx: Optional[W.Ctx] = field(default=None, repr=False)
+    _inventory_ctx: Optional[W.InventoryCtx] = field(default=None, repr=False)
 
     def ctx(self, now: datetime) -> W.Ctx:
         if self._ctx is None:
             self._ctx = W.load(self.store, now, self.org)
         return self._ctx
+
+    def inventory_ctx(self, now: datetime) -> W.InventoryCtx:
+        if self._inventory_ctx is None:
+            self._inventory_ctx = W.load_inventory(self.store, now, self.org)
+        return self._inventory_ctx
 
 
 def _unquote(s: str) -> str:
@@ -620,14 +626,14 @@ class App:
     def _h_accounts(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         if set(req.query) - {"selection", "workflow", "mapping", "view"}:
             raise HttpError(400, "bad-query")
-        return 200, INV.board(v.ctx(now), v.store, v.scope, req.query.get("selection", "all"),
+        return 200, INV.board(v.inventory_ctx(now), v.store, v.scope, req.query.get("selection", "all"),
                               req.query.get("workflow", "all"), req.query.get("mapping", "all"),
                               req.query.get("view", "current"))
 
     def _h_dashboard(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         if set(req.query) - {"selection"}:
             raise HttpError(400, "bad-query")
-        return 200, DASH.board(v.ctx(now), v.store, v.scope, req.query.get("selection", "all"))
+        return 200, DASH.board(v.inventory_ctx(now), v.store, v.scope, req.query.get("selection", "all"))
 
     def _h_account_reasons(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         if set(req.query) - {"selection", "ad_account_no", "page"}:

@@ -121,7 +121,7 @@
   var VIEW_FIELDS = { watch: ['possibility_id'], transfers: ['ad_account_no'], reports: ['possibility_id', 'account_key'], dashboard: null };
   var VIEW_STATUS = { watch: 'watchSync', transfers: 'inventorySync', reports: 'reportsSync', dashboard: 'dashboardSync' };
   var viewCache = new Map(), viewRequests = {}, viewShown = {}, viewChecked = {}, viewLegacy = {}, viewContext = null, viewEpoch = 0, upContext = null, linksRequest = null, linksWait = null;
-  var VIEW_CACHE_COUNT = 8, VIEW_CACHE_BYTES = 4 * 1024 * 1024, VIEW_CACHE_AGE = 10 * 60 * 1000;
+  var VIEW_CACHE_COUNT = 8, VIEW_CACHE_BYTES = 8 * 1024 * 1024, VIEW_CACHE_AGE = 10 * 60 * 1000;
   var INVENTORY_PAGE_SIZE = 100, inventoryNodes = new Map();
   function plain(value) { return !!value && typeof value === 'object' && !Array.isArray(value); }
   function rowKey(row, fields) {

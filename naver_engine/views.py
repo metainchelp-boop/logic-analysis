@@ -112,6 +112,20 @@ class Ctx:
         return f"Ctx(prospects={len(self.prospects)})"
 
 
+@dataclass(frozen=True)
+class InventoryCtx:
+    """계정 목록·성과 집계가 사용하는 현재 원천. 구형 판정/이슈 재료는 별도 Ctx에 둔다."""
+    now: datetime
+    today: date
+    org: O.Org
+    prospects: Mapping[int, dict]
+    accounts: Mapping[int, dict]
+    live_decisions: Tuple[S.LinkDecision, ...]
+
+    def __repr__(self) -> str:
+        return f"InventoryCtx(prospects={len(self.prospects)})"
+
+
 def _need_time(now: datetime) -> None:
     if not isinstance(now, datetime) or now.tzinfo is None:
         raise ValueError("now 는 시간대가 있는 시각이어야 합니다")
@@ -126,6 +140,16 @@ def load_org(store: S.Store) -> O.Org:
         return O.parse_org_snapshot(stored["body"])
     except (S.StoreError, O.SnapshotFormatError):
         raise OrgUnavailable("조직 자료를 읽지 못했습니다") from None
+
+
+def load_inventory(store: S.Store, now: datetime, org: Optional[O.Org] = None) -> InventoryCtx:
+    """요청의 조직/판단/계정을 다시 읽는다. 권한·숨김 단계·정책 판정은 inventory가 현재 원천으로 한다."""
+    _need_time(now)
+    org = load_org(store) if org is None else org
+    prospects = {p["possibility_id"]: p for p in store.prospects()}
+    winners, _ = store.link_decisions()
+    accounts = {a["customer_id"]: a for a in store.accounts()}
+    return InventoryCtx(now, now.astimezone(KST).date(), org, prospects, accounts, tuple(winners))
 
 
 def load(store: S.Store, now: datetime, org: Optional[O.Org] = None) -> Ctx:
