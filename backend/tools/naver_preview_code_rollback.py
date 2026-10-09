@@ -51,6 +51,20 @@ REVIEWED_ROLLBACKS = frozenset({(
     '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
     frozenset({'backend/naver_page/app.js', 'naver_engine/views.py', 'naver_engine/web.py'}),
 )})
+# Reviewed V9 rollback tuple and exact resource decision.
+REVIEWED_RESOURCE_LIMITS_V9 = True
+REVIEWED_ROLLBACK_V9 = (
+    '7985925dcc4ed9d75c28ae43a456964cdc78c63f', 'bd08fd07281ae5448bffb3de3d7c405887bfecd9',
+    '47632d4d3403c24dd4988b80c1a0ada25cc155fc6048a7f2413fb72d84ea73ff', '6b1618ab9dd47eca6030d1092bdbce1d451d30ce8fdf103e448a96f3ac9da3f1',
+    'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862', 'f33f8ca29633ae6cda46fd721d9cbf3bdf63969ac69059434a1a159562778862', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+    frozenset({'naver_engine/inventory.py', 'naver_engine/management_store.py'}) |
+        (frozenset({'compose.naver-engine.yml'}) if REVIEWED_RESOURCE_LIMITS_V9 is True else frozenset()),
+)
+if (type(REVIEWED_ROLLBACK_V9[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V9[1])
+        and type(REVIEWED_ROLLBACK_V9[3]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V9[3])
+        and type(REVIEWED_RESOURCE_LIMITS_V9) is bool):
+    REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V9})
+
 STAGE = 'input'
 OPERATION = 'none'
 

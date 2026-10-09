@@ -430,7 +430,7 @@ class ContractTest(unittest.TestCase):
         code = sealed_code(code_module)
         fourth_release = code_module in ('naver_preview_code_upgrade_v4', 'naver_preview_code_upgrade_v5',
                                        'naver_preview_code_upgrade_v6', 'naver_preview_code_upgrade_v7',
-                                       'naver_preview_code_upgrade_v8')
+                                       'naver_preview_code_upgrade_v8', 'naver_preview_code_upgrade_v9')
         target_store = StoreScopeTest.SOURCE if fourth_release else StoreScopeTest.TARGET_SOURCE
         policy = load('naver_preview_code_only') if code_only else None
         fixture = load('naver_preview_upgrade')
@@ -486,7 +486,18 @@ class ContractTest(unittest.TestCase):
                     value = json.loads(receipt.read_text())
                     value['files'] = {name: release.sha(Path(name).read_bytes()) for name in value['files']}
                     receipt.write_text(json.dumps(value))
-            request = root/'bootstrap-request.json'
+            if code_module == 'naver_preview_code_upgrade_v9':
+                old_compose = json.loads((Path(__file__).parent/'fixtures/v9-engine-compose-old.json').read_text())['compose'].encode()
+                new_compose = old_compose.replace(b'    cpus: "0.50"\n', b'    cpus: "1.00"\n').replace(b'    mem_limit: 512m\n', b'    mem_limit: 768m\n')
+                for path in (root/'releases').iterdir():
+                    (path/'compose.naver-engine.yml').write_bytes(old_compose if path.name == 'naver-'+code.OLD_COMMIT else new_compose)
+                    receipt=root/'receipts'/('preview-'+path.name.removeprefix('naver-')+'.json')
+                    if receipt.exists():
+                        value=json.loads(receipt.read_text())
+                        value['files']={name:release.sha(Path(name).read_bytes()) for name in value['files']}
+                        receipt.write_text(json.dumps(value))
+                infrastructure['compose.naver-engine.yml'] = new_compose
+            request = root/'bootstrap-request.json' 
             if failure in ('bootstrap_pending','bootstrap_changed'):
                 request.write_text('existing')
             if request.exists():
@@ -631,6 +642,9 @@ class ContractTest(unittest.TestCase):
                     policy.REVIEWED_TRANSITION_V7 = transition
                 elif code_module == 'naver_preview_code_upgrade_v8':
                     policy.REVIEWED_TRANSITION_V8 = transition
+                elif code_module == 'naver_preview_code_upgrade_v9':
+                    policy.REVIEWED_TRANSITION_V9 = transition
+                    policy.REVIEWED_RESOURCE_LIMITS_V9 = True
                 else:
                     policy.REVIEWED_TRANSITION = transition
             result = legacy_test.UpgradeTest().scenario(failure, mode, setup)

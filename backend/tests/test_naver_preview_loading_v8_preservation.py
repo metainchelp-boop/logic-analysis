@@ -35,11 +35,11 @@ class V8PreservationTest(unittest.TestCase):
     def test_shared_business_functions_are_unchanged_after_exact_passive_metadata_delta(self):
         class OldDispatch(ast.NodeTransformer):
             def visit_If(self,node):
-                if any(isinstance(n,ast.Name) and n.id=="REVIEWED_TRANSITION_V8" for n in ast.walk(node.test)):
+                if any(isinstance(n,ast.Name) and n.id in ("REVIEWED_TRANSITION_V8","REVIEWED_TRANSITION_V9") for n in ast.walk(node.test)):
                     return None
                 return self.generic_visit(node)
             def visit_IfExp(self,node):
-                if any(isinstance(n,ast.Name) and n.id=="REVIEWED_TRANSITION_V8" for n in ast.walk(node.test)):
+                if any(isinstance(n,ast.Name) and n.id in ("REVIEWED_TRANSITION_V8","REVIEWED_TRANSITION_V9") for n in ast.walk(node.test)):
                     return self.visit(node.orelse)
                 return self.generic_visit(node)
         expected={
@@ -130,7 +130,11 @@ class V8PreservationTest(unittest.TestCase):
                 (code.TARGET_SOURCE_SHA256,code.STORE_SHA256["target"],code.EXPECTED_BASELINE))
         self.assertEqual(set(status.PROFILE_RELEASES),{
             "953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6","49c42d645b90732071d0c61b8f9aaf7660e8b765"})
-        self.assertEqual(set(status.PASSIVE_RELEASES),{
+        passive=set(status.PASSIVE_RELEASES)
+        if status.PASSIVE_COMMIT_V9 in passive:
+            self.assertEqual(status.PASSIVE_RELEASES[status.PASSIVE_COMMIT_V9],status.PASSIVE_RELEASE_V9)
+            passive.remove(status.PASSIVE_COMMIT_V9)
+        self.assertEqual(passive,{
             "74b79ce6381178abf9b74fff43b0fcb03c5aa60b","383c8511964c13e24e884a4cee561fc9bee64102",
             "96f10f05b0e92651e04b2076999fa6c6ace7291e","7985925dcc4ed9d75c28ae43a456964cdc78c63f"})
 
