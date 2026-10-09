@@ -120,6 +120,9 @@ REVIEWED_TRANSITION_V14 = ('ecb26ccee4aa8d85b0101e0d59aeafe48de1166b', '153c9a3a
 # Reviewed V15 page-size transition; only the exact target/archive/Store pins are admitted.
 REVIEWED_TRANSITION_V15 = ('153c9a3a89585b00f2973a694a963ae9227ce19d', '702bc6ed3f224638524511a6ef7d43b6dd825343', 'd9be1b9e6225c856d06b8b6e2d5f1e91edfa46a2cb0aa94d4f17497877eceaf8', '5ad8a0e90e37c9025cf2e3e91ccb1c7db9f3fa6b05b17668a4b873ed6983723f', 'ccb0474dd764d06bb375cd298eb01b333a6503d8db06d3784f2f7599d19afe97', 'cc050c8c3d8c0d2a8e4977ec0e8e5b271ff7fc932a8d35a6c0f10dadc11ddb56', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
 
+# V16 exact three-asset transition.
+REVIEWED_TRANSITION_V16 = ('702bc6ed3f224638524511a6ef7d43b6dd825343', '6a0c54de9faffbf65ecee2ce57759598794bc005', '5ad8a0e90e37c9025cf2e3e91ccb1c7db9f3fa6b05b17668a4b873ed6983723f', 'f2570d3e1429f9593e7e4a1d559a4aec6665654ea0ed435d162cd8426d1cacc9', 'cc050c8c3d8c0d2a8e4977ec0e8e5b271ff7fc932a8d35a6c0f10dadc11ddb56', 'cc050c8c3d8c0d2a8e4977ec0e8e5b271ff7fc932a8d35a6c0f10dadc11ddb56', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
+
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
         return 'naver_preview_code_upgrade'
@@ -178,6 +181,12 @@ def code_module_name(source_commit):
             and all(type(REVIEWED_TRANSITION_V15[index]) is str
                 and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V15[index]) for index in (3, 4, 5))):
         return 'naver_preview_code_upgrade_v15'
+    if (type(source_commit) is str and type(REVIEWED_TRANSITION_V16[1]) is str
+            and source_commit == REVIEWED_TRANSITION_V16[1]
+            and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V16[1])
+            and all(type(REVIEWED_TRANSITION_V16[index]) is str
+                and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V16[index]) for index in (3, 4, 5))):
+        return 'naver_preview_code_upgrade_v16'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -232,12 +241,16 @@ def require_review(code):
         if (transition == REVIEWED_TRANSITION_V15
             and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
             and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
+                for index in (3, 4, 5))) else {'backend/naver_page/report-ui.js', 'backend/naver_page/report-pdf.js', 'backend/naver_page/app.css'}
+        if (transition == REVIEWED_TRANSITION_V16
+            and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
+            and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
                 for index in (3, 4, 5))) else None)
     if transition == REVIEWED_TRANSITION_V14 and (
             getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset({'naver_engine/report_enrichment.py', 'naver_engine/report_notes.py'})
             or getattr(code, 'TARGET_ACTION_ROUTES', None) != ('/reports/notes',)):
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
-    if transition == REVIEWED_TRANSITION_V15 and (
+    if transition in (REVIEWED_TRANSITION_V15, REVIEWED_TRANSITION_V16) and (
             getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset()
             or getattr(code, 'TARGET_ACTION_ROUTES', None) != ('/reports/notes',)
             or getattr(code, 'OWNER_ACTION_ROUTES', None) != (

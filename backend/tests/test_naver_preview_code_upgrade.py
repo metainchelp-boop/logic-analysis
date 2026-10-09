@@ -36,6 +36,8 @@ def sealed_code(module_name='naver_preview_code_upgrade'):
     module.TARGET_COMMIT = 'b'*40
     module.TARGET_SOURCE_SHA256 = 'd'*64
     module.STORE_SHA256['target'] = 'e'*64
+    if module_name == 'naver_preview_code_upgrade_v16':
+        module.STORE_SHA256['old'] = module.STORE_SHA256['target']
     module.REPORT_ASSETS = {route:(len(route.encode()),hashlib.sha256(route.encode()).hexdigest(),mime)
                            for route,(_,_,mime) in module.REPORT_ASSETS.items()}
     return module
@@ -49,7 +51,7 @@ def asset_response(code, route):
 
 def opened_routes(code, source):
     """Named writes that answer 401 without a token on this side of the release."""
-    return tuple(code.OWNER_ACTION_ROUTES) + (tuple(code.TARGET_ACTION_ROUTES) if source == code.TARGET_COMMIT or code.__name__ == 'naver_preview_code_upgrade_v15' else ())
+    return tuple(code.OWNER_ACTION_ROUTES) + (tuple(code.TARGET_ACTION_ROUTES) if source == code.TARGET_COMMIT or code.__name__ in ('naver_preview_code_upgrade_v15','naver_preview_code_upgrade_v16') else ())
 
 
 class ContractTest(unittest.TestCase):
@@ -431,7 +433,7 @@ class ContractTest(unittest.TestCase):
         fourth_release = code_module in ('naver_preview_code_upgrade_v4', 'naver_preview_code_upgrade_v5',
                                        'naver_preview_code_upgrade_v6', 'naver_preview_code_upgrade_v7',
                                        'naver_preview_code_upgrade_v8', 'naver_preview_code_upgrade_v9',
-                                       'naver_preview_code_upgrade_v10', 'naver_preview_code_upgrade_v11', 'naver_preview_code_upgrade_v12', 'naver_preview_code_upgrade_v13', 'naver_preview_code_upgrade_v14', 'naver_preview_code_upgrade_v15')
+                                       'naver_preview_code_upgrade_v10', 'naver_preview_code_upgrade_v11', 'naver_preview_code_upgrade_v12', 'naver_preview_code_upgrade_v13', 'naver_preview_code_upgrade_v14', 'naver_preview_code_upgrade_v15', 'naver_preview_code_upgrade_v16')
         target_store = (StoreScopeTest.SOURCE+b'\n# synthetic V11 read performance change\n'
             if code_module in ('naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12','naver_preview_code_upgrade_v13', 'naver_preview_code_upgrade_v14', 'naver_preview_code_upgrade_v15') else
             StoreScopeTest.SOURCE if fourth_release else StoreScopeTest.TARGET_SOURCE)
@@ -507,7 +509,7 @@ class ContractTest(unittest.TestCase):
                         value['files']={name:release.sha(Path(name).read_bytes()) for name in value['files']}
                         receipt.write_text(json.dumps(value))
                 infrastructure['compose.naver-engine.yml'] = new_compose
-            if code_module in ('naver_preview_code_upgrade_v10','naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12','naver_preview_code_upgrade_v13', 'naver_preview_code_upgrade_v14', 'naver_preview_code_upgrade_v15'):
+            if code_module in ('naver_preview_code_upgrade_v10','naver_preview_code_upgrade_v11','naver_preview_code_upgrade_v12','naver_preview_code_upgrade_v13', 'naver_preview_code_upgrade_v14', 'naver_preview_code_upgrade_v15','naver_preview_code_upgrade_v16'):
                 # Exact compose bytes from the immutable reviewed V9 fixture, with
                 # its already approved CPU1.0/memory768 values in both releases.
                 old_compose=json.loads((Path(__file__).parent/'fixtures/v9-engine-compose-old.json').read_text())['compose'].encode()
@@ -596,7 +598,7 @@ class ContractTest(unittest.TestCase):
                         '/api/naver-auto/management/update','/api/naver-auto/management/collect','/api/naver-auto/reports/review')
                     key = route.removeprefix('/api/naver-auto')
                     verified = verified or key in code.OWNER_ACTION_ROUTES or (
-                        (current['source']!=code.OLD_COMMIT or code_module=='naver_preview_code_upgrade_v15')
+                        (current['source']!=code.OLD_COMMIT or code_module in ('naver_preview_code_upgrade_v15','naver_preview_code_upgrade_v16'))
                         and key in code.TARGET_ACTION_ROUTES)
                     if current['source']==code.OLD_COMMIT:
                         return (401 if verified else 403),{},b''
@@ -669,6 +671,8 @@ class ContractTest(unittest.TestCase):
                     policy.REVIEWED_TRANSITION_V8 = transition
                 elif code_module == 'naver_preview_code_upgrade_v10':
                     policy.REVIEWED_TRANSITION_V10 = transition
+                elif code_module == 'naver_preview_code_upgrade_v16':
+                    policy.REVIEWED_TRANSITION_V16 = transition
                 elif code_module == 'naver_preview_code_upgrade_v15':
                     policy.REVIEWED_TRANSITION_V15 = transition
                 elif code_module == 'naver_preview_code_upgrade_v14':
