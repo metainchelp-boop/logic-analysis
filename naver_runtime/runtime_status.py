@@ -51,6 +51,12 @@ class RuntimeStatus:
             self._state, self._reason = "waiting", "WAITING"
             self._signal()
 
+    def step_progress(self):
+        """완료된 작업 조각만 실행 소유 스레드에서 관측한다. 단계·차단은 바꾸지 않는다."""
+        with self._lock:
+            if self._owner == threading.get_ident():
+                self._signal()
+
     def finish_cycle(self, delay, *, idle=False, verified=False):
         with self._lock:
             if verified:

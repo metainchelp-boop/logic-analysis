@@ -17,18 +17,22 @@ log = logging.getLogger("naver_runtime.scheduler")
 REPORT_SLICES_MAX = 64
 
 
-def run_report_cycle(store, now):
+def run_report_cycle(store, now, *, progress=None):
     """보고서 한 회차를 조각으로 부른다(NV-S00). 조각 하나 = 쓰기 줄 항목 하나 — 등록 거래 1 + 업체 한 곳씩.
 
     예전에는 한 항목이 회차 전체를 쥐어(판이 쌓인 운영에서 10~20초) 그 뒤에 선 직원 로그인 감사가 15초를 넘겨
     「감사 기록 불가」로 막혔다. 조각 사이에는 쓰기 줄에 먼저 들어온 감사가 실행된다. 시각은 회차 내내 같은 값을 넘긴다.
     """
     calls, result = 1, store.generate_reports(now, cycle=0)
+    if progress is not None:
+        progress()
     while isinstance(result, dict) and "cycle" in result:
         if calls >= REPORT_SLICES_MAX:
             raise RuntimeError("보고서 회차가 끝나지 않았습니다")
         calls += 1
         result = store.generate_reports(now, cycle=result["cycle"])
+        if progress is not None:
+            progress()
     return result
 
 
@@ -338,7 +342,8 @@ class Scheduler:
                 if IC.sync_catalog_due(st, self.clock()) or self._midnight_catalog_due():
                     self._step("inventory_catalog", lambda: IC.sync_catalog(self.erp_factory(), st, self.clock()), note=False)
                 self._step("inventory", lambda: self._inventory(), note=False)
-                self._step("reports", lambda: run_report_cycle(st, self.clock()), note=False)
+                self._step("reports", lambda: run_report_cycle(st, self.clock(),
+                           progress=self._runtime.step_progress), note=False)
             if c.morning_enabled:
                 now = self.clock().astimezone(S.KST)
                 if M.CHECK_START <= now.time().replace(tzinfo=None) < M.CHECK_DEADLINE:
