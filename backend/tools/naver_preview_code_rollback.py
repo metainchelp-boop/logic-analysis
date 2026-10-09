@@ -99,6 +99,13 @@ if (type(REVIEWED_ROLLBACK_V13[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIE
             and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V13[index]) for index in (3, 4, 5))):
     REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V13})
 
+# V14 exact inverse; pending pins never grant rollback authority.
+REVIEWED_ROLLBACK_V14 = ('ecb26ccee4aa8d85b0101e0d59aeafe48de1166b', '153c9a3a89585b00f2973a694a963ae9227ce19d', '6c0f7382676584a5d2c01fd0d54b169210293a58c654c70e5638e4fad2cbfcad', 'd9be1b9e6225c856d06b8b6e2d5f1e91edfa46a2cb0aa94d4f17497877eceaf8', 'be894a56d4b548700b14c2d8ffd95669ebfac73ead8e6521fb50a5bc9add14af', 'ccb0474dd764d06bb375cd298eb01b333a6503d8db06d3784f2f7599d19afe97', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_engine/reporting.py', 'naver_engine/report_views.py', 'naver_engine/store.py', 'naver_engine/web.py', 'backend/naver_page/report-ui.js', 'backend/naver_page/report-pdf.js', 'backend/naver_page/app.css', 'backend/naver_page/app.js', 'naver_engine/report_enrichment.py', 'naver_engine/report_notes.py'}))
+if (type(REVIEWED_ROLLBACK_V14[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V14[1])
+        and all(type(REVIEWED_ROLLBACK_V14[index]) is str
+            and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V14[index]) for index in (3, 4, 5))):
+    REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V14})
+
 STAGE = 'input'
 OPERATION = 'none'
 
@@ -116,7 +123,8 @@ def require_review(policy, code):
             or (code.STORE_SHA256.get('old') != code.STORE_SHA256.get('target')
                 and transition(code) != REVIEWED_ROLLBACK_V11
                 and transition(code) != REVIEWED_ROLLBACK_V12
-                and transition(code) != REVIEWED_ROLLBACK_V13)):
+                and transition(code) != REVIEWED_ROLLBACK_V13
+                and transition(code) != REVIEWED_ROLLBACK_V14)):
         raise ValueError('CODE_ROLLBACK_NOT_REVIEWED')
 
 
@@ -146,6 +154,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
         if (value['package'].get('baseline') != prepared['baseline']
                 or value['package'].get('source_tar_gz_sha256') != digest):
             raise ValueError('CODE_ROLLBACK_SOURCE')
+    if transition(code) == REVIEWED_ROLLBACK_V14:
+        code.compatible_inverse_source(path, old_path, upgrade)
     code.compatible_source(old_path, path, upgrade)
     files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)
     old_files = lifecycle.unit_files(old_path, pwd.getpwnam('www-data').pw_gid, release)
@@ -197,6 +207,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
         if (upgrade.manifest(release, code.OLD_COMMIT, started=True) != (old_path, old_receipt)
                 or upgrade.manifest(release, code.TARGET_COMMIT, prepared, started=True) != (path, receipt)):
             raise ValueError('CODE_ROLLBACK_SOURCE')
+        if transition(code) == REVIEWED_ROLLBACK_V14:
+            code.compatible_inverse_source(path, old_path, upgrade)
         code.compatible_source(old_path, path, upgrade)
 
     try:

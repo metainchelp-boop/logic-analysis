@@ -15,23 +15,15 @@ from decimal import Decimal
 
 STAGE = 'input'
 CATALOG_LINKS_COMMIT = '6e4b035901027fef29266de218bfb0594227a3fe'
-# These releases expose the same read-only diagnostics, including policy-aware target checks.
 DAILY_LIMITED_COMMIT = '01344b145d0b679a6ee730d7fa4b5990278dd654'
 RUNTIME_STATUS_COMMIT = '1b790b864ce27766251a205259fa6a332f60f72b'
 MONITORING_COMMIT = '0a302856c6177c4f53145abaf9ed31b6a39654f3'
 REPORTS_COMMIT = 'a38c53775c112cdf5db420f979093d6bee9e5376'
-# Same diagnostics as REPORTS_COMMIT; live reads are allowed for this release.
 SHM_LOCK_FIX_COMMIT = 'c21f5f05f610abf89df0c24e85c00b1bec23d01c'
-# Same diagnostics and DB schema as SHM_LOCK_FIX_COMMIT; adds named owner writes on the screen only.
 OWNER_ACTIONS_COMMIT = '8dd4292d82f5f98e7b4afa44a2a66b6770eaa505'
-# Same diagnostics and DB schema as OWNER_ACTIONS_COMMIT; screen overhaul and display-only board fields.
 SCREEN_OVERHAUL_COMMIT = 'a981b35e298aa58a52b30e266792bd0f36506c5d'
-# Same diagnostics and DB schema as SCREEN_OVERHAUL_COMMIT; report cycle in small writer items (staff login 503)
-# and one more engine log line (store busy).
 WRITER_RELIEF_COMMIT = '25dc24d8760a06b2321d4fbde481769c3ce32c34'
-# Same schema/diagnostic contract; lightweight views, unused JSON exclusion, bounded abort logs.
 LATENCY_FIX_COMMIT = '6198be366344a82923e10ba5e323877026d82f48'
-# Same schema/diagnostic contract; dashboard skips list-only work and linking reuses pure matching.
 DASHBOARD_LATENCY_FIX_COMMIT = 'e4f64e165ebdf81d4127218d5c91ff6904e75958'
 # Additional active profiles require these exact source/archive/store/baseline pins.
 # They do not widen ordinary collection readers or the incident-suspended release.
@@ -110,6 +102,16 @@ if (type(PASSIVE_COMMIT_V13) is str and re.fullmatch('[0-9a-f]{40}', PASSIVE_COM
         and all(type(value) is str and re.fullmatch('[0-9a-f]{64}', value)
             for value in (PASSIVE_SOURCE_SHA256_V13, PASSIVE_STORE_SHA256_V13))):
     PASSIVE_RELEASES[PASSIVE_COMMIT_V13] = PASSIVE_RELEASE_V13
+
+# V14 remains no-DB passive-only; target Store bytes may change but schema stays 11.
+PASSIVE_COMMIT_V14 = '153c9a3a89585b00f2973a694a963ae9227ce19d'
+PASSIVE_SOURCE_SHA256_V14 = 'd9be1b9e6225c856d06b8b6e2d5f1e91edfa46a2cb0aa94d4f17497877eceaf8'
+PASSIVE_STORE_SHA256_V14 = 'ccb0474dd764d06bb375cd298eb01b333a6503d8db06d3784f2f7599d19afe97'
+PASSIVE_RELEASE_V14 = (PASSIVE_SOURCE_SHA256_V14, PASSIVE_STORE_SHA256_V14, '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
+if (type(PASSIVE_COMMIT_V14) is str and re.fullmatch('[0-9a-f]{40}', PASSIVE_COMMIT_V14)
+        and all(type(value) is str and re.fullmatch('[0-9a-f]{64}', value)
+            for value in (PASSIVE_SOURCE_SHA256_V14, PASSIVE_STORE_SHA256_V14))):
+    PASSIVE_RELEASES[PASSIVE_COMMIT_V14] = PASSIVE_RELEASE_V14
 
 MONITORING_COMMITS = frozenset((MONITORING_COMMIT, REPORTS_COMMIT, SHM_LOCK_FIX_COMMIT, OWNER_ACTIONS_COMMIT,
                                 SCREEN_OVERHAUL_COMMIT, WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT,
