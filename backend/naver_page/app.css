@@ -201,6 +201,67 @@ h1.pt{font-size:20px;font-weight:800;margin-bottom:4px;text-wrap:balance}
 .nr-target-inputs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
 .nr-shared-content{border-left:3px solid var(--blue);background:var(--bluebg);padding:18px;border-radius:0 8px 8px 0;font-size:13px;line-height:1.8;overflow-wrap:anywhere}
 .nr-preserve{white-space:pre-wrap;overflow-wrap:anywhere}.nr-note-history{font-size:12px;margin-top:16px;color:var(--sub)}
+/* 같은 저장판을 세 배치로 읽는다. 편집·범위 선택은 공개 보고서 밖에 둔다. */
+.nr-report-controls{display:grid;gap:12px;margin-bottom:16px}
+.nr-layout-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px;font-weight:700}
+.nr-layout-tools .chips{margin:0}.nr-print-action{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.nr-print-action .hint{max-width:620px;color:var(--sub)}
+.nr-report-controls .nr-scope-row{margin:0;padding-top:12px}.nr-internal-review{margin-top:20px}.nr-internal-review .nr-annotations{margin:0;padding-top:0;border-top:0}
+.nr-report-paper{background:#fff;border:1px solid var(--line);border-radius:12px;margin-bottom:20px;color:var(--text);min-width:0}
+.nr-layout-label{font-size:12px;font-weight:700;color:var(--blue);background:var(--bluebg);padding:6px 10px;border:1px solid var(--line);border-radius:6px;flex-shrink:0}
+.nr-paper-meta{margin:16px 0;font-size:12px;line-height:1.75;color:var(--sub)}.nr-paper-meta h3{font-size:12px;margin-bottom:4px}.nr-paper-meta .nr-account-scope{margin:0}.nr-paper-meta .nr-compare-note{margin:4px 0 0}
+.nr-report-paper .hint{color:var(--sub)}.nr-public-caveat{font-size:11px;color:var(--sub);line-height:1.8;margin:16px 0}.nr-public-quality{margin:22px 0;font-size:12px}
+.nr-report-paper .nr-comparison>summary,.nr-day-table>summary{font-weight:700;color:var(--blue);cursor:pointer;margin-bottom:10px}
+.nr-a-review-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,1fr);gap:18px;margin-top:20px;align-items:start}
+.nr-a-review-grid .nr-chart-panel,.nr-a-review-grid .nr-shared-content{margin:0}.nr-layout-a .nr-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+.nr-layout-b{--blue:#087f85;--bluebg:#eaf5f4;--panel2:#f3f7f8;border-radius:0;border-top:4px solid #202c30}
+.nr-layout-b .nr-report-header{padding-bottom:15px;border-bottom:2px solid #202c30}.nr-layout-b .nr-layout-label{border-radius:0}
+.nr-analysis-grid{display:grid;grid-template-columns:190px minmax(0,1fr);gap:22px;margin-top:20px;align-items:start}
+.nr-analysis-meta{background:#edf3f4;border-top:4px solid #087f85;padding:14px;min-width:0}.nr-analysis-meta .nr-paper-meta{margin:0}.nr-analysis-meta .nr-quality-cards{grid-template-columns:1fr;gap:0;margin:18px 0 0}
+.nr-analysis-meta .nr-quality-card{border:0;border-top:1px solid #cad9db;border-radius:0;padding:12px 0;background:transparent}.nr-analysis-meta .nr-quality-card strong{font-size:16px}.nr-analysis-meta .nr-quality-card h3{font-size:12px}
+.nr-analysis-main{min-width:0}.nr-analysis-main>.nr-comparison{margin-top:0}.nr-layout-b .nr-scroll-table{border-radius:0}.nr-layout-b .nr-scroll-table th,.nr-layout-b .nr-scroll-table td{padding:8px 10px;font-size:12px}.nr-layout-b .nr-scroll-table .num{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.nr-layout-b .nr-chart-panel{padding:12px;border-radius:0}.nr-layout-b .nr-chart svg{max-height:200px}.nr-layout-b .nr-brief{margin:16px 0;padding:12px 16px;border-radius:0}.nr-layout-b .nr-feedback-grid article{padding:12px;border-radius:0}
+.nr-layout-c{--blue:#12654d;--bluebg:#eef6f1;--panel2:#f5f8f5;border-top:5px solid #12654d}.nr-layout-c .nr-kpis{grid-template-columns:repeat(6,minmax(0,1fr));gap:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.nr-layout-c .nr-kpi{border:0;border-right:1px solid var(--line);border-radius:0;padding:14px 12px}.nr-layout-c .nr-kpi:last-child{border-right:0}.nr-layout-c .nr-kpi dd{font-size:22px}
+.nr-strategy-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:24px;margin:20px 0;align-items:start}.nr-strategy-grid>*,.nr-strategy-plan{min-width:0}
+.nr-layout-c .nr-brief{margin-top:0;padding:20px;border-radius:0}.nr-layout-c .nr-brief ol{font-size:15px;line-height:1.8}.nr-layout-c .nr-feedback-grid{grid-template-columns:1fr}.nr-layout-c .nr-feedback-grid article{background:#fff;border:0;border-top:1px solid var(--line);border-radius:0;padding:12px 0}
+.nr-strategy-plan .nr-shared-content{margin-top:0;border-radius:0;border-left:0;border-top:3px solid #12654d}.nr-strategy-plan .nr-target-grid{grid-template-columns:1fr;gap:8px}.nr-strategy-plan .nr-target-grid article{padding:12px}.nr-strategy-plan .nr-target-grid strong{font-size:18px}
+#naver-report-print-root{display:none}
+@media(max-width:1100px){.nr-analysis-grid{grid-template-columns:160px minmax(0,1fr);gap:16px}.nr-layout-c .nr-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.nr-layout-c .nr-kpi:nth-child(3){border-right:0}.nr-layout-c .nr-kpi:nth-child(n+4){border-top:1px solid var(--line)}}
+@media(max-width:760px){.nr-a-review-grid,.nr-strategy-grid,.nr-analysis-grid{grid-template-columns:1fr;gap:16px}.nr-layout-a .nr-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.nr-analysis-meta .nr-quality-cards{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.nr-analysis-meta .nr-quality-card strong{font-size:14px}.nr-layout-label{white-space:normal}.nr-layout-b .nr-report-header{align-items:flex-start;flex-wrap:wrap}.nr-layout-b .nr-feedback-grid{grid-template-columns:1fr}}
+@media(max-width:420px){.nr-analysis-meta .nr-quality-cards{grid-template-columns:1fr}.nr-layout-c .nr-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.nr-layout-c .nr-kpi{border-right:0}.nr-layout-c .nr-kpi:nth-child(odd){border-right:1px solid var(--line)}.nr-layout-c .nr-kpi:nth-child(n+3){border-top:1px solid var(--line)}.nr-layout-c .nr-kpi dd{font-size:20px}.nr-layout-tools{gap:6px}.nr-layout-tools .chip{white-space:normal}.nr-paper-meta{font-size:11px}}
+@media print{
+  @page{size:A4 portrait;margin:12mm}
+  /* 브라우저 직접 인쇄도 내부 메모·초안·이력·편집 도구를 출력하지 않는다. */
+  .nr-internal-review,.nr-annotations,.nr-note-history,.report-history,.nr-report-controls,.nr-detail-top,.nr-preview-controls,.nr-note-grid,.nr-target-inputs,.nr-note-actions,
+  #reportNotesCandidate,#reportNotesSave,#reportNotesApprove,#reportNotesStatus,[id^="reportNote-"],[id^="reportTarget-"]{display:none!important}
+  body.nr-printing{background:#fff;padding:0;color:#202c30}
+  body.nr-printing>:not(#naver-report-print-root){display:none!important}
+  body.nr-printing #naver-report-print-root{display:block!important;width:100%;max-width:none;margin:0;padding:0}
+  #naver-report-print-root .nr-report-paper{width:100%;max-width:none;margin:0;padding:0;border:0;border-radius:0;box-shadow:none;font-size:13px;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+  #naver-report-print-root .nr-report-header{align-items:flex-start;gap:8px;break-after:avoid}
+  #naver-report-print-root .nr-paper-title{font-size:20px}#naver-report-print-root .nr-layout-label{font-size:11px}
+  #naver-report-print-root h3,#naver-report-print-root summary{break-after:avoid;font-size:14px}
+  #naver-report-print-root .nr-kpi,#naver-report-print-root .nr-quality-card,#naver-report-print-root .nr-target-grid article,#naver-report-print-root .nr-chart-panel{break-inside:avoid}
+  #naver-report-print-root .nr-kpi{padding:10px}#naver-report-print-root .nr-kpi dd{font-size:18px}
+  #naver-report-print-root .nr-quality-card{padding:10px}#naver-report-print-root .nr-quality-card strong{font-size:15px}
+  #naver-report-print-root .nr-scroll-table{overflow:visible;border-radius:0}
+  #naver-report-print-root .nr-scroll-table table,#naver-report-print-root .nr-day-table table{width:100%;min-width:0;table-layout:fixed;font-size:11px}
+  #naver-report-print-root .nr-scroll-table th,#naver-report-print-root .nr-scroll-table td,#naver-report-print-root .nr-day-table th,#naver-report-print-root .nr-day-table td{padding:6px 4px;font-size:11px;white-space:normal;overflow-wrap:anywhere}
+  #naver-report-print-root .nr-scroll-table .w{font-size:11px}
+  #naver-report-print-root thead{display:table-header-group}#naver-report-print-root tr{break-inside:avoid}
+  #naver-report-print-root .nr-comparison,#naver-report-print-root .nr-day-table,#naver-report-print-root .nr-contributions,#naver-report-print-root .nr-feedback,#naver-report-print-root .nr-public-quality{break-inside:auto}
+  #naver-report-print-root .nr-print-chart .nr-axis{font-size:16px}
+  #naver-report-print-root .nr-chart svg{width:100%;max-height:none}#naver-report-print-root .nr-chart-panel{padding:10px;margin-bottom:12px}
+  #naver-report-print-root .nr-a-review-grid{grid-template-columns:1.25fr 1fr;gap:12px}
+  #naver-report-print-root .nr-analysis-grid{grid-template-columns:34mm minmax(0,1fr);gap:10px}
+  #naver-report-print-root .nr-analysis-meta{padding:8px}#naver-report-print-root .nr-analysis-meta .nr-quality-cards{grid-template-columns:1fr;gap:0}
+  #naver-report-print-root .nr-strategy-grid{grid-template-columns:1.2fr 1fr;gap:14px}
+  #naver-report-print-root .nr-layout-c .nr-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+  #naver-report-print-root .nr-feedback-grid{grid-template-columns:1fr}#naver-report-print-root .nr-feedback-grid article{padding:10px;font-size:12px}
+  #naver-report-print-root .nr-brief{padding:12px;margin:14px 0}#naver-report-print-root .nr-brief ol{font-size:13px}
+  #naver-report-print-root .nr-shared-content{padding:12px;font-size:13px}#naver-report-print-root .nr-paper-meta,#naver-report-print-root .hint,#naver-report-print-root .nr-public-caveat{font-size:11px}
+  #naver-report-print-root .nr-report-footer{font-size:11px}
+}
 .nr-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
 @media(max-width:760px){.nr-quality-cards,.nr-feedback-grid,.nr-target-grid,.nr-note-grid,.nr-target-inputs{grid-template-columns:1fr}.nr-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.nr-preview-controls{align-items:flex-start}.nr-scroll-table th,.nr-scroll-table td{padding:8px}.nr-note-actions .btn{flex:1 1 130px}.nr-quality-card{padding:12px}}
 @media(max-width:1100px){.nr-secondary{grid-template-columns:repeat(3,minmax(0,1fr))}.nr-kpi dd{font-size:22px}}

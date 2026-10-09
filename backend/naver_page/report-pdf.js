@@ -406,7 +406,111 @@
     if (timer && typeof timer.unref === 'function') timer.unref();
     return {filename: name, bytes: bytes.length};
   }
-  const api = Object.freeze({build, download});
+  let activePrint = null;
+  function cancelPrint() {
+    if (activePrint) activePrint.cleanup();
+  }
+  function publicPaper(paper) {
+    const blockedTags = new Set(['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'INPUT', 'TEXTAREA',
+      'SELECT', 'BUTTON', 'AUDIO', 'VIDEO', 'LINK', 'STYLE', 'META', 'BASE', 'TEMPLATE', 'FOREIGNOBJECT']);
+    const privateClasses = new Set(['nr-annotations', 'nr-note-history', 'nr-internal-review',
+      'nr-note-grid', 'nr-note-actions', 'nr-preview-controls', 'nr-history']);
+    const nodes = [paper, ...paper.querySelectorAll('*')];
+    if (nodes.length > 20000) fail('REPORT_PRINT_PAPER');
+    for (const node of nodes) {
+      if (blockedTags.has(node.tagName.toUpperCase()) ||
+          (node.getAttribute('class') || '').split(/\s+/).some(name => privateClasses.has(name)) ||
+          /^(?:reportNotes|reportNote-|reportTarget-|reportHistory)/.test(node.getAttribute('id') || '')) fail('REPORT_PRINT_PRIVATE');
+      for (const attribute of node.attributes) {
+        const name = attribute.name.toLowerCase(), value = attribute.value;
+        if (name.startsWith('on') || ['contenteditable', 'data-private', 'data-internal', 'src', 'srcset',
+          'href', 'xlink:href', 'action', 'formaction', 'autofocus'].includes(name) ||
+          name === 'style' && /url\s*\(|@import|expression\s*\(|javascript:/i.test(value) ||
+          name === 'name' && ['internal_note', 'client_feedback'].includes(value)) fail('REPORT_PRINT_PRIVATE');
+      }
+    }
+  }
+  function waitForPrintFonts(document, state) {
+    if (!document.fonts || !document.fonts.ready) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const finish = error => {
+        clearTimeout(timer); state.cancelWait = null;
+        error ? reject(error) : resolve();
+      };
+      const timer = setTimeout(() => finish(new Error('REPORT_PRINT_FONTS')), 5000);
+      state.cancelWait = () => finish(new Error('REPORT_PDF_STALE'));
+      Promise.resolve(document.fonts.ready).then(() => finish(), () => finish(new Error('REPORT_PRINT_FONTS')));
+    });
+  }
+  function printPaper(snapshot, layout, paper, document, parent = null) {
+    if (!paper || paper.nodeType !== 1 || paper.ownerDocument !== document || paper.parentNode !== parent ||
+        !parent && paper.isConnected || parent && parent.parentNode !== document.body ||
+        !paper.classList.contains('nr-report-paper') || paper.getAttribute('data-layout') !== layout ||
+        paper.getAttribute('data-report-id') !== String(snapshot.report_id) ||
+        paper.getAttribute('data-revision-fingerprint') !== snapshot.revision_fingerprint ||
+        paper.getAttribute('data-account-key') !== snapshot.scope.account_key) fail('REPORT_PRINT_PAPER');
+    publicPaper(paper);
+  }
+  async function print(report, options) {
+    const current = () => {
+      try { return !!options && typeof options.isCurrent === 'function' && options.isCurrent() === true; }
+      catch (_) { return false; }
+    };
+    if (activePrint) fail('REPORT_PRINT_BUSY');
+    if (!current()) fail('REPORT_PDF_STALE');
+    const snapshot = structuredClone(report);
+    pinned(snapshot);
+    if (snapshot.payload.format_version !== 2 || typeof snapshot.revision_fingerprint !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(snapshot.revision_fingerprint) || typeof snapshot.scope.account_key !== 'string' ||
+        !snapshot.scope.account_key || snapshot.scope.account_key.length > 500) fail('REPORT_PDF_DATA');
+    const layout = options.layout, paper = options.paper, document = root.document;
+    if (!['a', 'b', 'c'].includes(layout)) fail('REPORT_PRINT_LAYOUT');
+    if (!document || !document.body || typeof root.print !== 'function') fail('REPORT_PRINT_UNAVAILABLE');
+    printPaper(snapshot, layout, paper, document);
+    for (const duplicate of document.querySelectorAll('#naver-report-print-root')) duplicate.remove();
+    const container = document.createElement('div');
+    container.setAttribute('id', 'naver-report-print-root');
+    container.setAttribute('data-layout', layout);
+    const state = {container, closed: false, phase: 'waiting', cleanup() {
+      if (state.closed) return;
+      state.closed = true;
+      if (state.cancelWait) state.cancelWait();
+      container.remove(); document.body.classList.remove('nr-printing');
+      root.removeEventListener('afterprint', state.afterPrint);
+      root.removeEventListener('pagehide', state.cleanup);
+      if (state.media) {
+        if (state.media.removeEventListener) state.media.removeEventListener('change', state.mediaChanged);
+        else if (state.media.removeListener) state.media.removeListener(state.mediaChanged);
+      }
+      if (activePrint === state) activePrint = null;
+    }};
+    activePrint = state;
+    try {
+      state.afterPrint = () => { if (state.phase === 'printing') state.cleanup(); };
+      root.addEventListener('afterprint', state.afterPrint);
+      root.addEventListener('pagehide', state.cleanup);
+      if (typeof root.matchMedia === 'function') {
+        state.media = root.matchMedia('print');
+        state.sawPrint = state.media.matches;
+        state.mediaChanged = event => {
+          if (event.matches) state.sawPrint = true;
+          else if (state.sawPrint && state.phase === 'printing') state.cleanup();
+        };
+        if (state.media.addEventListener) state.media.addEventListener('change', state.mediaChanged);
+        else if (state.media.addListener) state.media.addListener(state.mediaChanged);
+      }
+      container.appendChild(paper); document.body.appendChild(container);
+      document.body.classList.add('nr-printing');
+      if (!current()) fail('REPORT_PDF_STALE');
+      await waitForPrintFonts(document, state);
+      if (state.closed || activePrint !== state || !current()) fail('REPORT_PDF_STALE');
+      printPaper(snapshot, layout, paper, document, container);
+      state.phase = 'printing';
+      root.print();
+      return {started: true}; // The native dialog does not disclose whether a PDF was saved.
+    } catch (error) { state.cleanup(); throw error; }
+  }
+  const api = Object.freeze({build, download, print, cancelPrint});
   root.NaverReportPDF = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window === 'undefined' ? globalThis : window);

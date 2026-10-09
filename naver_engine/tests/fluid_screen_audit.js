@@ -143,7 +143,7 @@ async function auditFluidScreens(page, cfg) {
     await current.locator('.report-missing>summary').first().click();
     await current.locator('.nr-day-table>summary').click();
     assert.equal(await current.locator('.nr-day-table tbody tr').count(), 30, '월간 일별 숫자 30일 유지');
-    assert.match(await current.locator('.report-missing').innerText(), /2026-09-30.*전환 매출.*전환/);
+    assert.match(await current.locator('.report-missing').innerText(), /2026-09-30.*광고 전환가치.*전환/);
     assert.equal((await current.innerText()).includes('원천_사유_'), false, '내부 원천 사유는 화면에 노출하지 않음');
     assert.match(await current.locator('.report-changes').innerText(), /-1,234,567,890,123원/);
     assert.equal(await current.getByRole('button', { name: '검토 승인', exact: true }).count(), 0);

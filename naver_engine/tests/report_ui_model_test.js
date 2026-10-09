@@ -33,7 +33,7 @@ assert.ok(viewStart > 0 && viewEnd > viewStart, '실제 화면 요청 모듈을 
 
 // 실제 앱의 요청/캐시/권한 경계와 보고서 모듈을 실행한다. DOM·전송만 메모리 어댑터로 대체한다.
 // 브라우저, HTTP, 계정 자격정보, 실제 PDF 생성은 사용하지 않는다.
-function harness() {
+function harness(preference) {
   const nodes = new Map(), requests = [], applied = [], downloads = [], toasts = [];
   let day = '2026-10-04', routes = 0;
   function node(tag) {
@@ -94,7 +94,7 @@ function harness() {
     return promise;
   }
   const context = {
-    window: {}, document: {visibilityState: 'visible', createElementNS: (_namespace, tag) => node(tag)},
+    window: {sessionStorage:{getItem:()=>preference,setItem:(_key,value)=>{preference=value;}}}, document: {visibilityState: 'visible', createElementNS: (_namespace, tag) => node(tag)},
     state: {gen: 0, inventoryGen: 0, reportsGen: 0, linksGen: 0, bellGen: 0,
       selection: 'all', screen: 'reports', me: {idx: 1, scope: 'owner', narrowed: false}, session: {}},
     $, h, put, api, reportUI: null, kstDay: () => day, closeModals() {}, closeBell() {},
@@ -107,9 +107,9 @@ function harness() {
   vm.runInContext(appSource.slice(viewStart, viewEnd), context);
   context.syncContext();
   vm.runInContext(fs.readFileSync('backend/naver_page/report-ui.js', 'utf8'), context);
-  context.window.NaverReportPDF = {download(report, options) {
+  context.window.NaverReportPDF = {print(report, options) {
     if (options.isCurrent()) downloads.push(report);
-    return Promise.resolve();
+    return Promise.resolve({started:true});
   }};
   const ui = context.window.NaverReports.create({
     $, h, put, api, fetchList: (path, apply) => context.fetchView('reports', path, apply),
@@ -558,4 +558,105 @@ test('notes capability는 현재 상세의 판·범위·문안판·권한·화�
   assert.equal(denied.ui.notesCapability(save),false); assert.equal(denied.ui.notesCapability(approve),false);
   const approved=expandedData(); approved.annotations.state='approved';
   assert.equal((await renderReportFixture(approved)).ui.notesCapability(approve),false);
+});
+
+test('A/B/C 배치는 다른 구조로 같은 판을 읽고 미저장 입력·권한을 보존한다', async () => {
+  const report=expandedData(), original=JSON.stringify(report), fixture=await renderReportFixture(report);
+  fixture.$('reportNote-shared_comment').value='보존할 초안'; fixture.$('reportNote-shared_comment').fire('input');
+  fixture.$('reportNote-internal_note').value='PRIVATE_CHANGED'; fixture.$('reportNote-internal_note').fire('input');
+  fixture.$('reportTarget-cpa').value='100'; fixture.$('reportTarget-cpa').fire('input');
+  const count=fixture.requests.length;
+  for (const layout of ['b','c','a']) {
+    fixture.$('reportLayout-'+layout).fire('click');
+    const paper=findClass(fixture.$('reportDetail'),'nr-report-paper');
+    assert.equal(paper.attrs['data-layout'],layout);
+    assert.ok(findClass(paper,layout==='a'?'nr-a-review-grid':layout==='b'?'nr-analysis-grid':'nr-strategy-grid'));
+    assert.equal(findClass(paper,'nr-metric-table').children[1].children.length,17);
+    assert.equal(fixture.$('reportNote-shared_comment').value,'보존할 초안');
+    assert.equal(fixture.$('reportNote-internal_note').value,'PRIVATE_CHANGED');
+    assert.equal(fixture.ui.hasUnsaved(),true); assert.equal(fixture.$('reportPdfDownload').disabled,true);
+    assert.equal(fixture.$('reportNotesApprove').disabled,true); assert.equal(fixture.$('reportNotesSave').disabled,true,'출처 없는 목표는 전환 후에도 저장 금지');
+    assert.equal(fixture.ui.notesCapability({report_id:7,account_key:'account-a',revision_fingerprint:'fixed-source',expected_version:1,action:'save',document:{shared_comment:'검토'}}),true);
+    assert.doesNotMatch(paper.textContent,/PRIVATE|보존할 초안|100원/);
+  }
+  assert.equal(fixture.requests.length,count); assert.equal(JSON.stringify(report),original);
+});
+
+test('세 공개 인쇄 배치는 승인 판만 읽고 0·누락·부분 범위와 빈 문안을 구분한다', async () => {
+  const report=expandedData(); report.status='partial';
+  report.payload.details.enrichment.metrics[0].current=0;
+  report.payload.details.enrichment.metrics[1].current=null;
+  report.annotations.state='approved';
+  report.annotations.shared={version:1,state:'approved',metadata:report.annotations.metadata,shared_comment:'APPROVED_TEXT',next_plan:'APPROVED_PLAN',targets:{cpa:100,source:'APPROVED_SOURCE'},approved_at:'2026-09-28T11:00:00+09:00'};
+  report.annotations.history.items=[{document:{internal_note:'HISTORY_PRIVATE'}}];
+  const fixture=await renderReportFixture(report), count=fixture.requests.length;
+  for(const layout of ['a','b','c']) {
+    const paper=fixture.ui.makePaper(report,{layout,print:true}), nodes=allNodes(paper);
+    assert.equal(paper.attrs['data-report-id'],'7'); assert.equal(paper.attrs['data-account-key'],'account-a');
+    assert.equal(paper.attrs['data-revision-fingerprint'],'fixed-source');
+    const rows=findClass(paper,'nr-metric-table').children[1].children;
+    assert.equal(rows.length,17); assert.equal(rows[0].children[1].textContent,'0원'); assert.equal(rows[1].children[1].textContent,'—');
+    assert.match(paper.textContent,/부분 집계|APPROVED_TEXT/); assert.match(paper.textContent,/APPROVED_PLAN.*APPROVED_SOURCE/s);
+    assert.doesNotMatch(paper.textContent,/PRIVATE|검토할 공유 문안|당시 내부 메모/);
+    assert.equal(nodes.some(node=>['button','input','textarea','select','form','script'].includes(node.tag)),false);
+    assert.equal(nodes.some(node=>node.attrs.id==='reportChart'),false);
+    assert.equal(nodes.filter(node=>node.tag==='details').every(node=>Object.hasOwn(node.attrs,'open')),true);
+    for(const mutate of [r=>r.annotations.state='draft',r=>r.annotations.shared.version=2,r=>r.annotations.shared.metadata.revision_fingerprint='other']) {
+      const stale=JSON.parse(JSON.stringify(report)); mutate(stale);
+      const text=fixture.ui.makePaper(stale,{layout,print:true}).textContent;
+      assert.doesNotMatch(text,/APPROVED_TEXT|APPROVED_PLAN|APPROVED_SOURCE/); assert.match(text,/승인된 공유 문안이 없습니다/);
+    }
+  }
+  assert.equal(fixture.requests.length,count);
+});
+
+test('디자인 선택은 유효한 세 값만 이 세션에 보관하고 기본 A로 돌아간다', async () => {
+  for(const preference of [undefined,'b','c','UNKNOWN','<img src=x>']) {
+    const fixture=harness(preference), list=fixture.ui.load(); fixture.requests[0].resolve(full()); await list;
+    findButton(fixture.$('reportsRows'),'보고서 보기').fire('click'); fixture.requests[1].resolve(expandedData()); await flush();
+    assert.equal(findClass(fixture.$('reportDetail'),'nr-report-paper').attrs['data-layout'],['b','c'].includes(preference)?preference:'a');
+    fixture.$('reportLayout-b').fire('click'); fixture.ui.reset();
+    const next=fixture.ui.load(); fixture.requests[2].resolve(full()); await next;
+    findButton(fixture.$('reportsRows'),'보고서 보기').fire('click'); fixture.requests[3].resolve(expandedData()); await flush();
+    assert.equal(findClass(fixture.$('reportDetail'),'nr-report-paper').attrs['data-layout'],'b');
+  }
+});
+
+test('인쇄용 상세 재검증 중 디자인 왕복 전환·초안·권한 변화는 인쇄 시작을 막는다', async () => {
+  for(const change of ['layout','dirty','context']) {
+    const report=expandedData(), fixture=await renderReportFixture(report);
+    fixture.$('reportPdfDownload').fire('click');
+    if(change==='layout') {fixture.$('reportLayout-b').fire('click');fixture.$('reportLayout-a').fire('click');}
+    if(change==='dirty') {fixture.$('reportNote-shared_comment').value='변경 초안';fixture.$('reportNote-shared_comment').fire('input');}
+    if(change==='context') fixture.context.state.gen++;
+    fixture.requests[2].resolve(JSON.parse(JSON.stringify(report))); await flush();
+    assert.equal(fixture.downloads.length,0); assert.equal(fixture.toasts.length,0);
+  }
+});
+
+test('인쇄 호출은 선택 디자인과 공개 DOM을 고정하고 저장 완료를 주장하지 않는다', async () => {
+  const report=expandedData(), fixture=await renderReportFixture(report); fixture.$('reportLayout-c').fire('click');
+  let options, finish;
+  fixture.context.window.NaverReportPDF.print=(verified,passed)=>{options=passed; assert.equal(model.sameEdition(report,verified),true);return new Promise(resolve=>{finish=resolve;});};
+  fixture.$('reportPdfDownload').fire('click'); fixture.requests[2].resolve(JSON.parse(JSON.stringify(report))); await flush();
+  assert.equal(options.layout,'c'); assert.equal(options.paper.attrs['data-layout'],'c'); assert.equal(options.isCurrent(),true);
+  assert.doesNotMatch(options.paper.textContent,/PRIVATE|검토할 공유 문안/);
+  finish({started:true}); await flush();
+  assert.match(fixture.toasts[0],/인쇄창을 열었습니다/); assert.doesNotMatch(fixture.toasts[0],/내려받았습니다|저장했습니다/);
+  assert.equal(fixture.$('reportPdfDownload').textContent,'PDF 저장');
+  fixture.$('reportPdfDownload').fire('click'); fixture.requests[3].resolve(JSON.parse(JSON.stringify(report))); await flush();
+  fixture.$('reportLayout-a').fire('click'); assert.equal(options.isCurrent(),false); finish({started:true}); await flush();
+  assert.equal(fixture.toasts.length,1,'늦게 열린 이전 디자인의 인쇄는 완료 안내하지 않는다');
+});
+
+test('인쇄 재확인 중 디자인·초안 변경 후 도착한 권한 거절도 이전 자료를 제거한다', async () => {
+  for(const change of ['layout','dirty']) {
+    const fixture=await renderReportFixture(expandedData());
+    fixture.$('reportPdfDownload').fire('click');
+    if(change==='layout') fixture.$('reportLayout-b').fire('click');
+    else { fixture.$('reportNote-shared_comment').value='입력'; fixture.$('reportNote-shared_comment').fire('input'); }
+    fixture.requests[2].reject(new fixture.context.ApiError(403,{error:'forbidden'})); await flush();
+    assert.equal(fixture.$('reportDetail').children.length,0,'권한 거절은 변경된 디자인의 상세도 제거한다');
+    assert.equal(fixture.downloads.length,0);
+  }
 });

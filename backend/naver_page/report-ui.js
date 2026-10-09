@@ -3,6 +3,7 @@
   'use strict';
   var LABEL = {spend:'광고비',conversion_value:'광고 전환가치',roas:'ROAS',cpa:'CPA',impressions:'노출수',clicks:'클릭수',ctr:'CTR',cpc:'CPC',conversions:'전환수',cvr:'CVR',cpm:'CPM',value_per_conversion:'전환당 전환가치',spend_per_day:'일평균 광고비',clicks_per_day:'일평균 클릭수',impressions_per_day:'일평균 노출수',conversions_per_day:'일평균 전환수',value_per_day:'일평균 전환가치'};
   var STATUS = {ready:'생성 완료',partial:'부분 집계',collecting:'수집 중',not_generated:'아직 생성되지 않음'};
+  var LAYOUTS = {a:'A · 카드 대시보드',b:'B · 데이터 분석형',c:'C · 전략 브리프'};
   function finite(value) { return typeof value === 'number' && isFinite(value); }
   function round(value) { return Number(value.toFixed(2)).toLocaleString('ko-KR'); }
   function metric(payload, key) {
@@ -42,6 +43,8 @@
     var selected = null, displayed = null, initialized = false, chartMetric = 'spend', lastList = null, listReady = false, listContext = null;
     var displayedMark = null, displayedContext = null;
     var sharedView = false, drafts = {}, savingNotes = {};
+    var layout = 'a', layoutGeneration = 0;
+    try { var preferred = window.sessionStorage && window.sessionStorage.getItem('naver-report-layout'); if (Object.prototype.hasOwnProperty.call(LAYOUTS,preferred)) layout = preferred; } catch (_) {}
     function noteKey(report) { return report.report_id + '|' + report.scope.account_key + '|' + report.revision_fingerprint; }
     function dirty() { return Object.keys(drafts).some(function (key) { return drafts[key].dirty; }); }
     function exportReady(report) { var key = noteKey(report); return !savingNotes[key] && !(drafts[key] && drafts[key].dirty); }
@@ -212,16 +215,17 @@
       var node = document.createElementNS('http://www.w3.org/2000/svg',tag);
       Object.keys(attrs || {}).forEach(function (key) { node.setAttribute(key,attrs[key]); }); return node;
     }
-    function drawChart(report,key) {
+    function drawChart(report,key,printing) {
       var detail = report.payload.details || {}, days = detail.daily || [], comparison = detail.comparison || {};
       var conversion = key === 'conversions' || key === 'roas';
       var comparable = conversion ? comparison.conversion_status === 'ready' && (key !== 'roas' || comparison.basic_status === 'ready') : comparison.basic_status === 'ready';
       var prior = comparison.status === 'ready' || comparable ? comparison.daily || [] : [];
       var values = days.concat(prior).map(function (day) { return metric(day,key); }).filter(finite);
       if (!days.length || !values.length) return h('p',{class:'empty'},'일별 자료가 아직 저장되지 않았습니다. 누락은 0으로 표시하지 않습니다.');
-      var max = Math.max.apply(null,values.concat([1])), width = 960, height = 220, left = 62, right = 16, top = 16, bottom = 32;
+      var max = Math.max.apply(null,values.concat([1])), width = printing ? 480 : 960, height = 220, left = 62, right = 16, top = 16, bottom = 32;
+      left = Math.max(left,Math.min(width * .4,Math.round(max).toLocaleString('ko-KR').length * (printing ? 9 : 6) + 16));
       var size = Math.max(days.length,prior.length,2);
-      var graph = svg('svg',{viewBox:'0 0 ' + width + ' ' + height,role:'img','aria-label':LABEL[key] + ' 일별 추이. 점선은 비교 가능한 전기간, 끊긴 구간은 미확인입니다.'});
+      var graph = svg('svg',{viewBox:'0 0 ' + width + ' ' + height,class:printing ? 'nr-print-chart' : 'nr-preview-chart',role:'img','aria-label':LABEL[key] + ' 일별 추이. 점선은 비교 가능한 전기간, 끊긴 구간은 미확인입니다.'});
       for (var i = 0; i < 4; i++) {
         var y = top + i * (height-top-bottom)/3;
         graph.appendChild(svg('line',{x1:left,y1:y,x2:width-right,y2:y,class:'nr-gridline'}));
@@ -332,6 +336,8 @@
       if (!draft) draft = drafts[key] = {document:noteDocument(a.document),baseVersion:a.version || 0,dirty:false};
       if (!draft.dirty) { draft.document = noteDocument(a.document); draft.baseVersion = a.version || 0; }
       var stale = draft.baseVersion !== (a.version || 0), busy = !!savingNotes[key];
+      var invalid = Object.keys(draft.invalidTargets || {}).some(function (field) { return draft.invalidTargets[field]; });
+      var missingSource = ['cpa','roas','spend_per_day'].some(function (field) { return finite(draft.document.targets[field]); }) && !draft.document.targets.source.trim();
       function current() { return fresh(mark,ctx) && displayed === report; }
       function update() {
         if (!current()) return;
@@ -385,61 +391,103 @@
         h('div',{class:'nr-note-grid'},field('internal_note','담당자 내부 메모 · 공유/PDF 제외',1000),field('client_feedback','광고주에게 받은 질문·요청(내부 기록)',1000),field('shared_comment','공유용 코멘트',2000),field('next_plan','다음 관리 계획',1000)),field('plan_due','계획 기한',10,'date'),
         h('div',{class:'nr-target-inputs'},targetField('spend_per_day','일평균 광고비 목표(원)'),targetField('cpa','CPA 목표(원 이하)'),targetField('roas','ROAS 목표(% 이상)')),h('label',{class:'nr-note-field'},h('span',null,'목표 출처·합의 기준'),source),
         h('p',{id:'reportNotesStatus',class:'nr-notice','aria-live':'polite'},stale ? '다른 변경이 저장되었습니다. 입력 초안을 버리고 최신 문안을 확인해 주세요.' : draft.dirty ? '저장하지 않은 입력 초안입니다. 공유·PDF에는 포함되지 않습니다.' : a.state === 'approved' ? '현재 문안이 공유 승인되었습니다.' : '저장 후 공유할 내용과 목표 출처를 검토하고 승인해 주세요.'),
-        h('div',{class:'nr-note-actions'},h('button',{id:'reportNotesSave',type:'button',class:'btn primary',disabled:busy || !a.can_edit || !draft.dirty || stale,onclick:function () { mutate('save'); }},'문안 저장'),
+        h('div',{class:'nr-note-actions'},h('button',{id:'reportNotesSave',type:'button',class:'btn primary',disabled:busy || !a.can_edit || !draft.dirty || stale || invalid || missingSource,onclick:function () { mutate('save'); }},'문안 저장'),
           h('button',{id:'reportNotesApprove',type:'button',class:'btn',disabled:busy || !a.can_approve || draft.dirty || stale || a.state !== 'draft',onclick:function () { mutate('approve'); }},'검토 후 공유 승인'),
           h('button',{type:'button',class:'btn',disabled:busy,onclick:function () { if (!current() || savingNotes[key]) return; delete drafts[key]; renderDetail(report,mark,ctx); }},'입력 초안 버리기')),
         h('div',{id:'reportNotesCandidate'},sharedContent(report,draft.document,true)),
         notesHistory(a));
     }
+    function makePaper(report,options) {
+      options = options || {};
+      var kind = Object.prototype.hasOwnProperty.call(LAYOUTS,options.layout) ? options.layout : 'a';
+      var p = report.payload || {}, period = p.period || {}, scope = report.scope || {}, detail = p.details || {}, comparison = detail.comparison || {};
+      var extra = enrichment(report), shared = approvedShared(report), printing = options.print === true;
+      var available = p.format_version === 2 && Array.isArray(detail.daily);
+      function meta() {
+        return h('section',{class:'nr-paper-meta'},h('h3',null,'보고서 기준'),
+          h('p',null,env.periodText(period.start,period.end) + ' · ' + (period.kind === 'monthly' ? '월간' : '주간')),
+          h('p',{class:'nr-account-scope'},scope.kind === 'company' && detail.status === 'legacy_unavailable' ? '이전 판 · 포함 계정 상세 미보관' : scope.kind === 'company' ? '업체 전체 합산 · ' + env.num((scope.accounts || []).length) + '개 계정 · ' +
+            (scope.accounts || []).map(function (account) { return (account.account_name || '계정') + ' (' + (account.ad_account_no || '번호 미확인') + ')'; }).join(', ') :
+            (scope.account_name || '계정 이름 미확인') + ' · 광고 계정 ID ' + (scope.ad_account_no || '미확인')),
+          h('p',{class:'report-meta'},'담당 ' + (report.owner && report.owner.name || '미확인') + ' · 저장된 ' + env.num(report.revision_no) + '판'),
+          h('p',{class:'hint'},'자료 기준 ' + env.datedTime(report.generated_at)),
+          h('p',{class:'nr-compare-note'},'비교 기간: ' + (comparison.period ? env.periodText(comparison.period.start,comparison.period.end) : '자료 미보관') + ' · 전주/전월 비교이며 이전 판 정정과 다릅니다. 비율 차이는 %p로 표시합니다.'));
+      }
+      function brief() {
+        return h('section',{class:'nr-brief'},h('h3',null,'이번 기간, 세 줄로 보기'),
+          (detail.briefing || []).length ? h('ol',null,detail.briefing.map(function (line) { return h('li',null,line); })) :
+            h('p',null,'검증된 상세 자료가 부족해 요약을 작성하지 않았습니다.'),h('p',{class:'hint'},'저장된 숫자로 만든 요약입니다. 성과 원인이나 향후 매출을 추정하지 않습니다.'));
+      }
+      function kpis() { return h('dl',{class:'nr-kpis'},['spend','conversion_value','conversions','roas','cpa','cvr'].map(function (key) { return metricCard(report,key); })); }
+      function comparisonSection(open) {
+        var content = Array.isArray(extra.metrics) ? comparisonTable(extra.metrics) : h('p',{class:'hint'},'이 저장판의 추가 지표·비교 범위는 미보관입니다. 현재 자료로 채우지 않습니다.');
+        return open ? h('section',{class:'nr-comparison'},h('h3',null,'17개 지표 · 현재와 직전 기간'),content) :
+          h('details',{class:'nr-comparison',open:printing},h('summary',null,'17개 지표 · 현재와 직전 기간'),content);
+      }
+      function chart() {
+        return h('section',{class:'nr-chart-panel',id:printing ? null : 'reportChart'},
+          h('h3',null,'일별 성과 흐름 · ' + LABEL[chartMetric]),drawChart(report,chartMetric,printing));
+      }
+      var notices = [report.status !== 'ready' ? h('div',{class:'nr-notice'},stateLabel(report.status) + '입니다. 아래 숫자는 확인된 자료의 합계이며 전체 기간 성과와 다를 수 있습니다. 미수집 항목은 —로 표시합니다.') : null,
+        !available ? h('div',{class:'nr-notice'},'이전 형식으로 저장된 판입니다. 계정별 상세·일별 추이는 보관되지 않았습니다. 이 판의 값을 현재 자료로 바꾸지 않습니다.') : null,
+        (extra.period_caveats || []).length ? h('div',{class:'nr-notice'},(extra.period_caveats || []).map(function (line) { return h('p',null,line); })) : null];
+      var body;
+      if (kind === 'b') {
+        body = h('div',{class:'nr-analysis-grid'},h('aside',{class:'nr-analysis-meta'},meta(),qualityCards(report)),
+          h('div',{class:'nr-analysis-main'},notices,comparisonSection(true),chart(),brief(),feedback(report),sharedContent(report,shared,false),targetSection(report,shared)));
+      } else if (kind === 'c') {
+        body = [meta(),notices,qualityCards(report),kpis(),h('div',{class:'nr-strategy-grid'},h('div',null,brief(),feedback(report)),
+          h('aside',{class:'nr-strategy-plan'},sharedContent(report,shared,false),targetSection(report,shared))),chart(),comparisonSection(false)];
+      } else {
+        body = [meta(),notices,qualityCards(report),brief(),kpis(),h('div',{class:'nr-a-review-grid'},chart(),sharedContent(report,shared,false)),
+          feedback(report),targetSection(report,shared),comparisonSection(false)];
+      }
+      var paper = h('article',{class:'nr-report nr-report-paper nr-layout-' + kind,'data-layout':kind,'data-report-id':String(report.report_id),
+        'data-revision-fingerprint':report.revision_fingerprint,'data-account-key':scope.account_key},
+        h('header',{class:'nr-report-header'},h('div',null,h('p',{class:'nr-eyebrow'},'META I&C · NAVER ADS REPORT'),
+          h('h2',{class:'nr-paper-title',id:printing ? null : 'reportDetailTitle'},report.company_name + ' ' + (period.kind === 'monthly' ? '월간' : '주간') + ' 보고서'),
+          h('p',{class:'nr-subtitle'},env.periodText(period.start,period.end))),h('span',{class:'nr-layout-label'},LAYOUTS[kind])),
+        body,h('p',{class:'nr-public-caveat'},'전환은 광고 플랫폼의 이벤트 수이며 주문·구매자 수와 다를 수 있습니다. 광고 전환가치는 실제 주문·결제 매출과 별도입니다. ROAS·전환율·전환당 비용은 기본·전환이 함께 확인된 범위로 계산합니다.'),
+        h('details',{class:'nr-day-table',open:printing},h('summary',null,'일별 숫자 보기'),dailyTable(detail.daily || [])),contributions(report),
+        h('section',{class:'nr-public-quality'},h('h3',null,'집계 범위 · 누락 확인'),h('p',{class:'report-meta'},'기본 지표 ' + env.num((p.coverage || {}).basic_complete_account_days) + '/' + env.num((p.coverage || {}).expected_account_days) +
+          ' 계정×일 · 전환 지표 ' + env.num((p.coverage || {}).conversion_complete_account_days) + '/' + env.num((p.coverage || {}).expected_account_days) + ' 계정×일'),
+          h('p',{class:'hint'},'누락된 일자나 지표는 0이 아닙니다. 부분 집계 PDF에도 미확인 범위를 표시합니다.'),missingDetails(p)),
+        h('footer',{class:'nr-report-footer'},'META I&C · 네이버 광고 성과 보고서',h('span',null,'PDF 저장은 발송이 아닙니다. 사본은 이후 정정되어도 자동 변경되지 않습니다.')));
+      if (printing) {
+        function expand(node) {
+          if ((node.tagName || node.tag || '').toLowerCase() === 'details') node.setAttribute('open','');
+          Array.prototype.forEach.call(node.children || [],expand);
+        }
+        expand(paper);
+      }
+      return paper;
+    }
     function renderDetail(report,mark,ctx) {
       displayedMark = mark; displayedContext = ctx;
-      var p = report.payload || {}, period = p.period || {}, scope = report.scope || {}, detail = p.details || {}, comparison = detail.comparison || {};
-      var available = p.format_version === 2 && Array.isArray(detail.daily);
-      var chosen = selected, shared = approvedShared(report), extra = enrichment(report);
-      function switchScope(account) { if (fresh(mark,ctx) && displayed === report) open(chosen,account); }
+      var p = report.payload || {}, scope = report.scope || {}, detail = p.details || {};
+      var available = p.format_version === 2 && Array.isArray(detail.daily), chosen = selected;
+      function current() { return fresh(mark,ctx) && displayed === report; }
+      function switchScope(account) { if (current()) open(chosen,account); }
       put($('reportDetail'),
         h('div',{class:'nr-detail-top'},h('button',{type:'button',class:'link',id:'reportBack',onclick:function () { selected = null; load(filter.page); }},'← 보고서 목록'),
           h('div',{class:'nr-preview-controls'},h('span',{class:'hint'},'현재 로그인 사용자의 공유용 내부 미리보기'),h('button',{id:'reportSharePreview',type:'button',class:'btn sm','aria-pressed':String(sharedView),onclick:function () {
-            if (!fresh(mark,ctx) || displayed !== report) return; sharedView = !sharedView; renderDetail(report,mark,ctx);
+            if (!current()) return; sharedView = !sharedView; renderDetail(report,mark,ctx);
           }},sharedView ? '담당자 편집 보기' : '공유용 검토 보기'))),
-        h('article',{class:'card nr-report'},
-          h('header',{class:'nr-report-header'},h('div',null,h('p',{class:'nr-eyebrow'},'META I&C · NAVER ADS REPORT'),
-            h('h2',{id:'reportDetailTitle'},report.company_name + ' ' + (period.kind === 'monthly' ? '월간' : '주간') + ' 보고서'),
-            h('p',{class:'nr-subtitle'},env.periodText(period.start,period.end) + ' · 담당 ' + (report.owner && report.owner.name || '미확인'))),
-            h('button',{type:'button',class:'btn primary',id:'reportPdfDownload',disabled:!available || !exportReady(report),onclick:function () { download(report,this,mark,ctx); }},'PDF 내려받기')),
+        h('section',{class:'card nr-report-controls','aria-label':'보고서 디자인과 PDF 저장'},
+          h('div',{class:'nr-layout-tools'},h('span',null,'보고서 디자인'),h('div',{class:'chips','aria-label':'보고서 디자인 선택'},Object.keys(LAYOUTS).map(function (key) {
+            return h('button',{type:'button',id:'reportLayout-' + key,class:'chip' + (layout === key ? ' on' : ''),'aria-pressed':String(layout === key),onclick:function () {
+              if (!current() || layout === key) return; layout = key; layoutGeneration++;
+              try { if (window.sessionStorage) window.sessionStorage.setItem('naver-report-layout',key); } catch (_) {}
+              if (window.NaverReportPDF && window.NaverReportPDF.cancelPrint) window.NaverReportPDF.cancelPrint();
+              renderDetail(report,mark,ctx);
+            }},LAYOUTS[key]);
+          }))),h('div',{class:'nr-print-action'},h('button',{type:'button',class:'btn primary',id:'reportPdfDownload',disabled:!available || !exportReady(report),onclick:function () { download(report,this,mark,ctx); }},'PDF 저장'),
+            h('p',{class:'hint'},'선택한 디자인의 브라우저 인쇄창에서 PDF로 저장하세요. 저장 완료 여부는 브라우저에서 확인합니다.')),
           h('div',{class:'nr-scope-row'},h('div',{class:'chips','aria-label':'보고서 집계 범위'},
             h('button',{type:'button',class:'chip' + (scope.kind === 'account' ? ' on' : ''),'aria-pressed':String(scope.kind === 'account'),onclick:function () { switchScope(chosen.account_key); }},'이 광고 계정'),
-            h('button',{type:'button',class:'chip' + (scope.kind === 'company' ? ' on' : ''),'aria-pressed':String(scope.kind === 'company'),onclick:function () { switchScope('company'); }},'업체 전체 합산')),
-            statusChip(report.status)),
-          h('p',{class:'nr-account-scope'},scope.kind === 'company' && detail.status === 'legacy_unavailable' ? '이전 판 · 포함 계정 상세 미보관' : scope.kind === 'company' ? '합산 ' + env.num((scope.accounts || []).length) + '개 계정 · ' +
-              (scope.accounts || []).map(function (account) { return (account.account_name || '계정') + ' (' + (account.ad_account_no || '번호 미확인') + ')'; }).join(', ') :
-              (scope.account_name || '계정 이름 미확인') + ' · 광고 계정 ID ' + (scope.ad_account_no || '미확인')),
-          h('p',{class:'report-meta'},'저장된 ' + env.num(report.revision_no) + '판 · 자료 기준 ' + env.datedTime(report.generated_at)),
-          h('p',{class:'hint'},'열람 확인 ' + env.datedTime(report.checked_at) + ' · 원천 재확인 상태는 집계 완결과 별도입니다.'),
-          report.status !== 'ready' ? h('div',{class:'nr-notice'},stateLabel(report.status) + '입니다. 아래 숫자는 확인된 자료의 합계이며 전체 기간 성과와 다를 수 있습니다. 미수집 항목은 —로 표시합니다.') : null,
-          !available ? h('div',{class:'nr-notice'},'이전 형식으로 저장된 판입니다. 계정별 상세·일별 추이는 보관되지 않았습니다. 다음 보고서 재집계 때 새 판으로 확인할 수 있으며 이 판의 값을 현재 자료로 바꾸지 않습니다.') : null,
-          qualityCards(report),
-          (extra.period_caveats || []).length ? h('div',{class:'nr-notice'},(extra.period_caveats || []).map(function (line) { return h('p',null,line); })) : null,
-          h('section',{class:'nr-brief'},h('h3',null,'이번 기간, 세 줄로 보기'),
-            (detail.briefing || []).length ? h('ol',null,detail.briefing.map(function (line) { return h('li',null,line); })) :
-              h('p',null,'검증된 상세 자료가 부족해 요약을 작성하지 않았습니다.'),h('p',{class:'hint'},'저장된 숫자로 만든 요약입니다. 성과 원인이나 향후 매출을 추정하지 않습니다.')),
-          h('dl',{class:'nr-kpis'},['spend','conversion_value','conversions','roas','cpa','cvr'].map(function (key) { return metricCard(report,key); })),
-          h('p',{class:'nr-compare-note'},'비교 기간: ' + (comparison.period ? env.periodText(comparison.period.start,comparison.period.end) : '자료 미보관') +
-            ' · 전주/전월 비교이며 이전 판 정정과 다릅니다. 비율 차이는 %p로 표시합니다.'),
-          h('section',{class:'nr-comparison'},h('h3',null,'17개 지표 · 현재와 직전 기간'),Array.isArray(extra.metrics) ? comparisonTable(extra.metrics) : h('p',{class:'hint'},'이 저장판의 추가 지표·비교 범위는 미보관입니다. 현재 자료로 채우지 않습니다.')),
-          h('section',{id:'reportChart',class:'nr-chart-panel'}),
-          h('dl',{class:'nr-secondary'},['impressions','clicks','ctr','cpc','conversions','cvr'].map(function (key) { return metricCard(report,key); })),
-          h('p',{class:'hint'},'전환은 수집된 전환 지표이며 구매 건수와 다를 수 있습니다. ROAS·전환율·전환당 비용은 기본·전환이 함께 확인된 범위로 계산합니다.'),
-          h('details',{class:'nr-day-table'},h('summary',null,'일별 숫자 보기'),dailyTable(detail.daily || [])),
-          contributions(report),feedback(report),targetSection(report,sharedView ? shared : report.annotations && report.annotations.document),
-          sharedContent(report,shared,false),sharedView ? null : annotations(report,mark,ctx),
-          h('details',{class:'nr-quality'},h('summary',null,'집계 범위 · 누락 · 정정 이력 확인'),
-            env.validation(report),env.changes(report),
-            h('p',{class:'report-meta'},'기본 지표 ' + env.num((p.coverage || {}).basic_complete_account_days) + '/' + env.num((p.coverage || {}).expected_account_days) +
-              ' 계정×일 · 전환 지표 ' + env.num((p.coverage || {}).conversion_complete_account_days) + '/' + env.num((p.coverage || {}).expected_account_days) + ' 계정×일'),
-            h('p',{class:'hint'},'누락된 일자나 지표는 0이 아닙니다. 부분 집계 PDF에도 미확인 범위를 표시합니다.'),
-            missingDetails(p),history(report,mark,ctx)),
-          h('footer',{class:'nr-report-footer'},'META I&C · 네이버 광고 성과 보고서',h('span',null,'다운로드는 발송이 아닙니다. 사본은 이후 정정되어도 자동 변경되지 않습니다.'))));
+            h('button',{type:'button',class:'chip' + (scope.kind === 'company' ? ' on' : ''),'aria-pressed':String(scope.kind === 'company'),onclick:function () { switchScope('company'); }},'업체 전체 합산')),statusChip(report.status))),
+        makePaper(report,{layout:layout}),sharedView ? null : h('section',{class:'card nr-internal-review'},annotations(report,mark,ctx),
+          h('details',{class:'nr-quality'},h('summary',null,'내부 검토 · 정정 이력 확인'),env.validation(report),env.changes(report),history(report,mark,ctx))));
       renderChart(report,mark,ctx);
     }
     function missingDetails(payload) {
@@ -488,23 +536,28 @@
     }
     function download(report,button,mark,ctx) {
       if (!fresh(mark,ctx) || displayed !== report || button.disabled || !exportReady(report)) return;
+      var chosenLayout = layout, generation = layoutGeneration;
+      function current() { return fresh(mark,ctx) && displayed === report && exportReady(report) && layout === chosenLayout && layoutGeneration === generation; }
       button.disabled = true; button.textContent = '권한·보고서 확인 중…';
       env.api('GET',detailPath(report.report_id,report.scope.account_key)).then(function (verified) {
-        if (!fresh(mark,ctx) || displayed !== report) return;
+        if (!current()) return;
         if (!sameEdition(report,verified)) throw new Error('report-changed');
-        if (!window.NaverReportPDF) throw new Error('pdf-unavailable');
-        button.textContent = 'PDF 파일 생성 중…';
-        return window.NaverReportPDF.download(verified,{isCurrent:function () { return fresh(mark,ctx) && displayed === report && exportReady(report); }}).then(function () {
-          if (fresh(mark,ctx) && displayed === report) env.toast('PDF 파일을 내려받았습니다. 광고주에게 자동 발송하지 않았습니다.');
+        if (!window.NaverReportPDF || !window.NaverReportPDF.print) throw new Error('pdf-unavailable');
+        var paper = makePaper(verified,{layout:chosenLayout,print:true});
+        if (!current()) return;
+        button.textContent = '인쇄창 준비 중…';
+        return window.NaverReportPDF.print(verified,{layout:chosenLayout,paper:paper,isCurrent:current}).then(function (result) {
+          if (current() && result && result.started === true) env.toast('인쇄창을 열었습니다. 브라우저에서 PDF로 저장해 주세요.');
         });
       }).catch(function (error) {
         if (!fresh(mark,ctx)) return;
         if (env.denied(error)) { env.purge(error); return; }
-        env.toast(error.message === 'report-changed' ? '보고서 정보가 바뀌었습니다. 새로고침 후 다시 내려받아 주세요.' : 'PDF를 만들지 못했습니다. 파일·글꼴 연결과 로그인 상태를 확인한 뒤 다시 시도해 주세요.');
-      }).then(function () { if (fresh(mark,ctx) && displayed === report) { button.disabled = !exportReady(report); button.textContent = 'PDF 내려받기'; } });
+        if (!current()) return;
+        env.toast(error.message === 'report-changed' ? '보고서 정보가 바뀌었습니다. 새로고침 후 다시 저장해 주세요.' : '인쇄창을 열지 못했습니다. 로그인 상태와 브라우저 인쇄 설정을 확인해 주세요.');
+      }).then(function () { if (fresh(mark,ctx) && displayed === report && layoutGeneration === generation) { button.disabled = !exportReady(report); button.textContent = 'PDF 저장'; } });
     }
-    return {load:load,company:function (pid) { filter.pid = pid; filter.q = ''; filter.page = 0; selected = null; displayed = null; },
-      notesCapability:notesCapability,hasUnsaved:dirty,reset:function () { epoch++; clearTimeout(searchTimer); selected = null; displayed = null; displayedMark = null; displayedContext = null; lastList = null; listReady = false; listContext = null; drafts = {}; savingNotes = {}; sharedView = false; filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}; anchors = {}; if (initialized) controls(); put($('reportDetail')); put($('reportUnlinked')); }};
+    return {load:load,makePaper:makePaper,company:function (pid) { filter.pid = pid; filter.q = ''; filter.page = 0; selected = null; displayed = null; },
+      notesCapability:notesCapability,hasUnsaved:dirty,reset:function () { epoch++; layoutGeneration++; if (window.NaverReportPDF && window.NaverReportPDF.cancelPrint) window.NaverReportPDF.cancelPrint(); clearTimeout(searchTimer); selected = null; displayed = null; displayedMark = null; displayedContext = null; lastList = null; listReady = false; listContext = null; drafts = {}; savingNotes = {}; sharedView = false; filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}; anchors = {}; if (initialized) controls(); put($('reportDetail')); put($('reportUnlinked')); }};
   }
   window.NaverReports = {create:create,model:{query:query,changeText:changeText,sameEdition:sameEdition,metric:metric}};
 }());
