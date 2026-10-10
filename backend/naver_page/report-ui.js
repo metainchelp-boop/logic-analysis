@@ -35,6 +35,7 @@
       a.revision_fingerprint === b.revision_fingerprint && JSON.stringify(a.scope) === JSON.stringify(b.scope) &&
       JSON.stringify(a.payload) === JSON.stringify(b.payload) &&
       JSON.stringify(a.annotations) === JSON.stringify(b.annotations) &&
+      JSON.stringify(a.marketing_strategy) === JSON.stringify(b.marketing_strategy) &&
       ['company_name','owner','generated_at','period_key','status','possibility_id'].every(function (key) { return JSON.stringify(a[key]) === JSON.stringify(b[key]); });
   }
   function create(env) {
@@ -42,12 +43,12 @@
     var filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}, anchors = {}, epoch = 0, searchTimer;
     var selected = null, displayed = null, initialized = false, chartMetric = 'spend', lastList = null, listReady = false, listContext = null;
     var displayedMark = null, displayedContext = null;
-    var sharedView = false, drafts = {}, savingNotes = {};
+    var sharedView = false, drafts = {}, savingNotes = {}, strategyDrafts = {}, savingStrategy = {};
     var layout = 'a', layoutGeneration = 0;
     try { var preferred = window.sessionStorage && window.sessionStorage.getItem('naver-report-layout'); if (Object.prototype.hasOwnProperty.call(LAYOUTS,preferred)) layout = preferred; } catch (_) {}
     function noteKey(report) { return report.report_id + '|' + report.scope.account_key + '|' + report.revision_fingerprint; }
-    function dirty() { return Object.keys(drafts).some(function (key) { return drafts[key].dirty; }); }
-    function exportReady(report) { var key = noteKey(report); return !savingNotes[key] && !(drafts[key] && drafts[key].dirty); }
+    function dirty() { return Object.keys(drafts).some(function (key) { return drafts[key].dirty; }) || Object.keys(strategyDrafts).some(function (key) { return strategyDrafts[key].dirty; }); }
+    function exportReady(report) { var key = noteKey(report); return !savingNotes[key] && !(drafts[key] && drafts[key].dirty) && !savingStrategy[key] && !(strategyDrafts[key] && strategyDrafts[key].dirty); }
     if (window.addEventListener) window.addEventListener('beforeunload',function (event) { if (dirty()) { event.preventDefault(); event.returnValue = ''; } });
     function context() { return env.context(); }
     function fresh(mark, ctx) { return mark === epoch && ctx === context() && env.active(); }
@@ -58,6 +59,17 @@
           body.revision_fingerprint !== displayed.revision_fingerprint || !Number.isSafeInteger(body.expected_version) || body.expected_version !== a.version) return false;
       if (body.action === 'save') return a.can_edit === true && !!body.document && typeof body.document === 'object' && !Array.isArray(body.document);
       return body.action === 'approve' && body.document === undefined && a.can_approve === true && a.state === 'draft' && !(drafts[noteKey(displayed)] && drafts[noteKey(displayed)].dirty);
+    }
+    function strategyCapability(body) {
+      if (!body || !displayed || !fresh(displayedMark,displayedContext)) return false;
+      var s = displayed.marketing_strategy || {}, m = s.metadata, key = noteKey(displayed);
+      if (!Number.isSafeInteger(s.version) || s.version < 0 || !m || m.report_id !== displayed.report_id || m.account_key !== displayed.scope.account_key || m.revision_fingerprint !== displayed.revision_fingerprint ||
+          body.report_id !== displayed.report_id || body.account_key !== displayed.scope.account_key || body.revision_fingerprint !== displayed.revision_fingerprint ||
+          !Number.isSafeInteger(body.expected_version) || body.expected_version !== s.version || savingStrategy[key]) return false;
+      if (body.action === 'save') return s.can_edit === true && !!body.document && typeof body.document === 'object' && !Array.isArray(body.document);
+      if (body.document !== undefined || strategyDrafts[key] && strategyDrafts[key].dirty) return false;
+      if (body.action === 'generate_claude') return s.can_edit === true && displayed.scope.account_key !== 'company' && s.provider_status && s.provider_status.configured === true;
+      return body.action === 'generate' && s.can_edit === true || body.action === 'approve' && s.can_approve === true && s.state === 'draft';
     }
     function stateLabel(status) { return STATUS[status] || '집계 상태 미확인'; }
     function value(payload, key) {
@@ -111,6 +123,13 @@
       var a = report.annotations || {}, s = a.shared, m = s && s.metadata;
       return a.state === 'approved' && s && s.state === 'approved' && s.version === a.version && m &&
         m.report_id === report.report_id && m.account_key === report.scope.account_key && m.revision_fingerprint === report.revision_fingerprint ? s : null;
+    }
+    function approvedStrategy(report) {
+      var a = report.marketing_strategy || {}, s = a.shared, m = s && s.metadata, head = a.metadata;
+      return a.state === 'approved' && Number.isSafeInteger(a.version) && a.version > 0 && s && s.state === 'approved' && s.version === a.version && m && head &&
+        head.report_id === report.report_id && head.account_key === report.scope.account_key && head.revision_fingerprint === report.revision_fingerprint &&
+        m.report_id === report.report_id && m.account_key === report.scope.account_key && m.revision_fingerprint === report.revision_fingerprint &&
+        s.document && typeof s.document === 'object' && !Array.isArray(s.document) ? s : null;
     }
     function init() {
       if (initialized) return;
@@ -362,6 +381,129 @@
           h('p',{class:'nr-preserve'},'목표 출처: ' + (doc.targets.source || '미작성')));
       }),a.history && a.history.next_before_version ? h('p',{class:'hint'},'최근 20개 문안 이력을 표시합니다.') : null);
     }
+    function strategyDocument(raw) {
+      raw = raw || {};
+      function text(value) { return typeof value === 'string' ? value : ''; }
+      function plans(items) { return Array.isArray(items) ? items.slice(0,6).map(function (item) { item = item || {}; return {action:text(item.action),reason:text(item.reason),criterion:text(item.criterion)}; }) : []; }
+      return {diagnosis:text(raw.diagnosis),direction:text(raw.direction),competitive_response:text(raw.competitive_response),
+        funnel_comment:text(raw.funnel_comment),ab_comment:text(raw.ab_comment),shared_comment:text(raw.shared_comment),
+        appeal_points:Array.isArray(raw.appeal_points) ? raw.appeal_points.slice(0,6).map(function (item) { item = item || {}; return {title:text(item.title),message:text(item.message),basis:text(item.basis)}; }) : [],
+        weekly_plan:plans(raw.weekly_plan),monthly_plan:plans(raw.monthly_plan)};
+    }
+    function strategyContent(raw,version) {
+      if (!raw) return null;
+      var doc = strategyDocument(raw);
+      function paragraph(title,value) { return h('section',{class:'nr-strategy-block'},h('h4',null,title),h('p',{class:'nr-preserve'},value || '이 승인본에 작성된 내용이 없습니다.')); }
+      function plan(title,items) {
+        return h('section',{class:'nr-strategy-plan-list'},h('h4',null,title),items.length ? h('ol',null,items.map(function (item) {
+          return h('li',null,h('b',null,item.action || '실행 항목 미작성'),h('p',{class:'nr-preserve'},item.reason || '이유 미작성'),
+            h('p',{class:'hint nr-preserve'},'판단 기준: ' + (item.criterion || '미작성')));
+        })) : h('p',{class:'hint'},'이 승인본에 확정된 계획이 없습니다.'));
+      }
+      return h('section',{class:'nr-marketing-strategy'},h('div',{class:'nr-strategy-heading'},h('h3',null,'마케터 전략 브리핑'),
+        h('span',{class:'pill p-green'},'공유 승인 ' + env.num(version) + '판')),
+        paragraph('현재 진단',doc.diagnosis),paragraph('앞으로의 방향',doc.direction),
+        h('section',{class:'nr-strategy-appeals'},h('h4',null,'고객이 선택할 이유 · 소구점'),doc.appeal_points.length ? doc.appeal_points.map(function (item) {
+          return h('div',{class:'nr-strategy-block'},h('h5',null,item.title),h('p',{class:'nr-preserve'},item.message),h('p',{class:'hint nr-preserve'},item.basis));
+        }) : h('p',{class:'hint'},'확인된 상품 자료에 근거한 소구점이 이 승인본에 없습니다. 임의 상품 사실을 추가하지 않습니다.')),
+        paragraph('시장·경쟁 대응',doc.competitive_response),
+        h('div',{class:'nr-strategy-plans'},plan('다음 주 운영 계획',doc.weekly_plan),plan('월간 운영 방향',doc.monthly_plan)),
+        paragraph('퍼널 진단',doc.funnel_comment),paragraph('A/B 비교와 다음 실험',doc.ab_comment),paragraph('광고주에게 전달할 코멘트',doc.shared_comment),
+        h('p',{class:'hint'},'전략과 계획은 검토 시점의 판단이며 실제 광고 변경·실험 완료·성과 개선을 뜻하지 않습니다.'));
+    }
+    function validStrategy(doc) {
+      var limits = {diagnosis:1800,direction:1400,competitive_response:500,funnel_comment:600,ab_comment:600,shared_comment:3000};
+      return Object.keys(limits).every(function (key) { return !!doc[key].trim() && doc[key].length <= limits[key]; }) &&
+        ['weekly_plan','monthly_plan'].every(function (period) { return doc[period].length >= 1 && doc[period].length <= 6 && doc[period].every(function (item) {
+          return ['action','reason','criterion'].every(function (key) { return !!item[key].trim() && item[key].length <= (key === 'action' ? 300 : 500); });
+        }); });
+    }
+    function strategyEditor(report,mark,ctx) {
+      var a = report.marketing_strategy, key = noteKey(report);
+      if (!a) return h('p',{class:'nr-notice'},'이 저장판의 전략 검토 기능을 확인하지 못했습니다. 기존 보고서는 그대로 볼 수 있습니다.');
+      var saved = strategyDocument(a.document), draft = strategyDrafts[key];
+      if (!draft) draft = strategyDrafts[key] = {document:strategyDocument(a.document),baseVersion:a.version,dirty:false};
+      if (!draft.dirty) { draft.document = strategyDocument(a.document); draft.baseVersion = a.version; }
+      var stale = draft.baseVersion !== a.version, busy = !!savingStrategy[key];
+      function current() { return fresh(mark,ctx) && displayed === report; }
+      function update() {
+        if (!current()) return;
+        draft.dirty = JSON.stringify(draft.document) !== JSON.stringify(saved);
+        var pdf = $('reportPdfDownload'); if (pdf) pdf.disabled = !exportReady(report) || report.payload.format_version !== 2 || !Array.isArray(report.payload.details && report.payload.details.daily);
+        var save = $('reportStrategySave'), approve = $('reportStrategyApprove'), generate = $('reportStrategyGenerate'), claude = $('reportStrategyClaude');
+        if (save) save.disabled = busy || a.can_edit !== true || stale || !draft.dirty || !validStrategy(draft.document);
+        if (approve) approve.disabled = busy || a.can_approve !== true || stale || draft.dirty || a.state !== 'draft';
+        if (generate) generate.disabled = busy || a.can_edit !== true || stale || draft.dirty;
+        if (claude) claude.disabled = busy || a.can_edit !== true || stale || draft.dirty || report.scope.account_key === 'company' || !(a.provider_status && a.provider_status.configured === true);
+        var status = $('reportStrategyStatus');
+        if (status) status.textContent = stale ? '다른 전략판이 저장되었습니다. 입력을 버리고 최신 전략을 확인해 주세요.' : busy ? '전략을 저장하고 같은 수치판을 다시 확인 중입니다…' :
+          draft.dirty ? validStrategy(draft.document) ? '저장하지 않은 전략 초안입니다. 공유·PDF에는 포함되지 않습니다.' : '진단·방향·코멘트와 주간·월간 계획을 모두 작성해 주세요. 계획에는 실행 항목·이유·판단 기준이 필요합니다.' : a.state === 'approved' ? '현재 전략판이 공유 승인되었습니다.' : '초안을 저장한 뒤 진단·소구·계획을 검토해 공유 승인해 주세요.';
+      }
+      function field(key,label,max) {
+        var input = h('textarea',{id:'reportStrategy-' + key,rows:4,maxlength:max,disabled:busy || a.can_edit !== true || stale,'aria-label':label,oninput:function () {
+          if (!current() || savingStrategy[noteKey(report)] || busy || a.can_edit !== true || stale) return;
+          draft.document[key] = this.value; update();
+        }}); input.value = draft.document[key];
+        return h('label',{class:'nr-note-field'},h('span',null,label),input);
+      }
+      function plans(key,title) {
+        var rows = draft.document[key];
+        return h('section',{class:'nr-strategy-plan-editor'},h('h4',null,title),rows.map(function (item,index) {
+          return h('div',{class:'nr-strategy-plan-editor'},['action','reason','criterion'].map(function (name) {
+            var label = {action:'실행 항목',reason:'이유',criterion:'판단 기준'}[name], input = h('textarea',{rows:2,maxlength:name === 'action' ? 300 : 500,
+              disabled:busy || a.can_edit !== true || stale,'aria-label':title + ' ' + (index + 1) + ' ' + label,oninput:function () {
+                if (!current() || busy || a.can_edit !== true || stale) return; item[name] = this.value; update();
+              }}); input.value = item[name];
+            return h('label',{class:'nr-note-field'},h('span',null,label),input);
+          }),h('button',{type:'button',class:'btn sm',disabled:busy || a.can_edit !== true || stale,onclick:function () {
+            if (!current() || busy || a.can_edit !== true || stale) return; rows.splice(index,1); draft.dirty = JSON.stringify(draft.document) !== JSON.stringify(saved); renderDetail(report,mark,ctx);
+          }},'이 항목 삭제'));
+        }),h('button',{type:'button',class:'btn sm',disabled:busy || a.can_edit !== true || stale || rows.length >= 6,onclick:function () {
+          if (!current() || busy || a.can_edit !== true || stale || rows.length >= 6) return;
+          rows.push({action:'',reason:'',criterion:''}); draft.dirty = true; renderDetail(report,mark,ctx);
+        }},'계획 항목 추가'));
+      }
+      function mutate(action) {
+        if (!current() || busy || stale || savingStrategy[key] || action === 'save' && (a.can_edit !== true || !draft.dirty || !validStrategy(draft.document)) ||
+            action !== 'save' && draft.dirty || action === 'generate' && a.can_edit !== true || action === 'approve' && (a.can_approve !== true || a.state !== 'draft')) return;
+        var body = {report_id:report.report_id,account_key:report.scope.account_key,revision_fingerprint:report.revision_fingerprint,expected_version:a.version,action:action};
+        if (action === 'save') body.document = strategyDocument(draft.document);
+        if (!strategyCapability(body)) return;
+        var pending = env.api('POST','/reports/strategy',body); busy = true; savingStrategy[key] = pending; renderDetail(report,mark,ctx);
+        pending.then(function () {
+          if (!current()) return;
+          return env.api('GET',detailPath(report.report_id,report.scope.account_key)).then(function (verified) {
+            if (!current()) return;
+            if (verified.report_id !== report.report_id || verified.revision_fingerprint !== report.revision_fingerprint || verified.scope.account_key !== report.scope.account_key) throw new Error('report-changed');
+            delete strategyDrafts[key]; delete savingStrategy[key]; displayed = verified; renderDetail(verified,mark,ctx); env.onDetailVerified(verified);
+            env.toast(action === 'approve' ? '현재 전략판의 공유를 승인했습니다. 광고 실행·발송은 하지 않았습니다.' : action === 'generate_claude' ? '검수 사례와 저장 성과로 Claude 초안을 작성했습니다. 검토 후 공유 승인해 주세요.' : action === 'generate' ? '저장된 집계로 규칙 기반 초안을 작성했습니다. AI API는 호출하지 않았습니다.' : '전략 초안을 저장했습니다. 공유하려면 검토 후 승인해 주세요.');
+          });
+        }).catch(function (error) {
+          if (!fresh(mark,ctx)) return;
+          if (env.denied(error)) { env.purge(error); return; }
+          if (!current()) return;
+          busy = false; delete savingStrategy[key]; renderDetail(report,mark,ctx);
+          var status = $('reportStrategyStatus');
+          if (status) status.textContent = error.status === 409 || error.message === 'report-changed' ? '수치판 또는 전략판이 바뀌었습니다. 새로 확인해 주세요. 입력 초안은 보존됩니다.' : '전략을 저장·승인하지 못했습니다. 입력 내용과 연결 상태를 확인해 주세요.';
+        }).then(function () { if (savingStrategy[key] === pending) delete savingStrategy[key]; });
+      }
+      return h('section',{class:'nr-strategy-editor','data-private':'true'},h('h3',null,'마케터 전략 · 담당자 검토'),
+        h('p',{class:'hint'},'전략 ' + env.num(a.version || 0) + '판 · ' + ({empty:'작성 전',draft:'공유 검토 전',approved:'공유 승인'}[a.state] || '상태 미확인') +
+          ' · ' + (a.source === 'rule_based' ? '저장 집계 기반 규칙 진단' : a.source === 'staff' ? '담당자 작성·검토 문안' : a.source === 'claude' ? 'AI 초안 · 담당자 검토 필요' : '작성 방식 미확인')),
+        h('p',{class:'nr-notice'},a.provider_status && a.provider_status.configured === true ? 'Claude는 저장 성과·현재 계획·검수 사례를 사용합니다. 담당 범위 안에서 업종·목표·광고유형이 확인된 사례만 익명으로 참조하고, 월간 비용 예약 상한 안에서 생성합니다. 실제 광고 집행은 별도입니다.' : '저장 집계 초안은 무료 규칙 진단입니다. Claude는 API 키·모델·비용 상한 설정 전이며 유료 호출을 시작하지 않습니다. 검수 사례를 먼저 축적할 수 있습니다.'),
+        a.references_current === false ? h('p',{class:'nr-notice'},'참조 계획 또는 학습 사례가 변경되어 기존 AI 전략의 공유·PDF 반영을 보류했습니다. 새 자료로 다시 생성해 주세요.') : null,
+        a.learning_provenance ? h('p',{class:'hint'},'AI 참조 사례 ' + env.num(a.learning_provenance.case_refs.length) + '건 · 계획 ' + env.num(a.learning_provenance.plan_version) + '판 · 모델 ' + (a.learning_provenance.model || '미확인')) : null,
+        h('div',{class:'nr-note-grid'},field('diagnosis','현재 진단',1800),field('direction','앞으로의 전략 방향',1400),
+          field('competitive_response','시장·경쟁 대응',500),field('funnel_comment','퍼널 진단',600),field('ab_comment','A/B 비교와 다음 실험',600),field('shared_comment','광고주에게 전달할 코멘트',3000)),
+        h('p',{class:'hint'},'현재 상품·경쟁 자료의 자동 연결은 미구현이므로 소구 자동 생성을 보류합니다. 상품 자료 연결 후 자동 참조할 예정이며 담당자의 근거 입력을 필수로 요구하지 않습니다.'),
+        plans('weekly_plan','다음 주 운영 계획'),plans('monthly_plan','월간 운영 방향'),
+        h('p',{class:'nr-notice',id:'reportStrategyStatus','aria-live':'polite'},stale ? '다른 전략판이 저장되었습니다. 입력 초안을 버리고 최신 전략을 확인해 주세요.' : draft.dirty ? '저장하지 않은 전략 초안입니다. 공유·PDF에는 포함되지 않습니다.' : '초안 저장 후 내용을 검토해 공유 승인해 주세요.'),
+        h('div',{class:'nr-strategy-editor-actions'},h('button',{type:'button',class:'btn',id:'reportStrategyGenerate',disabled:busy || a.can_edit !== true || stale || draft.dirty,onclick:function () { mutate('generate'); }},'저장 집계로 초안 작성'),
+          h('button',{type:'button',class:'btn',id:'reportStrategyClaude',disabled:busy || a.can_edit !== true || stale || draft.dirty || report.scope.account_key === 'company' || !(a.provider_status && a.provider_status.configured === true),onclick:function () { mutate('generate_claude'); }},'검수 사례로 Claude 초안 생성'),
+          h('button',{type:'button',class:'btn primary',id:'reportStrategySave',disabled:busy || a.can_edit !== true || stale || !draft.dirty || !validStrategy(draft.document),onclick:function () { mutate('save'); }},'전략 초안 저장'),
+          h('button',{type:'button',class:'btn',id:'reportStrategyApprove',disabled:busy || a.can_approve !== true || stale || draft.dirty || a.state !== 'draft',onclick:function () { mutate('approve'); }},'검토 후 전략 공유 승인'),
+          h('button',{type:'button',class:'btn',disabled:busy,onclick:function () { if (!current() || savingStrategy[key]) return; delete strategyDrafts[key]; renderDetail(report,mark,ctx); }},'전략 입력 초안 버리기')));
+    }
     function annotations(report,mark,ctx) {
       var a = report.annotations || {}, key = noteKey(report), saved = noteDocument(a.document), draft = drafts[key];
       if (!draft) draft = drafts[key] = {document:noteDocument(a.document),baseVersion:a.version || 0,dirty:false};
@@ -432,7 +574,7 @@
       options = options || {};
       var kind = Object.prototype.hasOwnProperty.call(LAYOUTS,options.layout) ? options.layout : 'a';
       var p = report.payload || {}, period = p.period || {}, scope = report.scope || {}, detail = p.details || {}, comparison = detail.comparison || {};
-      var extra = enrichment(report), shared = approvedShared(report), printing = options.print === true;
+      var extra = enrichment(report), shared = approvedShared(report), strategy = approvedStrategy(report), printing = options.print === true;
       var available = p.format_version === 2 && Array.isArray(detail.daily);
       function meta() {
         return h('section',{class:'nr-paper-meta'},h('h3',null,'보고서 기준'),
@@ -465,12 +607,12 @@
       var body;
       if (kind === 'b') {
         body = h('div',{class:'nr-analysis-grid'},h('aside',{class:'nr-analysis-meta'},meta(),qualityCards(report)),
-          h('div',{class:'nr-analysis-main'},notices,comparisonSection(true),chart(),brief(),feedback(report),sharedContent(report,shared,false),targetSection(report,shared)));
+          h('div',{class:'nr-analysis-main'},notices,comparisonSection(true),chart(),brief(),strategyContent(strategy && strategy.document,strategy && strategy.version),feedback(report),sharedContent(report,shared,false),targetSection(report,shared)));
       } else if (kind === 'c') {
-        body = [meta(),notices,qualityCards(report),kpis(),h('div',{class:'nr-strategy-grid'},h('div',null,brief(),feedback(report)),
+        body = [meta(),notices,qualityCards(report),kpis(),h('div',{class:'nr-strategy-grid'},h('div',null,strategyContent(strategy && strategy.document,strategy && strategy.version),brief(),feedback(report)),
           h('aside',{class:'nr-strategy-plan'},sharedContent(report,shared,false),targetSection(report,shared))),chart(),comparisonSection(false)];
       } else {
-        body = [meta(),notices,qualityCards(report),brief(),kpis(),h('div',{class:'nr-a-review-grid'},chart(),sharedContent(report,shared,false)),
+        body = [meta(),notices,qualityCards(report),brief(),strategyContent(strategy && strategy.document,strategy && strategy.version),kpis(),h('div',{class:'nr-a-review-grid'},chart(),sharedContent(report,shared,false)),
           feedback(report),targetSection(report,shared),comparisonSection(false)];
       }
       var paper = h('article',{class:'nr-report nr-report-paper nr-layout-' + kind,'data-layout':kind,'data-report-id':String(report.report_id),
@@ -517,7 +659,7 @@
           h('div',{class:'nr-scope-row'},h('div',{class:'chips','aria-label':'보고서 집계 범위'},
             h('button',{type:'button',class:'chip' + (scope.kind === 'account' ? ' on' : ''),'aria-pressed':String(scope.kind === 'account'),onclick:function () { switchScope(chosen.account_key); }},'이 광고 계정'),
             h('button',{type:'button',class:'chip' + (scope.kind === 'company' ? ' on' : ''),'aria-pressed':String(scope.kind === 'company'),onclick:function () { switchScope('company'); }},'업체 전체 합산')),statusChip(report)),refreshSummary(report)),
-        makePaper(report,{layout:layout}),sharedView ? null : h('section',{class:'card nr-internal-review'},annotations(report,mark,ctx),
+        makePaper(report,{layout:layout}),sharedView ? null : h('section',{class:'card nr-internal-review'},strategyEditor(report,mark,ctx),annotations(report,mark,ctx),
           h('details',{class:'nr-quality'},h('summary',null,'내부 검토 · 정정 이력 확인'),env.validation(report),env.changes(report),history(report,mark,ctx))));
       renderChart(report,mark,ctx);
     }
@@ -588,7 +730,7 @@
       }).then(function () { if (fresh(mark,ctx) && displayed === report && layoutGeneration === generation) { button.disabled = !exportReady(report); button.textContent = 'PDF 저장'; } });
     }
     return {load:load,makePaper:makePaper,company:function (pid) { filter.pid = pid; filter.q = ''; filter.page = 0; selected = null; displayed = null; },
-      notesCapability:notesCapability,hasUnsaved:dirty,reset:function () { epoch++; layoutGeneration++; if (window.NaverReportPDF && window.NaverReportPDF.cancelPrint) window.NaverReportPDF.cancelPrint(); clearTimeout(searchTimer); selected = null; displayed = null; displayedMark = null; displayedContext = null; lastList = null; listReady = false; listContext = null; drafts = {}; savingNotes = {}; sharedView = false; filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}; anchors = {}; if (initialized) controls(); put($('reportDetail')); put($('reportUnlinked')); }};
+      notesCapability:notesCapability,strategyCapability:strategyCapability,hasUnsaved:dirty,reset:function () { epoch++; layoutGeneration++; if (window.NaverReportPDF && window.NaverReportPDF.cancelPrint) window.NaverReportPDF.cancelPrint(); clearTimeout(searchTimer); selected = null; displayed = null; displayedMark = null; displayedContext = null; lastList = null; listReady = false; listContext = null; drafts = {}; savingNotes = {}; strategyDrafts = {}; savingStrategy = {}; sharedView = false; filter = {kind:'weekly',anchor:'',requestAnchor:'',q:'',page:0,pid:null}; anchors = {}; if (initialized) controls(); put($('reportDetail')); put($('reportUnlinked')); }};
   }
   window.NaverReports = {create:create,model:{query:query,changeText:changeText,sameEdition:sameEdition,metric:metric}};
 }());

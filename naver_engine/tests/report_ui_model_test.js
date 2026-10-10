@@ -97,7 +97,7 @@ function harness(preference) {
     window: {sessionStorage:{getItem:()=>preference,setItem:(_key,value)=>{preference=value;}}}, document: {visibilityState: 'visible', createElementNS: (_namespace, tag) => node(tag)},
     state: {gen: 0, inventoryGen: 0, reportsGen: 0, linksGen: 0, bellGen: 0,
       selection: 'all', screen: 'reports', me: {idx: 1, scope: 'owner', narrowed: false}, session: {}},
-    $, h, put, api, reportUI: null, kstDay: () => day, closeModals() {}, closeBell() {},
+    $, h, put, api, reportUI: null, automationUI: null, kstDay: () => day, closeModals() {}, closeBell() {},
     datedTime: value => value || '', errText: error => error.body && error.body.error || 'error',
     route() { routes++; }, loadReports() { throw new Error('예상하지 않은 페이지 복구'); },
     ApiError: class extends Error { constructor(status, body) { super(body.error); this.status = status; this.body = body; } },
@@ -716,4 +716,141 @@ test('현재 전환 숫자 응답 완료는 저장판의 전환 근거·지표�
   const old=detailData(); old.refresh={scope:'saved',status:'pending',conversion_response:response};
   history.requests[1].resolve(old); await flush();
   assert.doesNotMatch(history.$('reportDetail').textContent,/현재 원천 전환 수치 응답/);
+});
+
+function strategyReport(state='approved',version=1) {
+  const report=expandedData(), metadata={report_id:report.report_id,account_key:report.scope.account_key,revision_fingerprint:report.revision_fingerprint,strategy_version:1};
+  const document={diagnosis:'승인 진단 <img onerror=alert(1)>',direction:'승인 방향',appeal_points:[],competitive_response:'경쟁 자료 미연결',
+    weekly_plan:[{action:'주간 확인',reason:'근거 대조',criterion:'자료 완결 확인'}],monthly_plan:[{action:'월간 검토',reason:'추이 확인',criterion:'같은 범위 비교'}],funnel_comment:'광고 관측 범위',ab_comment:'통제된 A/B 자료 미연결',shared_comment:'승인된 마케터 코멘트'};
+  report.marketing_strategy={version,state,metadata,source:'staff',document,can_edit:true,can_approve:true,provider_status:{configured:false},
+    shared:state==='approved'?{version,state,metadata:{...metadata},document:JSON.parse(JSON.stringify(document)),source:'staff',approved_at:'2026-10-10T12:00:00+09:00'}:null};
+  return report;
+}
+test('세 공개 배치는 exact 승인 전략만 표시하고 불일치·초안·내부 필드는 제외한다',async()=>{
+  for(const layout of ['a','b','c']) {
+    const report=strategyReport(), fixture=await renderReportFixture(report);
+    report.marketing_strategy.document.shared_comment='PRIVATE_STRATEGY_CURRENT';
+    report.marketing_strategy.shared.document.internal_note='PRIVATE_STRATEGY_EXTRA';
+    const paper=fixture.ui.makePaper(report,{layout,print:true});
+    assert.match(paper.textContent,/승인 진단 <img onerror=alert\(1\)>/);assert.match(paper.textContent,/승인된 마케터 코멘트/);
+    assert.doesNotMatch(paper.textContent,/PRIVATE|담당자 검토|초안 저장/);
+    assert.equal(allNodes(paper).filter(node=>node.tag==='img'||node.tag==='textarea').length,0);
+    for(const mutate of [r=>r.marketing_strategy.state='draft',r=>r.marketing_strategy.shared.version=0,
+      r=>r.marketing_strategy.shared.metadata.account_key='other',r=>r.marketing_strategy.metadata.revision_fingerprint='other']) {
+      const changed=strategyReport();mutate(changed);const publicText=fixture.ui.makePaper(changed,{layout}).textContent;
+      assert.doesNotMatch(publicText,/승인 진단|승인된 마케터 코멘트/);assert.equal(allNodes(fixture.ui.makePaper(changed,{layout})).filter(node=>node.classList.contains('nr-marketing-strategy')).length,0);
+    }
+  }
+});
+test('전략 dirty 입력은 디자인·공유 미리보기 전환 후 보존되며 PDF·승인을 차단한다',async()=>{
+  const fixture=await renderReportFixture(strategyReport('draft'));
+  fixture.$('reportStrategy-direction').value='저장하지 않은 방향';fixture.$('reportStrategy-direction').fire('input');
+  assert.equal(fixture.$('reportPdfDownload').disabled,true);assert.equal(fixture.$('reportStrategyApprove').disabled,true);
+  fixture.$('reportLayout-c').fire('click');assert.equal(fixture.$('reportStrategy-direction').value,'저장하지 않은 방향');
+  fixture.$('reportSharePreview').fire('click');assert.doesNotMatch(fixture.$('reportDetail').textContent,/저장하지 않은 방향/);
+  fixture.$('reportSharePreview').fire('click');assert.equal(fixture.$('reportStrategy-direction').value,'저장하지 않은 방향');
+  assert.equal(fixture.requests.length,2);assert.equal(fixture.ui.hasUnsaved(),true);
+});
+test('전략 capability는 동일 수치판·계정·현재 버전과 서버 권한을 요구한다',async()=>{
+  const report=strategyReport('draft'),fixture=await renderReportFixture(report),body={report_id:report.report_id,account_key:report.scope.account_key,revision_fingerprint:report.revision_fingerprint,expected_version:1,action:'approve'};
+  assert.equal(fixture.ui.strategyCapability(body),true);
+  for(const change of [{report_id:99},{account_key:'other'},{revision_fingerprint:'other'},{expected_version:0},{expected_version:'1'},{document:{}},{action:'execute'}])assert.equal(fixture.ui.strategyCapability({...body,...change}),false);
+  fixture.$('reportStrategy-direction').value='입력';fixture.$('reportStrategy-direction').fire('input');assert.equal(fixture.ui.strategyCapability(body),false);
+  assert.equal(fixture.ui.strategyCapability({...body,action:'save',document:report.marketing_strategy.document}),true);
+  report.marketing_strategy.can_edit='true';assert.equal(fixture.ui.strategyCapability({...body,action:'save',document:{}}),false);
+  fixture.context.state.gen++;assert.equal(fixture.ui.strategyCapability(body),false);
+});
+test('규칙 초안 생성·승인은 명시 클릭으로만 요청하고 같은 상세를 다시 읽는다',async()=>{
+  const initial=strategyReport('empty',0);initial.marketing_strategy.document=null;const fixture=await renderReportFixture(initial);
+  assert.equal(fixture.requests.filter(r=>r.method==='POST').length,0);fixture.$('reportStrategyGenerate').fire('click');
+  assert.equal(fixture.requests[2].path,'/reports/strategy');assert.equal(fixture.requests[2].body.action,'generate');assert.equal(fixture.requests[2].body.expected_version,0);
+  fixture.requests[2].resolve({});await flush();assert.match(fixture.requests[3].path,/\/reports\/detail\?/);
+  const generated=strategyReport('draft',1);generated.marketing_strategy.source='rule_based';fixture.requests[3].resolve(generated);await flush();
+  assert.match(fixture.toasts.at(-1),/AI API는 호출하지 않았습니다/);fixture.$('reportStrategyApprove').fire('click');
+  assert.equal(fixture.requests[4].body.action,'approve');assert.equal(fixture.requests[4].body.document,undefined);fixture.requests[4].resolve({});await flush();
+  fixture.requests[5].resolve(strategyReport('approved',2));await flush();assert.match(fixture.$('reportDetail').textContent,/승인된 마케터 코멘트/);
+});
+test('전략 변경은 동일판 비교와 진행 중 PDF 검증을 무효화한다',async()=>{
+  const report=strategyReport(),fixture=await renderReportFixture(report),changed=JSON.parse(JSON.stringify(report));changed.marketing_strategy.can_approve=false;
+  assert.equal(model.sameEdition(report,changed),false);fixture.$('reportPdfDownload').fire('click');fixture.requests[2].resolve(changed);await flush();
+  assert.equal(fixture.downloads.length,0);assert.match(fixture.toasts.at(-1),/보고서 정보가 바뀌었습니다/);
+});
+test('전략 저장 대기 중 모든 입력을 잠그고 실패하면 초안을 다시 편집할 수 있다',async()=>{
+  const report=strategyReport('draft'),fixture=await renderReportFixture(report);
+  fixture.$('reportStrategy-direction').value='저장할 방향';fixture.$('reportStrategy-direction').fire('input');fixture.$('reportStrategySave').fire('click');
+  assert.equal(fixture.$('reportStrategy-direction').disabled,true);assert.equal(fixture.$('reportStrategySave').disabled,true);
+  fixture.$('reportStrategy-direction').value='대기 중 입력';fixture.$('reportStrategy-direction').fire('input');
+  fixture.requests[2].reject(new fixture.context.ApiError(500,{error:'failed'}));await flush();
+  assert.equal(fixture.$('reportStrategy-direction').value,'저장할 방향');assert.equal(fixture.$('reportStrategy-direction').disabled,false);assert.equal(fixture.ui.hasUnsaved(),true);
+});
+test('미승인·불일치 전략은 공개 ABC DOM에 빈 안내나 배치를 추가하지 않는다',async()=>{
+  const baseline=strategyReport(),fixture=await renderReportFixture(baseline);
+  delete baseline.marketing_strategy;
+  function publicTree(node) {return {tag:node.tag,attrs:node.attrs,text:node._text,children:node.children.map(publicTree)};}
+  for(const layout of ['a','b','c']) {
+    const expected=publicTree(fixture.ui.makePaper(baseline,{layout,print:true}));
+    for(const mutate of [r=>r.marketing_strategy.state='draft',r=>r.marketing_strategy.shared.version=9,
+      r=>r.marketing_strategy.metadata.report_id=99,r=>r.marketing_strategy.shared.metadata.account_key='foreign']) {
+      const unapproved=strategyReport();mutate(unapproved);
+      assert.deepEqual(publicTree(fixture.ui.makePaper(unapproved,{layout,print:true})),expected);
+    }
+  }
+});
+test('전략 저장은 현재 expected_version만 전송하며 충돌·권한거절 응답을 구분한다',async()=>{
+  const report=strategyReport('draft'),fixture=await renderReportFixture(report);
+  fixture.$('reportStrategy-direction').value='보존할 충돌 초안';fixture.$('reportStrategy-direction').fire('input');fixture.$('reportStrategySave').fire('click');
+  const sent=fixture.requests[2];
+  assert.equal(sent.body.expected_version,1);assert.equal(sent.body.document.direction,'보존할 충돌 초안');
+  assert.equal(sent.body.account_key,report.scope.account_key);assert.equal(sent.body.revision_fingerprint,report.revision_fingerprint);
+  sent.reject(new fixture.context.ApiError(409,{error:'conflict'}));await flush();
+  assert.equal(fixture.$('reportStrategy-direction').value,'보존할 충돌 초안');assert.match(fixture.$('reportStrategyStatus').textContent,/입력 초안은 보존됩니다/);
+  assert.equal(fixture.requests.length,3,'충돌을 자동 재시도하지 않는다');
+  fixture.$('reportStrategySave').fire('click');fixture.requests[3].reject(new fixture.context.ApiError(403,{error:'denied'}));await flush();
+  assert.equal(fixture.$('reportDetail').textContent,'');assert.equal(fixture.ui.hasUnsaved(),false);
+});
+test('초기화 뒤 늦은 전략 응답은 새 화면이나 새 저장 잠금을 해제하지 않는다',async()=>{
+  const report=strategyReport('draft'),fixture=await renderReportFixture(report);
+  fixture.$('reportStrategy-direction').value='옛 초안';fixture.$('reportStrategy-direction').fire('input');fixture.$('reportStrategySave').fire('click');
+  const oldSave=fixture.requests[2];fixture.ui.reset();
+  const list=fixture.ui.load();fixture.requests[3].resolve(full());await list;
+  findButton(fixture.$('reportsRows'),'보고서 보기').fire('click');fixture.requests[4].resolve(strategyReport('draft'));await flush();
+  fixture.$('reportStrategy-direction').value='새 초안';fixture.$('reportStrategy-direction').fire('input');fixture.$('reportStrategySave').fire('click');
+  oldSave.resolve({});await flush();
+  assert.equal(fixture.requests.length,6,'옛 응답은 상세 재조회도 시작하지 않는다');
+  assert.equal(fixture.$('reportStrategy-direction').value,'새 초안');assert.equal(fixture.$('reportStrategy-direction').disabled,true);
+  assert.equal(fixture.$('reportPdfDownload').disabled,true);assert.equal(fixture.toasts.length,0);
+  fixture.requests[5].reject(new fixture.context.ApiError(500,{error:'failed'}));await flush();
+  assert.equal(fixture.$('reportStrategy-direction').disabled,false);assert.equal(fixture.$('reportStrategy-direction').value,'새 초안');
+});
+
+test('Claude 초안은 설정된 개별 계정에서 명시 클릭할 때만 요청하고 저장판을 다시 읽는다',async()=>{
+  const report=strategyReport('empty',0);report.marketing_strategy.document=null;
+  report.marketing_strategy.provider_status={configured:true};
+  const fixture=await renderReportFixture(report),button=fixture.$('reportStrategyClaude');
+  assert.equal(button.disabled,false);assert.equal(fixture.requests.filter(r=>r.method==='POST').length,0);
+  const body={report_id:report.report_id,account_key:report.scope.account_key,revision_fingerprint:report.revision_fingerprint,expected_version:0,action:'generate_claude'};
+  assert.equal(fixture.ui.strategyCapability(body),true);
+  button.fire('click');assert.equal(fixture.requests[2].path,'/reports/strategy');assert.deepEqual(JSON.parse(JSON.stringify(fixture.requests[2].body)),body);
+  assert.equal(fixture.$('reportStrategyClaude').disabled,true);button.fire('click');assert.equal(fixture.requests.length,3,'생성 중 중복 호출을 거부한다');
+  fixture.requests[2].resolve({saved:true});await flush();assert.match(fixture.requests[3].path,/\/reports\/detail\?/);
+  const generated=strategyReport('draft',1);generated.marketing_strategy.source='claude';generated.marketing_strategy.provider_status={configured:true};
+  generated.marketing_strategy.provenance={plan_version:2,case_refs:[{asset_id:'anonymized-case',version:3}],model:'synthetic-model'};
+  fixture.requests[3].resolve(generated);await flush();
+  assert.match(fixture.toasts.at(-1),/Claude 초안을 작성/);assert.equal(fixture.$('reportStrategyApprove').disabled,false);
+  assert.equal(fixture.requests.filter(r=>r.method==='POST').length,1);
+});
+
+test('Claude 미설정·읽기 전용·통합 계정·dirty·오래된 화면은 생성 요청을 보내지 않는다',async()=>{
+  for(const mode of ['unconfigured','readonly','company','dirty','stale']) {
+    const report=strategyReport('draft');report.marketing_strategy.provider_status={configured:mode!=='unconfigured'};
+    if(mode==='readonly')report.marketing_strategy.can_edit=false;
+    if(mode==='company'){report.scope.account_key='company';report.marketing_strategy.metadata.account_key='company';}
+    const fixture=await renderReportFixture(report),button=fixture.$('reportStrategyClaude');
+    const body={report_id:report.report_id,account_key:report.scope.account_key,revision_fingerprint:report.revision_fingerprint,expected_version:1,action:'generate_claude'};
+    if(mode==='dirty'){fixture.$('reportStrategy-direction').value='미저장 전략';fixture.$('reportStrategy-direction').fire('input');}
+    if(mode==='stale')fixture.context.state.gen++;
+    else assert.equal(button.disabled,true,mode);
+    assert.equal(fixture.ui.strategyCapability(body),false,mode);button.fire('click');await flush();
+    assert.equal(fixture.requests.filter(r=>r.method==='POST').length,0,mode);
+  }
 });

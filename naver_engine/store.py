@@ -1782,6 +1782,16 @@ def _report_batch(store, cycle, pid, targets):
                     VALUES(?,?,?,?,?,?,?)""", (pid, period.key, report["revision_fingerprint"], at,
                                               report["status"], report["review_status"], text))
                 own[period.key] = (cursor.lastrowid, text)
+                # 학습 편입 오류가 원본 보고서 갱신을 막지 않는다. 실패는 재편입 대상으로 남긴다.
+                connection.execute("SAVEPOINT learning_report_capture")
+                try:
+                    store._capture_learning_report(connection, pid, cursor.lastrowid, report, at)
+                except (S.StoreError, ValueError, TypeError, KeyError):
+                    connection.execute("ROLLBACK TO SAVEPOINT learning_report_capture")
+                    connection.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (f"learning-capture-pending:{pid}:{cursor.lastrowid}", "pending"))
+                finally:
+                    connection.execute("RELEASE SAVEPOINT learning_report_capture")
                 made += 1
             validation["_required_after"] = required_after
             connection.execute("""INSERT INTO naver_auto_report_validation
@@ -3217,6 +3227,362 @@ class ManagedStorage:
                       (N._version_prefix(report_id, account_key) + f"{saved['version']:016d}", raw))
             self._set_meta(c, N._head_key(report_id, account_key), raw)
         return N._present(saved)
+
+    def _approval_head(self, connection, kind, identity, metadata):
+        from . import approval_documents as D
+        row = connection.execute("SELECT length(value),substr(value,1,?) FROM naver_auto_meta WHERE key=?",
+                                 (D.MAX_CHARS + 1, D.head_key(kind, identity))).fetchone()
+        return D.decode(row, metadata, kind)
+
+    def learning_assets(self, possibility_id, account_key):
+        """계정 원본을 보존한 학습 자산. 조회로 수집·검수·AI 호출을 시작하지 않는다."""
+        from . import learning_assets as LA
+        with _report_read_snapshot(self):
+            items = LA.list_assets(self._conn, possibility_id, account_key)
+            return {"version": 1, "items": items,
+                    "templates": {kind: LA.document_template(kind) for kind in ("performance", "setting_change", "experiment")},
+                    "counts": {state: sum(r["state"] == state for r in items) for state in ("draft", "reviewed", "rejected")},
+                    "retrieval": LA.retrieve(self._conn, possibility_id, account_key),
+                    "window_limit": 100, "has_more": len(items) == 100,
+                    "capture_pending": self._conn.execute("SELECT COUNT(*) FROM naver_auto_meta WHERE key>=? AND key<? AND value='pending'",
+                        (f"learning-capture-pending:{possibility_id}:", f"learning-capture-pending:{possibility_id}:\uffff")).fetchone()[0],
+                    "provenance_notice": "원천 성과와 담당자 입력·검수 기록을 구분합니다. 검수는 원인이나 실제 집행의 독립 입증이 아닙니다."}
+
+    def _learning_actor(self, possibility_id, account_key, actor, now, *, narrowed=False):
+        from . import automation_views as AV, approval_documents as D, views as W
+        from app.naver_auto import scope as SC
+        ctx = W.load(self, now)
+        scope = SC.narrowed_scope_of(ctx.org, actor) if narrowed else SC.scope_of(ctx.org, actor)
+        company, _ = AV.resolve(ctx, self, scope, possibility_id, account_key)
+        SC.require_client(ctx.org, scope, {possibility_id: AV.ownership(ctx, company)}, possibility_id, SC.ACT_APPROVE)
+        if H.stage_key(company["stage"]) not in D.EDIT_STAGES:
+            raise StoreRefused("현재 계약 단계에서는 학습 자산을 수정할 수 없습니다")
+        return ctx, scope
+
+    def record_learning_asset(self, possibility_id, account_key, actor, now, *, expected_version, asset_id, action, document=None):
+        from . import learning_assets as LA
+        self._need_writer()
+        self._not_future(now, "학습 기록 시각")
+        at = _kst_text(now, "학습 기록 시각")
+        if action == "save" and (not isinstance(document, dict) or document.get("source_refs")):
+            raise StoreRefused("원천 보고서·계획 참조는 서버 수집에서만 연결할 수 있습니다")
+        if action == "save" and isinstance(asset_id, str) and asset_id.startswith(("report-", "plan-")):
+            raise StoreRefused("보고서·계획 식별자는 서버 기록에서만 사용할 수 있습니다")
+        with self._tx() as c:
+            self._learning_actor(possibility_id, account_key, actor, now)
+            current = LA.get_asset(c, possibility_id, account_key, asset_id)
+            if action == "save" and current and current["document"]["source_refs"]:
+                raise StoreRefused("보고서·계획 원천 기록은 수정할 수 없습니다. 별도 자산으로 기록해 주세요")
+            return LA.record(c, possibility_id, account_key, actor, at, expected_version,
+                             asset_id, document, action=action)
+
+    def _capture_learning_report(self, connection, possibility_id, report_id, payload, at, actor=None):
+        from . import learning_assets as LA, report_views as RV, marketing_strategy as STR
+        for cid, account in payload.get("_account_reports", {}).items():
+            context = STR.build_context(account)
+            values = {item["key"]: item for item in context["metrics"]}
+            evidence = LA.document_template("performance")["evidence"]
+            for field, metric in (("impressions", "impressions"), ("clicks", "clicks"), ("spend", "spend"),
+                                  ("conversions", "conversions"), ("conversion_value", "conversion_value")):
+                value = values[metric]
+                evidence[field] = value["current"] if value["value_status"] == "ready" else None
+            evidence.update(period_start=account["period"]["start"], period_end=account["period"]["end"],
+                measurement_complete=context["quality"]["basic"]["complete"] and context["quality"]["conversion"]["complete"],
+                conversion_definition="platform", lag_mature=False)
+            document = LA.document_template("performance")
+            document.update(title="저장 보고서 성과 관측", evidence=evidence,
+                            source_refs={"report_id": report_id, "report_revision": payload["revision_fingerprint"]})
+            key, asset_id = RV.account_key(int(cid)), "report-" + str(report_id)
+            if LA.get_asset(connection, possibility_id, key, asset_id) is None:
+                LA.record(connection, possibility_id, key, actor, at, 0, asset_id, document, action="save")
+
+    def capture_learning_report(self, possibility_id, account_key, actor, now):
+        """기존 최신 보고서를 명시적으로 편입한다. 없는 자료를 새로 계산·수집하지 않는다."""
+        from . import learning_assets as LA
+        self._need_writer()
+        with self._tx() as c:
+            self._learning_actor(possibility_id, account_key, actor, now)
+            rows = c.execute("""SELECT report_id,payload_json FROM naver_auto_report_snapshot
+                WHERE possibility_id=? ORDER BY report_id DESC LIMIT 100""", (possibility_id,)).fetchall()
+            if not rows:
+                raise StoreRefused("연결할 저장 보고서가 없습니다")
+            from . import report_views as RV
+            found = 0
+            for row in rows:
+                payload = json.loads(row[1])
+                accounts = {cid: value for cid, value in payload.get("_account_reports", {}).items()
+                            if RV.account_key(int(cid)) == account_key}
+                if len(accounts) != 1:
+                    continue
+                found += 1
+                self._capture_learning_report(c, possibility_id, row[0], {**payload, "_account_reports": accounts},
+                                              _kst_text(now, "학습 기록 시각"), actor)
+                all_present = all(LA.get_asset(c, possibility_id, RV.account_key(int(cid)), "report-"+str(row[0])) is not None
+                                  for cid in payload.get("_account_reports", {}))
+                if all_present:
+                    self._set_meta(c, f"learning-capture-pending:{possibility_id}:{row[0]}", "recorded")
+            if not found:
+                raise StoreRefused("저장 보고서의 개별 계정 범위를 확인해 주세요")
+        return self.learning_assets(possibility_id, account_key)
+
+    def _save_approval(self, connection, kind, identity, metadata, current, document, source, actor, at, action):
+        from . import approval_documents as D
+        approved = action == "approve"
+        saved = {"version": current["version"] + 1, "state": "approved" if approved else "draft",
+                 "metadata": metadata, "document": document, "source": source,
+                 "author": current["author"] if approved else {"actor": actor, "at": at},
+                 "approved_by": actor if approved else None, "approved_at": at if approved else None}
+        raw = json.dumps(saved, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        if len(raw) > D.MAX_CHARS:
+            raise StoreRefused("승인 문서가 너무 큽니다")
+        connection.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?)",
+                           (D.history_key(kind, identity, saved["version"]), raw))
+        self._set_meta(connection, D.head_key(kind, identity), raw)
+        if kind == "automation-plan" and approved:
+            self._set_meta(connection, D.head_key("automation-plan-approved", identity), raw)
+        if kind == "automation-plan":
+            from . import learning_assets as LA
+            old = current["document"] or D.empty_plan()
+            fields = ("goal", "target_value", "daily_spend_cap", "absolute_bid_cap", "experiment_days", "loss_cap")
+            before, after = ({k: old[k] for k in fields}, {k: document[k] for k in fields})
+            changed = [k for k in fields if before[k] != after[k]]
+            event = LA.document_template("setting_change")
+            event.update(title="계획 승인 기록" if approved else "계획 변경 제안",
+                         source_refs={"plan_version": saved["version"]})
+            event["evidence"].update(execution="planned", before=before, after=after,
+                changed_variable=changed[0] if len(changed) == 1 else "multiple", observed_at=None)
+            LA.record(connection, metadata["possibility_id"], metadata["account_key"], actor, at, 0,
+                      "plan-" + str(saved["version"]), event, action="save")
+        if kind == "report-strategy" and approved:
+            old_ref = connection.execute("SELECT value FROM naver_auto_meta WHERE key=?",
+                (f"learning-strategy:{identity}:{current['version']}",)).fetchone()
+            if old_ref:
+                connection.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?)",
+                    (f"learning-strategy:{identity}:{saved['version']}", old_ref[0]))
+        return D.present(saved, plan=kind == "automation-plan")
+
+    def report_strategy(self, report_id, account_key, revision_fingerprint):
+        from . import approval_documents as D, report_notes as N
+        N._identity(report_id, account_key, revision_fingerprint)
+        with _report_read_snapshot(self):
+            pid, _, metadata = self._report_notes_scope(self._conn, report_id, account_key, revision_fingerprint)
+            metadata = {**metadata, "strategy_version": 1}
+            result = D.present(self._approval_head(self._conn, "report-strategy", f"{report_id}:{account_key}", metadata))
+            raw = self._conn.execute("SELECT value FROM naver_auto_meta WHERE key=?",
+                (f"learning-strategy:{report_id}:{account_key}:{result['version']}",)).fetchone()
+            result["learning_provenance"] = json.loads(raw[0]) if raw else None
+            result["references_current"] = True
+            if result["learning_provenance"]:
+                from . import learning_assets as LA
+                provenance = result["learning_provenance"]
+                valid = self.automation_plan(pid, account_key)["version"] == provenance["plan_version"]
+                for ref in provenance["case_refs"]:
+                    asset = LA.get_asset(self._conn, ref.get("possibility_id", pid), ref.get("account_key", account_key), ref["asset_id"])
+                    valid = valid and asset is not None and asset["version"] == ref["version"] and asset["state"] == "reviewed"
+                result["learning_provenance"] = {**provenance, "case_refs": [
+                    {"asset_id": ref["asset_id"] if ref.get("possibility_id", pid) == pid and ref.get("account_key", account_key) == account_key
+                     else "shared-" + hashlib.sha256(_json(ref).encode()).hexdigest()[:16], "version": ref["version"]}
+                    for ref in provenance["case_refs"]]}
+                result["references_current"] = valid
+                if not valid:
+                    result["shared"] = None
+            return result
+
+    def prepare_learning_strategy(self, report_id, account_key, revision_fingerprint, actor, now, expected_version, *, narrowed=False):
+        """Claude 호출 전에 고정 입력을 만든다. 호출 중에는 writer/DB 거래를 점유하지 않는다."""
+        from . import learning_assets as LA, approval_documents as D, report_views as RV
+        D.version(expected_version)
+        if not isinstance(account_key, str) or not re.fullmatch(r"[0-9a-f]{64}", account_key):
+            raise StoreRefused("AI 사례 참조는 개별 광고 계정에서 생성해 주세요")
+        with _report_read_snapshot(self):
+            pid, period_key, metadata = self._report_notes_scope(self._conn, report_id, account_key, revision_fingerprint)
+            ctx, scope = self._learning_actor(pid, account_key, actor, now, narrowed=narrowed)
+            latest = self._conn.execute("SELECT MAX(report_id) FROM naver_auto_report_snapshot WHERE possibility_id=? AND period_key=?",
+                                        (pid, period_key)).fetchone()[0]
+            dirty = self._conn.execute("SELECT pending FROM naver_auto_report_dirty WHERE possibility_id=? AND period_key=?",
+                                       (pid, period_key)).fetchone()
+            head = self._approval_head(self._conn, "report-strategy", f"{report_id}:{account_key}", {**metadata, "strategy_version": 1})
+            if latest != report_id or (dirty and dirty[0]) or head["version"] != expected_version:
+                raise StoreRefused("보고서·전략판이 변경되었습니다. 최신 자료를 확인해 주세요")
+            payload = json.loads(self._conn.execute("SELECT payload_json FROM naver_auto_report_snapshot WHERE report_id=?", (report_id,)).fetchone()[0])
+            plan = self.automation_plan(pid, account_key)
+            from . import learning_retrieval as LR, automation_views as AV
+            companies, pairs = AV.context(ctx, self, scope)
+            allowed_pairs = [(company, RV.account_key(cid)) for cid, company in pairs.items()
+                             if company in companies and cid in ctx.accounts]
+            retrieved = LR.retrieve_scoped(self._conn, allowed_pairs, pid, account_key)
+            learning = retrieved["context"]
+            plan_context = {"version": plan["version"], "state": plan["state"],
+                            "document": {k: v for k, v in plan["plan"].items() if k != "notes"}}
+            proof = {"report_id": report_id, "account_key": account_key, "revision_fingerprint": revision_fingerprint,
+                     "expected_version": expected_version, "plan_context": plan_context, "learning_context": learning,
+                     "case_refs": retrieved["refs"], "narrowed": narrowed}
+            return {**proof, "payload": RV._account_payload(payload, account_key),
+                    "proof_hash": hashlib.sha256(_json(proof).encode()).hexdigest()}
+
+    def record_learning_strategy(self, prepared, generated, actor, now):
+        from . import approval_documents as D
+        self._need_writer()
+        with self._tx() as c:
+            fresh = self.prepare_learning_strategy(prepared["report_id"], prepared["account_key"],
+                prepared["revision_fingerprint"], actor, now, prepared["expected_version"], narrowed=prepared["narrowed"])
+            if fresh["proof_hash"] != prepared["proof_hash"]:
+                raise StoreRefused("참조 사례나 운영 계획이 변경되었습니다. AI 초안을 다시 생성해 주세요")
+            if generated.get("source") != "claude":
+                raise StoreRefused("AI 초안의 작성 경로를 확인해 주세요")
+            clean = D.strategy_document(generated["document"])
+            _, _, metadata = self._report_notes_scope(c, prepared["report_id"], prepared["account_key"], prepared["revision_fingerprint"])
+            identity = f"{prepared['report_id']}:{prepared['account_key']}"
+            metadata = {**metadata, "strategy_version": 1}
+            head = self._approval_head(c, "report-strategy", identity, metadata)
+            out = self._save_approval(c, "report-strategy", identity, metadata, head, clean, "claude", actor,
+                                      _kst_text(now, "AI 초안 기록 시각"), "save")
+            provenance = {"report_revision": prepared["revision_fingerprint"], "plan_version": prepared["plan_context"]["version"],
+                "case_refs": prepared["case_refs"],
+                "model": generated.get("model"), "prompt_version": generated.get("prompt_version"),
+                "context_fingerprint": generated.get("context_fingerprint"), "proof_hash": prepared["proof_hash"]}
+            c.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?)",
+                      (f"learning-strategy:{identity}:{out['version']}", _json(provenance)))
+            return out
+
+    def reserve_learning_call(self, prepared, actor, now, job_id, maximum_microusd, monthly_microusd):
+        """실패 요청도 회수하지 않는 보수적인 월간 비용 예약. 실제 청구액으로 표시하지 않는다."""
+        self._need_writer()
+        if (not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{32}", job_id)
+                or type(maximum_microusd) is not int or not 0 < maximum_microusd <= 10**12
+                or type(monthly_microusd) is not int or not 0 < monthly_microusd <= 10**12):
+            raise StoreRefused("Claude 호출 비용 한도를 확인해 주세요")
+        with self._tx() as c:
+            fresh = self.prepare_learning_strategy(prepared["report_id"], prepared["account_key"], prepared["revision_fingerprint"],
+                                                   actor, now, prepared["expected_version"], narrowed=prepared["narrowed"])
+            if fresh["proof_hash"] != prepared["proof_hash"]:
+                raise StoreRefused("참조 자료가 변경되었습니다. 다시 확인해 주세요")
+            month = now.astimezone(KST).strftime("%Y-%m")
+            key = "learning-budget:" + month
+            row = c.execute("SELECT value FROM naver_auto_meta WHERE key=?", (key,)).fetchone()
+            if row and (not isinstance(row[0], str) or not re.fullmatch(r"0|[1-9][0-9]{0,12}", row[0]) or int(row[0]) > 10**12):
+                raise StoreError("저장된 Claude 비용 누계를 확인해 주세요")
+            used = int(row[0]) if row else 0
+            if used + maximum_microusd > monthly_microusd:
+                raise StoreRefused("Claude 월간 호출 비용 한도에 도달했습니다")
+            c.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?)",
+                      ("learning-call:" + job_id, _json({"actor": actor, "at": _kst_text(now, "AI 호출 예약 시각"),
+                       "reserved_microusd": maximum_microusd, "proof_hash": prepared["proof_hash"]})))
+            self._set_meta(c, key, str(used + maximum_microusd))
+        return {"job_id": job_id, "reserved_microusd": maximum_microusd, "monthly_reserved_microusd": used + maximum_microusd}
+
+    def record_report_strategy(self, report_id, account_key, revision_fingerprint, actor, now, *,
+                               expected_version, action, document=None, narrowed=False):
+        from . import approval_documents as D, report_notes as N, marketing_strategy as STR, report_views as RV
+        self._need_writer()
+        N._identity(report_id, account_key, revision_fingerprint)
+        D.version(expected_version)
+        if action not in ("generate", "save", "approve") or (action != "save" and document is not None):
+            raise StoreRefused("전략 문안 요청을 확인해 주세요")
+        clean = D.strategy_document(document) if action == "save" else None
+        at = _kst_text(now, "전략 작성 시각")
+        self._not_future(now, "전략 작성 시각")
+        with self._tx() as c:
+            pid, period_key, metadata = self._report_notes_scope(c, report_id, account_key, revision_fingerprint)
+            N._require_actor(self, pid, actor, now)
+            latest = c.execute("SELECT MAX(report_id) FROM naver_auto_report_snapshot WHERE possibility_id=? AND period_key=?",
+                               (pid, period_key)).fetchone()[0]
+            if latest != report_id:
+                raise StoreRefused("최신 보고서에서 전략을 다시 작성해 주세요")
+            metadata = {**metadata, "strategy_version": 1}
+            identity = f"{report_id}:{account_key}"
+            current = self._approval_head(c, "report-strategy", identity, metadata)
+            if current["version"] != expected_version or expected_version == D.MAX_VERSION:
+                raise StoreRefused("전략 문안이 변경되었습니다. 다시 불러와 주세요")
+            source = "staff"
+            if action == "approve":
+                dirty = c.execute("SELECT pending FROM naver_auto_report_dirty WHERE possibility_id=? AND period_key=?",
+                                  (pid, period_key)).fetchone()
+                if current["state"] != "draft" or (dirty and dirty[0]):
+                    raise StoreRefused("전략 초안과 수치 재대조 상태를 확인해 주세요")
+                ref = c.execute("SELECT value FROM naver_auto_meta WHERE key=?",
+                    (f"learning-strategy:{identity}:{current['version']}",)).fetchone()
+                if ref:
+                    from . import learning_assets as LA
+                    provenance = json.loads(ref[0])
+                    if self.automation_plan(pid, account_key)["version"] != provenance["plan_version"]:
+                        raise StoreRefused("AI가 참조한 운영 계획이 변경되었습니다. 초안을 다시 생성해 주세요")
+                    from . import automation_views as AV
+                    ctx, scope = self._learning_actor(pid, account_key, actor, now, narrowed=narrowed)
+                    companies, pairs = AV.context(ctx, self, scope)
+                    allowed = {(company, RV.account_key(cid)) for cid, company in pairs.items()
+                               if company in companies and cid in ctx.accounts}
+                    for case in provenance["case_refs"]:
+                        source_pid, source_key = case.get("possibility_id", pid), case.get("account_key", account_key)
+                        if (source_pid, source_key) not in allowed:
+                            raise StoreRefused("AI 참조 사례의 현재 담당 범위가 변경되었습니다")
+                        asset = LA.get_asset(c, source_pid, source_key, case["asset_id"])
+                        if asset is None or asset["version"] != case["version"] or asset["state"] != "reviewed":
+                            raise StoreRefused("AI가 참조한 사례가 변경되었습니다. 초안을 다시 생성해 주세요")
+                clean, source = current["document"], current["source"]
+            elif action == "generate":
+                row = c.execute("SELECT payload_json FROM naver_auto_report_snapshot WHERE report_id=?", (report_id,)).fetchone()
+                payload = json.loads(row[0])
+                selected = payload if account_key == "company" else RV._account_payload(payload, account_key)
+                try:
+                    generated = STR.rule_based(selected)
+                    clean, source = D.strategy_document(generated["document"]), "rule_based"
+                except STR.StrategyRefused:
+                    raise StoreRefused("전략을 작성할 저장 수치가 부족합니다") from None
+            return self._save_approval(c, "report-strategy", identity, metadata, current, clean, source, actor, at, action)
+
+    def automation_plan(self, possibility_id, account_key):
+        from . import approval_documents as D
+        _pos_int(possibility_id, "업체")
+        if not isinstance(account_key, str) or not re.fullmatch(r"[0-9a-f]{64}", account_key):
+            raise StoreRefused("계정 범위를 확인해 주세요")
+        metadata = {"possibility_id": possibility_id, "account_key": account_key}
+        identity = f"{possibility_id}:{account_key}"
+        current = self._approval_head(self._conn, "automation-plan", identity, metadata)
+        approved = self._automation_approved(self._conn, identity, metadata)
+        out = D.present(current, plan=True)
+        out["approval_requires_lead"] = D.cap_raise(current, approved)
+        return out
+
+    def _automation_approved(self, connection, identity, metadata):
+        from . import approval_documents as D
+        row = connection.execute("SELECT length(value),substr(value,1,?) FROM naver_auto_meta WHERE key=?",
+                                 (D.MAX_CHARS + 1, D.head_key("automation-plan-approved", identity))).fetchone()
+        return D.decode(row, metadata, "automation-plan")
+
+    def record_automation_plan(self, possibility_id, account_key, actor, now, *, expected_version, action, plan=None):
+        from . import approval_documents as D, automation_views as AV, views as W
+        from app.naver_auto import scope as SC
+        self._need_writer()
+        _pos_int(possibility_id, "업체")
+        D.version(expected_version)
+        if action not in ("save", "approve") or (action == "approve" and plan is not None):
+            raise StoreRefused("계획 저장·승인 요청을 확인해 주세요")
+        clean = D.plan_document(plan) if action == "save" else None
+        at = _kst_text(now, "계획 작성 시각")
+        self._not_future(now, "계획 작성 시각")
+        with self._tx() as c:
+            ctx = W.load(self, now)
+            scope = SC.scope_of(ctx.org, actor)
+            company, _ = AV.resolve(ctx, self, scope, possibility_id, account_key)
+            own = AV.ownership(ctx, company)
+            SC.require_client(ctx.org, scope, {possibility_id: own}, possibility_id, SC.ACT_APPROVE)
+            stage = H.stage_key(company["stage"])
+            if stage not in D.EDIT_STAGES or (action == "approve" and stage not in D.AUTO_STAGES):
+                raise StoreRefused("현재 계약 단계에서는 자동화 계획을 승인할 수 없습니다")
+            metadata = {"possibility_id": possibility_id, "account_key": account_key}
+            identity = f"{possibility_id}:{account_key}"
+            current = self._approval_head(c, "automation-plan", identity, metadata)
+            if current["version"] != expected_version or expected_version == D.MAX_VERSION:
+                raise StoreRefused("계획이 변경되었습니다. 다시 불러와 주세요")
+            if action == "approve":
+                if current["state"] != "draft":
+                    raise StoreRefused("저장된 계획 초안을 먼저 확인해 주세요")
+                clean = D.plan_document(current["document"], approve=True)
+                approved = self._automation_approved(c, identity, metadata)
+                if D.cap_raise(current, approved) and not SC.can_approve(ctx.org, own, SC.LEVEL_LEAD, current["author"]["actor"], actor):
+                    raise StoreRefused("승인된 상한을 높이려면 팀장 등급 승인이 필요합니다")
+            return self._save_approval(c, "automation-plan", identity, metadata, current, clean, "staff", actor, at, action)
 
     def record_report_review(self, report_id, actor, now, decision, note):
         from . import store as S, views as W, sync as Y, inventory as I

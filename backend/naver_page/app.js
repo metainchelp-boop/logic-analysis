@@ -173,6 +173,7 @@
   function purgeViews() {
     if (window.NaverSalesUI) window.NaverSalesUI.reset();
     if (reportUI) reportUI.reset();
+    if (automationUI) automationUI.reset();
     cancelViewRequests();
     viewEpoch++; viewCache.clear(); viewRequests = {}; viewShown = {}; viewChecked = {}; viewLegacy = {};
     state.gen++; state.inventoryGen++; state.reportsGen++; state.linksGen++; state.bellGen++;
@@ -665,6 +666,7 @@
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState !== 'visible') {
       gateView(state.screen); cancelViewRequests();
+      if (automationUI) automationUI.suspend();
       if (state.me && state.me.scope === 'SALES_READ' && window.NaverSalesUI) window.NaverSalesUI.reset();
       return;
     }
@@ -672,7 +674,7 @@
     renderRuntime();
     tick();
     loadRuntime();
-    if (state.me && state.session && (VIEW_STATUS[state.screen] || state.me.scope === 'SALES_READ')) route();
+    if (state.me && state.session && (VIEW_STATUS[state.screen] || state.screen === 'automation' || state.me.scope === 'SALES_READ')) route();
   });
   window.addEventListener('pageshow', function (event) { if (event.persisted && state.me && state.session) { gateView(state.screen); route(); } });
 
@@ -682,9 +684,9 @@
     if (name !== state.screen) gateView(name);
     state.screen = name;
     SCREENS.forEach(function (s) { var el = $('s-' + s); if (el) el.classList.toggle('on', s === name); });
-    // 개편(D2): 대시보드·보고서는 「📊 성과·보고서」 한 탭 · 🤖 자동화는 5차 때까지 메뉴에 없다(주소는 남김)
+    // 성과·보고서는 한 메뉴로 묶고 자동화 계획은 관리 화면에서 따로 엽니다.
     var menuKey = { sales: '/naver/', dashboard: '/naver/dashboard', watch: '/naver/', client: '/naver/', reports: '/naver/dashboard',
-                    transfers: '/naver/transfers', settings: '/naver/settings' }[name];
+                    automation: '/naver/automation', transfers: '/naver/transfers', settings: '/naver/settings' }[name];
     Array.prototype.forEach.call(document.querySelectorAll('.menu button'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-go') === menuKey);
     });
@@ -749,7 +751,7 @@
       else if (state.spaneFromRoute) { state.spane = 'th'; state.spaneFromRoute = false; }
       return openSettings();
     }
-    if (r.screen === 'automation') { show(r.screen); return; }
+    if (r.screen === 'automation') { show(r.screen); return automationsUI().load(); }
     if (r.screen === 'reports') { show('reports'); return loadReports(); }
     if (r.screen === 'transfers') {
       // 개편(2026-10-06): 🔗 짝 확인은 이관 현황 안에 · /naver/ended(📦) 는 「계약만료」 거르기(D9)
@@ -1456,6 +1458,16 @@
   }
   // 보고서 상세와 PDF는 같은 불변 판을 읽는다. 업무 쓰기나 네이버 재수집을 하지 않는다.
   var reportUI = null;
+  var automationUI = null;
+  function automationsUI() {
+    if (!automationUI) automationUI = window.NaverAutomation.create({h:h,put:put,$:$,num:num,won:won,datedTime:datedTime,
+      learningEntry:new URLSearchParams(location.search).get('tab') === 'learning',
+      api:api,selection:function () { return state.selection; },context:function () { return viewEpoch + '|' + state.gen + '|' + state.selection; },
+      active:function () { return !!state.me && (state.me.scope === 'ALL' || state.me.scope === 'MINE') && !!state.session && state.screen === 'automation' && document.visibilityState !== 'hidden'; },
+      denied:viewDenied,purge:function (error) { purgeViews(); toast('현재 계정과 권한을 다시 확인해 주세요.','warn'); },
+      toast:toast,go:go});
+    return automationUI;
+  }
   function reportsUI() {
     if (!reportUI) reportUI = window.NaverReports.create({h:h,put:put,$:$,num:num,won:won,periodText:periodText,datedTime:datedTime,
       api:api,fetchList:function (path,apply) { return fetchView('reports',path,apply); },
@@ -1566,6 +1578,12 @@
   }
   var reportEdit = null;
   function reportCapability(path, body) {
+    if (path === '/automation/learning') return !!body && !!state.me && (state.me.scope === 'ALL' || state.me.scope === 'MINE') && parse(location.pathname).screen === 'automation' &&
+      !!automationUI && typeof automationUI.learningCapability === 'function' && automationUI.learningCapability(body);
+    if (path === '/automation/plans') return !!body && !!state.me && (state.me.scope === 'ALL' || state.me.scope === 'MINE') && parse(location.pathname).screen === 'automation' &&
+      !!automationUI && typeof automationUI.planCapability === 'function' && automationUI.planCapability(body);
+    if (path === '/reports/strategy') return !!body && !!state.me && (state.me.scope === 'ALL' || state.me.scope === 'MINE') && parse(location.pathname).screen === 'reports' &&
+      !!reportUI && typeof reportUI.strategyCapability === 'function' && reportUI.strategyCapability(body);
     if (path === '/reports/notes') return !!body && !!state.me && parse(location.pathname).screen === 'reports' &&
       !!reportUI && typeof reportUI.notesCapability === 'function' && reportUI.notesCapability(body);
     if (path !== '/reports/review' || !body || !state.me || !state.reports || parse(location.pathname).screen !== 'reports') return false;

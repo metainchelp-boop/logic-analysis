@@ -64,7 +64,8 @@ class SalesReadWebTest(unittest.TestCase):
     def test_existing_read_routes_and_all_business_writes_are_closed(self):
         for path in ("/board", "/accounts", "/accounts/reasons", "/dashboard", "/clients/11",
                      "/reports", "/reports/accounts", "/reports/detail", "/reports/history",
-                     "/links/pending", "/ended", "/unlinked", "/bell", "/settings", "/health", "/collection/status"):
+                     "/links/pending", "/ended", "/unlinked", "/bell", "/settings", "/health", "/collection/status",
+                     "/automation", "/reports/strategy"):
             with self.subTest(path=path):
                 self.assertEqual(self.get(path, query="")[0], 403)
         for route in TW.WEB.ROUTES:

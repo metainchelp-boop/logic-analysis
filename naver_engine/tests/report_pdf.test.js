@@ -258,3 +258,34 @@ test('company contribution shares are fixed response values; incomplete shares r
   const content=await extracted(await require('../../backend/naver_page/report-pdf.js').build(input));
   for (const expected of ['계정별 기여','기여 계정','61.5%','미완결 기여 비중은 —']) assert.ok(content.includes(expected),expected);
 });
+
+test('legacy PDF contains only the exact approved marketing strategy and excludes drafts or mismatched identities', async () => {
+  function fixture() {
+    const input=expandedReport(),metadata={report_id:input.report_id,account_key:input.scope.account_key,revision_fingerprint:input.revision_fingerprint,strategy_version:1};
+    const document={diagnosis:'승인된 전략 진단',direction:'승인된 다음 방향',appeal_points:[{title:'확인 소구',message:'확인된 특성만 설명',basis:'담당자 검수 자료'}],competitive_response:'경쟁 사실 미확인',
+      weekly_plan:[{action:'주간 검증 행동',reason:'조건 확인',criterion:'동일 범위 판단'}],monthly_plan:[{action:'월간 검증 행동',reason:'누적 범위 확인',criterion:'완결 후 검토'}],funnel_comment:'퍼널 자료 미연결',ab_comment:'승자 판정 보류',shared_comment:'승인된 전략 공유 문안'};
+    input.marketing_strategy={version:2,state:'approved',metadata,source:'staff',document:{diagnosis:'PRIVATE_STRATEGY_DRAFT'},history:[{document:{diagnosis:'PRIVATE_STRATEGY_HISTORY'}}],
+      shared:{version:2,state:'approved',metadata,source:'staff',document,approved_at:'2026-10-10T10:00:00+09:00'}};
+    return input;
+  }
+  const pdf=require('../../backend/naver_page/report-pdf.js'),input=fixture(),original=JSON.stringify(input);
+  const content=await extracted(await pdf.build(input));
+  for(const expected of ['승인된 전략 진단','승인된 다음 방향','확인 소구','주간 검증 행동','월간 검증 행동','승인된 전략 공유 문안'])assert.ok(content.includes(expected),expected);
+  assert.ok(!content.includes('PRIVATE'));assert.equal(JSON.stringify(input),original);
+  for(const mutate of [r=>r.marketing_strategy.state='draft',r=>r.marketing_strategy.shared.version=1,r=>r.marketing_strategy.metadata.account_key='other',r=>r.marketing_strategy.shared.metadata={...r.marketing_strategy.shared.metadata,revision_fingerprint:'other'}]) {
+    const invalid=fixture();mutate(invalid);const text=await extracted(await pdf.build(invalid));
+    assert.ok(!text.includes('승인된 전략 진단'));assert.ok(!text.includes('PRIVATE'));assert.ok(!text.includes('마케터 전략 브리핑'));
+  }
+});
+test('unapproved strategy leaves existing PDF page count, text and numeric meaning identical', async () => {
+  const pdf=require('../../backend/naver_page/report-pdf.js'),base=report();
+  base.scope.account_key='account-a';base.revision_fingerprint='e'.repeat(64);
+  const original=await pdf.build(base), originalText=await extracted(original), originalPages=(await global.PDFLib.PDFDocument.load(original)).getPageCount();
+  const draft=structuredClone(base);
+  draft.marketing_strategy={state:'draft',version:1,metadata:{report_id:base.report_id,account_key:base.scope.account_key,revision_fingerprint:base.revision_fingerprint},
+    document:{diagnosis:'PRIVATE_DRAFT',shared_comment:'PRIVATE_UNAPPROVED'},shared:null};
+  const saved=JSON.stringify(draft),bytes=await pdf.build(draft);
+  assert.equal(await extracted(bytes),originalText);
+  assert.equal((await global.PDFLib.PDFDocument.load(bytes)).getPageCount(),originalPages);
+  assert.equal(JSON.stringify(draft),saved);
+});

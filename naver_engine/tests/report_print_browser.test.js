@@ -10,7 +10,8 @@ const writePDFs=process.argv.includes('--write-pdfs');
 const product=path.resolve(__dirname,'../..'), artifacts=path.resolve(product,'../../outputs');
 const fixtureSource=fs.readFileSync(path.join(__dirname,'report_ui_model_test.js'),'utf8'), fixtureBox={};
 vm.runInNewContext(fixtureSource.slice(fixtureSource.indexOf('function listData()'),fixtureSource.indexOf('function findButton('))+
-  fixtureSource.slice(fixtureSource.indexOf('function expandedData()'),fixtureSource.indexOf('function allNodes(')),fixtureBox);
+  fixtureSource.slice(fixtureSource.indexOf('function expandedData()'),fixtureSource.indexOf('function allNodes('))+
+  fixtureSource.slice(fixtureSource.indexOf('function strategyReport('),fixtureSource.indexOf("test('세 공개 배치는 exact 승인 전략")),fixtureBox);
 const report=fixtureBox.expandedData();
 report.company_name='가상 광고주 · 보고서 디자인 PDF 검증';report.revision_fingerprint='a'.repeat(64);
 report.status='partial';report.payload.status='partial';
@@ -81,6 +82,7 @@ const csp="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'sel
       assert.equal(state.canvasColor,'rgb(255, 255, 255)');
       assert.equal(state.privateCount,0);assert.equal(state.closedDetails,0);assert.equal(state.metricRows,17);assert.equal(state.overflow,false);
       assert.ok(state.text.includes('합성 검증용 승인 코멘트'));assert.ok(state.text.includes('실제 주문·결제 매출'),state.text.slice(-1500));assert.notEqual(state.caveatDisplay,'none');assert.ok(!state.text.includes('PRIVATE'));
+      assert.equal(await page.locator('#naver-report-print-root .nr-marketing-strategy').count(),0,'basic report pages remain without unapproved strategy notices');
       assert.deepEqual(state.violations,[]);
       if(writePDFs){fs.mkdirSync(artifacts,{recursive:true});const target=path.join(artifacts,'naver-report-layout-'+layout+'.pdf');
         const bytes=await page.pdf({path:target,format:'A4',printBackground:true,preferCSSPageSize:true});assert.equal(bytes.subarray(0,5).toString(),'%PDF-');
@@ -91,7 +93,31 @@ const csp="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'sel
       await page.emulateMedia({media:'screen'});
       console.log('native print '+layout.toUpperCase()+': PASS; public renderer, 17 metrics, external CSS CSP, print-only scope, cleanup'+(writePDFs?', synthetic A4 PDF':''));
     }
+    const strategy=fixtureBox.strategyReport().marketing_strategy;
+    strategy.metadata.revision_fingerprint=report.revision_fingerprint;
+    strategy.shared.metadata.revision_fingerprint=report.revision_fingerprint;
+    strategy.document.shared_comment='PRIVATE_STRATEGY_CURRENT';
+    strategy.shared.document.internal_note='PRIVATE_STRATEGY_EXTRA';
+    await page.evaluate(strategy=>{qaReport.marketing_strategy=strategy;},strategy);
+    for(const layout of ['a','b','c']) {
+      await page.evaluate(async layout=>NaverReportPDF.print(qaReport,{layout,paper:qaUI.makePaper(qaReport,{layout,print:true}),isCurrent:()=>true}),layout);
+      assert.equal(await page.title(),report.company_name+'_주간보고서_2026-09-21_2026-09-27_'+report.scope.ad_account_no+'_v'+report.revision_no);
+      await page.emulateMedia({media:'print'});
+      const paper=page.locator('#naver-report-print-root .nr-report-paper');
+      assert.equal(await paper.locator('.nr-marketing-strategy').count(),1);
+      assert.equal(await paper.locator('.nr-metric-table tbody tr').count(),17);
+      assert.equal(await paper.locator('textarea,input,select,button,.nr-strategy-editor,.nr-annotations,.nr-note-history').count(),0);
+      const text=await paper.textContent();
+      assert.ok(text.includes('승인된 마케터 코멘트'));assert.ok(text.includes('다음 주 운영 계획'));assert.ok(text.includes('월간 운영 방향'));
+      assert.ok(!text.includes('PRIVATE'));assert.equal(await paper.evaluate(node=>node.scrollWidth>node.clientWidth+1),false);
+      const bytes=await page.pdf({format:'A4',printBackground:true,preferCSSPageSize:true});
+      assert.equal(bytes.subarray(0,5).toString(),'%PDF-');
+      await page.evaluate(()=>window.dispatchEvent(new Event('afterprint')));
+      assert.equal(await page.locator('#naver-report-print-root').count(),0);assert.equal(await page.title(),'');
+      await page.emulateMedia({media:'screen'});
+      console.log('approved strategy native print '+layout.toUpperCase()+': PASS; exact approved content, original metrics/title, no drafts/private controls, real A4 PDF bytes and cleanup');
+    }
     assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[]);
-    assert.equal(await page.evaluate(()=>qaPrints.length),3);
+    assert.equal(await page.evaluate(()=>qaPrints.length),6);
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

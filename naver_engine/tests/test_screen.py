@@ -58,7 +58,7 @@ class TextRulesTest(unittest.TestCase):
         management = [body for attrs, body in menus if re.search(r'class="menu"', attrs)]
         self.assertEqual(len(management), 1)
         self.assertEqual(re.findall(r'data-go="([^"]+)"', management[0]),
-                         ['/naver/', '/naver/dashboard', '/naver/transfers', '/naver/settings'])
+                         ['/naver/', '/naver/dashboard', '/naver/automation', '/naver/transfers', '/naver/settings'])
         self.assertNotIn('data-sales', management[0])
         sales = [body for attrs, body in menus if 'id="salesMenu"' in attrs]
         self.assertEqual(len(sales), 1)
@@ -68,10 +68,10 @@ class TextRulesTest(unittest.TestCase):
 
     def test_no_inline_script_or_handlers_or_styles(self):
         scripts = re.findall(r"<script\b([^>]*)>(.*?)</script>", HTML, flags=re.S | re.I)
-        self.assertEqual(len(scripts), 5)
+        self.assertEqual(len(scripts), 7)
         for (attrs, body), (name, deferred) in zip(scripts, (
                 ('sso-bootstrap.js', False), ('report-ui.js', True), ('report-pdf.js', True),
-                ('sales-ui.js', True), ('app.js', True))):
+                ('sales-ui.js', True), ('automation-ui.js', True), ('learning-ui.js', True), ('app.js', True))):
             self.assertEqual(body.strip(), "")
             self.assertEqual(attrs.strip(), 'src="/naver/' + name + '"' + (' defer' if deferred else ''))
         self.assertNotRegex(HTML, r"\son[a-z]+\s*=", "인라인 손잡이(onclick= …)")
@@ -223,6 +223,33 @@ def _node_env():
             env["NODE_PATH"] = c
             return node, env
     return None, None
+
+
+class AutomationUITest(unittest.TestCase):
+    def test_automation_ui_model_contracts(self):
+        node = shutil.which("node")
+        if node is None:
+            if REQUIRE:
+                self.fail("자동화 화면 회귀에는 Node.js가 필요합니다")
+            self.skipTest("Node.js 없음")
+        root = PAGE.parents[1]
+        result = subprocess.run([node, "--test", "naver_engine/tests/automation_ui_model_test.js"],
+                                cwd=root, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_automation_in_synthetic_real_browser(self):
+        node, env = _node_env()
+        if node is None:
+            if REQUIRE:
+                self.fail("자동화 브라우저 회귀에는 Playwright·Chromium이 필요합니다")
+            self.skipTest("Node·Playwright 없음")
+        if os.environ.get("NAVER_REPORT_BROWSER"):
+            env["NAVER_REPORT_BROWSER"] = os.environ["NAVER_REPORT_BROWSER"]
+        result = subprocess.run([node, "naver_engine/tests/automation_browser.test.js"],
+                                cwd=PAGE.parents[1], env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("320px PASS", result.stdout)
+        self.assertIn("1920px PASS", result.stdout)
 
 
 class _Front(socketserver.ThreadingMixIn, http.server.HTTPServer):

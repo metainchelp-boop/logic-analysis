@@ -40,7 +40,7 @@ function fixture() {
     return nodes.get(id);
   }
   const context = {
-    $, reportUI:null, ApiError, AbortController, URLSearchParams, Map, Set,
+    $, reportUI:null, automationUI:null, ApiError, AbortController, URLSearchParams, Map, Set,
     Date:Clock, isFinite, setTimeout, document:{visibilityState:'visible',querySelectorAll:()=>[]},
     window:{addEventListener() {}}, location:{pathname:'/naver/dashboard',search:''},
     history:{pushState() {}}, put(){}, h(){return {};}, datedTime:value=>value,

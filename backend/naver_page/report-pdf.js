@@ -132,6 +132,13 @@
     return a.state === 'approved' && s && s.state === 'approved' && s.version === a.version && m &&
       m.report_id === report.report_id && m.account_key === report.scope.account_key && m.revision_fingerprint === report.revision_fingerprint ? s : null;
   }
+  function approvedStrategy(report) {
+    const a = report.marketing_strategy || {}, s = a.shared, m = s && s.metadata, head = a.metadata;
+    return a.state === 'approved' && Number.isSafeInteger(a.version) && a.version > 0 && s && s.state === 'approved' && s.version === a.version && m && head &&
+      head.report_id === report.report_id && head.account_key === report.scope.account_key && head.revision_fingerprint === report.revision_fingerprint &&
+      m.report_id === report.report_id && m.account_key === report.scope.account_key && m.revision_fingerprint === report.revision_fingerprint &&
+      s.document && typeof s.document === 'object' && !Array.isArray(s.document) ? s : null;
+  }
   async function build(report) {
     report = structuredClone(report); // Freeze the selected revision before asynchronous asset loading.
     const view = pinned(report), bytes = await dependencies();
@@ -290,6 +297,33 @@
         }
       });
     }
+    const strategy = approvedStrategy(report);
+    if (strategy) {
+      heading('마케터 전략 브리핑');
+      const document = strategy.document;
+      paragraph('전략 공유 승인 ' + strategy.version + '판 · ' + text(strategy.approved_at, 60), 9, muted);
+      for (const [field, label, limit] of [['diagnosis', '현재 진단', 1800], ['direction', '앞으로의 방향', 1400],
+        ['competitive_response', '시장·경쟁 대응', 500], ['funnel_comment', '퍼널 진단', 600],
+        ['ab_comment', 'A/B 비교와 다음 실험', 600], ['shared_comment', '광고주에게 전달할 코멘트', 3000]]) {
+        paragraph(label, 11, accent); paragraph(text(document[field] || '이 승인본에 작성된 내용이 없습니다.', limit), 10);
+      }
+      paragraph('고객이 선택할 이유 · 소구점', 11, accent);
+      const appeals = Array.isArray(document.appeal_points) ? document.appeal_points : [];
+      if (!appeals.length) paragraph('확인된 상품 자료에 근거한 소구점이 이 승인본에 없습니다.', 10, muted);
+      appeals.slice(0,6).forEach(item => {
+        paragraph(text(item.title, 300), 11, accent); paragraph(text(item.message, 1000), 10); paragraph(text(item.basis, 1000), 9, muted);
+      });
+      for (const [field, label] of [['weekly_plan', '다음 주 운영 계획'], ['monthly_plan', '월간 운영 방향']]) {
+        paragraph(label, 11, accent);
+        const plans = Array.isArray(document[field]) ? document[field] : [];
+        if (!plans.length) paragraph('이 승인본에 확정된 계획이 없습니다.', 10, muted);
+        plans.slice(0,6).forEach(item => {
+          paragraph(text(item.action, 300), 10); paragraph(text(item.reason, 500), 10);
+          paragraph('판단 기준: ' + text(item.criterion, 500), 9, muted);
+        });
+      }
+      paragraph('계획은 실제 광고 변경·실험 완료·성과 개선을 뜻하지 않습니다.', 9, muted);
+    }
     heading('승인된 공유 문안 / 다음 계획');
     if (shared) {
       paragraph('공유 문안 ' + shared.version + '판 · 승인 시각 ' + text(shared.approved_at, 60), 9, muted);
@@ -414,13 +448,13 @@
     const blockedTags = new Set(['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'INPUT', 'TEXTAREA',
       'SELECT', 'BUTTON', 'AUDIO', 'VIDEO', 'LINK', 'STYLE', 'META', 'BASE', 'TEMPLATE', 'FOREIGNOBJECT']);
     const privateClasses = new Set(['nr-annotations', 'nr-note-history', 'nr-internal-review',
-      'nr-note-grid', 'nr-note-actions', 'nr-preview-controls', 'nr-history']);
+      'nr-note-grid', 'nr-note-actions', 'nr-preview-controls', 'nr-history', 'nr-strategy-editor', 'nr-strategy-plan-editor', 'nr-strategy-editor-actions']);
     const nodes = [paper, ...paper.querySelectorAll('*')];
     if (nodes.length > 20000) fail('REPORT_PRINT_PAPER');
     for (const node of nodes) {
       if (blockedTags.has(node.tagName.toUpperCase()) ||
           (node.getAttribute('class') || '').split(/\s+/).some(name => privateClasses.has(name)) ||
-          /^(?:reportNotes|reportNote-|reportTarget-|reportHistory)/.test(node.getAttribute('id') || '')) fail('REPORT_PRINT_PRIVATE');
+          /^(?:reportNotes|reportNote-|reportTarget-|reportHistory|reportStrategy)/.test(node.getAttribute('id') || '')) fail('REPORT_PRINT_PRIVATE');
       for (const attribute of node.attributes) {
         const name = attribute.name.toLowerCase(), value = attribute.value;
         if (name.startsWith('on') || ['contenteditable', 'data-private', 'data-internal', 'src', 'srcset',

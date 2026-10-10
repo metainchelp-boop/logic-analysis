@@ -41,7 +41,7 @@ const server=http.createServer(async(req,res)=>{
  }
  let name=u.pathname.slice('/naver/'.length);
  if(name==='sso-bootstrap.js'){res.writeHead(200,{'content-type':'application/javascript'});res.end('window.__metaincSso=null;');return;}
- if(!['app.js','app.css','report-ui.js','report-pdf.js'].includes(name))name='index.html';
+ if(!['app.js','app.css','report-ui.js','report-pdf.js','sales-ui.js','automation-ui.js','learning-ui.js'].includes(name))name='index.html';
  res.writeHead(200,{'content-type':name.endsWith('.js')?'application/javascript':name.endsWith('.css')?'text/css':'text/html'});
  res.end(fs.readFileSync(name==='app.js'&&process.env.NAVER_NAVIGATION_APP?process.env.NAVER_NAVIGATION_APP:path.join(pageDir,name)));
 });

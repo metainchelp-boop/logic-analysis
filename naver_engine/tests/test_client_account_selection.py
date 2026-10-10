@@ -80,6 +80,21 @@ class ClientAccountSelectionTest(TW.WebBase):
             status, new = self.get('/clients/11', who)
             self.assertEqual(status, 200)
             new = copy.deepcopy(new)
+            setup = new.pop('setup_checks')
+            self.assertEqual(set(setup), {'version', 'items', 'counts', 'source'})
+            self.assertEqual(setup['version'], 1)
+            self.assertEqual([item['key'] for item in setup['items']], [
+                'structure', 'inspection', 'suspension', 'delivery', 'campaign_budget',
+                'campaign_period', 'time_targeting', 'region_targeting', 'age_targeting',
+                'negative_keywords', 'creative_copy', 'goal', 'budget_plan', 'setup_completeness'])
+            self.assertEqual(len(setup['items']), 14)
+            self.assertEqual(set(setup['counts']), {'attention', 'unknown', 'verified', 'not_applicable'})
+            self.assertEqual(sum(setup['counts'].values()), 14)
+            for item in setup['items']:
+                self.assertEqual(set(item), {'key', 'label', 'state', 'summary', 'next_action'})
+                self.assertIn(item['state'], setup['counts'])
+                self.assertTrue(all(isinstance(item[field], str) and item[field]
+                                    for field in ('label', 'summary', 'next_action')))
             self.assertEqual(new.pop('account_selection'), {'kind': 'company', 'account_key': None})
             choices = new.pop('account_choices')
             self.assertEqual(len(choices), len(old['accounts']))

@@ -99,6 +99,8 @@ test('print cleanup preserves a newer page title set by navigation',async()=>{
 test('private controls, annotation history and active content cannot enter a printed paper',async()=>{
   for (const [tag,attrs] of [['textarea',{}],['button',{}],['input',{}],['form',{}],['iframe',{}],['script',{}],
     ['div',{class:'nr-annotations'}],['details',{class:'nr-note-history'}],['div',{'data-private':'true'}],
+    ['div',{class:'nr-strategy-editor'}],['div',{class:'nr-strategy-plan-editor'}],
+    ['div',{class:'nr-strategy-editor-actions'}],['div',{id:'reportStrategyStatus'}],
     ['div',{contenteditable:'false'}],['svg',{onload:'bad()'}],['a',{href:'https://example.invalid'}],
     ['div',{style:'background-image:url(https://example.invalid/secret)'}]]) {
     const env=platform(),paper=env.paper(),node=env.document.createElement(tag);

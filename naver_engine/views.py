@@ -869,11 +869,22 @@ def client(ctx: Ctx, store: S.Store, scope: SC.Scope, pid, account_key: Optional
                "hand": hand_now(ctx, i, hand.get(i["issue_id"]))} for i in shown]
     allowed = SC.allowed_actions(ctx.org, scope, own)
     actor = SC.issue_actor(ctx.org, scope, own)
+    from . import setup_checks as SETUP
+    setup_cid = selected_cid
+    if setup_cid is None and len(linked) == 1 and _client_current_decision(ctx, pid, linked[0]) and _client_current_mapping(ctx, store, pid, linked[0]):
+        setup_cid = linked[0]["customer_id"]
+    setup_plan = None
+    structure = None
+    if setup_cid is not None:
+        saved_plan = store.automation_plan(pid, _client_account_key(setup_cid))["plan"]
+        setup_plan = {"goal": saved_plan["goal"], "budget_plan": {"daily_budget": saved_plan["daily_spend_cap"]}}
+        structure = store.structure_checks([setup_cid], ctx.now).get(setup_cid)
+    setup_checks = SETUP.project_setup(now=ctx.now, structure=structure, plan=setup_plan)
     return {"possibility_id": pid, "name": p["name"], "stage": p["stage_key"], "managed": p["present"] == 1,
             "today": ctx.today.isoformat(),   # 화면이 예외 기간을 서버의 「오늘」로 세게(S13)
             "latest_end_date": p["latest_end_date"], "relation": SC.relation(ctx.org, scope, own),
             "owner": _owner(ctx, own), "verdict": _verdict_out(v), "accounts": accounts, "issues": issues,
-            "account_choices": choices,
+            "account_choices": choices, "setup_checks": setup_checks,
             "account_selection": {"kind": "company" if account_key is None else "account", "account_key": account_key},
             "link": link_state(ctx, pid), "account_unconfirmed": _auto_link(ctx, pid), "unlinked": has_unlinked(ctx, pid),
             "white_detail": white_detail(ctx, pid, v),

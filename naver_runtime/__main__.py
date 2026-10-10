@@ -15,6 +15,7 @@ from naver_engine.backup import BackupJob
 from naver_engine.credentials import load_manager_credentials
 from naver_runtime.backup_transport import OpenSslEncryptor, SshSender
 from naver_runtime.config import Config, ConfigError
+from naver_runtime.learning_provider import provider_from_environment
 from naver_runtime.erp_tunnel_transport import ErpTunnelTransport
 from naver_runtime.scheduler import Scheduler
 from naver_runtime.runtime_status import RuntimeStatus
@@ -199,7 +200,8 @@ def run(config, env, *, stop=None):
                       owner_actions=True,
                       request_collection=scheduler.request_collection,
                       collection_status=scheduler.collection_status,
-                      runtime_status=scheduler.runtime_status) if config.web_enabled else None
+                      runtime_status=scheduler.runtime_status,
+                      strategy_provider=provider_from_environment(env)) if config.web_enabled else None
         with UnixServer(config.socket, combine_web(status, web)):
             # WEB는 이미 별도 스레드에서 열린 상태. 관리 단발 작업을 예약 회차보다 먼저 실행한다.
             # 환경값이 없으면 bootstrap 파일/영수증/스냅샷 경로를 전혀 조회하지 않는다.

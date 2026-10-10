@@ -10,6 +10,8 @@ const page = path.join(__dirname, '../backend/naver_page');
 const html = fs.readFileSync(path.join(page, 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(page, 'app.js'), 'utf8');
 const reportUI = fs.readFileSync(path.join(page, 'report-ui.js'), 'utf8');
+const automationUI = fs.readFileSync(path.join(page, 'automation-ui.js'), 'utf8');
+const learningUI = fs.readFileSync(path.join(page, 'learning-ui.js'), 'utf8');
 
 class Element {
   constructor(tag = 'div', registerId) {
@@ -60,7 +62,7 @@ function inventory(rows = [], coverage) {
 }
 function launch(options = {}) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(m => [m[1], new Element()]));
-  const requests = [], events = {}, opened = [], salesMounts = [];
+  const requests = [], events = {}, documentEvents = {}, opened = [], salesMounts = [];
   const location = new URL('https://watch.invalid/naver/' + (options.screen || 'transfers'));
   const window = { addEventListener: (k, fn) => { events[k] = fn; }, open: (...args) => {opened.push(args); return null;} };
   if (options.salesUI) window.NaverSalesUI = {reset() {}, mount: settings => salesMounts.push(settings)};
@@ -69,7 +71,7 @@ function launch(options = {}) {
   const clientTabs = createElement('div'); elements.get('s-client').appendChild(clientTabs);
   const document = { visibilityState: 'visible', getElementById: id => elements.get(id), createElement,
     createElementNS: (_namespace, tag) => createElement(tag),
-    createTextNode: text => ({ textContent: String(text) }), addEventListener() {}, body: { contains: () => true },
+    createTextNode: text => ({ textContent: String(text) }), addEventListener(k, fn) { documentEvents[k] = fn; }, body: { contains: () => true },
     querySelectorAll: selector => selector === '.modal' ? [...elements].filter(([id]) => id.startsWith('m-')).map(([, el]) => el) : [],
     querySelector: selector => selector === '#s-client .tabs' ? clientTabs : null };
   const history = { pushState: (_, __, url) => { location.href = new URL(url, location).href; } };
@@ -98,9 +100,12 @@ function launch(options = {}) {
       } };
     } });
   vm.runInContext(reportUI, context);
+  vm.runInContext(automationUI, context);
+  vm.runInContext(learningUI, context);
   vm.runInContext(app, context);
   return { elements, requests, opened, location, salesMounts, text: id => elements.get(id).textContent,
     buttons: id => tree(elements.get(id)).filter(el => el.tagName === 'BUTTON'),
+    visibility(value) { document.visibilityState = value; documentEvents.visibilitychange(); },
     scope(value) { const el = elements.get('scope'); el.value = value; el.dispatch('change'); },
     navigate(screen) { location.href = new URL('/naver/' + screen, location).href; events.popstate(); } };
 }
@@ -127,6 +132,10 @@ test('영업 전용 메뉴는 관리 메뉴를 숨기고 자체 단추·직접 �
   assert.equal(run.salesMounts.length,2);
   run.navigate('clients/11'); await flush();
   assert.equal(run.salesMounts.length,3);
+  run.navigate('automation'); await flush();
+  assert.equal(run.salesMounts.length,4);
+  assert.equal(run.elements.get('s-automation').classList.contains('on'),false);
+  assert.equal(run.text('automationRoot'),'');
   assert.equal(run.elements.get('s-sales').classList.contains('on'),true);
   assert.equal(run.elements.get('s-client').classList.contains('on'),false);
   await run.salesMounts.at(-1).api('/sales/clients',{kind:'weekly'});
@@ -1221,4 +1230,126 @@ test('성공 기록 없는 대기를 이전 성공값이라 하지 않고 잔액
   assert.match(run.text('inventoryRows'), /성공 실적 없음/);
   assert.doesNotMatch(run.text('inventorySummary'), /오늘 확인한 잔액/);
   assert.match(run.text('inventorySummary'), /계정별 확인 시각/);
+});
+
+test('실제 앱의 자동화 계획 쓰기는 개별 계정 최신판 저장·계획 승인만 통과하고 광고 실행 요청은 없다', async () => {
+  const account={possibility_id:1,account_key:'scoped-account-a',company_name:'합성 계획 업체',account_name:'합성 계정',ad_account_no:'700',workflow:'진행중'};
+  const plan={version:1,state:'draft',metadata:{possibility_id:1,account_key:account.account_key},plan:{goal:'cpa',target_value:5000,daily_spend_cap:10000,absolute_bid_cap:1000,experiment_days:7,loss_cap:10000,notes:''},execution_status:'not_enabled',experiment_results:null};
+  const selected=()=>({accounts:[account],selection:account,plan,can_edit:true,can_approve:true,execution_enabled:false,policy:{}});
+  const run=launch({screen:'automation',respond:req=>{
+    if(req.method==='POST') {
+      assert.equal(req.url,'/api/naver-auto/automation/plans');assert.equal(req.body.possibility_id,1);assert.equal(req.body.account_key,account.account_key);assert.equal(req.body.expected_version,plan.version);
+      plan.version++;
+      if(req.body.action==='save'){plan.plan=req.body.plan;plan.state='draft';}else{assert.equal(req.body.action,'approve');assert.equal(req.body.plan,undefined);plan.state='approved';}
+      return {saved:true};
+    }
+    if(req.url.includes('/automation?'))return req.url.includes('possibility_id=')?selected():{accounts:[account],total:1,page:0,page_size:100,next_page:null,selection:null,plan:null,execution_enabled:false};
+    return {};
+  }});
+  await flush();
+  const select=run.elements.get('automationAccount');select.value='1|'+account.account_key;select.dispatch('change');await flush();
+  assert.match(run.text('automationRoot'),/실제 광고 자동 실행은 미연결/);
+  const input=run.elements.get('automationPlan-notes');input.value='담당자 검토 메모';input.dispatch('input');
+  run.elements.get('automationPlanSave').dispatch('click');await flush();
+  run.elements.get('automationPlanApprove').dispatch('click');await flush();
+  assert.deepEqual(run.requests.filter(r=>r.method==='POST').map(r=>r.body.action),['save','approve']);
+  assert.equal(plan.plan.notes,'담당자 검토 메모');assert.equal(plan.execution_status,'not_enabled');
+  const staleInput=run.elements.get('automationPlan-notes'),staleSave=run.elements.get('automationPlanSave');
+  staleInput.value='이동 뒤 제출 불가';staleInput.dispatch('input');run.navigate('settings');await flush();staleSave.dispatch('click');await flush();
+  assert.equal(run.requests.filter(r=>r.method==='POST').length,2);
+});
+
+test('자동화 화면 숨김은 이전 버튼을 막고 복귀 때 최신 계정 권한을 다시 읽으며 미저장 초안은 보존한다', async () => {
+  const account={possibility_id:1,account_key:'a'.repeat(64),company_name:'합성 계획 업체',account_name:'개별 계정',ad_account_no:'700',workflow:'진행중'};
+  const plan={version:1,state:'draft',metadata:{possibility_id:1,account_key:account.account_key},plan:{goal:'cpa',target_value:5000,daily_spend_cap:10000,absolute_bid_cap:1000,experiment_days:7,loss_cap:10000,notes:''},execution_status:'not_enabled'};
+  const run=launch({screen:'automation',me:{scope:'MINE',idx:10},respond:req=>{
+    assert.equal(req.method,'GET');
+    if(req.url.includes('/automation?'))return req.url.includes('possibility_id=')?
+      {selection:account,plan,can_edit:true,can_approve:true,execution_enabled:false,policy:{}}:
+      {accounts:[account],next_page:null,execution_enabled:false};
+    return {};
+  }});
+  await flush();const select=run.elements.get('automationAccount');select.value='1|'+account.account_key;select.dispatch('change');await flush();
+  const input=run.elements.get('automationPlan-notes'),oldSave=run.elements.get('automationPlanSave');
+  input.value='복귀 후 검토할 초안';input.dispatch('input');run.visibility('hidden');
+  assert.equal(run.text('automationRoot'),'');oldSave.dispatch('click');await flush();
+  assert.equal(run.requests.filter(req=>req.method==='POST').length,0);
+  run.visibility('visible');await flush();
+  assert.equal(run.elements.get('automationPlan-notes').value,'복귀 후 검토할 초안');
+  assert.equal(run.elements.get('automationPlanApprove').disabled,true);
+  assert.equal(run.requests.filter(req=>req.url.includes('/automation?')&&!req.url.includes('possibility_id=')).length,2);
+  assert.equal(run.requests.filter(req=>req.url.includes('/automation?')&&req.url.includes('possibility_id=')).length,2);
+  oldSave.dispatch('click');await flush();assert.equal(run.requests.filter(req=>req.method==='POST').length,0);
+});
+
+test('실제 앱의 읽기 전용 게이트는 현재 전략의 작성·저장·승인만 허용하고 화면 이동 뒤 옛 입력을 거부한다', async () => {
+  const row=reportFixture(), metadata={report_id:row.report_id,account_key:row.scope.account_key,revision_fingerprint:row.revision_fingerprint,strategy_version:1};
+  const document={diagnosis:'저장 지표의 진단',direction:'다음 기간 검증 방향',appeal_points:[],competitive_response:'경쟁 자료 미연결',
+    weekly_plan:[{action:'소재 검토',reason:'원인 미확정',criterion:'동일 조건 비교'}],monthly_plan:[{action:'집계 검토',reason:'부분 자료 확인',criterion:'전체 범위 확인'}],
+    funnel_comment:'구매 여정 자료 미연결',ab_comment:'실험 판정 자료 미연결',shared_comment:'검토한 전략'};
+  row.marketing_strategy={version:0,state:'empty',metadata,source:null,document:{},shared:null,can_edit:true,can_approve:true,provider_status:{configured:false}};
+  const run=launch({screen:'reports',respond:req=>{
+    if(req.method==='POST') {
+      assert.equal(req.url,'/api/naver-auto/reports/strategy');
+      const head=row.marketing_strategy;
+      assert.equal(req.body.expected_version,head.version);assert.equal(req.body.report_id,row.report_id);
+      assert.equal(req.body.account_key,row.scope.account_key);assert.equal(req.body.revision_fingerprint,row.revision_fingerprint);
+      head.version++;
+      if(req.body.action==='approve') {assert.equal(req.body.document,undefined);head.state='approved';head.shared={version:head.version,state:'approved',metadata,document:head.document,source:head.source,approved_at:'2026-10-10T10:00:00+09:00'};}
+      else {head.state='draft';head.source=req.body.action==='save'?'staff':'rule_based';head.document=req.body.document||document;head.shared=null;}
+      return {saved:true};
+    }
+    return req.url.includes('/reports/')?reportResponse([row],req):{};
+  }});
+  await showReport(run);
+  assert.equal(run.requests.filter(r=>r.method==='POST').length,0);
+  run.elements.get('reportStrategyGenerate').dispatch('click');await flush();
+  assert.match(run.text('reportDetail'),/저장 집계 기반 규칙 진단/);
+  const diagnosis=run.elements.get('reportStrategy-diagnosis');diagnosis.value='담당자가 검토한 진단';diagnosis.dispatch('input');
+  assert.equal(run.elements.get('reportStrategyApprove').disabled,true);
+  run.elements.get('reportStrategySave').dispatch('click');await flush();
+  assert.match(run.text('reportDetail'),/담당자 작성·검토 문안/);
+  run.elements.get('reportStrategyApprove').dispatch('click');await flush();
+  assert.deepEqual(run.requests.filter(r=>r.method==='POST').map(r=>r.body.action),['generate','save','approve']);
+  assert.match(run.text('reportDetail'),/담당자가 검토한 진단/);
+  const staleInput=run.elements.get('reportStrategy-diagnosis'),staleSave=run.elements.get('reportStrategySave');
+  staleInput.value='화면 이동 전 입력';staleInput.dispatch('input');
+  run.navigate('settings');await flush();staleSave.dispatch('click');await flush();
+  assert.equal(run.requests.filter(r=>r.method==='POST').length,3);
+});
+
+test('실제 앱은 현재 계정의 학습 편입·검수만 전송하고 화면 이동·읽기 전용에서는 쓰기를 막는다',async()=>{
+  const account={possibility_id:1,account_key:'a'.repeat(64),company_name:'합성 학습 업체',account_name:'개별 계정',ad_account_no:'700',workflow:'진행중'};
+  const plan={version:0,state:'empty',metadata:{possibility_id:1,account_key:account.account_key},plan:{},execution_status:'not_enabled'};
+  const row={asset_id:'report-fixture',version:1,state:'draft',document:{kind:'performance',title:'원천 성과 관측',source_refs:{report_id:7,report_revision:'b'.repeat(64)}},assessment:{outcome:'observation',reason_codes:['no_causal_control']},author:{at:'2026-10-11T09:00:00+09:00'}};
+  for(const canEdit of [true,false]) {
+    const current=JSON.parse(JSON.stringify(row));
+    const learning=()=>({version:1,items:[current],templates:{},counts:{draft:current.state==='draft'?1:0,reviewed:current.state==='reviewed'?1:0,rejected:0},retrieval:{version:1,cases:[]}});
+    const run=launch({screen:'automation',me:{scope:'MINE',idx:10},respond:req=>{
+      if(req.method==='POST') {
+        assert.equal(canEdit,true);assert.equal(req.url,'/api/naver-auto/automation/learning');
+        assert.equal(req.body.possibility_id,1);assert.equal(req.body.account_key,account.account_key);
+        if(req.body.action==='capture')assert.deepEqual(Object.keys(req.body).sort(),['account_key','action','possibility_id']);
+        else {assert.equal(req.body.action,'review');assert.equal(req.body.asset_id,current.asset_id);assert.equal(req.body.expected_version,current.version);assert.equal(req.body.document,undefined);current.state='reviewed';current.version++;}
+        return {saved:true};
+      }
+      if(req.url.includes('/automation?'))return req.url.includes('possibility_id=')?
+        {selection:account,plan,can_edit:canEdit,can_approve:canEdit,learning_assets:learning(),execution_enabled:false,policy:{}}:
+        {accounts:[account],next_page:null,execution_enabled:false};
+      return {};
+    }});
+    await flush();const select=run.elements.get('automationAccount');select.value='1|'+account.account_key;select.dispatch('change');await flush();
+    run.buttons('automationRoot').find(button=>button.textContent==='데이터 학습 자산').dispatch('click');await flush();
+    assert.match(run.text('automationRoot'),/원천 성과 관측/);
+    const capture=run.buttons('automationRoot').find(button=>button.textContent==='최신 저장 보고서 편입');
+    const review=run.buttons('automationRoot').find(button=>button.textContent==='검수 완료');
+    assert.equal(capture.disabled,!canEdit);assert.equal(review.disabled,!canEdit);
+    capture.dispatch('click');await flush();
+    run.buttons('automationRoot').find(button=>button.textContent==='검수 완료').dispatch('click');await flush();
+    assert.deepEqual(run.requests.filter(req=>req.method==='POST').map(req=>req.body.action),canEdit?['capture','review']:[]);
+    const staleCapture=run.buttons('automationRoot').find(button=>button.textContent==='최신 저장 보고서 편입');
+    run.navigate('settings');await flush();staleCapture.dispatch('click');await flush();
+    assert.equal(run.requests.filter(req=>req.method==='POST').length,canEdit?2:0);
+    assert.ok(run.requests.every(req=>req.method==='GET'||req.url==='/api/naver-auto/automation/learning'));
+  }
 });

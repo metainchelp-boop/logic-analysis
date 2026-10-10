@@ -7,8 +7,11 @@ const {chromium} = require('playwright');
 const source = fs.readFileSync('naver_engine/tests/report_ui_model_test.js', 'utf8');
 const fixtureBox = {};
 vm.runInNewContext(source.slice(source.indexOf('function listData()'), source.indexOf('function findButton(')) +
-  source.slice(source.indexOf('function expandedData()'), source.indexOf('function allNodes(')), fixtureBox);
-const report = fixtureBox.expandedData();
+  source.slice(source.indexOf('function expandedData()'), source.indexOf('function allNodes(')) +
+  source.slice(source.indexOf('function strategyReport('), source.indexOf("test('세 공개 배치는 exact 승인 전략")), fixtureBox);
+const report = fixtureBox.strategyReport();
+report.marketing_strategy.document.shared_comment='PRIVATE_STRATEGY_CURRENT';
+report.marketing_strategy.shared.document.internal_note='PRIVATE_STRATEGY_EXTRA';
 report.collection_status='conversion_unconfirmed';
 report.refresh={scope:'current',status:'failed',source_collected_at:'2026-10-05T11:00:00+09:00',last_success_at:null,last_attempt_at:'2026-10-05T12:00:00+09:00'};
 const list = fixtureBox.listData();
@@ -32,6 +35,9 @@ async function assertStructure(paper,layout) {
   assert.ok(await paper.evaluate((node,layout)=>node.classList.contains('nr-layout-'+layout),layout));
   assert.equal(await paper.locator('.nr-metric-table tbody tr').count(),17);
   assert.equal(await paper.locator('.nr-quality-card').count(),3);
+  assert.equal(await paper.locator('.nr-marketing-strategy').count(),1);
+  assert.ok((await paper.textContent()).includes('승인된 마케터 코멘트'));
+  assert.ok(!(await paper.textContent()).includes('PRIVATE_STRATEGY'));
   const before = async (first,second) => assert.equal(await paper.evaluate((root,{first,second})=>{
     const a=root.querySelector(first),b=root.querySelector(second);
     return !!a && !!b && !!(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING);
@@ -113,6 +119,8 @@ async function assertTextSafe(page,scope) {
       const baseline=await frozenValues(page.locator('.nr-report-paper'));
       await page.locator('#reportNote-shared_comment').fill(draftComment);
       await page.locator('#reportNote-internal_note').fill('DIRTY_PRIVATE');
+      await page.locator('#reportStrategy-direction').fill('UNSAVED_STRATEGY_DIRECTION');
+      assert.equal(await page.locator('#reportPdfDownload').isDisabled(),true);
       for(const layout of layouts) {
         await page.locator('#reportLayout-'+layout).click();
         const paper=page.locator('.nr-report-paper[data-layout="'+layout+'"]');
@@ -122,6 +130,7 @@ async function assertTextSafe(page,scope) {
         assert.equal(await page.locator('#reportLayout-'+layout).getAttribute('aria-pressed'),'true');
         assert.equal(await page.locator('#reportNote-shared_comment').inputValue(),draftComment);
         assert.equal(await page.locator('#reportNote-internal_note').inputValue(),'DIRTY_PRIVATE');
+        assert.equal(await page.locator('#reportStrategy-direction').inputValue(),'UNSAVED_STRATEGY_DIRECTION');
         assert.equal(await page.evaluate(()=>window.testReportUI.hasUnsaved()),true);
         await assertTextSafe(page,page.locator('#reportDetail'));
         await page.locator('#reportChart').getByRole('button',{name:'ROAS',exact:true}).click();
@@ -136,12 +145,15 @@ async function assertTextSafe(page,scope) {
         assert.ok(shared.includes('합성 검증 업체 <img src=x onerror=alert(1)>'));
         assert.ok(!shared.includes('PRIVATE')); assert.ok(!shared.includes('당시 내부 메모'));
         assert.ok(!shared.includes(draftComment),'shared view must use approved notes');
+        assert.ok(!shared.includes('UNSAVED_STRATEGY_DIRECTION'),'shared view must use approved strategy');
+        assert.equal(await page.locator('#reportDetail .nr-strategy-editor').count(),0);
         assert.equal(await page.locator('#reportDetail .nr-note-history').count(),0);
         await assertTextSafe(page,page.locator('#reportDetail'));
         assert.equal(await page.evaluate(()=>window.reportRequests.length),requests,'layout and local tabs must not request data');
         await page.locator('#reportSharePreview').click();
         assert.equal(await page.locator('#reportNote-shared_comment').inputValue(),draftComment,'draft survives shared view');
         assert.equal(await page.locator('#reportNote-internal_note').inputValue(),'DIRTY_PRIVATE');
+        assert.equal(await page.locator('#reportStrategy-direction').inputValue(),'UNSAVED_STRATEGY_DIRECTION');
         console.log('report enrichment browser: '+width+'px '+layout.toUpperCase()+' PASS; distinct structure, 17 metrics, 3 quality cards, dirty drafts, shared privacy, XSS, partial chart, no tab requests');
       }
       const liveHTML=await page.locator('#reportDetail').evaluate(root=>root.outerHTML);
@@ -156,14 +168,15 @@ async function assertTextSafe(page,scope) {
         const paper=page.locator('#printTestRoot .nr-report-paper');
         await assertStructure(paper,layout);
         assert.deepEqual(await frozenValues(paper),baseline);
-        assert.equal(await paper.locator('#reportChart,button,input,select,textarea,[role="button"],.nr-note-history,.report-history,.nr-annotations').count(),0,'print excludes interactive and private UI');
+        assert.equal(await paper.locator('#reportChart,button,input,select,textarea,[role="button"],.nr-note-history,.report-history,.nr-annotations,.nr-strategy-editor').count(),0,'print excludes interactive and private UI');
         assert.equal(await paper.locator('details:not([open])').count(),0,'print details are expanded');
         const text=await paper.textContent();
         assert.ok(text.includes('승인 문안 <svg onload=alert(2)>'));
-        assert.ok(!text.includes('PRIVATE')); assert.ok(!text.includes(draftComment));
+        assert.ok(!text.includes('PRIVATE')); assert.ok(!text.includes(draftComment)); assert.ok(!text.includes('UNSAVED_STRATEGY_DIRECTION'));
         await assertTextSafe(page,paper);
         assert.equal(await page.locator('#reportDetail').evaluate(root=>root.outerHTML),liveHTML,'print leaves live report unchanged');
         assert.equal(await page.locator('#reportNote-shared_comment').inputValue(),draftComment);
+        assert.equal(await page.locator('#reportStrategy-direction').inputValue(),'UNSAVED_STRATEGY_DIRECTION');
         assert.equal(await page.evaluate(()=>JSON.stringify(window.frozenReport)===window.frozenReportJSON),true,'renderer preserves frozen source');
         assert.equal(await page.evaluate(()=>window.reportRequests.length),requests,'print renderer does not request data');
         await page.locator('#printTestRoot').evaluate(root=>root.remove());

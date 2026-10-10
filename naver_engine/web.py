@@ -31,6 +31,7 @@ import re
 import threading
 import time as _time
 import unicodedata
+import uuid
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
@@ -54,6 +55,8 @@ from . import management as MG
 from . import reporting as R
 from . import report_views as REPORTS
 from . import sales_views as SALES
+from . import automation_views as AUTO
+from . import marketing_strategy as STR
 from . import view_sync as VS
 from . import runtime_view as RV
 
@@ -64,11 +67,12 @@ GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일�
 # 제한판은 새 경로가 추가돼도 자동으로 열지 않는다. 로그인/갱신은 기술 쓰기만 허용한다.
 _VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/accounts/reasons", "/dashboard", "/links/pending", "/ended", "/unlinked",
                                "/bell", "/settings", "/health", "/reports", "/reports/history", "/reports/accounts", "/reports/detail",
-                               "/sales/clients", "/sales/detail", "/sales/report"})
+                               "/sales/clients", "/sales/detail", "/sales/report", "/automation"})
 _VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
 _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/request"),
                                 (GET, "/collection/status"), (POST, "/management/update"),
-                                (POST, "/management/collect"), (POST, "/reports/review"), (POST, "/reports/notes")})
+                                (POST, "/management/collect"), (POST, "/reports/review"), (POST, "/reports/notes"),
+                                (POST, "/reports/strategy"), (POST, "/automation/plans"), (POST, "/automation/learning")})
 _VERIFICATION_CLIENT = re.compile(r"/clients/[0-9]{1,18}")
 # 실사용 손길(2026-10-05 대표 지시) — 제한판 위에서 이름 붙인 것만 연다. 누가 하는지는 각 handler 판정 그대로.
 # 거두기는 대표만 · 사유 한 줄(2026-10-06 대표 결정 D5 — handler 가 제한판에서 대표 아님을 403 으로 막는다).
@@ -348,7 +352,8 @@ class App:
                  login_window: float = LOGIN_WINDOW, monotonic: Optional[Callable[[], float]] = None,
                  login_source_max: int = LOGIN_SOURCE_MAX, login_token_max: int = LOGIN_TOKEN_MAX,
                  owner_verification: bool = False, verified_linking: bool = False, owner_actions: bool = False,
-                 request_collection=None, collection_status=None, runtime_status=None, writer_diagnostics=None) -> None:
+                 request_collection=None, collection_status=None, runtime_status=None, writer_diagnostics=None,
+                 strategy_provider=None) -> None:
         if not isinstance(signer, SE.TokenSigner):
             raise TypeError("signer 는 TokenSigner 여야 합니다(비밀값 없이 시작하지 않는다)")
         if type(owner_verification) is not bool:
@@ -369,6 +374,8 @@ class App:
         self._collection_status_uses_reader = getattr(collection_status, "read_store_supported", False) is True
         self._runtime_status = runtime_status
         self._writer_diagnostics = writer_diagnostics
+        self._strategy_provider = strategy_provider
+        self._strategy_lock = threading.Lock()
         self._view_sync = VS.ViewSync()
         self._clock = clock or (lambda: datetime.now(KST))
         self._previewer = previewer
@@ -908,7 +915,14 @@ class App:
     def _h_report_detail(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         ctx, owns, _names, _current = self._report_context(v, now)
         try:
-            return 200, {**REPORTS.detail(ctx, v.store, v.scope, owns, req.query), "checked_at": now.isoformat()}
+            result = {**REPORTS.detail(ctx, v.store, v.scope, owns, req.query), "checked_at": now.isoformat()}
+            if "marketing_strategy" in result:
+                configured = self._strategy_provider is not None
+                result["marketing_strategy"]["provider_status"] = {"configured": configured,
+                    "state": "ready" if configured else "not_enabled",
+                    "reason": "월간 예약 한도 안에서 명시 생성" if configured else "API 키·모델·비용 상한 설정 전",
+                    "maximum_call_microusd": getattr(self._strategy_provider, "maximum_call_microusd", None)}
+            return 200, result
         except REPORTS.QueryInvalid:
             raise HttpError(400, "bad-query") from None
         except REPORTS.SourceUnavailable:
@@ -1004,6 +1018,131 @@ class App:
                 expected_version=version, action=action, document=body.get("document"))
 
         return 200, self._control_write(v, now, "report-notes-"+action, record)
+
+    def _h_report_strategy(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        required = frozenset({"report_id", "account_key", "revision_fingerprint", "expected_version", "action"})
+        body = _body(req, required | {"document"}, required)
+        report_id = _pos(body["report_id"])
+        key, fingerprint, version, action = (body[field] for field in
+            ("account_key", "revision_fingerprint", "expected_version", "action"))
+        if (not isinstance(key, str) or (key != "company" and not re.fullmatch(r"[0-9a-f]{64}", key))
+                or not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+                or type(version) is not int or not 0 <= version <= 2**53-1 or action not in ("generate", "generate_claude", "save", "approve")
+                or (action == "save" and not isinstance(body.get("document"), dict))
+                or (action != "save" and "document" in body)):
+            raise HttpError(400, "bad-body")
+        if action == "generate_claude":
+            return self._generate_learning_strategy(req, v, now, report_id, key, fingerprint, version)
+        def record(st):
+            current = self._now()
+            fresh = self._fresh_for_write(v, st, current)
+            ctx, owns, _names, _current = self._report_context(fresh, current)
+            try:
+                selected = REPORTS.detail(ctx, st, fresh.scope, owns, {"report_id": str(report_id), "account_key": key})
+            except REPORTS.SourceUnavailable:
+                raise HttpError(409, "source-stale") from None
+            SC.require_client(ctx.org, fresh.scope, owns, selected["possibility_id"], SC.ACT_APPROVE)
+            return st.record_report_strategy(report_id, key, fingerprint, v.idx, current,
+                expected_version=version, action=action, document=body.get("document"), narrowed=fresh.claims.narrowed)
+        return 200, self._control_write(v, now, "report-strategy-"+action, record)
+
+    def _generate_learning_strategy(self, req, v, now, report_id, key, fingerprint, version):
+        # 먼저 범위·계정·저장판을 확인한다. 키나 유료 제공자의 존재를 권한 밖에 드러내지 않는다.
+        ctx, owns, _names, _current = self._report_context(v, now)
+        selected = REPORTS.detail(ctx, v.store, v.scope, owns, {"report_id": str(report_id), "account_key": key})
+        SC.require_client(ctx.org, v.scope, owns, selected["possibility_id"], SC.ACT_APPROVE)
+        prepared = v.store.prepare_learning_strategy(report_id, key, fingerprint, v.idx, now, version, narrowed=v.claims.narrowed)
+        provider = self._strategy_provider
+        if provider is None:
+            raise HttpError(503, "claude-not-configured")
+        if not self._strategy_lock.acquire(blocking=False):
+            raise HttpError(409, "claude-busy")
+        try:
+            def reserve(st):
+                current = self._now()
+                fresh = self._fresh_for_write(v, st, current)
+                ctx, owns, _names, _current = self._report_context(fresh, current)
+                selected = REPORTS.detail(ctx, st, fresh.scope, owns, {"report_id": str(report_id), "account_key": key})
+                SC.require_client(ctx.org, fresh.scope, owns, selected["possibility_id"], SC.ACT_APPROVE)
+                return st.reserve_learning_call(prepared, v.idx, current, uuid.uuid4().hex,
+                    getattr(provider, "maximum_call_microusd", None), getattr(provider, "monthly_budget_microusd", None))
+            reservation = self._control_write(v, now, "learning-ai-reserve", reserve)
+            try:
+                generated = STR.generate(prepared["payload"], provider=provider,
+                    learning_context=prepared["learning_context"], plan_context=prepared["plan_context"])
+            except STR.StrategyRefused:
+                raise HttpError(503, "claude-generation-failed") from None
+            def save(st):
+                current = self._now()
+                fresh = self._fresh_for_write(v, st, current)
+                ctx, owns, _names, _current = self._report_context(fresh, current)
+                selected = REPORTS.detail(ctx, st, fresh.scope, owns, {"report_id": str(report_id), "account_key": key})
+                SC.require_client(ctx.org, fresh.scope, owns, selected["possibility_id"], SC.ACT_APPROVE)
+                result = st.record_learning_strategy(prepared, generated, v.idx, current)
+                return {**result, "cost_reservation": reservation}
+            return 200, self._control_write(v, now, "learning-ai-draft", save)
+        finally:
+            self._strategy_lock.release()
+
+    def _h_automation(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        try:
+            return 200, AUTO.view(v.ctx(now), v.store, v.scope, req.query)
+        except REPORTS.QueryInvalid:
+            raise HttpError(400, "bad-query") from None
+        except REPORTS.SourceUnavailable:
+            raise HttpError(503, "source-stale") from None
+
+    def _h_automation_plan(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        required = frozenset({"possibility_id", "account_key", "expected_version", "action"})
+        body = _body(req, required | {"plan"}, required)
+        pid = _pos(body["possibility_id"])
+        key, version, action = (body[field] for field in ("account_key", "expected_version", "action"))
+        if (not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key)
+                or type(version) is not int or not 0 <= version <= 2**53-1 or action not in ("save", "approve")
+                or (action == "save" and not isinstance(body.get("plan"), dict))
+                or (action == "approve" and "plan" in body)):
+            raise HttpError(400, "bad-body")
+        def record(st):
+            current = self._now()
+            fresh = self._fresh_for_write(v, st, current)
+            ctx = fresh.ctx(current)
+            try:
+                company, _ = AUTO.resolve(ctx, st, fresh.scope, pid, key)
+            except REPORTS.SourceUnavailable:
+                raise HttpError(409, "source-stale") from None
+            SC.require_client(ctx.org, fresh.scope, {pid: AUTO.ownership(ctx, company)}, pid, SC.ACT_APPROVE)
+            return st.record_automation_plan(pid, key, v.idx, current, expected_version=version,
+                                             action=action, plan=body.get("plan"))
+        return 200, self._control_write(v, now, "automation-plan-"+action, record)
+
+    def _h_learning_asset(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        required = frozenset({"possibility_id", "account_key", "action"})
+        body = _body(req, required | {"asset_id", "expected_version", "document"}, required)
+        pid, key, action = _pos(body["possibility_id"]), body["account_key"], body["action"]
+        if (not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key)
+                or action not in ("capture", "save", "review", "reject")):
+            raise HttpError(400, "bad-body")
+        if action == "capture":
+            if set(body) != required:
+                raise HttpError(400, "bad-body")
+        elif (not isinstance(body.get("asset_id"), str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", body["asset_id"])
+                or type(body.get("expected_version")) is not int or not 0 <= body["expected_version"] <= 2**53-1
+                or (action == "save" and not isinstance(body.get("document"), dict))
+                or (action != "save" and "document" in body)):
+            raise HttpError(400, "bad-body")
+        def record(st):
+            current = self._now()
+            fresh = self._fresh_for_write(v, st, current)
+            try:
+                company, _ = AUTO.resolve(fresh.ctx(current), st, fresh.scope, pid, key)
+            except REPORTS.SourceUnavailable:
+                raise HttpError(409, "source-stale") from None
+            SC.require_client(fresh.org, fresh.scope, {pid: AUTO.ownership(fresh.ctx(current), company)}, pid, SC.ACT_APPROVE)
+            if action == "capture":
+                return st.capture_learning_report(pid, key, v.idx, current)
+            return st.record_learning_asset(pid, key, v.idx, current, expected_version=body["expected_version"],
+                asset_id=body["asset_id"], action=action, document=body.get("document"))
+        return 200, self._control_write(v, now, "learning-"+action, record)
 
     def _h_board(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         sel = req.query.get("selection", "all")
@@ -1439,6 +1578,10 @@ ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a i
     (GET, r"/reports/history", App._h_report_history, True),
     (POST, r"/reports/review", App._h_report_review, True),
     (POST, r"/reports/notes", App._h_report_notes, True),
+    (POST, r"/reports/strategy", App._h_report_strategy, True),
+    (GET, r"/automation", App._h_automation, True),
+    (POST, r"/automation/plans", App._h_automation_plan, True),
+    (POST, r"/automation/learning", App._h_learning_asset, True),
     (GET, r"/clients/(?P<pid>[0-9]{1,18})", App._h_client, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/ack", App._h_issue_ack, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/resolve", App._h_issue_resolve, True),

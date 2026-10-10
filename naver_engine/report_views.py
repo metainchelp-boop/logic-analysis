@@ -276,6 +276,7 @@ def detail(ctx, store, scope, owns, query):
                 **public_payload(ENR.contribution(payload, account))})
     # 現 권한 확인 후에만 내부 문안과 이력을 읽는다. 과거 수치판의 승인을 최신판으로 넘기지 않는다.
     annotations = None
+    marketing_strategy = None
     if (report.get("revision_fingerprint")
             and cleaned["details"].get("status") != "legacy_unavailable"):
         annotations = store.report_notes(rid, key, report["revision_fingerprint"])
@@ -284,6 +285,8 @@ def detail(ctx, store, scope, owns, query):
                     and SC.ACT_APPROVE in SC.allowed_actions(ctx.org, scope, owns[pid])
                     and store.report_latest_ids(report["period_key"], [pid]).get(pid) == rid)
         annotations.update(can_edit=editable, can_approve=editable)
+        marketing_strategy = store.report_strategy(rid, key, report["revision_fingerprint"])
+        marketing_strategy.update(can_edit=editable, can_approve=editable)
     states = store.report_refresh_states(rid)
     validation, refresh = _refresh(selected, states, None if key == "company" else members[key])
     return {**{field: public_payload(report[field]) for field in ("report_id", "period_key", "revision_no",
@@ -294,4 +297,5 @@ def detail(ctx, store, scope, owns, query):
             "collection_status": _collection_status(selected),
             "change_summary": public_payload(report.get("change_summary")) if key == "company" else
                               public_payload(selected.get("change_summary")),
-            "scope": scope_info, "annotations": public_payload(annotations)}
+            "scope": scope_info, "annotations": public_payload(annotations),
+            "marketing_strategy": public_payload(marketing_strategy)}
