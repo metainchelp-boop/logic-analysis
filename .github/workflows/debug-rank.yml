@@ -6,6 +6,16 @@ name: Debug Rank Batch (읽기 전용 진단)
 on:
   workflow_dispatch:
     inputs:
+      ad_prepare:
+        description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
+        type: choice
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
+        required: false
+        default: 'off'
+      ad_expected_baseline:
+        description: 'prepare/keygen: 기준 SHA-256. tunnel-install/activate: baseline·공개키지문·BE공개hostkey·꺼짐확인 4필드 JSON. 개인키 금지.'
+        required: false
+        default: ''
       collector:
         description: '수집기 진단 — off(기본) / on(확장이 서버에 접속했는지·큐·토큰 상태)'
         required: false
@@ -40,7 +50,1122 @@ on:
         default: 'off'
 
 jobs:
+  preview-ops:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-backup' || inputs.ad_prepare == 'preview-inspect' || inputs.ad_prepare == 'preview-plan' || inputs.ad_prepare == 'preview-publish' || inputs.ad_prepare == 'preview-rollback' || inputs.ad_prepare == 'preview-lifecycle' || inputs.ad_prepare == 'preview-status' || inputs.ad_prepare == 'preview-data-audit' || inputs.ad_prepare == 'preview-collection-status' || inputs.ad_prepare == 'preview-link-audit' || inputs.ad_prepare == 'preview-legacy-audit' || inputs.ad_prepare == 'preview-upgrade' || inputs.ad_prepare == 'preview-code-upgrade' || inputs.ad_prepare == 'preview-code-diagnose' || inputs.ad_prepare == 'preview-code-only-upgrade' || inputs.ad_prepare == 'preview-code-only-rollback' || inputs.ad_prepare == 'preview-resource-trial' || inputs.ad_prepare == 'preview-report-recovery' || inputs.ad_prepare == 'preview-report-recovery-v19' || inputs.ad_prepare == 'preview-conversion-diagnostics') }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # Code-only forward + rollback reserve: raw224KiB, wire72KiB; bounded decompression/eof/tail checks retained.
+    timeout-minutes: ${{ inputs.ad_prepare == 'preview-code-only-rollback' && 65 || inputs.ad_prepare == 'preview-code-only-upgrade' && 65 || inputs.ad_prepare == 'preview-code-upgrade' && 65 || 15 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 승인된 관제 전용 작업·합성 검사
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
+          python3 - <<'PY'
+          import base64,gzip,json,os,pathlib
+          def encode_ops(bundle):
+              raw=json.dumps(bundle).encode()
+              if bundle['operation'] not in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status','preview-code-only-upgrade','preview-code-only-rollback','preview-resource-trial','preview-report-recovery','preview-report-recovery-v19','preview-conversion-diagnostics'):
+                  return base64.b64encode(raw).decode()
+              if len(raw)>229376:
+                  raise ValueError('CODE_OPS_JSON_SIZE')
+              encoded='code-gzip-v1:'+base64.b64encode(gzip.compress(raw,mtime=0)).decode()
+              if len(encoded)>73728:
+                  raise ValueError('CODE_OPS_WIRE_SIZE')
+              return encoded
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          operation=inputs.pop('ad_prepare')
+          module,function={'preview-backup':('naver_preview_backup_probe','run'),
+            'preview-status':('naver_preview_status','run'),
+            'preview-data-audit':('naver_preview_data_audit','run'),
+            'preview-collection-status':('naver_preview_collection_status','run'),
+            'preview-report-recovery':('naver_preview_report_recovery','run'),
+            'preview-report-recovery-v19':('naver_preview_report_recovery_v19','run'),
+            'preview-conversion-diagnostics':('naver_preview_conversion_diagnostics','run'),
+            'preview-resource-trial':('naver_preview_resource_trial','run'),
+            'preview-link-audit':('naver_preview_link_audit','run'),
+            'preview-legacy-audit':('naver_preview_legacy_audit','run'),
+            'preview-upgrade':('naver_preview_upgrade','apply'),
+            'preview-code-upgrade':('naver_preview_code_upgrade','apply'),
+            'preview-code-only-upgrade':('naver_preview_code_only','apply'),
+            'preview-code-only-rollback':('naver_preview_code_rollback','run'),
+            'preview-code-diagnose':('naver_preview_code_diagnose','run'),
+            'preview-inspect':('naver_preview_publish','inspect'),
+            'preview-plan':('naver_preview_publish','plan'),
+            'preview-publish':('naver_preview_publish','apply'),
+            'preview-rollback':('naver_preview_publish','rollback'),
+            'preview-lifecycle':('naver_preview_lifecycle','install')}[operation]
+          package=json.loads(inputs.pop('ad_expected_baseline'))
+          assert all(v=='off' for v in inputs.values())
+          if operation=='preview-resource-trial':
+              import sys
+              sys.path.insert(0,'backend/tools')
+              import naver_preview_resource_trial
+              naver_preview_resource_trial.validate_package(package)
+          if operation=='preview-report-recovery':
+              import sys
+              sys.path.insert(0,'backend/tools')
+              import naver_preview_report_recovery
+              naver_preview_report_recovery.validate_package(package)
+          if operation=='preview-report-recovery-v19':
+              import sys
+              sys.path.insert(0,'backend/tools')
+              import naver_preview_report_recovery_v19
+              naver_preview_report_recovery_v19.validate_package(package)
+          if operation=='preview-conversion-diagnostics':
+              import sys
+              sys.path.insert(0,'backend/tools')
+              import naver_preview_conversion_diagnostics
+              naver_preview_conversion_diagnostics.validate_package(package)
+          code_module='naver_preview_code_upgrade'
+          if operation in ('preview-code-only-upgrade','preview-code-only-rollback'):
+              import importlib,sys
+              sys.path.insert(0,'backend/tools')
+              import naver_preview_code_only,naver_preview_release
+              naver_preview_release.validate_package(dict(package['release'],operation='upgrade-prepare'))
+              code_module=naver_preview_code_only.code_module_name(package['release']['source_commit'])
+              code=importlib.import_module(code_module)
+              naver_preview_code_only.require_review(code)
+              code.validate_package(package['release'],naver_preview_release)
+              if operation=='preview-code-only-rollback':
+                  import naver_preview_code_rollback
+                  naver_preview_code_rollback.validate_package(package,naver_preview_release,naver_preview_code_only,code)
+          bundle={'package':package,'operation':operation,'function':function,
+                  'source':pathlib.Path('backend/tools/'+module+'.py').read_text(),
+                  'release_source':pathlib.Path('backend/tools/naver_preview_release.py').read_text(),
+                  'host_source':pathlib.Path('backend/tools/naver_erp_tunnel_service_install.py').read_text()}
+          if operation in ('preview-upgrade','preview-code-upgrade','preview-code-diagnose','preview-code-only-upgrade','preview-code-only-rollback'):
+              bundle['lifecycle_source']=pathlib.Path('backend/tools/naver_preview_lifecycle.py').read_text()
+          if operation in ('preview-code-upgrade','preview-code-diagnose','preview-code-only-upgrade','preview-code-only-rollback'):
+              bundle['upgrade_source']=pathlib.Path('backend/tools/naver_preview_upgrade.py').read_text()
+          if operation in ('preview-code-diagnose','preview-code-only-upgrade','preview-code-only-rollback'):
+              bundle['code_source']=pathlib.Path('backend/tools/'+code_module+'.py').read_text()
+          if operation=='preview-code-only-rollback':
+              bundle['code_only_source']=pathlib.Path('backend/tools/naver_preview_code_only.py').read_text()
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('PREVIEW_OPS_B64='+encode_ops(bundle)+'\n')
+          PY
+      - name: 새 관제만 제한 작업 — 기존 앱 유지
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          PREVIEW_OPS_B64: ${{ env.PREVIEW_OPS_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: PREVIEW_OPS_B64
+          command_timeout: ${{ inputs.ad_prepare == 'preview-code-only-rollback' && '60m' || inputs.ad_prepare == 'preview-code-only-upgrade' && '60m' || inputs.ad_prepare == 'preview-code-upgrade' && '60m' || '12m' }}
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import base64,json,os,re,sys,types,zlib
+            def decode_ops(encoded):
+                if not encoded.startswith('code-gzip-v1:'):
+                    bundle=json.loads(base64.b64decode(encoded,validate=True))
+                    if bundle.get('operation') in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status','preview-code-only-upgrade','preview-code-only-rollback','preview-resource-trial','preview-report-recovery','preview-report-recovery-v19','preview-conversion-diagnostics'):
+                        raise ValueError('CODE_OPS_ENCODING')
+                    return bundle
+                if len(encoded)>73728:
+                    raise ValueError('CODE_OPS_WIRE_SIZE')
+                packed=base64.b64decode(encoded[len('code-gzip-v1:'):],validate=True)
+                decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+                raw=decoder.decompress(packed,229377)
+                if len(raw)>229376 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+                    raise ValueError('CODE_OPS_GZIP')
+                bundle=json.loads(raw)
+                if (bundle.get('operation'),bundle.get('function')) not in (('preview-code-upgrade','apply'),('preview-code-diagnose','run'),('preview-collection-status','run'),('preview-code-only-upgrade','apply'),('preview-code-only-rollback','run'),('preview-resource-trial','run'),('preview-report-recovery','run'),('preview-report-recovery-v19','run'),('preview-conversion-diagnostics','run')):
+                    raise ValueError('CODE_OPS_OPERATION')
+                return bundle
+            module=None
+            code=None
+            bundle={}
+            try:
+                bundle=decode_ops(os.environ['PREVIEW_OPS_B64'])
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                allowed={'preview-backup':'run','preview-status':'run','preview-data-audit':'run','preview-collection-status':'run','preview-resource-trial':'run','preview-report-recovery':'run','preview-report-recovery-v19':'run','preview-conversion-diagnostics':'run','preview-link-audit':'run','preview-legacy-audit':'run','preview-upgrade':'apply','preview-code-upgrade':'apply','preview-code-only-upgrade':'apply','preview-code-only-rollback':'run','preview-code-diagnose':'run','preview-inspect':'inspect','preview-plan':'plan','preview-publish':'apply','preview-rollback':'rollback','preview-lifecycle':'install'}
+                assert allowed[bundle['operation']]==bundle['function']
+                host=types.ModuleType('approved_host');exec(bundle['host_source'],host.__dict__)
+                module=types.ModuleType('approved_preview');exec(bundle['source'],module.__dict__)
+                if bundle['operation'] in ('preview-upgrade','preview-code-upgrade','preview-code-diagnose','preview-code-only-upgrade','preview-code-only-rollback'):
+                    release=types.ModuleType('approved_release');exec(bundle['release_source'],release.__dict__)
+                    lifecycle=types.ModuleType('approved_lifecycle');exec(bundle['lifecycle_source'],lifecycle.__dict__)
+                    if bundle['operation']=='preview-code-upgrade':
+                        upgrade=types.ModuleType('approved_upgrade');exec(bundle['upgrade_source'],upgrade.__dict__)
+                        result=module.apply(bundle['package'],host.NativeHost(),release,lifecycle,upgrade)
+                    elif bundle['operation']=='preview-code-only-upgrade':
+                        upgrade=types.ModuleType('approved_upgrade');exec(bundle['upgrade_source'],upgrade.__dict__)
+                        code=types.ModuleType('approved_code');exec(bundle['code_source'],code.__dict__)
+                        result=module.apply(bundle['package'],host.NativeHost(),release,lifecycle,upgrade,code)
+                    elif bundle['operation']=='preview-code-only-rollback':
+                        upgrade=types.ModuleType('approved_upgrade');exec(bundle['upgrade_source'],upgrade.__dict__)
+                        code=types.ModuleType('approved_code');exec(bundle['code_source'],code.__dict__)
+                        policy=types.ModuleType('approved_policy');exec(bundle['code_only_source'],policy.__dict__)
+                        result=module.run(bundle['package'],host.NativeHost(),release,lifecycle,upgrade,policy,code)
+                    elif bundle['operation']=='preview-code-diagnose':
+                        upgrade=types.ModuleType('approved_upgrade');exec(bundle['upgrade_source'],upgrade.__dict__)
+                        code=types.ModuleType('approved_code');exec(bundle['code_source'],code.__dict__)
+                        result=module.run(bundle['package'],host.NativeHost(),release,lifecycle,upgrade,code)
+                    else:
+                        result=module.apply(bundle['package'],host.NativeHost(),release,lifecycle)
+                elif bundle['operation'] in ('preview-lifecycle','preview-status','preview-data-audit','preview-collection-status','preview-link-audit','preview-legacy-audit','preview-resource-trial','preview-report-recovery','preview-report-recovery-v19','preview-conversion-diagnostics'):
+                    release=types.ModuleType('approved_release');exec(bundle['release_source'],release.__dict__)
+                    result=getattr(module,bundle['function'])(bundle['package'],host.NativeHost(),release)
+                else:
+                    result=getattr(module,bundle['function'])(bundle['package'],host.NativeHost())
+            except Exception as error:
+                result={'ok':False,'stage':getattr(module,'STAGE','preflight'),'error_kind':type(error).__name__,
+                        'error_code':str(error) if re.fullmatch('[A-Z_]{1,64}',str(error)) else None}
+                if bundle.get('operation')=='preview-resource-trial':
+                    result={'ok':False,'stage':'preflight','error_kind':'OtherError','error_code':'UNRECOGNIZED','database_opened':False}
+                    if hasattr(module,'failure_report'):
+                        result={'ok':False,**module.failure_report(error)}
+                elif bundle.get('operation') in ('preview-code-only-upgrade','preview-code-only-rollback'):
+                    result={'ok':False,'stage':'preflight','error_kind':'OtherError','error_code':'UNRECOGNIZED'}
+                    if hasattr(module,'failure_report') and code is not None:
+                        result={'ok':False,**module.failure_report(error,code)}
+                elif bundle.get('operation') in ('preview-code-upgrade','preview-code-diagnose'):
+                    result={'ok':False,'stage':'preflight','error_kind':'OtherError','error_code':'UNRECOGNIZED'}
+                    if hasattr(module,'failure_report'):
+                        result={'ok':False,**module.failure_report(error)}
+            print('NAVER_PREVIEW_OPS='+json.dumps(result,sort_keys=True))
+            sys.exit(0 if result.get('ok') else 1)
+            PY
+  preview-start:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-start' }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 제한 실행 입력·합성 검사
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
+          python3 - <<'PY'
+          import base64,json,os,pathlib,sys
+          sys.path.insert(0,'backend/tools')
+          from naver_preview_release import validate_package
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('ad_prepare')=='preview-start'
+          package=validate_package(json.loads(inputs.pop('ad_expected_baseline')))
+          assert package['operation']=='start' and all(v=='off' for v in inputs.values())
+          bundle={'package':package,'source':pathlib.Path('backend/tools/naver_preview_release.py').read_text(),
+                  'host_source':pathlib.Path('backend/tools/naver_erp_tunnel_service_install.py').read_text()}
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('PREVIEW_START_B64='+base64.b64encode(json.dumps(bundle).encode()).decode()+'\n')
+          PY
+      - name: 새 관제 두 서비스만 기동·내부 확인 — 외부 주소 미공개
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          PREVIEW_START_B64: ${{ env.PREVIEW_START_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: PREVIEW_START_B64
+          command_timeout: 8m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import base64,json,os,re,sys,types
+            module=None
+            try:
+                bundle=json.loads(base64.b64decode(os.environ['PREVIEW_START_B64'],validate=True))
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                host=types.ModuleType('approved_host');exec(bundle['host_source'],host.__dict__)
+                module=types.ModuleType('approved_release');exec(bundle['source'],module.__dict__)
+                result=module.start(bundle['package'],host.NativeHost())
+            except Exception as error:
+                result={'ok':False,'stage':getattr(module,'STAGE','start'),'error_kind':type(error).__name__,
+                        'error_code':str(error) if re.fullmatch('[A-Z_]{1,64}',str(error)) else None}
+            print('NAVER_PREVIEW_START='+json.dumps(result,sort_keys=True))
+            sys.exit(0 if result.get('ok') else 1)
+            PY
+  preview-prepare:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-prepare' || inputs.ad_prepare == 'preview-upgrade-prepare' || inputs.ad_prepare == 'preview-code-prepare' || inputs.ad_prepare == 'preview-code-only-prepare') }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.ad_prepare == 'preview-code-only-prepare' && 40 || inputs.ad_prepare == 'preview-code-prepare' && 40 || 20 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 만료되는 GitHub 암호문 수신·승인된 소스 지문 검증
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          RUN_ID: ${{ github.run_id }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import base64,gzip,importlib.util,json,os,pathlib,sys
+          sys.path.insert(0,'backend/tools')
+          from naver_preview_download import download
+          from naver_preview_release import validate_package
+          try:
+              inputs=json.loads(os.environ['INPUTS_JSON'])
+              operation=inputs.pop('ad_prepare')
+              assert operation in ('preview-prepare','preview-upgrade-prepare','preview-code-prepare','preview-code-only-prepare')
+              package=json.loads(inputs.pop('ad_expected_baseline'))
+              assert all(value=='off' for value in inputs.values())
+              if operation=='preview-code-only-prepare':
+                  import naver_preview_code_only
+                  selected=naver_preview_code_only.code_module_name(package.get('source_commit'))
+                  naver_preview_code_only.require_review(importlib.import_module(selected))
+              fields=download(package,'preview-payload')
+              fields.update(run_id=os.environ['RUN_ID'],operation={'preview-prepare':'prepare','preview-upgrade-prepare':'upgrade-prepare','preview-code-prepare':'code-prepare','preview-code-only-prepare':'code-prepare'}[operation])
+              code_module='naver_preview_code_upgrade'
+              if operation in ('preview-code-prepare','preview-code-only-prepare'):
+                  import importlib,naver_preview_release
+                  if operation=='preview-code-only-prepare':
+                      naver_preview_release.validate_package(dict(fields,operation='upgrade-prepare'))
+                      code_module=naver_preview_code_only.code_module_name(fields['source_commit'])
+                  code=importlib.import_module(code_module)
+                  if operation=='preview-code-only-prepare':
+                      naver_preview_code_only.require_review(code)
+                  code.validate_package(fields,naver_preview_release)
+              else:
+                  validate_package(fields)
+              bundle={'package':fields,'source':pathlib.Path('backend/tools/naver_preview_release.py').read_text(),
+                      'host_source':pathlib.Path('backend/tools/naver_erp_tunnel_service_install.py').read_text()}
+              if operation in ('preview-upgrade-prepare','preview-code-prepare','preview-code-only-prepare'):
+                  bundle['upgrade_source']=pathlib.Path('backend/tools/naver_preview_upgrade.py').read_text()
+                  bundle['lifecycle_source']=pathlib.Path('backend/tools/naver_preview_lifecycle.py').read_text()
+              if operation in ('preview-code-prepare','preview-code-only-prepare'):
+                  bundle['code_source']=pathlib.Path('backend/tools/'+code_module+'.py').read_text()
+              if operation=='preview-code-only-prepare':
+                  bundle['operation']=operation
+                  bundle['code_only_source']=pathlib.Path('backend/tools/naver_preview_code_only.py').read_text()
+              raw=json.dumps(bundle).encode()
+              if len(raw)>229376:
+                  raise ValueError('PREPARE_BUNDLE_SIZE')
+              encoded='prepare-gzip-v1:'+base64.b64encode(gzip.compress(raw,mtime=0)).decode()
+              if len(encoded)>73728:
+                  raise ValueError('PREPARE_WIRE_SIZE')
+              with open(os.environ['GITHUB_ENV'],'a') as stream:
+                  stream.write('PREVIEW_RELEASE_B64='+encoded+'\n')
+          except Exception:
+              print('PREVIEW_ENCRYPTED_INPUT_REFUSED')
+              sys.exit(1)
+          PY
+          python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
+      - name: 새 암호문 수신 폴더만 준비
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          PREVIEW_RELEASE_B64: ${{ env.PREVIEW_RELEASE_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: PREVIEW_RELEASE_B64
+          command_timeout: 60s
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import base64,json,os,pathlib,re,stat,sys,types,zlib
+            try:
+                wire=os.environ['PREVIEW_RELEASE_B64']
+                assert wire.startswith('prepare-gzip-v1:') and len(wire)<=73728
+                decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),229377)
+                assert len(raw)<=229376 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+                bundle=json.loads(raw)
+                assert bundle.get('operation') in (None,'preview-code-only-prepare')
+                assert ('code_only_source' in bundle)==(bundle.get('operation')=='preview-code-only-prepare')
+                if bundle.get('operation')=='preview-code-only-prepare':
+                    assert bundle['package']['operation']=='code-prepare'
+                os.environ.clear(); os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                host=types.ModuleType('approved_host'); exec(bundle['host_source'],host.__dict__)
+                module=types.ModuleType('approved_release'); exec(bundle['source'],module.__dict__)
+                if bundle['package']['operation']=='code-prepare':
+                    code=types.ModuleType('approved_code');exec(bundle['code_source'],code.__dict__)
+                    if bundle.get('operation')=='preview-code-only-prepare':
+                        policy=types.ModuleType('approved_code_only');exec(bundle['code_only_source'],policy.__dict__)
+                        policy.require_review(code)
+                    package=code.validate_package(bundle['package'],module)
+                else:
+                    package=module.validate_package(bundle['package'])
+                assert os.geteuid()==0 and host.NativeHost().baseline()==package['baseline']
+                for path in (module.ROOT,module.ROOT/'incoming'):
+                    module.trusted_dir(path,mode=0o700)
+                module.trusted_dir(module.ROOT/'incoming'/package['run_id'],mode=0o700,new=True)
+            except Exception:
+                print('PREVIEW_INCOMING_REFUSED');sys.exit(1)
+            print('PREVIEW_INCOMING_READY')
+            PY
+      - name: 암호문 전용 임시 파일 소유자 정렬 — 0700·0600 유지
+        run: |
+          set -eu
+          sudo /usr/bin/python3 -I -B - <<'PY'
+          import os,pathlib,stat
+          folder=pathlib.Path.cwd()/'preview-payload'
+          path=folder/'runtime-secrets.cms'
+          assert folder.resolve()==folder and path.resolve()==path
+          assert sorted(p.name for p in folder.iterdir())==['runtime-secrets.cms']
+          parent=folder.lstat();item=path.lstat()
+          assert stat.S_ISDIR(parent.st_mode) and stat.S_IMODE(parent.st_mode)==0o700
+          assert stat.S_ISREG(item.st_mode) and item.st_nlink==1 and stat.S_IMODE(item.st_mode)==0o600
+          assert 0<item.st_size<=2*1024*1024 and parent.st_uid==item.st_uid==int(os.environ['SUDO_UID'])
+          os.chown(path,1000,1000);os.chown(folder,1000,1000)
+          print('ENCRYPTED_TRANSFER_OWNER_READY: private modes unchanged')
+          PY
+      - name: 암호문만 운영 서버로 전달
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: preview-payload/runtime-secrets.cms
+          target: /srv/metainc/ad-deploy-staging/incoming/${{ github.run_id }}
+          strip_components: 1
+          overwrite: false
+      - name: 목적 서버에서 검증·복호화·격리 이미지 준비 — 기존 앱 유지
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          PREVIEW_RELEASE_B64: ${{ env.PREVIEW_RELEASE_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: PREVIEW_RELEASE_B64
+          command_timeout: ${{ inputs.ad_prepare == 'preview-code-only-prepare' && '35m' || inputs.ad_prepare == 'preview-code-prepare' && '35m' || '15m' }}
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import base64,json,os,re,sys,types,zlib
+            module=None
+            policy=None
+            bundle={}
+            try:
+                wire=os.environ['PREVIEW_RELEASE_B64']
+                assert wire.startswith('prepare-gzip-v1:') and len(wire)<=73728
+                decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),229377)
+                assert len(raw)<=229376 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+                bundle=json.loads(raw)
+                assert bundle.get('operation') in (None,'preview-code-only-prepare')
+                assert ('code_only_source' in bundle)==(bundle.get('operation')=='preview-code-only-prepare')
+                if bundle.get('operation')=='preview-code-only-prepare':
+                    assert bundle['package']['operation']=='code-prepare'
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                host=types.ModuleType('approved_host');exec(bundle['host_source'],host.__dict__)
+                module=types.ModuleType('approved_release');exec(bundle['source'],module.__dict__)
+                if bundle['package']['operation'] in ('upgrade-prepare','code-prepare'):
+                    release=module
+                    module=types.ModuleType('approved_upgrade');exec(bundle['upgrade_source'],module.__dict__)
+                    lifecycle=types.ModuleType('approved_lifecycle');exec(bundle['lifecycle_source'],lifecycle.__dict__)
+                    if bundle['package']['operation']=='code-prepare':
+                        upgrade=module
+                        module=types.ModuleType('approved_code');exec(bundle['code_source'],module.__dict__)
+                        if bundle.get('operation')=='preview-code-only-prepare':
+                            policy=types.ModuleType('approved_code_only');exec(bundle['code_only_source'],policy.__dict__)
+                            result=policy.prepare(bundle['package'],host.NativeHost(),release,lifecycle,upgrade,module)
+                        else:
+                            result=module.prepare(bundle['package'],host.NativeHost(),release,lifecycle,upgrade)
+                    else:
+                        result=module.prepare(bundle['package'],host.NativeHost(),release,lifecycle)
+                else:
+                    result=module.prepare(bundle['package'],host.NativeHost())
+            except Exception as error:
+                result={'ok':False,'stage':getattr(module,'STAGE','prepare'),'error_kind':type(error).__name__,
+                        'error_code':str(error) if re.fullmatch('[A-Z_]{1,64}',str(error)) else None,
+                        'created_paths':getattr(module,'CREATED',[])}
+                if bundle.get('operation')=='preview-code-only-prepare':
+                    result={'ok':False,'stage':'preflight','error_kind':'OtherError','error_code':'UNRECOGNIZED'}
+                    if hasattr(policy,'failure_report') and module is not None:
+                        result={'ok':False,**policy.failure_report(error,module)}
+            print('NAVER_PREVIEW_RELEASE='+json.dumps(result,sort_keys=True))
+            sys.exit(0 if result.get('ok') else 1)
+            PY
+  preview-envelope:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-envelope' }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 새 봉투 공개키 생성 코드 검사·포장
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -m unittest discover -s backend/tests -p test_naver_preview_envelope.py -q
+          python3 - <<'PY'
+          import base64,json,os,pathlib,re
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('ad_prepare')=='preview-envelope'
+          expected=inputs.pop('ad_expected_baseline')
+          assert re.fullmatch('[0-9a-f]{64}',expected) and all(v=='off' for v in inputs.values())
+          payload={'baseline':expected,'source':pathlib.Path('backend/tools/naver_preview_envelope.py').read_text(),
+                   'host_source':pathlib.Path('backend/tools/naver_erp_tunnel_service_install.py').read_text()}
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('PREVIEW_ENVELOPE_B64='+base64.b64encode(json.dumps(payload).encode()).decode()+'\n')
+          PY
+      - name: 목적 서버에서만 새 봉투 키 생성 — 개인키 미반출·앱 무변경
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          PREVIEW_ENVELOPE_B64: ${{ env.PREVIEW_ENVELOPE_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: PREVIEW_ENVELOPE_B64
+          command_timeout: 120s
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import base64,json,os,pathlib,re,stat,sys,types
+            try:
+                bundle=json.loads(base64.b64decode(os.environ['PREVIEW_ENVELOPE_B64'],validate=True))
+                os.environ.clear()
+                os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                assert os.geteuid()==0 and set(bundle)=={'baseline','source','host_source'}
+                assert re.fullmatch('[0-9a-f]{64}',bundle['baseline'])
+                host=types.ModuleType('approved_host')
+                exec(compile(bundle['host_source'],'<approved-host>','exec'),host.__dict__)
+                assert host.NativeHost().baseline()==bundle['baseline']
+                for path in ('/etc','/etc/metainc'):
+                    st=pathlib.Path(path).lstat()
+                    assert stat.S_ISDIR(st.st_mode) and st.st_uid==0 and not stat.S_IMODE(st.st_mode)&0o022
+                module=types.ModuleType('approved_envelope')
+                exec(compile(bundle['source'],'<approved-envelope>','exec'),module.__dict__)
+                receipt=module.create_envelope('/etc/metainc/naver-deploy-envelope')
+                assert host.NativeHost().baseline()==bundle['baseline']
+                receipt.update(ok=True,containers_unchanged=True,baseline_sha256=bundle['baseline'])
+            except Exception as error:
+                print('NAVER_PREVIEW_ENVELOPE='+json.dumps({'ok':False,'error_kind':type(error).__name__}))
+                sys.exit(1)
+            print('NAVER_PREVIEW_ENVELOPE='+json.dumps(receipt,sort_keys=True))
+            PY
+  tunnel-native:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-native' }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 입력 확인·합성 검사·일회용 runner 재현 (운영 서버 연결 없음)
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import json,os; d=json.loads(os.environ["INPUTS_JSON"]); assert d.pop("ad_prepare")=="tunnel-native"; assert d.pop("ad_expected_baseline", "")==""; assert all(v=="off" for v in d.values())'
+          python3 -m unittest discover -s backend/tests -p 'test_naver_tunnel_bpf_native_ci.py' -q
+          sudo env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted CI=true NAVER_TUNNEL_BPF_NATIVE_CI=1 timeout 25s /usr/bin/python3 -I -B backend/tools/naver_tunnel_bpf_native_ci.py
+  ad-deploy-prepare:
+    if: ${{ inputs.ad_prepare == 'inspect' || inputs.ad_prepare == 'prepare' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-keygen') }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - name: 준비 입력 확인 — 원격 연결 전
+        env:
+          AD_PREPARE_MODE: ${{ inputs.ad_prepare }}
+          AD_EXPECTED_BASELINE: ${{ inputs.ad_expected_baseline }}
+          AD_RUN_EVENT: ${{ github.event_name }}
+          AD_RUN_REF: ${{ github.ref }}
+          AD_RUN_INPUTS: ${{ toJSON(inputs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$AD_PREPARE_MODE" in
+            inspect) test -z "$AD_EXPECTED_BASELINE" ;;
+            prepare) [[ "$AD_EXPECTED_BASELINE" =~ ^[0-9a-f]{64}$ ]] ;;
+            tunnel-keygen)
+              [[ "$AD_EXPECTED_BASELINE" =~ ^[0-9a-f]{64}$ ]] || exit 1
+              test "$AD_RUN_EVENT" = workflow_dispatch || exit 1
+              test "$AD_RUN_REF" = refs/heads/codex/ad-deploy-prep-20261001 || exit 1
+              python3 -c 'import json, os, sys; values=json.loads(os.environ["AD_RUN_INPUTS"]); allowed={"ad_prepare", "ad_expected_baseline"}; sys.exit(0 if all(value == "off" for name, value in values.items() if name not in allowed) else 1)' || exit 1
+              ;;
+            *) exit 1 ;;
+          esac
+      - name: 광고센터 전용 준비 경로 확인·준비
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        env:
+          AD_PREPARE_MODE: ${{ inputs.ad_prepare }}
+          AD_EXPECTED_BASELINE: ${{ inputs.ad_expected_baseline }}
+        with:
+          envs: AD_PREPARE_MODE,AD_EXPECTED_BASELINE
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 90s
+          # script_stop은 heredoc 안에도 셸 검사문을 끼워 넣으므로 쓰지 않는다.
+          # 아래 set -eu + Python의 실패 종료로 작업 전체를 중단한다.
+          script: |
+            set -eu
+            python3 - <<'PY'
+            import base64, grp, hashlib, ipaddress, json, os, pathlib, pwd, re, shutil, socket, stat, subprocess
+
+            # 공개 실행 로그: 환경·키·DB·앱 로그를 읽지 않고 Docker 메타데이터만 선택한다.
+            def command(args):
+                try:
+                    result = subprocess.run(args, capture_output=True, text=True, timeout=12)
+                except (OSError, subprocess.TimeoutExpired):
+                    raise RuntimeError('command_unavailable') from None
+                if result.returncode:
+                    raise RuntimeError('command_failed')
+                return result.stdout.strip()
+
+            def metadata(path):
+                target = pathlib.Path(path)
+                try:
+                    info = target.lstat()
+                except FileNotFoundError:
+                    return {'exists': False}
+                return {'exists': True, 'symlink': stat.S_ISLNK(info.st_mode),
+                        'directory': stat.S_ISDIR(info.st_mode), 'uid': info.st_uid,
+                        'gid': info.st_gid, 'mode': oct(stat.S_IMODE(info.st_mode))}
+
+            def probe(args):
+                # 선택 도구의 부재/실패는 원문 stdout/stderr 없이 unknown으로 보고한다.
+                try:
+                    result = subprocess.run(args, capture_output=True, text=True, timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    return None
+                if result.returncode or len(result.stdout) + len(result.stderr) > 16384:
+                    return None
+                return result
+
+            def tunnel_preflight():
+                ssh = probe(['ssh', '-V'])
+                ssh_match = re.search(r'\bOpenSSH_([0-9]{1,2}\.[0-9]{1,2}(?:p[0-9]{1,2})?)\b',
+                                      ssh.stdout + '\n' + ssh.stderr) if ssh else None
+                systemd = probe(['systemd', '--version'])
+                systemd_text = systemd.stdout if systemd else ''
+                systemd_match = re.search(r'(?m)^systemd ([0-9]{1,4})\b', systemd_text)
+                feature = re.search(r'(?<!\S)([+-])BPF_FRAMEWORK(?!\S)', systemd_text)
+                route = {'available': False, 'source_matches_expected': None}
+                result = probe(['ip', '-json', 'route', 'get', '1.234.23.117'])
+                if result:
+                    try:
+                        rows = json.loads(result.stdout)
+                        if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict):
+                            selected = rows[0].get('prefsrc', rows[0].get('src'))
+                            if isinstance(selected, str):
+                                selected = str(ipaddress.IPv4Address(selected))
+                                route = {'available': True, 'source_matches_expected': selected == '1.234.20.80'}
+                    except (ValueError, TypeError):
+                        pass
+                try:
+                    account = pwd.getpwuid(10001)
+                except KeyError:
+                    account = None
+                try:
+                    group = grp.getgrgid(10001)
+                except KeyError:
+                    group = None
+                identity = {'uid_10001_exists': account is not None,
+                            'uid_10001_primary_gid': account.pw_gid if account else None,
+                            'gid_10001_exists': group is not None,
+                            'gid_10001_explicit_member_count': len(group.gr_mem) if group else 0,
+                            'gid_10001_primary_member_count': sum(row.pw_gid == 10001 for row in pwd.getpwall())}
+                return {'ssh_version': 'OpenSSH_' + ssh_match.group(1) if ssh_match else None,
+                        'systemd_version': 'systemd ' + systemd_match.group(1) if systemd_match else None,
+                        'route': route, 'identity': identity,
+                        'paths': {'config': metadata('/etc/metainc/naver-erp-tunnel'),
+                                  'service': metadata('/etc/systemd/system/metainc-naver-erp-tunnel.service'),
+                                  'runtime': metadata('/run/metainc-naver-erp-tunnel')},
+                        # 읽기 지표일 뿐 실제 BPF 프로그램 부착/패킷 거절은 검증하지 않는다.
+                        # 기능 probe·임시 unit 실행은 커널/서비스 변경이므로 이 진단에서 금지한다.
+                        'bpf': {'systemd_framework_compiled': feature.group(1) == '+' if feature else None,
+                                'cgroup_v2': pathlib.Path('/sys/fs/cgroup/cgroup.controllers').is_file(),
+                                'bpffs_directory_exists': pathlib.Path('/sys/fs/bpf').is_dir(),
+                                'runtime_enforcement_verified': False,
+                                'assessment': 'read_only_indicators_only'}}
+
+            def tunnel_public_file_metadata(path):
+                result = metadata(path)
+                result['sha256'] = None
+                if not result['exists'] or result['symlink'] or result['directory']:
+                    return result
+                try:
+                    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    try:
+                        item = os.fstat(fd)
+                        if not stat.S_ISREG(item.st_mode) or item.st_uid != 0 or item.st_nlink != 1 or item.st_size > 262144:
+                            return result
+                        body = os.read(fd, 262145)
+                        if len(body) == item.st_size:
+                            result['sha256'] = hashlib.sha256(body).hexdigest()
+                    finally:
+                        os.close(fd)
+                except OSError:
+                    pass
+                return result
+
+            def tunnel_service_diagnostics():
+                unit = 'metainc-naver-erp-tunnel.service'
+                fields = ('ActiveState', 'SubState', 'Result', 'ExecMainCode', 'ExecMainStatus', 'NRestarts')
+                state = {name: None for name in fields}
+                prestart = {'code': None, 'status': None}
+                shown = probe(['systemctl', 'show', unit, '--no-pager',
+                               '--property=' + ','.join(fields + ('ExecStartPre',))])
+                if shown:
+                    for line in shown.stdout.splitlines():
+                        name, _, value = line.partition('=')
+                        if name in fields:
+                            if name in ('ExecMainCode', 'ExecMainStatus', 'NRestarts'):
+                                state[name] = int(value) if re.fullmatch(r'[0-9]{1,10}', value) else None
+                            elif re.fullmatch(r'[a-z-]{1,40}', value):
+                                state[name] = value
+                        elif name == 'ExecStartPre':
+                            code = re.search(r'(?:^|[; ])code=(exited|killed|dumped|[0-9]+)(?:[; ]|$)', value)
+                            status = re.search(r'(?:^|[; ])status=([0-9]{1,5})(?:[; /}]|$)', value)
+                            if code:
+                                raw = code.group(1)
+                                prestart['code'] = int(raw) if raw.isdigit() else {'exited': 1, 'killed': 2, 'dumped': 3}[raw]
+                            prestart['status'] = int(status.group(1)) if status else None
+                patterns = {'exec': r'\bEXEC\b', 'group': r'\bGROUP\b', 'namespace': r'\bNAMESPACE\b',
+                            'ip_address': r'IPAddress', 'bpf': r'\bBPF\b',
+                            'permission': r'permission|operation not permitted',
+                            'exit_status': r'exit[- ](?:code|status)|status=[0-9]'}
+                counts = {name: 0 for name in patterns}
+                journal = probe(['journalctl', '--unit=' + unit, '-n', '30', '-o', 'json', '--no-pager'])
+                parsed = 0
+                if journal:
+                    for line in journal.stdout.splitlines()[:30]:
+                        try:
+                            row = json.loads(line)
+                            message = row.get('MESSAGE', '')
+                            if not isinstance(message, str):
+                                continue
+                            parsed += 1
+                            for name, pattern in patterns.items():
+                                counts[name] += bool(re.search(pattern, message, re.IGNORECASE))
+                        except (ValueError, TypeError, AttributeError):
+                            pass
+                tcp = {}
+                # 각 목적지 1회·2초, 인증/전송 없이 연결만 닫는다. unit 실행/정책 변경 없음.
+                for name, address in (('be_ssh', '1.234.23.117'), ('loopback_ssh', '127.0.0.1')):
+                    try:
+                        with socket.create_connection((address, 22), timeout=2):
+                            pass
+                        tcp[name] = {'success': True, 'errno': None}
+                    except OSError as error:
+                        tcp[name] = {'success': False, 'errno': error.errno if isinstance(error.errno, int) else None}
+                try:
+                    group = grp.getgrgid(10001)
+                    group_info = {'exists': True, 'gid': group.gr_gid,
+                                  'name_matches_expected': group.gr_name == 'metainc-naver-erp-tunnel',
+                                  'explicit_member_count': len(group.gr_mem)}
+                except KeyError:
+                    group_info = {'exists': False}
+                python = {'link': metadata('/usr/bin/python3'), 'target': None, 'executable': None}
+                try:
+                    target = pathlib.Path('/usr/bin/python3').resolve(strict=True)
+                    python.update(target=metadata(target), executable=os.access(str(target), os.X_OK))
+                except OSError:
+                    pass
+                return {'state': state, 'exec_start_pre': prestart,
+                        'journal': {'available': journal is not None, 'parsed_rows': parsed, 'pattern_counts': counts},
+                        'files': {name: tunnel_public_file_metadata(path) for name, path in (
+                            ('unit', '/etc/systemd/system/' + unit),
+                            ('ssh_config', '/etc/metainc/naver-erp-tunnel/ssh_config'),
+                            ('known_hosts', '/etc/metainc/naver-erp-tunnel/known_hosts'),
+                            ('bpf_probe', '/etc/metainc/naver-erp-tunnel/bpf_preflight.py'))},
+                        'runtime': metadata('/run/metainc-naver-erp-tunnel'),
+                        'socket': metadata('/run/metainc-naver-erp-tunnel/erp.sock'),
+                        'group': group_info, 'python': python, 'tcp_once': tcp}
+
+            def inspect():
+                names = command(['docker', 'ps', '-a', '--format', '{{.Names}}']).splitlines()
+                names = [n for n in names if re.fullmatch(r'[a-zA-Z0-9_.-]{1,100}', n)
+                         and re.search(r'ad-api|ad-dashboard|logic-analysis|studio|autobid', n)]
+                if not names or len(names) > 20:
+                    raise RuntimeError('unexpected_container_inventory')
+                containers = []
+                for name in sorted(names):
+                    item = {'name': name}
+                    for field, template in {
+                        'id': '{{json .Id}}', 'image_id': '{{json .Image}}',
+                        'running': '{{json .State.Running}}',
+                        'started_at': '{{json .State.StartedAt}}',
+                        'restart_count': '{{json .RestartCount}}',
+                        'project': '{{json (index .Config.Labels "com.docker.compose.project")}}',
+                        'service': '{{json (index .Config.Labels "com.docker.compose.service")}}',
+                        'working_dir': '{{json (index .Config.Labels "com.docker.compose.project.working_dir")}}',
+                        'config_files': '{{json (index .Config.Labels "com.docker.compose.project.config_files")}}',
+                        'mounts': '{{json .Mounts}}',
+                    }.items():
+                        item[field] = json.loads(command(['docker', 'inspect', '--format', template, name]))
+                    item['mounts'] = [{k: m.get(k) for k in ('Type', 'Source', 'Destination', 'RW')}
+                                      for m in item['mounts']]
+                    wd = item['working_dir']
+                    if isinstance(wd, str) and wd.startswith('/'):
+                        item['directory_stat'] = metadata(wd)
+                        item['env_stat'] = metadata(str(pathlib.Path(wd) / '.env'))
+                        item['git_stat'] = metadata(str(pathlib.Path(wd) / '.git'))
+                    containers.append(item)
+                ad = [c for c in containers if c['service'] == 'ad-api']
+                if len(ad) != 1 or not ad[0]['running']:
+                    raise RuntimeError('ad_service_not_unique_running')
+                mem = {}
+                for line in pathlib.Path('/proc/meminfo').read_text().splitlines():
+                    if line.split(':')[0] in ('MemTotal', 'MemAvailable'):
+                        mem[line.split(':')[0]] = int(line.split()[1])
+                disk = shutil.disk_usage('/srv')
+                report = {'mode': 'inspect', 'mutations': 0, 'uid': os.geteuid(),
+                          'cpu_count': os.cpu_count(), 'load_average': os.getloadavg(),
+                          'memory_kib': mem, 'disk_bytes': {'total': disk.total, 'free': disk.free},
+                          'docker_version': command(['docker', '--version']),
+                          'compose_version': command(['docker', 'compose', 'version', '--short']),
+                          'staging_stat': metadata('/srv/metainc/ad-deploy-staging'),
+                          'containers': containers}
+                return report
+
+            def preview_readiness():
+                # 인증서/환경파일/원격 자격은 읽지 않는다. nginx 구성은 필요한 메타데이터만 반환.
+                result = probe(['nginx', '-T'])
+                configs = []
+                if result:
+                    for section in re.split(r'(?m)^# configuration file ', result.stdout)[1:]:
+                        name, _, body = section.partition(':\n')
+                        if 'dashboard.metainc.co.kr' not in body:
+                            continue
+                        configs.append({'path': name, 'sha256': hashlib.sha256(body.encode()).hexdigest(),
+                            'locations': re.findall(r'(?m)^\s*location\s+([^\n{;]{1,120})\s*\{', body),
+                            'upstreams': re.findall(r'(?m)^\s*proxy_pass\s+(https?://(?:127\.0\.0\.1|localhost):[0-9]{2,5}/?);', body),
+                            'tls': bool(re.search(r'listen\s+443', body))})
+                return {'nginx_available': result is not None, 'dashboard_configs': configs,
+                        'paths': {name: metadata(name) for name in (
+                            '/etc/metainc/naver-engine', '/var/lib/metainc/naver-engine',
+                            '/run/metainc/naver-engine', '/var/backups/metainc/naver-engine',
+                            '/etc/metainc/naver-deploy-envelope')},
+                        'openssl_available': probe(['openssl', 'version']) is not None}
+
+            def baseline(report):
+                fields = ('name', 'id', 'image_id', 'running', 'started_at',
+                          'restart_count', 'project', 'service')
+                value = [{key: row[key] for key in fields}
+                         for row in sorted(report['containers'], key=lambda row: row['name'])]
+                return hashlib.sha256(json.dumps(value, sort_keys=True,
+                    separators=(',', ':')).encode('utf-8')).hexdigest()
+
+            created = []
+            def tunnel_keygen(report, expected):
+                if os.geteuid() != 0 or not re.fullmatch(r'[0-9a-f]{64}', expected):
+                    raise RuntimeError('invalid_keygen_context')
+                if baseline(report) != expected:
+                    raise RuntimeError('baseline_changed')
+                folder = pathlib.Path('/etc/metainc/naver-erp-tunnel')
+                # 선행 디렉터리만 검사한다. 기존 키/환경파일 내용은 열지 않는다.
+                for parent in (pathlib.Path('/'), pathlib.Path('/etc'), folder.parent):
+                    info = metadata(parent)
+                    if not info['exists'] and parent == folder.parent:
+                        continue
+                    if (not info['exists'] or info['symlink'] or not info['directory']
+                            or info['uid'] != 0 or info['gid'] != 0 or int(info['mode'], 8) & 0o022):
+                        raise RuntimeError('unsafe_keygen_parent')
+                if os.path.lexists(str(folder)):
+                    raise RuntimeError('keygen_path_exists')
+                old_umask = os.umask(0o077)
+                try:
+                    if not folder.parent.exists():
+                        os.mkdir(str(folder.parent), 0o700)
+                        created.append(str(folder.parent))
+                    # 원자적 mkdir: 동일 모드 중복 실행도 기존 경로를 재사용하지 않는다.
+                    os.mkdir(str(folder), 0o700)
+                    created.append(str(folder))
+                    info = folder.lstat()
+                    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_gid != 0
+                            or stat.S_IMODE(info.st_mode) != 0o700):
+                        raise RuntimeError('keygen_directory_permissions')
+                    identity = (info.st_dev, info.st_ino)
+                    private = folder / 'id_ed25519'
+                    result = subprocess.run(['/usr/bin/ssh-keygen', '-q', '-t', 'ed25519', '-N', '',
+                        '-C', 'naver-erp-tunnel', '-f', str(private)], stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+                        env={'PATH': '/usr/bin:/bin', 'LANG': 'C'})
+                    if result.returncode:
+                        raise RuntimeError('keygen_failed')
+                    current = folder.lstat()
+                    if identity != (current.st_dev, current.st_ino):
+                        raise RuntimeError('keygen_directory_changed')
+                    public = None
+                    files = {}
+                    for target in (private, folder / 'id_ed25519.pub'):
+                        fd = os.open(str(target), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                        try:
+                            item = os.fstat(fd)
+                            if (not stat.S_ISREG(item.st_mode) or item.st_uid != 0 or item.st_gid != 0
+                                    or item.st_nlink != 1 or stat.S_IMODE(item.st_mode) != 0o600
+                                    or not 0 < item.st_size < 4096):
+                                raise RuntimeError('keygen_file_permissions')
+                            files[target.name] = {'uid': item.st_uid, 'gid': item.st_gid,
+                                'mode': oct(stat.S_IMODE(item.st_mode)), 'links': item.st_nlink,
+                                'inode_sha256': hashlib.sha256(('%s:%s' % (
+                                    item.st_dev, item.st_ino)).encode('ascii')).hexdigest()}
+                            if target.name.endswith('.pub'):
+                                public = os.read(fd, 512).decode('ascii').strip()
+                        finally:
+                            os.close(fd)
+                    if not public or not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/]{68} naver-erp-tunnel', public):
+                        raise RuntimeError('invalid_generated_public_key')
+                    blob = base64.b64decode(public.split()[1], validate=True)
+                    if len(blob) != 51 or blob[:19] != b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20':
+                        raise RuntimeError('invalid_generated_public_key')
+                    if baseline(inspect()) != expected:
+                        raise RuntimeError('container_changed_during_keygen')
+                    return {'mode': 'tunnel-keygen', 'public_key': public,
+                            'files': files, 'directory_mode': oct(stat.S_IMODE(current.st_mode)),
+                            'baseline_sha256': expected, 'containers_unchanged': True,
+                            'private_key_exported': False, 'service_installed': False}
+                finally:
+                    os.umask(old_umask)
+                # 실패 잔재는 삭제/교체하지 않는다. created 목록으로 수동 점검 후 중단한다.
+
+            def prepare(report, expected):
+                if os.geteuid() != 0 or not re.fullmatch(r'[0-9a-f]{64}', expected):
+                    raise RuntimeError('invalid_prepare_context')
+                if baseline(report) != expected:
+                    raise RuntimeError('baseline_changed')
+                root = pathlib.Path('/srv/metainc/ad-deploy-staging')
+                folders = [pathlib.Path('/srv'), root.parent, root,
+                           root / 'incoming', root / 'releases', root / 'receipts']
+                marker = root / 'PREPARATION_ONLY.json'
+                marker_body = b'{"schema":1,"service":"ad-api","deployment_enabled":false}\n'
+                # 쓰기 전에 모든 상위 경로·기존 항목을 검사한다. 기존 권한은 바꾸지 않는다.
+                for folder in folders:
+                    info = metadata(folder)
+                    if info['exists'] and (info['symlink'] or not info['directory']
+                            or info['uid'] != 0 or info['gid'] != 0
+                            or int(info['mode'], 8) & 0o022
+                            or (folder in folders[2:] and info['mode'] != '0o700')):
+                        raise RuntimeError('unsafe_existing_directory')
+                if root.exists():
+                    if set(p.name for p in root.iterdir()) - {
+                            'incoming', 'releases', 'receipts', 'PREPARATION_ONLY.json'}:
+                        raise RuntimeError('unexpected_staging_content')
+                for folder in folders[3:]:
+                    if folder.exists() and any(folder.iterdir()):
+                        raise RuntimeError('staging_is_in_use')
+                info = metadata(marker)
+                if info['exists']:
+                    st = marker.lstat()
+                    if (info['symlink'] or not stat.S_ISREG(st.st_mode)
+                            or st.st_uid != 0 or st.st_gid != 0 or st.st_nlink != 1
+                            or stat.S_IMODE(st.st_mode) != 0o600
+                            or st.st_size != len(marker_body)
+                            or marker.read_bytes() != marker_body):
+                        raise RuntimeError('unexpected_staging_marker')
+                for folder in folders[1:]:
+                    if not folder.exists():
+                        folder.mkdir(mode=0o750 if folder == root.parent else 0o700)
+                        created.append(str(folder))
+                if not info['exists']:
+                    fd = os.open(str(marker), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    created.append(str(marker))
+                    with os.fdopen(fd, 'wb') as output:
+                        output.write(marker_body)
+                        output.flush()
+                        os.fsync(output.fileno())
+                # 요청 mode와 실제 결과는 다를 수 있다(umask·그룹 상속). 고치지 말고 검증한다.
+                for folder in folders[2:]:
+                    actual = metadata(folder)
+                    if (not actual['exists'] or actual['symlink'] or not actual['directory']
+                            or actual['uid'] != 0 or actual['gid'] != 0 or actual['mode'] != '0o700'):
+                        raise RuntimeError('created_directory_permissions_mismatch')
+                actual = marker.lstat()
+                if (not stat.S_ISREG(actual.st_mode) or actual.st_uid != 0 or actual.st_gid != 0
+                        or actual.st_nlink != 1 or stat.S_IMODE(actual.st_mode) != 0o600
+                        or actual.st_size != len(marker_body)):
+                    raise RuntimeError('created_marker_permissions_mismatch')
+                after = inspect()
+                if baseline(after) != expected:
+                    raise RuntimeError('container_changed_during_preparation')
+                return {'mode': 'prepare', 'created': created,
+                        'staging_stat': after['staging_stat'], 'baseline_sha256': expected,
+                        'containers_unchanged': True, 'deployment_enabled': False,
+                        'existing_environment_changed': False, 'existing_permissions_changed': False}
+
+            try:
+                mode = os.environ.get('AD_PREPARE_MODE', 'inspect')
+                if mode not in ('inspect', 'prepare', 'tunnel-keygen'):
+                    raise RuntimeError('invalid_mode')
+                report = inspect()
+                report['baseline_sha256'] = baseline(report)
+                if mode == 'tunnel-keygen':
+                    report = tunnel_keygen(report, os.environ.get('AD_EXPECTED_BASELINE', ''))
+                elif mode == 'prepare':
+                    report = prepare(report, os.environ.get('AD_EXPECTED_BASELINE', ''))
+                else:
+                    report['tunnel_preflight'] = tunnel_preflight()
+                    report['tunnel_service'] = tunnel_service_diagnostics()
+                    report['preview_readiness'] = preview_readiness()
+                    if baseline(inspect()) != report['baseline_sha256']:
+                        raise RuntimeError('container_changed_during_inspection')
+                    report['containers_unchanged'] = True
+                print('AD_DEPLOY_PREFLIGHT=' + json.dumps(report, sort_keys=True))
+            except Exception as exc:
+                # 예외 원문/표준 오류에는 경로·자격이 섞일 수 있어 출력하지 않는다.
+                print('AD_DEPLOY_PREFLIGHT_FAILED=' + type(exc).__name__)
+                print('AD_DEPLOY_CREATED_PATHS=' + json.dumps(created))
+                raise SystemExit(1)
+            PY
+
+  ad-tunnel-install:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'tunnel-install' || inputs.ad_prepare == 'tunnel-activate') }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 승인된 가지 소스 받기 — 자격 저장 없음
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 공개 입력 검증과 신뢰 소스 패키징 — 서버 연결 없음
+        env:
+          AD_RUN_EVENT: ${{ github.event_name }}
+          AD_RUN_REF: ${{ github.ref }}
+          AD_RUN_INPUTS: ${{ toJSON(inputs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'INSTALL_PACKAGE'
+          import base64, importlib.util, json, os, pathlib, sys
+          def unique_pairs(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError('duplicate_field')
+                  result[key] = value
+              return result
+          try:
+              if (os.environ.get('AD_RUN_EVENT') != 'workflow_dispatch'
+                      or os.environ.get('AD_RUN_REF') != 'refs/heads/codex/ad-deploy-prep-20261001'):
+                  raise ValueError('invalid_context')
+              inputs = json.loads(os.environ['AD_RUN_INPUTS'], object_pairs_hook=unique_pairs)
+              if (inputs.get('ad_prepare') not in ('tunnel-install', 'tunnel-activate') or any(value != 'off'
+                      for name, value in inputs.items() if name not in ('ad_prepare', 'ad_expected_baseline'))):
+                  raise ValueError('invalid_mode')
+              raw = inputs['ad_expected_baseline']
+              if not isinstance(raw, str) or not 0 < len(raw) <= 16384:
+                  raise ValueError('invalid_size')
+              package = json.loads(raw, object_pairs_hook=unique_pairs)
+              path = pathlib.Path('backend/tools/naver_erp_tunnel_service_install.py')
+              spec = importlib.util.spec_from_file_location('trusted_tunnel_installer', path)
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              module.validate_package(package)
+              installer = path.read_bytes()
+              probe = path.with_name('naver_erp_tunnel_bpf_preflight.py').read_bytes()
+              if not 0 < len(installer) <= 131072 or not 0 < len(probe) <= 16384:
+                  raise ValueError('invalid_source_size')
+              bundle = {'operation': inputs['ad_prepare'], 'package': package, 'installer_source': base64.b64encode(installer).decode('ascii'),
+                        'probe_source': base64.b64encode(probe).decode('ascii')}
+              encoded = base64.b64encode(json.dumps(bundle, separators=(',', ':')).encode()).decode('ascii')
+              with open(os.environ['GITHUB_ENV'], 'a') as output:
+                  output.write('NAVER_TUNNEL_INSTALL_BUNDLE_B64=' + encoded + '\n')
+          except Exception:
+              print('NAVER_TUNNEL_INSTALL_INPUT_REJECTED')
+              sys.exit(1)
+          INSTALL_PACKAGE
+      - name: Linux 합성 안전 검사 — 실제 키·서버 연결 없음
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s backend/tests -p 'test_ad_tunnel_*.py' -q
+          python3 -m unittest discover -s backend/tests -p 'test_naver_erp_tunnel_service_install.py' -q
+      - name: 신규 터널 서비스만 설치 또는 검증 활성화 — 기존 앱 재시작 없음
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          NAVER_TUNNEL_INSTALL_BUNDLE_B64: ${{ env.NAVER_TUNNEL_INSTALL_BUNDLE_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: NAVER_TUNNEL_INSTALL_BUNDLE_B64
+          command_timeout: 180s
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'INSTALL_REMOTE'
+            import base64, contextlib, io, json, os, re, sys, types
+            stage = 'decode'
+            module = None
+            try:
+                encoded = os.environ.get('NAVER_TUNNEL_INSTALL_BUNDLE_B64', '')
+                os.environ.clear()
+                os.environ.update({'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'})
+                if not 0 < len(encoded) <= 280000:
+                    raise ValueError('invalid_bundle')
+                bundle = json.loads(base64.b64decode(encoded, validate=True))
+                if not isinstance(bundle, dict) or set(bundle) != {'operation', 'package', 'installer_source', 'probe_source'}:
+                    raise ValueError('invalid_bundle_fields')
+                if bundle['operation'] not in ('tunnel-install', 'tunnel-activate'):
+                    raise ValueError('invalid_operation')
+                installer = base64.b64decode(bundle['installer_source'], validate=True)
+                probe = base64.b64decode(bundle['probe_source'], validate=True)
+                if not 0 < len(installer) <= 131072 or not 0 < len(probe) <= 16384:
+                    raise ValueError('invalid_source_size')
+                stage = 'activate' if bundle['operation'] == 'tunnel-activate' else 'install'
+                module = types.ModuleType('trusted_tunnel_installer')
+                # 공개 입력과 소스는 고정 가지 checkout에서만 온다. 원격 임시 소스파일 없음.
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    exec(compile(installer, '<trusted-tunnel-installer>', 'exec'), module.__dict__)
+                    module.validate_package(bundle['package'])
+                    if bundle['operation'] == 'tunnel-activate':
+                        result = module.activate_installed(bundle['package'], probe_source=probe)
+                    else:
+                        result = module.install(bundle['package'], probe_source=probe)
+                if not isinstance(result, dict) or type(result.get('ok')) is not bool:
+                    raise ValueError('invalid_receipt')
+            except Exception as error:
+                # 통제된 설치 오류 코드만 허용한다. 일반 예외 원문/SSH stderr는 출력 금지.
+                controlled = isinstance(error, getattr(module, 'InstallError', ()))
+                code = str(error) if controlled and re.fullmatch(r'[A-Z0-9_]{1,80}', str(error)) else None
+                result = {'ok': False, 'stage': stage, 'error_kind': type(error).__name__, 'error_code': code}
+            print('NAVER_TUNNEL_SERVICE_INSTALL_V1 ' + json.dumps(result, sort_keys=True))
+            sys.exit(0 if result['ok'] else 1)
+            INSTALL_REMOTE
+
   diagnose:
+    if: ${{ !inputs.ad_prepare || inputs.ad_prepare == 'off' }}
     runs-on: ubuntu-latest
     steps:
       # 브랜치 코드 미리보기용 — 평소(off)엔 받아만 두고 쓰지 않는다.
@@ -1055,3 +2180,84 @@ jobs:
               | grep -aE '\"(GET|POST) /api/' \
               | awk '{for(i=1;i<=NF;i++) if($i ~ /^\/api\//) {split($i,a,"?"); print a[1]}}' \
               | sort | uniq -c | sort -rn | head -15
+
+  learning-center-static:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'learning-center-static-check' || inputs.ad_prepare == 'learning-center-static-install' || inputs.ad_prepare == 'learning-center-static-rollback')
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify exact public static package
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,io,json,os,pathlib,tarfile
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('ad_prepare') in ('learning-center-static-check','learning-center-static-install','learning-center-static-rollback')
+          assert inputs.pop('ad_expected_baseline','')==''
+          assert set(inputs)=={'collector','rank_link','capacity','structure','expired','queue','urlshape','use_branch_code'}
+          assert all(v=='off' for v in inputs.values())
+          p=pathlib.Path('releases/learning-center-static-patch-20261011.tar.gz')
+          raw=p.read_bytes()
+          assert hashlib.sha256(raw).hexdigest()=='2f8a6b3fb73ce5e471915a3ba45eb92da13b0ac08679e93c78f711daaf0a778b'
+          expected={'install_static.py','manifest.json','original-index.html','index.html','app.17f591847ebe.js','app.367bce70601a.js'}
+          with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as tar:
+              members=tar.getmembers()
+              assert len(members)==6 and {m.name for m in members}==expected
+              assert all(m.isfile() and not m.issym() and not m.islnk() for m in members)
+              assert sum(m.size for m in members)<4*1024*1024
+          print('Pinned package verified; single LearningCenterPage change only')
+          PY
+      - name: Transfer package into new staging directory
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: 'releases/learning-center-static-patch-20261011.tar.gz'
+          target: '/srv/metainc/learning-center-staging/${{ github.run_id }}'
+          overwrite: false
+      - name: Verify current files then perform scoped operation
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          STATIC_MODE: ${{ inputs.ad_prepare }}
+          STATIC_RUN_ID: ${{ github.run_id }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: STATIC_MODE,STATIC_RUN_ID
+          command_timeout: 90s
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import hashlib,io,os,pathlib,re,subprocess,tarfile
+            operation=os.environ['STATIC_MODE']; run_id=os.environ['STATIC_RUN_ID']
+            mode={'learning-center-static-check':'check','learning-center-static-install':'install','learning-center-static-rollback':'rollback'}[operation]
+            assert mode in ('check','install','rollback') and re.fullmatch('[0-9]{1,20}',run_id)
+            staging=pathlib.Path('/srv/metainc/learning-center-staging')/run_id
+            archive=staging/'releases/learning-center-static-patch-20261011.tar.gz'
+            assert not archive.is_symlink() and archive.is_file()
+            raw=archive.read_bytes()
+            assert hashlib.sha256(raw).hexdigest()=='2f8a6b3fb73ce5e471915a3ba45eb92da13b0ac08679e93c78f711daaf0a778b'
+            target=staging/'package'; target.mkdir(mode=0o700)
+            expected={'install_static.py','manifest.json','original-index.html','index.html','app.17f591847ebe.js','app.367bce70601a.js'}
+            with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as tar:
+                members=tar.getmembers()
+                assert len(members)==6 and {m.name for m in members}==expected
+                assert all(m.isfile() and not m.issym() and not m.islnk() for m in members)
+                assert sum(m.size for m in members)<4*1024*1024
+                for member in members:
+                    data=tar.extractfile(member).read(); assert len(data)==member.size
+                    fd=os.open(target/member.name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+                    with os.fdopen(fd,'wb') as stream: stream.write(data)
+            subprocess.run(['/usr/bin/python3','-I','-B',str(target/'install_static.py'),'--root','/root/logic-analysis-deploy/frontend','--mode',mode],check=True,timeout=30)
+            PY
