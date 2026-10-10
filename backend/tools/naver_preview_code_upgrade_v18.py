@@ -13,12 +13,12 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 OLD_COMMIT = '7c99e18e29e6cb4d3f32eb41b6983529126d8f3a'
-TARGET_COMMIT = 'c3ce2b47ce088483c734e8ba5cef569ecfa66e77'
+TARGET_COMMIT = '7f32d70d97876b806cc5bc44a7cc0f9688caeada'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 # Current V17 canonical archive.
 OLD_SOURCE_SHA256 = '874ea72edfef7c5a375f26cf8bdb103aa487779bd06e208aada7b1a5184dcee2'
 # Exact canonical archive.
-TARGET_SOURCE_SHA256 = '7a23f9717056b483915a076d658f85aab5f5cf662e7bc5454a64788db847123e'
+TARGET_SOURCE_SHA256 = 'd6a2d1fe521287c9cedfba1132e5a81164ed2e2745ddea7ea01d74c2beb80a13'
 # Exact old and target Store implementation pins; schema unchanged.
 STORE_SHA256 = {'old': 'cc050c8c3d8c0d2a8e4977ec0e8e5b271ff7fc932a8d35a6c0f10dadc11ddb56', 'target': 'b01a1e21cc87df1ef5a3935a30cc25d96b0ec3ced0fcc42a2bc9999685ef7d95'}
 # Only reviewed report runtime paths; one added read projection module.
@@ -42,7 +42,7 @@ OLD_REPORT_UI = (60450, 'c629f0f2485f9ba5d524b6cbf1329e562958b7099fad5b568c944a0
 REPORT_ASSETS = {
     '/naver/'+name:(size,digest,'application/gzip' if name.endswith('.gz') else 'text/css; charset=utf-8' if name.endswith('.css') else 'text/javascript; charset=utf-8')
     for name,size,digest in (
-        ('report-ui.js', 62639, 'af40b3903436e9dbb419abb414e08bda5cbe4d1336a2ee71a87f308418d78ab7'),
+        ('report-ui.js', 62666, '3f5ba0938c922ce8fbcaae59a8893d2b031b22d335554f0befd8dfd477d5d6c2'),
         ('report-pdf.js', 35168, '45d15c2862cd83a223e52cf85c1feb9327ffe6cc5753d558a8f6d67e1cd8f6bc'),
         ('app.js', 218303, 'ccc7591759a448f8299610b32c60715b408246b9a7a094369fc5c71884a41984'),
         ('app.css', 53635, 'bacdae44e6e99a2be2e84c53c3347029ef8845b110c2367a0fb8ed54594ea5db'),

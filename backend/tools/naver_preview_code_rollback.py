@@ -127,7 +127,7 @@ if (type(REVIEWED_ROLLBACK_V17[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIE
     REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V17})
 
 # V18 exact inverse including removal of the new read projection.
-REVIEWED_ROLLBACK_V18 = ('7c99e18e29e6cb4d3f32eb41b6983529126d8f3a', 'c3ce2b47ce088483c734e8ba5cef569ecfa66e77', '874ea72edfef7c5a375f26cf8bdb103aa487779bd06e208aada7b1a5184dcee2', '7a23f9717056b483915a076d658f85aab5f5cf662e7bc5454a64788db847123e', 'cc050c8c3d8c0d2a8e4977ec0e8e5b271ff7fc932a8d35a6c0f10dadc11ddb56', 'b01a1e21cc87df1ef5a3935a30cc25d96b0ec3ced0fcc42a2bc9999685ef7d95', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_engine/report_refresh.py', 'naver_engine/report_views.py', 'naver_engine/store.py', 'backend/naver_page/report-ui.js'}))
+REVIEWED_ROLLBACK_V18 = ('7c99e18e29e6cb4d3f32eb41b6983529126d8f3a', '7f32d70d97876b806cc5bc44a7cc0f9688caeada', '874ea72edfef7c5a375f26cf8bdb103aa487779bd06e208aada7b1a5184dcee2', 'd6a2d1fe521287c9cedfba1132e5a81164ed2e2745ddea7ea01d74c2beb80a13', 'cc050c8c3d8c0d2a8e4977ec0e8e5b271ff7fc932a8d35a6c0f10dadc11ddb56', 'b01a1e21cc87df1ef5a3935a30cc25d96b0ec3ced0fcc42a2bc9999685ef7d95', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_engine/report_refresh.py', 'naver_engine/report_views.py', 'naver_engine/store.py', 'backend/naver_page/report-ui.js'}))
 if (type(REVIEWED_ROLLBACK_V18[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V18[1])
         and all(type(REVIEWED_ROLLBACK_V18[index]) is str
             and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V18[index]) for index in (3, 4, 5))):

@@ -10,8 +10,8 @@ import test_naver_preview_code_upgrade as shared
 
 
 MODULE = 'naver_preview_code_upgrade_v18'
-TARGET = 'c3ce2b47ce088483c734e8ba5cef569ecfa66e77'
-TARGET_ARCHIVE = '7a23f9717056b483915a076d658f85aab5f5cf662e7bc5454a64788db847123e'
+TARGET = '7f32d70d97876b806cc5bc44a7cc0f9688caeada'
+TARGET_ARCHIVE = 'd6a2d1fe521287c9cedfba1132e5a81164ed2e2745ddea7ea01d74c2beb80a13'
 TARGET_STORE = 'b01a1e21cc87df1ef5a3935a30cc25d96b0ec3ced0fcc42a2bc9999685ef7d95'
 OLD = '7c99e18e29e6cb4d3f32eb41b6983529126d8f3a'
 OLD_ARCHIVE = '874ea72edfef7c5a375f26cf8bdb103aa487779bd06e208aada7b1a5184dcee2'
