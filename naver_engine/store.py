@@ -1484,25 +1484,67 @@ def _report_facts(store, connection, ids, *, prune=False):
     if cache is None:
         # ReportAdapter 같은 시험 저장소는 Store.__init__ 을 거치지 않는다 — 처음 쓸 때 만든다.
         cache = store._report_fact_cache = {}
+    coverage_cache = getattr(store, "_report_coverage_cache", None)
+    if coverage_cache is None:
+        coverage_cache = store._report_coverage_cache = {}
     # 거래 안에서 읽은 판은 아직 확정이 아니다 — 되돌려지면 같은 번호가 다른 판에 다시 쓰인다. 계산만 하고 기억하지 않는다.
     keep = not store._conn.in_transaction
     found = {rid: cache[rid] for rid in ids if rid in cache}
-    missing = sorted({rid for rid in ids if rid not in found})
+    coverage = {rid: coverage_cache[rid] for rid in ids if rid in coverage_cache}
+    missing = sorted({rid for rid in ids if rid not in found or rid not in coverage})
     for offset in range(0, len(missing), REPORT_FACTS_CHUNK):
         chunk = missing[offset:offset+REPORT_FACTS_CHUNK]
-        for rid, review, legacy, number in connection.execute("""SELECT report_id,review_status,
+        for rid, review, legacy, number, basic, conversion in connection.execute("""SELECT report_id,review_status,
                 COALESCE(json_extract(payload_json,'$.format_version'),1)<?,
                 CASE WHEN json_type(payload_json,'$.format_version') IN ('integer','real')
-                    THEN json_extract(payload_json,'$.format_version') END
+                    THEN json_extract(payload_json,'$.format_version') END,
+                json_extract(payload_json,'$.coverage.basic_complete_account_days'),
+                json_extract(payload_json,'$.coverage.conversion_complete_account_days')
                 FROM naver_auto_report_snapshot WHERE report_id IN ("""+",".join("?" for _ in chunk)+")",
                 (R.FORMAT_VERSION, *chunk)):
             found[rid] = (review, legacy, number)
+            coverage[rid] = (basic, conversion)
     if keep:
         if prune:
             # 지금 최신 판만 남긴다 — 밀려난 옛 판 번호가 쌓이지 않게(기억 크기 = 업체·기간 수).
             cache.clear()
+            coverage_cache.clear()
         cache.update(found)
+        coverage_cache.update(coverage)
     return found
+
+
+def _report_previous_month_drift(store, cycle, pairs):
+    """직전월 한 번의 좁은 원천 조회로 저장판의 완결 일수만 대조한다. 외부 조회·판 수정은 없다."""
+    previous = R.period("monthly", cycle.now.astimezone(KST).date().replace(day=1)-timedelta(days=1))
+    if previous.due_at > cycle.now:
+        return previous, set()
+    cache = getattr(store, "_report_coverage_cache", {})
+    expected = {}
+    for pid in cycle.groups:
+        latest = pairs.get((pid, previous.key))
+        counts = cache.get(latest[0]) if latest else None
+        if counts is not None and all(type(value) is int and value >= 0 for value in counts):
+            expected[pid] = counts
+    if not expected:
+        return previous, set()
+    actual = {pid: [0, 0] for pid in expected}
+    # 이전 귀속 계정도 source_scope와 똑같이 해당 업체의 역사 원천에 포함한다.
+    # 하루/계정의 PK가 있으므로 중복 없이 최대 한 달만 읽는다. 지표·시각 검사는 R.aggregate와 같다.
+    cursor = store._conn.execute("""SELECT possibility_id,day,basic_complete,conversion_complete,
+        imp,clk,spend,conversions,conversion_value,checked_at,source_at
+        FROM naver_auto_daily_performance WHERE day BETWEEN ? AND ?
+        AND possibility_id IN (SELECT value FROM json_each(?))""",
+        (str(previous.start), str(previous.end), _json(sorted(expected))))
+    names = tuple(column[0] for column in cursor.description)
+    for values in cursor:
+        row = dict(zip(names, values))
+        if R._collected(row, row["day"], cycle.now) is None:
+            continue
+        counts = actual[row["possibility_id"]]
+        counts[0] += bool(row["basic_complete"]) and all(R._number(row[key]) for key in R.BASIC_FIELDS)
+        counts[1] += bool(row["conversion_complete"]) and all(R._number(row[key]) for key in R.CONVERSION_FIELDS)
+    return previous, {pid for pid, counts in actual.items() if tuple(counts) != expected[pid]}
 
 
 def _report_format_old(connection, report_id, number):
@@ -1570,8 +1612,15 @@ def _report_plan(store, now):
     # 등록 거래는 판을 넣지 않는다 — 거래 밖(확정본)에서 한 번 묶어 읽은 지도가 거래 안에서도 그대로 맞다.
     pairs, by_pid, top = _report_index(store._conn)
     facts = _report_facts(store, store._conn, [rid for pid in groups for _key, rid in by_pid.get(pid, ())], prune=True)
+    previous_month, drifted = _report_previous_month_drift(store, cycle, pairs)
     # 초판 및 최근 보고서의 검토정책 변화만 등록한다. 원천 정정은 수집 거래의 dirty가 담당한다.
     with store._tx() as connection:
+        for pid in sorted(drifted):
+            for key in (previous_month.key, R.period("monthly", previous_month.end+timedelta(days=1)).key):
+                # 이미 기다리는 업체의 차례를 뒤로 보내지 않는다. 확정판은 기존 생성기가 새 판으로 보존한다.
+                connection.execute("""INSERT INTO naver_auto_report_dirty(possibility_id,period_key,updated_at,pending)
+                    VALUES(?,?,?,1) ON CONFLICT(possibility_id,period_key) DO UPDATE SET pending=1,
+                    updated_at=excluded.updated_at WHERE naver_auto_report_dirty.pending=0""", (pid, key, at))
         for pid in groups:
             # 원문: 업체마다 판 표 전체를 훑어 최신 판 중 옛 형식(SQL 식)을 골랐다 — 같은 식을 판마다 한 번만 계산해 둔다.
             for legacy, report_id in by_pid.get(pid, ()):
@@ -2312,6 +2361,22 @@ class ManagedStorage:
                            if str(month_start+timedelta(days=n)) not in complete]
                 if missing:
                     planned.append(("backfill", day, min(missing), month_end))
+                previous_end = month_start-timedelta(days=1)
+                previous_start = previous_end.replace(day=1)
+                boundary = self._performance_attribution_start(cid, row["possibility_id"])
+                previous_rows = {value["day"]: value for value in self.daily_performance([cid], previous_start, previous_end)}
+                previous_missing = []
+                for offset in range((previous_end-previous_start).days+1):
+                    prior_day = previous_start+timedelta(days=offset)
+                    if boundary is not None and str(prior_day) < boundary:
+                        continue
+                    raw = previous_rows.get(str(prior_day))
+                    if raw is not None and raw["possibility_id"] not in (None, row["possibility_id"]):
+                        continue
+                    if raw is None or raw["possibility_id"] is None or not raw["basic_complete"]:
+                        previous_missing.append(prior_day)
+                if len(previous_missing) > 0:
+                    planned.append(("backfill", day, min(previous_missing), previous_end))
             for kind, cycle, since, until in planned:
                 fill = self._performance_job(cid, kind, cycle, since, until, row, snapshot, catalog["generated_at"],
                                             matching_fingerprint=matching_fingerprint)
@@ -2320,7 +2385,9 @@ class ManagedStorage:
                         and fill["period_end"] <= f["period_end"] and f["generation"] >= fill["generation"] for f in fills):
                     fills.append(fill)
                     # 최초 수집을 우선하되 별도 예산 예약이 보충의 진행 기회를 보장한다.
-                    backfill.append((2, fill["generation"] if saved is None else saved["checked_at"], cid, fill))
+                    # 새 직전월 보충은 기존 주간·월간·당월 보충의 순서를 바꾸지 않는다.
+                    priority = 3 if kind == "backfill" and until < day.replace(day=1) else 2
+                    backfill.append((priority, fill["generation"] if saved is None else saved["checked_at"], cid, fill))
             if fills:
                 # 과거 미완료 단일일을 새 보충 범위에 합친다. 원래 작업의 기간/체크포인트는
                 # 보존하고 포함 범위 성공 후에만 superseded로 종료한다.
@@ -2493,8 +2560,7 @@ class ManagedStorage:
             previous_end = month-timedelta(days=1)
             week_end = cycle-timedelta(days=cycle.weekday()+1)
             return (month <= start <= end == cycle-timedelta(days=1)) or (
-                cycle.day == 3
-                and start == previous_end.replace(day=1) and end == previous_end) or (
+                previous_end.replace(day=1) <= start <= end == previous_end) or (
                 cycle == week_end+timedelta(days=1) and start == week_end-timedelta(days=6) and end == week_end)
         period = P.period_for(decision.cadence, cycle)
         return job["kind"] == decision.cadence and (cycle, start, end) == (
@@ -2711,7 +2777,6 @@ class ManagedStorage:
                 attempts=?,source_wait_attempts=?,error_code=?,bizmoney=?,bizmoney_at=?,campaigns_json=? WHERE job_key=?""",
                 (status, at, S._kst_text(now+timedelta(minutes=delay), "대기 시각"), attempts, waits, code,
                  balance, balance_at, _json([F.keep(r, F.CAMPAIGN) for r in campaigns]), job["job_key"]))
-            self._performance_dirty(c, job, pid, at)
             if status == "ok":
                 c.execute("""UPDATE naver_auto_performance_job SET previous_bizmoney=last_bizmoney,
                     previous_bizmoney_at=last_bizmoney_at,last_success_at=?,last_bizmoney=?,last_bizmoney_at=?
@@ -2765,6 +2830,9 @@ class ManagedStorage:
                      row["source_at"],row["checked_at"] if row["conversion_complete"] else None,
                      values["campaign_fingerprint"],job["generation"],
                      (previous[0].get("source_revision", 1)+int(material)) if len(previous) > 0 else 1))
+            # 새로 귀속된 원천도 실제 저장된 업체의 보고서에 전달한다.
+            # 다른 업체·오래된 원천을 건너뛴 결과까지 같은 거래에서 다시 읽는다.
+            self._performance_dirty(c, job, pid, at)
         return status
 
     def _performance_conversion_due(self, job, possibility_id, now):

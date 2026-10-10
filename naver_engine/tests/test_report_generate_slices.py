@@ -205,8 +205,8 @@ def sc_not_due_and_outside(st, gen):
 
 
 def sc_deadline(st, gen):
-    st.seed(date(2026, 9, 1), date(2026, 10, 4))
     st.now = NOW-timedelta(microseconds=1)   # 9/28 주 기한(10:00) 바로 전
+    st.seed(date(2026, 9, 1), date(2026, 10, 4))  # 미래 원천을 만들지 않고 기한 경계만 대조한다.
     out = [gen(st)]
     st.now = NOW
     out += [gen(st), gen(st)]
