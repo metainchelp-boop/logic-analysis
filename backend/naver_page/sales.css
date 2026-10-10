@@ -1,0 +1,62 @@
+/* 판매 전용 화면. 모든 선택자는 별도 접두사로 관리 화면과 분리한다. */
+.ns-sales{max-width:1440px;margin:0 auto;color:#1e293b;font-size:14px;line-height:1.55}
+.ns-sales *{box-sizing:border-box}
+.ns-heading{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin:0 0 20px}
+.ns-heading h1{font-size:26px;line-height:1.3;color:#0f172a;margin:3px 0 7px}
+.ns-eyebrow{color:#2563eb;font-size:12px;font-weight:800;letter-spacing:.04em}
+.ns-lead,.ns-meta,.ns-muted{color:#475569;font-size:12px;margin:5px 0;overflow-wrap:anywhere}
+.ns-readonly{background:#f5f3ff;border:1px solid #ddd6fe;color:#6d28d9;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap}
+.ns-filters{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;padding:16px;background:#fff;border:1px solid #e2e8f0;border-radius:12px}
+.ns-filters label{display:flex;flex-direction:column;gap:5px;min-width:0}
+.ns-filters label>span{font-size:12px;font-weight:700;color:#475569}
+.ns-filters input,.ns-filters select{font:inherit;background:#fff;border:1px solid #cbd5e1;color:#1e293b;border-radius:8px;padding:9px 10px;min-height:40px;max-width:100%;min-width:0}
+.ns-filters .ns-search{flex:1 1 200px}
+.ns-filters input[type=search]{width:100%}
+.ns-button{font:inherit;border:1px solid #cbd5e1;background:#fff;color:#1e293b;border-radius:8px;padding:8px 12px;min-height:38px;cursor:pointer;white-space:normal}
+.ns-button:hover{background:#eff6ff;border-color:#93c5fd}
+.ns-button:disabled{opacity:.45;cursor:default}
+.ns-primary{background:#2563eb;border-color:#2563eb;color:#fff}
+.ns-primary:hover{background:#1d4ed8;color:#fff}
+.ns-sales button:focus-visible,.ns-sales input:focus-visible,.ns-sales select:focus-visible{outline:2px solid #2563eb;outline-offset:3px}
+.ns-status{margin:12px 0;font-size:12px;color:#475569;min-height:19px}
+.ns-error{padding:12px;border:1px solid #fecaca;border-radius:9px;color:#991b1b;background:#fef2f2}
+.ns-count{margin:12px 0;color:#334155;font-size:13px}
+.ns-company{background:#fff;border:1px solid #e2e8f0;border-radius:12px;margin:12px 0;padding:18px;min-width:0}
+.ns-company-head,.ns-account-head{display:flex;gap:10px;justify-content:space-between;align-items:center;min-width:0}
+.ns-company-head>div{min-width:0}
+.ns-company h2,.ns-report h2{font-size:19px;margin:0;overflow-wrap:anywhere;color:#0f172a}
+.ns-company h3{font-size:14px;overflow-wrap:anywhere;margin:0}
+.ns-account{margin-top:14px;padding-top:14px;border-top:1px solid #e2e8f0;min-width:0}
+.ns-tag{flex-shrink:0;background:#f1f5f9;color:#475569;padding:3px 8px;border-radius:6px;font-size:11px}
+.ns-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:14px 0}
+.ns-metric{padding:13px;background:#f8fafc;border:1px solid #edf2f7;border-radius:9px;min-width:0}
+.ns-metric dt{font-size:12px;color:#475569;margin:0 0 6px}
+.ns-metric dd{font-size:20px;font-weight:750;margin:0;line-height:1.4;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.ns-metrics-compact .ns-metric{padding:10px 12px}
+.ns-metrics-compact dd{font-size:17px}
+.ns-empty{background:#f8fafc;border:1px dashed #cbd5e1;color:#475569;border-radius:9px;padding:20px;margin:14px 0}
+.ns-pages{display:flex;justify-content:center;align-items:center;gap:14px;flex-wrap:wrap;margin:22px 0}
+.ns-pages span{font-size:12px;color:#475569}
+.ns-report-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:14px 0;flex-wrap:wrap}
+.ns-report{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:28px;margin:14px 0;min-width:0;overflow-wrap:anywhere}
+.ns-report h3{font-size:16px;color:#0f172a;margin:24px 0 10px}
+.ns-comment{white-space:pre-wrap;color:#334155;line-height:1.8}
+.ns-targets{grid-template-columns:repeat(3,minmax(0,1fr))}
+.ns-footnote{font-size:11px;color:#64748b;border-top:1px solid #e2e8f0;padding-top:16px;margin-top:24px}
+.ns-print-root{display:none}
+@media(max-width:900px){.ns-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.ns-targets{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:580px){.ns-heading{gap:10px}.ns-heading h1{font-size:23px}.ns-filters{gap:10px;padding:12px}.ns-filters label{flex:1 1 120px}.ns-filters .ns-search{flex-basis:100%}.ns-filters>.ns-button{width:100%}.ns-company{padding:14px}.ns-company-head,.ns-account-head{align-items:flex-start;flex-wrap:wrap}.ns-company-head>.ns-button{width:100%}.ns-metrics,.ns-targets{grid-template-columns:repeat(2,minmax(0,1fr))}.ns-metric{padding:10px}.ns-metric dd{font-size:18px}.ns-report{padding:18px}.ns-readonly{padding:4px 8px}.ns-report-actions>.ns-button{flex:1 1 140px}}
+@media print{
+  body.ns-printing{background:#fff!important;margin:0!important;padding:0!important}
+  body.ns-printing>*{display:none!important}
+  body.ns-printing>.ns-print-root{display:block!important;color:#1e293b;font:12px/1.55 -apple-system,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+  .ns-print-root .ns-report{border:0;border-radius:0;margin:0;padding:0}
+  .ns-print-root .ns-report h2{font-size:24px}
+  .ns-print-root .ns-metrics{grid-template-columns:repeat(5,minmax(0,1fr))}
+  .ns-print-root .ns-targets{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .ns-print-root .ns-metric{break-inside:avoid;padding:10px}
+  .ns-print-root .ns-metric dd{font-size:17px}
+  .ns-print-root h3{break-after:avoid}
+  .ns-print-root .ns-comment{orphans:3;widows:3}
+  @page{size:A4 portrait;margin:15mm}
+}

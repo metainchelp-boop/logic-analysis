@@ -53,6 +53,7 @@ from . import management_store as MS
 from . import management as MG
 from . import reporting as R
 from . import report_views as REPORTS
+from . import sales_views as SALES
 from . import view_sync as VS
 from . import runtime_view as RV
 
@@ -62,7 +63,8 @@ PREFIX = "/api/naver-auto"
 GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일은 나가는 요청을 만들지 않는다)
 # 제한판은 새 경로가 추가돼도 자동으로 열지 않는다. 로그인/갱신은 기술 쓰기만 허용한다.
 _VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/accounts/reasons", "/dashboard", "/links/pending", "/ended", "/unlinked",
-                               "/bell", "/settings", "/health", "/reports", "/reports/history", "/reports/accounts", "/reports/detail"})
+                               "/bell", "/settings", "/health", "/reports", "/reports/history", "/reports/accounts", "/reports/detail",
+                               "/sales/clients", "/sales/detail", "/sales/report"})
 _VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
 _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/request"),
                                 (GET, "/collection/status"), (POST, "/management/update"),
@@ -505,9 +507,10 @@ class App:
         if timing is not None:
             timing["view_sync"] = view_sync
         viewer_started = _time.perf_counter() if timing is not None else 0.0
-        if view_sync or sub in {"/reports/accounts", "/reports/detail"}:
+        if view_sync or sub in {"/reports/accounts", "/reports/detail", "/sales/clients", "/sales/detail", "/sales/report"}:
             with ExitStack() as snapshot:
                 v = self._viewer(environ, now, snapshot=snapshot)
+                self._authorize_route(v, method, sub)
                 self._viewer_timing(timing, v, viewer_started)
                 if timing is not None and timing["export"] is True and view_sync:
                     timing["store_reads"] = {}
@@ -527,6 +530,7 @@ class App:
         self._viewer_timing(timing, v, viewer_started)
         handler_started = _time.perf_counter() if timing is not None else 0.0
         try:
+            self._authorize_route(v, method, sub)
             return route.handler(self, req, v, now, **m.groupdict())
         finally:
             v.store.close()
@@ -558,11 +562,22 @@ class App:
                 raise HttpError(401, "no-scope")   # 퇴사 · 조직 표에서 빠짐 — 다음 요청부터 0곳
             if scope.kind != SC.ALL and Y.org_freshness(store, now) in (O.FRESH_STALE, O.FRESH_NONE):
                 raise HttpError(503, "org-stale")
+            if scope.kind == SC.SALES_READ:
+                try:
+                    SALES.require_source(store, org, now)
+                except REPORTS.SourceUnavailable:
+                    raise HttpError(503, "sales-source-unavailable") from None
             return Viewer(who, scope, claims, store, org)
         except BaseException:
             if snapshot is None:
                 store.close()
             raise
+
+    @staticmethod
+    def _authorize_route(v, method, path):
+        if v.scope.kind == SC.SALES_READ and not (
+                method == GET and path in SALES.GETS or method == POST and path == "/session/refresh"):
+            raise HttpError(403, "sales-read-only")
 
     # ── 쓰기 · 감사 ──
     def _write(self, fn: Callable[[S.Store], Any]) -> Any:
@@ -674,6 +689,11 @@ class App:
         store = self._open_read()
         try:
             org = W.load_org(store)
+            if SC.scope_of(org, prof.idx).kind == SC.SALES_READ:
+                try:
+                    SALES.require_source(store, org, now)
+                except REPORTS.SourceUnavailable:
+                    raise HttpError(503, "sales-source-unavailable") from None
         finally:
             store.close()
         if SC.scope_of(org, prof.idx).kind == SC.NONE:
@@ -693,6 +713,11 @@ class App:
 
     # ── 읽기 ──
     def _h_me(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if v.scope.kind == SC.SALES_READ:
+            person = v.org.people[v.idx]
+            return 200, {"idx": v.idx, "name": person.name, "scope": SC.SALES_READ,
+                         "sales_read_only": True, "source_as_of": v.org.generated_at,
+                         "narrowed": False, "verified_linking": False}
         ctx = v.inventory_ctx(now)
         out = W.me(ctx, v.scope, freshness=Y.org_freshness(v.store, now))
         counts = INV.staff_counts(ctx, v.store, v.scope)
@@ -743,6 +768,8 @@ class App:
         scope = SC.narrowed_scope_of(org, v.idx) if v.claims.narrowed else SC.scope_of(org, v.idx)
         if scope.kind == SC.NONE:
             raise HttpError(401, "no-scope")
+        if scope.kind not in (SC.ALL, SC.MINE):
+            raise HttpError(403, "sales-read-only")
         if not O.allows_raising(Y.org_freshness(store, now)):
             raise HttpError(409, "org-stale")
         return Viewer(v.idx, scope, v.claims, store, org)
@@ -857,6 +884,17 @@ class App:
                     "next_page": page+1 if (page+1)*page_size < total else None,
                     "schedule": {"timezone": "Asia/Seoul", "weekly": "월요일 10:00",
                                                   "monthly": "매월 3일 10:00"}}
+
+    def _h_sales(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        try:
+            ctx = v.inventory_ctx(now)
+            if req.path == "/sales/report":
+                return 200, SALES.report(ctx, v.store, v.scope, req.query)
+            return 200, SALES.clients(ctx, v.store, v.scope, req.query, detail=req.path == "/sales/detail")
+        except REPORTS.QueryInvalid:
+            raise HttpError(400, "bad-query") from None
+        except REPORTS.SourceUnavailable:
+            raise HttpError(503, "sales-source-unavailable") from None
 
     def _h_report_accounts(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         ctx, owns, _names, _current = self._report_context(v, now)
@@ -1386,6 +1424,9 @@ ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a i
     (POST, r"/session", App._h_login, False),
     (POST, r"/session/refresh", App._h_refresh, True),
     (GET, r"/me", App._h_me, True),
+    (GET, r"/sales/clients", App._h_sales, True),
+    (GET, r"/sales/detail", App._h_sales, True),
+    (GET, r"/sales/report", App._h_sales, True),
     (GET, r"/board", App._h_board, True),
     (GET, r"/accounts", App._h_accounts, True),
     (GET, r"/accounts/reasons", App._h_account_reasons, True),

@@ -171,6 +171,7 @@
     if (linksRequest) { linksRequest.controller.abort(); linksRequest = null; state.linksGen++; }
   }
   function purgeViews() {
+    if (window.NaverSalesUI) window.NaverSalesUI.reset();
     if (reportUI) reportUI.reset();
     cancelViewRequests();
     viewEpoch++; viewCache.clear(); viewRequests = {}; viewShown = {}; viewChecked = {}; viewLegacy = {};
@@ -662,23 +663,27 @@
     tick();   // 새로 고침 · 잠자기 뒤 바로 한 번(토큰이 곧 끝나면 지금 갱신)
   }
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState !== 'visible') { gateView(state.screen); cancelViewRequests(); return; }
+    if (document.visibilityState !== 'visible') {
+      gateView(state.screen); cancelViewRequests();
+      if (state.me && state.me.scope === 'SALES_READ' && window.NaverSalesUI) window.NaverSalesUI.reset();
+      return;
+    }
     gateView(state.screen);
     renderRuntime();
     tick();
     loadRuntime();
-    if (state.me && state.session && VIEW_STATUS[state.screen]) route();
+    if (state.me && state.session && (VIEW_STATUS[state.screen] || state.me.scope === 'SALES_READ')) route();
   });
   window.addEventListener('pageshow', function (event) { if (event.persisted && state.me && state.session) { gateView(state.screen); route(); } });
 
   // ── 화면 고르기 ────────────────────────────────────────────────────
-  var SCREENS = ['loading', 'blocked', 'dashboard', 'watch', 'client', 'automation', 'reports', 'transfers', 'settings'];
+  var SCREENS = ['loading', 'blocked', 'sales', 'dashboard', 'watch', 'client', 'automation', 'reports', 'transfers', 'settings'];
   function show(name) {
     if (name !== state.screen) gateView(name);
     state.screen = name;
     SCREENS.forEach(function (s) { var el = $('s-' + s); if (el) el.classList.toggle('on', s === name); });
     // 개편(D2): 대시보드·보고서는 「📊 성과·보고서」 한 탭 · 🤖 자동화는 5차 때까지 메뉴에 없다(주소는 남김)
-    var menuKey = { dashboard: '/naver/dashboard', watch: '/naver/', client: '/naver/', reports: '/naver/dashboard',
+    var menuKey = { sales: '/naver/', dashboard: '/naver/dashboard', watch: '/naver/', client: '/naver/', reports: '/naver/dashboard',
                     transfers: '/naver/transfers', settings: '/naver/settings' }[name];
     Array.prototype.forEach.call(document.querySelectorAll('.menu button'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-go') === menuKey);
@@ -700,8 +705,24 @@
   }
   window.addEventListener('popstate', function () { if (state.me) route(); });
   function route() {
+    var context = syncContext();
+    if (state.me && state.me.scope === 'SALES_READ') {
+      cancelViewRequests();
+      show('sales');
+      if (window.NaverSalesUI) window.NaverSalesUI.mount({root: $('s-sales'), me: state.me,
+        api: function (path, query, options) {
+          var params = new URLSearchParams(query || {});
+          return api('GET', path + (params.toString() ? '?' + params.toString() : ''), undefined, options && options.signal);
+        }, onError: function (e) {
+          if (e && (e.status === 401 || e.status === 403 || e.status === 503)) {
+            if (window.NaverSalesUI) window.NaverSalesUI.reset();
+            if (e.status !== 401) blocked('down', entryServerDiagnostic(e), e);
+          }
+        }});
+      return;
+    }
     var r = parse(location.pathname);
-    var context = syncContext(), routeKey = context + '|' + location.pathname + location.search;
+    var routeKey = context + '|' + location.pathname + location.search;
     // 같은 탭의 연타만 진행 중 조회에 합친다. 재진입·범위 변경·완료 뒤 새로고침은 다시 검증한다.
     var pending = viewRequests[r.screen];
     if (state.routeKey === routeKey && state.screen === r.screen && pending && pending.gen === state.gen) return pending.promise;
@@ -748,7 +769,7 @@
   }
 
   // ── 위 띠 · 보는 범위 ─────────────────────────────────────────────
-  function readOnly() { return !!(state.me && state.me.owner_verification); }
+  function readOnly() { return !!(state.me && (state.me.owner_verification || state.me.scope === 'SALES_READ')); }
   // 2026-10-05 실사용 손길 — web.py _OWNER_ACTION_* 와 같은 목록(누가 하는지는 서버가 판정).
   var OWNER_ACTION = /^\/(?:issues\/[0-9]{1,18}\/(?:ack|resolve|except)|bell\/[0-9]{1,18}\/read|bell\/read-all|settings\/thresholds|holds\/(?:org|stages|accounts)\/confirm|links\/revoke)$/;
   function ownerActions() { return readOnly() && state.me.owner_actions === true; }
@@ -757,6 +778,22 @@
   function renderTop() {
     var me = state.me;
     $('top').hidden = false;
+    var sales = me.scope === 'SALES_READ';
+    Array.prototype.forEach.call(document.querySelectorAll('.menu button'), function (b) {
+      b.hidden = sales ? b.getAttribute('data-sales-only') !== 'true' : b.getAttribute('data-sales-only') === 'true';
+    });
+    $('bell').hidden = sales;
+    $('runtimeStatus').hidden = sales;
+    if (sales) {
+      $('verificationNotice').hidden = true;
+      $('scope').hidden = true;
+      $('scopePill').hidden = false;
+      $('scopePill').textContent = '본인 계약 · 진행중 · 읽기 전용';
+      put($('me'), h('b', null, me.name || ''), ' · 영업 조회');
+      clearInterval(state.runtimeTimer); state.runtimeTimer = null;
+      if (state.runtimeRequest) { state.runtimeRequest.abort(); state.runtimeRequest = null; }
+      return;
+    }
     $('verificationNotice').hidden = !readOnly();
     $('noticeActs').textContent = ownerActions()
       ? '이슈는 이 화면에서 👀 확인 중 · ✅ 해결 · 🙈 예외로 처리합니다. 광고 변경·자동입찰·알림 전송은 하지 않습니다.'
@@ -844,6 +881,7 @@
     renderRuntime();
   }
   function loadRuntime() {
+    if (state.me && state.me.scope === 'SALES_READ') return;
     if (!state.session || !state.me || document.visibilityState === 'hidden' || state.runtimeRequest) return;
     if (Date.now() >= state.session.exp || Date.now() - state.lastInput >= IDLE_MS) { tick(); return; }
     var request = new AbortController(), mono = performance.now(), wall = Date.now();

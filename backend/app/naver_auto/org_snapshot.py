@@ -107,6 +107,8 @@ class OrgPerson:
     status: Optional[str]   # ① null 이면 None — 재직이 아니다
     is_deleted: bool
     is_management: bool = False  # ① authority.departmentType == MANAGEMENT. 누락·모르는 값은 접근 불가.
+    is_sales: bool = False
+    naver_sales_view: bool = False
 
     @property
     def active(self) -> bool:
@@ -138,6 +140,8 @@ class Org:
     members: Mapping[int, tuple[int, ...]]   # 팀 → 소속 직원(퇴사자 포함)
     cyclic_teams: frozenset[int]             # 부모를 따라가면 제자리로 돌아오는 팀
     orphan_teams: frozenset[int]             # 부모 번호(>0)가 팀 표에 없는 팀
+    sales_contracts: tuple[tuple[int, int], ...] = ()  # (가망, 현재 유효 계약의 실제 판매자)
+    sales_source_present: bool = False
 
     # ── 팀 판정 ──
     def is_system_team(self, team_idx: Optional[int]) -> bool:
@@ -391,6 +395,8 @@ def parse_org_snapshot(payload: Any) -> Org:
             status=_str(r, "status", w, nullable=True),   # ① 계약: 비었으면 null(재직 아님)
             is_deleted=_bool(r, "is_deleted", w),
             is_management=r.get("is_management") is True,
+            is_sales=r.get("is_sales") is True,
+            naver_sales_view=r.get("naver_sales_view") is True,
         )
 
     owners: list[OwnerRow] = []
@@ -412,6 +418,16 @@ def parse_org_snapshot(payload: Any) -> Org:
         )
         owners.append(row)
         by_pid[pid] = row
+
+    sales_contracts = set()
+    if "sales_contracts" in body:
+        for i, r in enumerate(_rows(body, "sales_contracts")):
+            w = f"sales_contracts[{i}]"
+            pid = _int(r, "possibility_id", w, nullable=False)
+            seller = _int(r, "seller_emp_idx", w, nullable=False)
+            if pid <= 0 or not is_person_idx(seller):
+                raise SnapshotFormatError(f"{w}: 계약 판매자 관계를 확인해 주세요")
+            sales_contracts.add((pid, seller))
 
     children: dict[int, list[int]] = {}
     orphans: set[int] = set()
@@ -439,6 +455,8 @@ def parse_org_snapshot(payload: Any) -> Org:
         members=MappingProxyType({k: tuple(sorted(v)) for k, v in members.items()}),
         cyclic_teams=_find_cycles(teams),
         orphan_teams=frozenset(orphans),
+        sales_contracts=tuple(sorted(sales_contracts)),
+        sales_source_present="sales_contracts" in body,
     )
 
 

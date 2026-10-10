@@ -40,6 +40,7 @@ from .org_snapshot import OWNER_SOURCE_PREV, SYSTEM_EMPLOYEE_IDX, Org, OrgPerson
 ALL = "ALL"      # 대표 — 전부 + 담당 미정
 TEAM = "TEAM"    # 구 범위/위조 판정 호환값. 새 요청에는 절대 발급하지 않는다.
 MINE = "MINE"    # 재직 관리팀 직원·팀장 — 본인 담당만
+SALES_READ = "SALES_READ"  # 명시 특수권한 영업사원. 관리 권한 함수에서는 항상 닫는다.
 NONE = "NONE"    # 조직 표에 없음 · 재직 아님 · 음수 번호 · 낡은/손으로 만든 Scope — 0곳 (0번은 대표 — 사람이다)
 
 # ── 광고주 담당 상태 ──
@@ -250,9 +251,11 @@ def scope_of(org: Org, viewer_idx: Any) -> Scope:
         return _none_scope(org)
     if p.is_top_manager:
         return Scope(ALL, p.idx, frozenset(), management_people(org), org.generated_at)
-    if p.is_management is not True:
-        return _none_scope(org)
-    return Scope(MINE, p.idx, frozenset(), frozenset({p.idx}), org.generated_at)
+    if p.is_management is True:
+        return Scope(MINE, p.idx, frozenset(), frozenset({p.idx}), org.generated_at)
+    if p.is_sales is True and p.naver_sales_view is True:
+        return Scope(SALES_READ, p.idx, frozenset(), frozenset({p.idx}), org.generated_at)
+    return _none_scope(org)
 
 
 def narrowed_scope_of(org: Org, viewer_idx: Any) -> Scope:
@@ -342,7 +345,7 @@ def _key_is_top(org: Org, own: Ownership) -> bool:
 def _can_see(org: Org, scope: Scope, own: Ownership) -> bool:
     if scope.kind == ALL:
         return True
-    if scope.kind == NONE or scope.viewer_idx is None:
+    if scope.kind not in (MINE, TEAM) or scope.viewer_idx is None:
         return False
     st = owner_state(org, own)
     if st == UNASSIGNED:

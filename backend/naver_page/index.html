@@ -9,8 +9,10 @@
 <title>네이버 관제</title>
 <link rel="icon" href="/naver/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/naver/app.css">
+<link rel="stylesheet" href="/naver/sales.css">
 <script src="/naver/report-ui.js" defer></script>
 <script src="/naver/report-pdf.js" defer></script>
+<script src="/naver/sales-ui.js" defer></script>
 <script src="/naver/app.js" defer></script>
 </head>
 <body>
@@ -18,6 +20,7 @@
   <div class="row1">
     <div class="brand">네이버 관제</div>
     <nav class="menu" aria-label="메뉴">
+      <button type="button" data-go="/naver/" data-sales-only="true" hidden>내 광고주 성과</button>
       <button type="button" data-go="/naver/">🛰 관제</button>
       <button type="button" data-go="/naver/dashboard">📊 성과·보고서</button>
       <button type="button" data-go="/naver/transfers">📋 이관 현황</button>
@@ -43,6 +46,7 @@
       <li>위 숫자 4칸은 서로 겹치지 않습니다 — 오늘 볼 곳 · 문제없음 · 연결 안 됨 · 점검 못 함을 더하면 전체 광고주 수입니다.</li>
       <li>숫자를 모르는 곳은 0이 아니라 「—」와 까닭으로 보입니다.</li></ul></details>
   <section class="screen on" id="s-loading"><div class="loading">불러오는 중…</div></section>
+  <section class="screen" id="s-sales" aria-label="본인 계약 광고주 진행 성과"></section>
 
   <section class="screen" id="s-blocked" aria-labelledby="b-t">
     <div class="blocked"><div class="ic" id="b-ic" aria-hidden="true">🔒</div><h1 id="b-t"></h1><p id="b-p"></p></div>

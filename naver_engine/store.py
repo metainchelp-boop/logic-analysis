@@ -4046,7 +4046,10 @@ class Store(ManagedStorage):
             raise StoreRefused("조직 스냅숏 시각을 읽지 못했습니다")
         gen_text = _kst_text(gen_dt, "조직 스냅숏 시각")
         kept = {"generated_at": gen}
-        for key, allowed in (("teams", F.ORG_TEAM), ("employees", F.ORG_EMPLOYEE), ("owners", F.ORG_OWNER)):
+        sources = [("teams", F.ORG_TEAM), ("employees", F.ORG_EMPLOYEE), ("owners", F.ORG_OWNER)]
+        if "sales_contracts" in body:
+            sources.append(("sales_contracts", F.ORG_SALES_CONTRACT))
+        for key, allowed in sources:
             items = _seq(body.get(key), f"조직 {key}")
             if len(items) > ORG_MAX_ROWS:
                 raise StoreRefused(f"조직 {key}: 줄이 너무 많습니다")
