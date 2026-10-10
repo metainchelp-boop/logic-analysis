@@ -49,6 +49,9 @@ if transition(code) == REVIEWED_ROLLBACK_V20:
 )
 V20_EXACT_SCOPE = "{'naver_engine/report_refresh.py', 'naver_engine/report_views.py', 'backend/naver_page/report-ui.js'} if transition == REVIEWED_TRANSITION_V20 and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1]) and all((type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index]) for index in (3, 4, 5))) else None"
 
+# Only these complete V21 nodes may normalize; mutations must fail the original digest.
+V21_EXACT_IFS = ("if type(source_commit) is str and type(REVIEWED_TRANSITION_V21[1]) is str and (source_commit == REVIEWED_TRANSITION_V21[1]) and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V21[1]) and all((type(REVIEWED_TRANSITION_V21[index]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V21[index]) for index in (3, 4, 5))):\n    return 'naver_preview_code_upgrade_v21'", "if transition == REVIEWED_TRANSITION_V21 and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1]) and all((type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index]) for index in (3, 4, 5))):\n    expected_paths = {'naver_engine/store.py', 'naver_engine/web.py', 'backend/naver_page/app.js', 'backend/naver_page/sales.css', 'naver_engine/fields.py', 'backend/app/naver_auto/org_snapshot.py', 'backend/naver_page/sales-ui.js', 'backend/app/naver_auto/scope.py', 'naver_engine/sales_views.py', 'backend/naver_page/index.html'}", "if transition == REVIEWED_TRANSITION_V21 and (getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset({'naver_engine/sales_views.py', 'backend/naver_page/sales.css', 'backend/naver_page/sales-ui.js'}) or getattr(code, 'TARGET_ACTION_ROUTES', None) != ('/reports/notes',) or getattr(code, 'OWNER_ACTION_ROUTES', None) != ('/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all', '/settings/thresholds', '/holds/org/confirm', '/holds/stages/confirm', '/holds/accounts/confirm', '/links/revoke') or (getattr(code, 'CLOSED_LINK_ROUTES', None) != ('/links/reject', '/links/preview')) or (getattr(code, 'OLD_REPORT_UI', None) != REVIEWED_REPORT_UI_V21) or (getattr(code, 'OLD_APP', None) != REVIEWED_OLD_APP_V21) or (getattr(code, 'REPORT_ASSETS', None) != REVIEWED_ASSETS_V21) or (getattr(code, 'SALES_GET_ROUTES', None) != ('/sales/clients', '/sales/detail', '/sales/report'))):\n    raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')", 'if transition(code) == REVIEWED_ROLLBACK_V21:\n    code.compatible_inverse_source(path, old_path, upgrade)')
+
 
 class V8PreservationTest(unittest.TestCase):
     def test_v20_guard_scope_selector_and_inverse_mutations_do_not_normalize_away(self):
@@ -75,10 +78,34 @@ class V8PreservationTest(unittest.TestCase):
                     V8PreservationTest().test_shared_business_functions_are_unchanged_after_exact_passive_metadata_delta()
             self.assertTrue(changed)
 
+    def test_v21_guard_scope_selector_and_inverse_mutations_do_not_normalize_away(self):
+        original_tree = tree
+        for mutation in ('selector','scope','guard','inverse'):
+            changed = False
+            def altered(name):
+                nonlocal changed
+                value = original_tree(name)
+                if name != ('naver_preview_code_rollback' if mutation=='inverse' else 'naver_preview_code_only'):
+                    return value
+                for node in ast.walk(value):
+                    if mutation=='selector' and isinstance(node,ast.Return) and isinstance(node.value,ast.Constant) and node.value.value=='naver_preview_code_upgrade_v21':
+                        node.value.value='naver_preview_code_upgrade_v19';changed=True;break
+                    if mutation=='scope' and isinstance(node,ast.If) and ast.unparse(node.test).startswith('transition == REVIEWED_TRANSITION_V21') and isinstance(node.body[0],ast.Assign):
+                        node.body[0].value.elts.append(ast.Constant(value='naver_runtime/scheduler.py'));changed=True;break
+                    if mutation=='guard' and isinstance(node,ast.If) and ast.unparse(node.test).startswith('transition == REVIEWED_TRANSITION_V21') and isinstance(node.body[0],ast.Raise):
+                        node.body=[ast.Pass()];changed=True;break
+                    if mutation=='inverse' and isinstance(node,ast.If) and ast.unparse(node.test)=='transition(code) == REVIEWED_ROLLBACK_V21':
+                        node.body=[ast.Pass()];changed=True;break
+                return value
+            with self.subTest(mutation=mutation),patch(__name__+'.tree',side_effect=altered):
+                with self.assertRaises(AssertionError):
+                    V8PreservationTest().test_shared_business_functions_are_unchanged_after_exact_passive_metadata_delta()
+            self.assertTrue(changed)
+
     def test_shared_business_functions_are_unchanged_after_exact_passive_metadata_delta(self):
         class OldDispatch(ast.NodeTransformer):
             def visit_If(self,node):
-                if any(ast.dump(node,include_attributes=False)==ast.dump(ast.parse(source).body[0],include_attributes=False) for source in V20_EXACT_IFS):
+                if any(ast.dump(node,include_attributes=False)==ast.dump(ast.parse(source).body[0],include_attributes=False) for source in V20_EXACT_IFS + V21_EXACT_IFS):
                     return None
                 exact=ast.parse('if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17, REVIEWED_ROLLBACK_V18, REVIEWED_ROLLBACK_V19):\n    code.compatible_inverse_source(path, old_path, upgrade)').body[0]
                 if ast.dump(node,include_attributes=False)==ast.dump(exact,include_attributes=False):
@@ -91,7 +118,7 @@ class V8PreservationTest(unittest.TestCase):
             def visit_BoolOp(self,node):
                 exact=ast.parse("code.STORE_SHA256.get('old') != code.STORE_SHA256.get('target') and transition(code) != REVIEWED_ROLLBACK_V11 and transition(code) != REVIEWED_ROLLBACK_V12 and transition(code) != REVIEWED_ROLLBACK_V13 and transition(code) != REVIEWED_ROLLBACK_V14",mode="eval").body
                 v15=ast.parse(ast.unparse(exact)+' and transition(code) != REVIEWED_ROLLBACK_V15',mode='eval').body
-                if ast.dump(node,include_attributes=False) in (ast.dump(exact,include_attributes=False),ast.dump(v15,include_attributes=False),ast.dump(ast.parse(ast.unparse(v15)+' and transition(code) != REVIEWED_ROLLBACK_V18',mode='eval').body,include_attributes=False),ast.dump(ast.parse(ast.unparse(v15)+' and transition(code) != REVIEWED_ROLLBACK_V18 and transition(code) != REVIEWED_ROLLBACK_V19',mode='eval').body,include_attributes=False)):
+                if ast.dump(node,include_attributes=False) in (ast.dump(exact,include_attributes=False),ast.dump(v15,include_attributes=False),ast.dump(ast.parse(ast.unparse(v15)+' and transition(code) != REVIEWED_ROLLBACK_V18',mode='eval').body,include_attributes=False),ast.dump(ast.parse(ast.unparse(v15)+' and transition(code) != REVIEWED_ROLLBACK_V18 and transition(code) != REVIEWED_ROLLBACK_V19',mode='eval').body,include_attributes=False),ast.dump(ast.parse(ast.unparse(v15)+' and transition(code) != REVIEWED_ROLLBACK_V18 and transition(code) != REVIEWED_ROLLBACK_V19 and transition(code) != REVIEWED_ROLLBACK_V21',mode='eval').body,include_attributes=False)):
                     return self.visit(node.values[0])
                 return self.generic_visit(node)
             def visit_IfExp(self,node):

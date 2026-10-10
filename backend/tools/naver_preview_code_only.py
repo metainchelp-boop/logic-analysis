@@ -141,6 +141,12 @@ REVIEWED_TRANSITION_V20 = ('00701771c0583477357010e9ac731263770f1da5', '27ed22b1
 REVIEWED_OLD_REPORT_UI_V20 = (62666, '3f5ba0938c922ce8fbcaae59a8893d2b031b22d335554f0befd8dfd477d5d6c2', 'text/javascript; charset=utf-8')
 REVIEWED_REPORT_UI_V20 = (64396, '4e93625a940beddedd3dac1ce52e1a74ff8588ede9f74ecb9c71c23b8f023a91', 'text/javascript; charset=utf-8')
 
+# V21 exact sales read projection; pending pins grant no authority.
+REVIEWED_TRANSITION_V21 = ('27ed22b1e77213912db3750ddeb91d046fa770f5', '83ec2d34ad1d06471f638671c283bccd58533f08', '3dd748de6c2f737af6c5cdf9e8b94a073329f0dcc2a2bf91ff7e180e35da80fd', 'bc369f7c5cf7da96ffe33175efd6284247888786c8a769a878694f2050c785fc', 'aa39afff20c48225d70e80a899234c68b862aeaa53fae43c2e0769346f3b6d62', 'fe85c4df66addd727298e0b1406876c43bd84b727368203c791570590deefa4c', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
+REVIEWED_OLD_APP_V21 = (218303, 'ccc7591759a448f8299610b32c60715b408246b9a7a094369fc5c71884a41984', 'text/javascript; charset=utf-8')
+REVIEWED_REPORT_UI_V21 = (64396, '4e93625a940beddedd3dac1ce52e1a74ff8588ede9f74ecb9c71c23b8f023a91', 'text/javascript; charset=utf-8')
+REVIEWED_ASSETS_V21 = {'/naver/report-ui.js': (64396, '4e93625a940beddedd3dac1ce52e1a74ff8588ede9f74ecb9c71c23b8f023a91', 'text/javascript; charset=utf-8'), '/naver/report-pdf.js': (35168, '45d15c2862cd83a223e52cf85c1feb9327ffe6cc5753d558a8f6d67e1cd8f6bc', 'text/javascript; charset=utf-8'), '/naver/app.js': (220180, '3c6caddca86f0905e51cefef86cefb20a8ccd5383c3227c4c7d9365206dbfed1', 'text/javascript; charset=utf-8'), '/naver/sales-ui.js': (17774, '00553781030990970c88dcd6d86c11730cf9c60cf9ce7a7963f2b091cd5aa2ff', 'text/javascript; charset=utf-8'), '/naver/sales.css': (5905, 'f27843cb1e1e63a41d85f5f794035f47c62ec72dda5971f95dd9ed58226ba09d', 'text/css; charset=utf-8'), '/naver/app.css': (53635, 'bacdae44e6e99a2be2e84c53c3347029ef8845b110c2367a0fb8ed54594ea5db', 'text/css; charset=utf-8'), '/naver/vendor/report-pdf/NanumGothic-Regular.ttf.gz': (697020, '72d1bf88a642ede8ff7da422031106fc697ea4c79b1cfd2994bffc57df4dab07', 'application/gzip'), '/naver/vendor/report-pdf/pdf-lib-1.17.1.min.js': (525099, '0f9a5cad07941f0826586c94e089d89b918c46e5c17cf2d5a3c6f666e3bc694f', 'text/javascript; charset=utf-8'), '/naver/vendor/report-pdf/fontkit-1.1.1.umd.min.js': (758440, 'd8df561b9fba98e24f2e5130e40948809281bbbc55a20c412359f1a0a5eb35a6', 'text/javascript; charset=utf-8'), '/naver/vendor/report-pdf/sha256-1.0.0.min.js': (8156, 'a050d794e170699bd1a69d33908d0942c68901cb88347016064b60b240f0067e', 'text/javascript; charset=utf-8')}
+
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
         return 'naver_preview_code_upgrade'
@@ -229,6 +235,12 @@ def code_module_name(source_commit):
             and all(type(REVIEWED_TRANSITION_V20[index]) is str
                 and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V20[index]) for index in (3, 4, 5))):
         return 'naver_preview_code_upgrade_v20'
+    if (type(source_commit) is str and type(REVIEWED_TRANSITION_V21[1]) is str
+            and source_commit == REVIEWED_TRANSITION_V21[1]
+            and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V21[1])
+            and all(type(REVIEWED_TRANSITION_V21[index]) is str
+                and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V21[index]) for index in (3, 4, 5))):
+        return 'naver_preview_code_upgrade_v21'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -304,6 +316,8 @@ def require_review(code):
             and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
             and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
                 for index in (3, 4, 5))) else None)
+    if transition == REVIEWED_TRANSITION_V21 and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1]) and all((type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index]) for index in (3, 4, 5))):
+        expected_paths = {'naver_engine/store.py', 'naver_engine/web.py', 'backend/naver_page/app.js', 'backend/naver_page/sales.css', 'naver_engine/fields.py', 'backend/app/naver_auto/org_snapshot.py', 'backend/naver_page/sales-ui.js', 'backend/app/naver_auto/scope.py', 'naver_engine/sales_views.py', 'backend/naver_page/index.html'}
     if transition == REVIEWED_TRANSITION_V14 and (
             getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset({'naver_engine/report_enrichment.py', 'naver_engine/report_notes.py'})
             or getattr(code, 'TARGET_ACTION_ROUTES', None) != ('/reports/notes',)):
@@ -346,6 +360,18 @@ def require_review(code):
             or getattr(code, 'CLOSED_LINK_ROUTES', None) != ('/links/reject', '/links/preview')
             or getattr(code, 'OLD_REPORT_UI', None) != REVIEWED_OLD_REPORT_UI_V20
             or getattr(code, 'REPORT_ASSETS', {}).get('/naver/report-ui.js') != REVIEWED_REPORT_UI_V20):
+        raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
+    if transition == REVIEWED_TRANSITION_V21 and (
+            getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset({'naver_engine/sales_views.py', 'backend/naver_page/sales.css', 'backend/naver_page/sales-ui.js'})
+            or getattr(code, 'TARGET_ACTION_ROUTES', None) != ('/reports/notes',)
+            or getattr(code, 'OWNER_ACTION_ROUTES', None) != (
+                '/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all',
+                '/settings/thresholds', '/holds/org/confirm', '/holds/stages/confirm', '/holds/accounts/confirm', '/links/revoke')
+            or getattr(code, 'CLOSED_LINK_ROUTES', None) != ('/links/reject', '/links/preview')
+            or getattr(code, 'OLD_REPORT_UI', None) != REVIEWED_REPORT_UI_V21
+            or getattr(code, 'OLD_APP', None) != REVIEWED_OLD_APP_V21
+            or getattr(code, 'REPORT_ASSETS', None) != REVIEWED_ASSETS_V21
+            or getattr(code, 'SALES_GET_ROUTES', None) != ('/sales/clients', '/sales/detail', '/sales/report')):
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')

@@ -151,6 +151,13 @@ if (type(REVIEWED_ROLLBACK_V20[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIE
             and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V20[index]) for index in (3, 4, 5))):
     REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V20})
 
+# V21 exact sales read inverse; all prior transitions are preserved.
+REVIEWED_ROLLBACK_V21 = ('27ed22b1e77213912db3750ddeb91d046fa770f5', '83ec2d34ad1d06471f638671c283bccd58533f08', '3dd748de6c2f737af6c5cdf9e8b94a073329f0dcc2a2bf91ff7e180e35da80fd', 'bc369f7c5cf7da96ffe33175efd6284247888786c8a769a878694f2050c785fc', 'aa39afff20c48225d70e80a899234c68b862aeaa53fae43c2e0769346f3b6d62', 'fe85c4df66addd727298e0b1406876c43bd84b727368203c791570590deefa4c', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_engine/web.py', 'naver_engine/sales_views.py', 'backend/naver_page/sales.css', 'backend/naver_page/sales-ui.js', 'backend/naver_page/app.js', 'backend/naver_page/index.html', 'backend/app/naver_auto/org_snapshot.py', 'backend/app/naver_auto/scope.py', 'naver_engine/store.py', 'naver_engine/fields.py'}))
+if (type(REVIEWED_ROLLBACK_V21[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V21[1])
+        and all(type(REVIEWED_ROLLBACK_V21[index]) is str
+            and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V21[index]) for index in (3, 4, 5))):
+    REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V21})
+
 STAGE = 'input'
 OPERATION = 'none'
 
@@ -171,7 +178,8 @@ def require_review(policy, code):
                 and transition(code) != REVIEWED_ROLLBACK_V14
                 and transition(code) != REVIEWED_ROLLBACK_V15
                 and transition(code) != REVIEWED_ROLLBACK_V18
-                and transition(code) != REVIEWED_ROLLBACK_V19)):
+                and transition(code) != REVIEWED_ROLLBACK_V19
+                and transition(code) != REVIEWED_ROLLBACK_V21)):
         raise ValueError('CODE_ROLLBACK_NOT_REVIEWED')
 
 
@@ -204,6 +212,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
     if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17, REVIEWED_ROLLBACK_V18, REVIEWED_ROLLBACK_V19):
         code.compatible_inverse_source(path, old_path, upgrade)
     if transition(code) == REVIEWED_ROLLBACK_V20:
+        code.compatible_inverse_source(path, old_path, upgrade)
+    if transition(code) == REVIEWED_ROLLBACK_V21:
         code.compatible_inverse_source(path, old_path, upgrade)
     code.compatible_source(old_path, path, upgrade)
     files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)
@@ -259,6 +269,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
         if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17, REVIEWED_ROLLBACK_V18, REVIEWED_ROLLBACK_V19):
             code.compatible_inverse_source(path, old_path, upgrade)
         if transition(code) == REVIEWED_ROLLBACK_V20:
+            code.compatible_inverse_source(path, old_path, upgrade)
+        if transition(code) == REVIEWED_ROLLBACK_V21:
             code.compatible_inverse_source(path, old_path, upgrade)
         code.compatible_source(old_path, path, upgrade)
 
