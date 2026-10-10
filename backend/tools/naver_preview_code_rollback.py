@@ -140,6 +140,10 @@ if (type(REVIEWED_ROLLBACK_V19[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIE
             and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V19[index]) for index in (3, 4, 5))):
     REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V19})
 
+# V22 exact inverse removes only the ten added modules; all learned metadata is preserved.
+REVIEWED_ROLLBACK_V22 = ('83ec2d34ad1d06471f638671c283bccd58533f08', '3b3ad2afeff137d29c40ad2e8cba34034cf5af3b', 'bc369f7c5cf7da96ffe33175efd6284247888786c8a769a878694f2050c785fc', 'ea663c8d4a9a69fbd1688076e27dba0f4148cbabd29202c7a21155c6e7a8c812', 'fe85c4df66addd727298e0b1406876c43bd84b727368203c791570590deefa4c', '187f4c7693bb32350b8a3b4c31a1ebb58480e92c317977a45fdbcf1377c2df3e', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_engine/web.py', 'naver_engine/setup_checks.py', 'naver_engine/automation_views.py', 'naver_engine/marketing_strategy.py', 'backend/naver_page/index.html', 'naver_runtime/__main__.py', 'backend/naver_page/automation-ui.js', 'naver_engine/store.py', 'naver_engine/learning_assets.py', 'naver_runtime/claude_provider.py', 'naver_engine/learning_retrieval.py', 'backend/naver_page/app.js', 'backend/naver_page/report-pdf.js', 'naver_engine/approval_documents.py', 'backend/naver_page/learning-ui.js', 'naver_engine/report_views.py', 'naver_engine/views.py', 'backend/naver_page/report-ui.js', 'naver_runtime/learning_provider.py', 'backend/naver_page/app.css'}))
+REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V22})
+
 STAGE = 'input'
 OPERATION = 'none'
 
@@ -179,7 +183,8 @@ def require_review(policy, code):
                 and transition(code) != REVIEWED_ROLLBACK_V15
                 and transition(code) != REVIEWED_ROLLBACK_V18
                 and transition(code) != REVIEWED_ROLLBACK_V19
-                and transition(code) != REVIEWED_ROLLBACK_V21)):
+                and transition(code) != REVIEWED_ROLLBACK_V21
+                and transition(code) != REVIEWED_ROLLBACK_V22)):
         raise ValueError('CODE_ROLLBACK_NOT_REVIEWED')
 
 
@@ -214,6 +219,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
     if transition(code) == REVIEWED_ROLLBACK_V20:
         code.compatible_inverse_source(path, old_path, upgrade)
     if transition(code) == REVIEWED_ROLLBACK_V21:
+        code.compatible_inverse_source(path, old_path, upgrade)
+    if transition(code) == REVIEWED_ROLLBACK_V22:
         code.compatible_inverse_source(path, old_path, upgrade)
     code.compatible_source(old_path, path, upgrade)
     files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)
@@ -271,6 +278,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
         if transition(code) == REVIEWED_ROLLBACK_V20:
             code.compatible_inverse_source(path, old_path, upgrade)
         if transition(code) == REVIEWED_ROLLBACK_V21:
+            code.compatible_inverse_source(path, old_path, upgrade)
+        if transition(code) == REVIEWED_ROLLBACK_V22:
             code.compatible_inverse_source(path, old_path, upgrade)
         code.compatible_source(old_path, path, upgrade)
 

@@ -291,15 +291,15 @@ class V14TransportTest(unittest.TestCase):
         encode, decode, _ = shared.ContractTest().workflow_transport()
         for bundle in self.bundles():
             with self.subTest(operation=bundle['operation']):
-                self.assertLessEqual(len(json.dumps(bundle).encode()), 196608)
+                self.assertLessEqual(len(json.dumps(bundle).encode()), 229376)
                 wire = encode(bundle)
-                self.assertLessEqual(len(wire), 65536)
+                self.assertLessEqual(len(wire), 73728)
                 self.assertEqual(decode(wire), bundle)
         forward = self.bundles()[0]
         prepare = dict(forward, operation='preview-code-only-prepare', function='prepare',
                        code_only_source=forward['source'], source=forward['code_source'], package=forward['package']['release'])
         prepare.pop('code_source')
-        self.assertLessEqual(len(json.dumps(prepare).encode()), 180000)
+        self.assertLessEqual(len(json.dumps(prepare).encode()), 229376)
 
     def test_unpinned_forward_and_inverse_remote_scripts_refuse_before_host_action(self):
         import test_naver_preview_code_only as legacy

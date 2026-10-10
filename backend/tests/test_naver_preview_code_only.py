@@ -30,10 +30,10 @@ class CodeOnlyTest(unittest.TestCase):
             'release':dict(baseline='a'*64,source_commit='b'*40,ciphertext_sha256='c'*64,
                           source_tar_gz_sha256='d'*64,run_id='9'*20,operation='code-prepare'),
             'operation_id':'e'*32})
-        self.assertLessEqual(len(json.dumps(bundle).encode()),196608)
+        self.assertLessEqual(len(json.dumps(bundle).encode()),229376)
         encoded = encode(bundle)
         self.assertTrue(encoded.startswith('code-gzip-v1:'))
-        self.assertLessEqual(len(encoded),65536)
+        self.assertLessEqual(len(encoded),73728)
         self.assertEqual(decode(encoded),bundle)
         with self.assertRaisesRegex(ValueError,'CODE_OPS_OPERATION'):
             decode(encode(dict(bundle,function='run')))
@@ -280,9 +280,9 @@ class CodeOnlyTest(unittest.TestCase):
                 exec(compile(self.prepare_encoder(),'<code-only-prepare>','exec'),{})
             encoded = env_file.read_text().split('=',1)[1].strip()
         self.assertTrue(encoded.startswith('prepare-gzip-v1:'))
-        self.assertLessEqual(len(encoded),65536)
+        self.assertLessEqual(len(encoded),73728)
         raw = gzip.decompress(base64.b64decode(encoded.split(':',1)[1]))
-        self.assertLessEqual(len(raw),180000)
+        self.assertLessEqual(len(raw),229376)
         bundle = json.loads(raw)
         self.assertEqual(bundle['operation'],'preview-code-only-prepare')
         self.assertEqual(bundle['package']['operation'],'code-prepare')

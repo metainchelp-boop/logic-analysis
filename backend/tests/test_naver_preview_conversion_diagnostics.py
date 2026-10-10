@@ -289,8 +289,8 @@ class ConversionOperationTest(unittest.TestCase):
             host_source=(TOOLS/'naver_erp_tunnel_service_install.py').read_text())
         wire=encode(bundle)
         self.assertEqual(decode(wire),bundle)
-        self.assertLessEqual(len(wire),65536)
-        self.assertLessEqual(len(json.dumps(bundle).encode()),196608)
+        self.assertLessEqual(len(wire),73728)
+        self.assertLessEqual(len(json.dumps(bundle).encode()),229376)
         with self.assertRaisesRegex(ValueError,'CODE_OPS_OPERATION'):
             decode(encode(dict(bundle,function='apply')))
         for required in ("'preview-conversion-diagnostics':('naver_preview_conversion_diagnostics','run')",
@@ -298,8 +298,8 @@ class ConversionOperationTest(unittest.TestCase):
                 "github.ref == 'refs/heads/codex/ad-deploy-prep-20261001'"):
             self.assertIn(required,workflow)
         for codec in (encode,decode):
-            self.assertIn(196608,codec.__code__.co_consts)
-            self.assertIn(65536,codec.__code__.co_consts)
+            self.assertIn(229376,codec.__code__.co_consts)
+            self.assertIn(73728,codec.__code__.co_consts)
 
 
 if __name__ == '__main__':

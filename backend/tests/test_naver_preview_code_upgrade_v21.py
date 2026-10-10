@@ -277,19 +277,19 @@ class V21TransportTest(unittest.TestCase):
         for kind, bundle in self.bundles().items():
             raw = json.dumps(bundle).encode()
             with self.subTest(kind=kind):
-                self.assertLessEqual(len(raw), 180000 if kind == 'prepare' else 196608)
+                self.assertLessEqual(len(raw), 229376 if kind == 'prepare' else 229376)
                 if kind == 'prepare':
                     wire = 'prepare-gzip-v1:'+base64.b64encode(gzip.compress(raw, mtime=0)).decode()
-                    self.assertLessEqual(len(wire), 65536)
+                    self.assertLessEqual(len(wire), 73728)
                     decoder = zlib.decompressobj(16+zlib.MAX_WBITS)
-                    unpacked = decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):], validate=True), 180001)
-                    self.assertLessEqual(len(unpacked), 180000)
+                    unpacked = decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):], validate=True), 229377)
+                    self.assertLessEqual(len(unpacked), 229376)
                     self.assertTrue(decoder.eof)
                     self.assertFalse(decoder.unused_data or decoder.unconsumed_tail)
                     self.assertEqual(json.loads(unpacked), bundle)
                 else:
                     wire = encode(bundle)
-                    self.assertLessEqual(len(wire), 65536)
+                    self.assertLessEqual(len(wire), 73728)
                     self.assertEqual(decode(wire), bundle)
 
     def test_pending_forward_and_inverse_scripts_refuse_before_any_host_action(self):

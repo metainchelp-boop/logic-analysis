@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -58,7 +58,7 @@ jobs:
       group: deploy-logic-analysis
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    # Code-only forward + rollback command bounds need a separate reserve; old mode unchanged.
+    # Code-only forward + rollback reserve: raw224KiB, wire72KiB; bounded decompression/eof/tail checks retained.
     timeout-minutes: ${{ inputs.ad_prepare == 'preview-code-only-rollback' && 65 || inputs.ad_prepare == 'preview-code-only-upgrade' && 65 || inputs.ad_prepare == 'preview-code-upgrade' && 65 || 15 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -77,10 +77,10 @@ jobs:
               raw=json.dumps(bundle).encode()
               if bundle['operation'] not in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status','preview-code-only-upgrade','preview-code-only-rollback','preview-resource-trial','preview-report-recovery','preview-report-recovery-v19','preview-conversion-diagnostics'):
                   return base64.b64encode(raw).decode()
-              if len(raw)>196608:
+              if len(raw)>229376:
                   raise ValueError('CODE_OPS_JSON_SIZE')
               encoded='code-gzip-v1:'+base64.b64encode(gzip.compress(raw,mtime=0)).decode()
-              if len(encoded)>65536:
+              if len(encoded)>73728:
                   raise ValueError('CODE_OPS_WIRE_SIZE')
               return encoded
           inputs=json.loads(os.environ['INPUTS_JSON'])
@@ -175,12 +175,12 @@ jobs:
                     if bundle.get('operation') in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status','preview-code-only-upgrade','preview-code-only-rollback','preview-resource-trial','preview-report-recovery','preview-report-recovery-v19','preview-conversion-diagnostics'):
                         raise ValueError('CODE_OPS_ENCODING')
                     return bundle
-                if len(encoded)>65536:
+                if len(encoded)>73728:
                     raise ValueError('CODE_OPS_WIRE_SIZE')
                 packed=base64.b64decode(encoded[len('code-gzip-v1:'):],validate=True)
                 decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
-                raw=decoder.decompress(packed,196609)
-                if len(raw)>196608 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+                raw=decoder.decompress(packed,229377)
+                if len(raw)>229376 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
                     raise ValueError('CODE_OPS_GZIP')
                 bundle=json.loads(raw)
                 if (bundle.get('operation'),bundle.get('function')) not in (('preview-code-upgrade','apply'),('preview-code-diagnose','run'),('preview-collection-status','run'),('preview-code-only-upgrade','apply'),('preview-code-only-rollback','run'),('preview-resource-trial','run'),('preview-report-recovery','run'),('preview-report-recovery-v19','run'),('preview-conversion-diagnostics','run')):
@@ -360,10 +360,10 @@ jobs:
                   bundle['operation']=operation
                   bundle['code_only_source']=pathlib.Path('backend/tools/naver_preview_code_only.py').read_text()
               raw=json.dumps(bundle).encode()
-              if len(raw)>180000:
+              if len(raw)>229376:
                   raise ValueError('PREPARE_BUNDLE_SIZE')
               encoded='prepare-gzip-v1:'+base64.b64encode(gzip.compress(raw,mtime=0)).decode()
-              if len(encoded)>65536:
+              if len(encoded)>73728:
                   raise ValueError('PREPARE_WIRE_SIZE')
               with open(os.environ['GITHUB_ENV'],'a') as stream:
                   stream.write('PREVIEW_RELEASE_B64='+encoded+'\n')
@@ -388,10 +388,10 @@ jobs:
             import base64,json,os,pathlib,re,stat,sys,types,zlib
             try:
                 wire=os.environ['PREVIEW_RELEASE_B64']
-                assert wire.startswith('prepare-gzip-v1:') and len(wire)<=65536
+                assert wire.startswith('prepare-gzip-v1:') and len(wire)<=73728
                 decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
-                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),180001)
-                assert len(raw)<=180000 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),229377)
+                assert len(raw)<=229376 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
                 bundle=json.loads(raw)
                 assert bundle.get('operation') in (None,'preview-code-only-prepare')
                 assert ('code_only_source' in bundle)==(bundle.get('operation')=='preview-code-only-prepare')
@@ -461,10 +461,10 @@ jobs:
             bundle={}
             try:
                 wire=os.environ['PREVIEW_RELEASE_B64']
-                assert wire.startswith('prepare-gzip-v1:') and len(wire)<=65536
+                assert wire.startswith('prepare-gzip-v1:') and len(wire)<=73728
                 decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
-                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),180001)
-                assert len(raw)<=180000 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),229377)
+                assert len(raw)<=229376 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
                 bundle=json.loads(raw)
                 assert bundle.get('operation') in (None,'preview-code-only-prepare')
                 assert ('code_only_source' in bundle)==(bundle.get('operation')=='preview-code-only-prepare')
@@ -2180,3 +2180,82 @@ jobs:
               | grep -aE '\"(GET|POST) /api/' \
               | awk '{for(i=1;i<=NF;i++) if($i ~ /^\/api\//) {split($i,a,"?"); print a[1]}}' \
               | sort | uniq -c | sort -rn | head -15
+
+  learning-center-static:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'learning-center-static-check' || inputs.ad_prepare == 'learning-center-static-install' || inputs.ad_prepare == 'learning-center-static-rollback')
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify exact public static package
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,io,json,os,pathlib,tarfile
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('ad_prepare') in ('learning-center-static-check','learning-center-static-install','learning-center-static-rollback')
+          assert inputs.pop('ad_expected_baseline')=='' and all(v=='off' for v in inputs.values())
+          p=pathlib.Path('releases/learning-center-static-patch-20261011.tar.gz')
+          raw=p.read_bytes()
+          assert hashlib.sha256(raw).hexdigest()=='2f8a6b3fb73ce5e471915a3ba45eb92da13b0ac08679e93c78f711daaf0a778b'
+          expected={'install_static.py','manifest.json','original-index.html','index.html','app.17f591847ebe.js','app.367bce70601a.js'}
+          with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as tar:
+              members=tar.getmembers()
+              assert len(members)==6 and {m.name for m in members}==expected
+              assert all(m.isfile() and not m.issym() and not m.islnk() for m in members)
+              assert sum(m.size for m in members)<4*1024*1024
+          print('Pinned package verified; single LearningCenterPage change only')
+          PY
+      - name: Transfer package into new staging directory
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: 'releases/learning-center-static-patch-20261011.tar.gz'
+          target: '/srv/metainc/learning-center-staging/${{ github.run_id }}'
+          overwrite: false
+      - name: Verify current files then perform scoped operation
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          STATIC_MODE: ${{ inputs.ad_prepare }}
+          STATIC_RUN_ID: ${{ github.run_id }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: STATIC_MODE,STATIC_RUN_ID
+          command_timeout: 90s
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import hashlib,io,os,pathlib,re,subprocess,tarfile
+            operation=os.environ['STATIC_MODE']; run_id=os.environ['STATIC_RUN_ID']
+            mode={'learning-center-static-check':'check','learning-center-static-install':'install','learning-center-static-rollback':'rollback'}[operation]
+            assert mode in ('check','install','rollback') and re.fullmatch('[0-9]{1,20}',run_id)
+            staging=pathlib.Path('/srv/metainc/learning-center-staging')/run_id
+            archive=staging/'releases/learning-center-static-patch-20261011.tar.gz'
+            assert not archive.is_symlink() and archive.is_file()
+            raw=archive.read_bytes()
+            assert hashlib.sha256(raw).hexdigest()=='2f8a6b3fb73ce5e471915a3ba45eb92da13b0ac08679e93c78f711daaf0a778b'
+            target=staging/'package'; target.mkdir(mode=0o700)
+            expected={'install_static.py','manifest.json','original-index.html','index.html','app.17f591847ebe.js','app.367bce70601a.js'}
+            with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as tar:
+                members=tar.getmembers()
+                assert len(members)==6 and {m.name for m in members}==expected
+                assert all(m.isfile() and not m.issym() and not m.islnk() for m in members)
+                assert sum(m.size for m in members)<4*1024*1024
+                for member in members:
+                    data=tar.extractfile(member).read(); assert len(data)==member.size
+                    fd=os.open(target/member.name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+                    with os.fdopen(fd,'wb') as stream: stream.write(data)
+            subprocess.run(['/usr/bin/python3','-I','-B',str(target/'install_static.py'),'--root','/root/logic-analysis-deploy/frontend','--mode',mode],check=True,timeout=30)
+            PY

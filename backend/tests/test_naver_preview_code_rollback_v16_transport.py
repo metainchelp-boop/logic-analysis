@@ -151,8 +151,8 @@ class V16RollbackTransportTest(previous.RollbackTransportTest):
                     self.assertEqual(bundle['code_only_source'], (tools/'naver_preview_code_only.py').read_text())
                 if name != 'prepare':
                     self.assertEqual(self.encode(bundle), wire)
-                self.assertLessEqual(len(json.dumps(bundle).encode()), 180000 if name == 'prepare' else 196608)
-                self.assertLessEqual(len(wire.encode()), 65536)
+                self.assertLessEqual(len(json.dumps(bundle).encode()), 229376 if name == 'prepare' else 229376)
+                self.assertLessEqual(len(wire.encode()), 73728)
         for name,size in self.transport_sizes().items():
             with self.subTest(shell=name):
                 self.assertLess(size['shell_bytes'], 120000)

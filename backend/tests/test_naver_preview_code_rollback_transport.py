@@ -47,8 +47,8 @@ class RollbackTransportTest(unittest.TestCase):
         self.assertEqual(bundle['source'], (tools / 'naver_preview_code_rollback.py').read_text())
         self.assertEqual(bundle['code_only_source'], (tools / 'naver_preview_code_only.py').read_text())
         self.assertEqual(bundle['package'], self.package)
-        self.assertLessEqual(len(wire), 65536)
-        self.assertLessEqual(len(json.dumps(bundle).encode()), 196608)
+        self.assertLessEqual(len(wire), 73728)
+        self.assertLessEqual(len(json.dumps(bundle).encode()), 229376)
         self.assertEqual(self.encode(bundle), wire)
 
     def test_request_source_archive_baseline_scope_override_or_bad_ids_cannot_open_another_transition(self):
@@ -84,7 +84,7 @@ class RollbackTransportTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'CODE_OPS_OPERATION'):
             self.decode(self.encode(dict(bundle, function='apply')))
         with self.assertRaisesRegex(ValueError, 'CODE_OPS_JSON_SIZE'):
-            self.encode(dict(bundle, source='x' * 196608))
+            self.encode(dict(bundle, source='x' * 229376))
 
     def test_remote_dispatch_loads_rollback_policy_separately_and_clears_credential_environment(self):
         bundle = self.decode(self.encoded())

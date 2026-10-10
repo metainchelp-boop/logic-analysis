@@ -265,8 +265,8 @@ class V7WorkflowTest(unittest.TestCase):
                 wire=env_file.read_text().split('=',1)[1].strip()
             bundle=decode(wire)
             self.assertEqual(bundle['code_source'],(Path(__file__).parents[1]/'tools'/(name+'.py')).read_text())
-            self.assertLessEqual(len(wire),65536)
-            self.assertLessEqual(len(json.dumps(bundle).encode()),196608)
+            self.assertLessEqual(len(wire),73728)
+            self.assertLessEqual(len(json.dumps(bundle).encode()),229376)
             self.assertEqual(encode(bundle),wire)
 
     def test_prepare_encoder_selects_after_verified_download_and_uses_existing_remote_name(self):
@@ -287,7 +287,7 @@ class V7WorkflowTest(unittest.TestCase):
                 wire=env_file.read_text().split('=',1)[1].strip()
             raw=gzip.decompress(base64.b64decode(wire.split(':',1)[1]));bundle=json.loads(raw)
             self.assertEqual(bundle['code_source'],(Path(__file__).parents[1]/'tools'/(name+'.py')).read_text())
-            self.assertLessEqual(len(raw),180000);self.assertLessEqual(len(wire),65536)
+            self.assertLessEqual(len(raw),229376);self.assertLessEqual(len(wire),73728)
             remote_code=next(s for s in self.scripts() if "print('NAVER_PREVIEW_RELEASE=" in s)
             self.assertIn("types.ModuleType('approved_code')",remote_code)
 

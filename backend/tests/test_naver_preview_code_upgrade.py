@@ -102,7 +102,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(decode(encoded),bundle)
         shell="export PREVIEW_OPS_B64="+shlex.quote(encoded)+";\nset -eu\n/usr/bin/python3 -I -B - <<'PY'\n"+script+'\nPY\n'
         self.assertLess(len(('/bin/bash -c '+shlex.quote(shell)).encode()),120000)
-        self.assertLessEqual(len(encoded),65536)
+        self.assertLessEqual(len(encoded),73728)
 
     def test_code_diagnose_transport_preserves_all_six_sources_with_existing_wire_bounds(self):
         encode,decode,script=self.workflow_transport()
@@ -115,10 +115,10 @@ class ContractTest(unittest.TestCase):
             'release':dict(baseline='a'*64,source_commit='b'*40,ciphertext_sha256='c'*64,
                           source_tar_gz_sha256='d'*64,run_id='9'*20,operation='code-prepare'),
             'operation_id':'e'*32})
-        self.assertLessEqual(len(json.dumps(bundle).encode()),196608)
+        self.assertLessEqual(len(json.dumps(bundle).encode()),229376)
         encoded=encode(bundle)
         self.assertEqual(decode(encoded),bundle)
-        self.assertLessEqual(len(encoded),65536)
+        self.assertLessEqual(len(encoded),73728)
         shell="export PREVIEW_OPS_B64="+shlex.quote(encoded)+";\nset -eu\n/usr/bin/python3 -I -B - <<'PY'\n"+script+'\nPY\n'
         self.assertLess(len(('/bin/bash -c '+shlex.quote(shell)).encode()),120000)
         with self.assertRaisesRegex(ValueError,'CODE_OPS_OPERATION'):
@@ -133,11 +133,11 @@ class ContractTest(unittest.TestCase):
         bundle.update(operation='preview-collection-status',function='run',package={
             'baseline':'a'*64,'source_commit':'01344b145d0b679a6ee730d7fa4b5990278dd654',
             'source_tar_gz_sha256':'b'*64})
-        self.assertLessEqual(len(json.dumps(bundle).encode()),196608)
+        self.assertLessEqual(len(json.dumps(bundle).encode()),229376)
         encoded=encode(bundle)
         self.assertTrue(encoded.startswith('code-gzip-v1:'))
         self.assertEqual(decode(encoded),bundle)
-        self.assertLessEqual(len(encoded),65536)
+        self.assertLessEqual(len(encoded),73728)
         shell="export PREVIEW_OPS_B64="+shlex.quote(encoded)+";\nset -eu\n/usr/bin/python3 -I -B - <<'PY'\n"+script+'\nPY\n'
         self.assertLess(len(('/bin/bash -c '+shlex.quote(shell)).encode()),120000)
         with self.assertRaisesRegex(ValueError,'CODE_OPS_ENCODING'):
@@ -168,15 +168,15 @@ class ContractTest(unittest.TestCase):
         bundle=dict(operation='preview-code-upgrade',function='apply',package={})
         packed=gzip.compress(json.dumps(bundle).encode())
         bad=[packed[:-1],packed+b'private-tail',packed+packed,
-             gzip.compress(b' '*196609),b'invalid-gzip']
+             gzip.compress(b' '*229377),b'invalid-gzip']
         for data in bad:
             with self.subTest(size=len(data)),self.assertRaises((ValueError,zlib.error)):
                 decode('code-gzip-v1:'+base64.b64encode(data).decode())
-        for encoded in ('code-gzip-v1:!!!','code-gzip-v1:'+'A'*65536):
+        for encoded in ('code-gzip-v1:!!!','code-gzip-v1:'+'A'*73728):
             with self.assertRaises(ValueError):
                 decode(encoded)
         with self.assertRaisesRegex(ValueError,'CODE_OPS_JSON_SIZE'):
-            encode(dict(bundle,source='x'*196608))
+            encode(dict(bundle,source='x'*229376))
         with self.assertRaisesRegex(ValueError,'CODE_OPS_WIRE_SIZE'):
             encode(dict(bundle,source=random.Random(0).randbytes(60000).hex()))
 
@@ -1161,7 +1161,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(len(decoders),2)
         encoded=encode(prepare)
         self.assertTrue(encoded.startswith('prepare-gzip-v1:'))
-        self.assertLessEqual(len(encoded),65536)
+        self.assertLessEqual(len(encoded),73728)
         self.assertLess(len(shlex.quote('export PREVIEW_RELEASE_B64='+shlex.quote(encoded))),120000)
         for decoder in decoders:
             def decode(wire):
@@ -1170,13 +1170,13 @@ class ContractTest(unittest.TestCase):
                 return scope['bundle']
             self.assertEqual(decode(encoded),prepare)
             packed=gzip.compress(json.dumps(prepare).encode())
-            for bad in (packed[:-1], packed+b'tail', packed+packed, gzip.compress(b' '*180001), b'bad'):
+            for bad in (packed[:-1], packed+b'tail', packed+packed, gzip.compress(b' '*229377), b'bad'):
                 with self.assertRaises((AssertionError,ValueError,zlib.error)):
                     decode('prepare-gzip-v1:'+base64.b64encode(bad).decode())
             with self.assertRaises(AssertionError):
-                decode('prepare-gzip-v1:'+'A'*65536)
+                decode('prepare-gzip-v1:'+'A'*73728)
         with self.assertRaisesRegex(ValueError,'PREPARE_BUNDLE_SIZE'):
-            encode({'source':'x'*180000})
+            encode({'source':'x'*229376})
         with self.assertRaisesRegex(ValueError,'PREPARE_WIRE_SIZE'):
             encode({'source':random.Random(0).randbytes(60000).hex()})
 
