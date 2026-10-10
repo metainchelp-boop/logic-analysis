@@ -1,5 +1,5 @@
 """계정 보고서 조회. 현재 권한을 먼저 적용하며 저장 자료만 읽는다."""
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import hashlib
 import re
 
@@ -81,6 +81,37 @@ def _context(ctx, store, scope, owns, selection):
     return companies, pairs
 
 
+def _collection_status(payload):
+    coverage = (payload or {}).get("coverage", {})
+    if not payload or (payload.get("details", {}).get("status") == "legacy_unavailable"):
+        return "unknown"
+    if coverage.get("basic_complete") is True:
+        return "complete" if coverage.get("conversion_complete") is True else "conversion_unconfirmed"
+    if isinstance(coverage.get("expected_account_days"), int) and coverage["expected_account_days"] > 0:
+        return "basic_incomplete"
+    return "unknown"
+
+
+def _refresh(selected, states, cid):
+    saved = (selected or {}).get("validation", {"status": "unknown", "last_checked_at": None})
+    current = (states or {}).get("company") if cid is None else (states or {}).get("accounts", {}).get(str(cid))
+    validation = {**saved, **(current or {}).get("validation", {})}
+    if current and validation.get("last_checked_at") is None:
+        validation["last_checked_at"] = saved.get("last_checked_at")
+    source_at = (current or {}).get("source_collected_at")
+    if not current:
+        # 과거 판의 원천 증거만 사용한다. 다른 판/현재 계정의 자료를 섞지 않는다.
+        from .report_refresh import source_collected_at
+        try:
+            generated = datetime.fromisoformat((selected or {}).get("generated_at") or "")
+            source_at = source_collected_at((selected or {}).get("_source_manifest", []), R._now(generated))
+        except (TypeError, ValueError):
+            source_at = None
+    return validation, {"scope": "current" if current else "saved", "source_collected_at": source_at,
+                        "last_success_at": validation.get("last_checked_at"),
+                        "last_attempt_at": validation.get("last_attempt_at"), "status": validation.get("status", "unknown")}
+
+
 def accounts(ctx, store, scope, owns, query):
     if set(query)-{"selection", "kind", "anchor", "q", "page", "possibility_id"}:
         raise QueryInvalid()
@@ -118,6 +149,7 @@ def accounts(ctx, store, scope, owns, query):
     page_rows = rows[page*PAGE_SIZE:(page+1)*PAGE_SIZE]
     latest = store.report_latest_ids(period.key, sorted({row["possibility_id"] for row in page_rows}))
     snapshots = {}
+    refresh_states = store.report_refresh_states_batch(sorted(set(latest.values())))
     for row in page_rows:
         rid = latest.get(row["possibility_id"])
         if rid is None:
@@ -128,7 +160,9 @@ def accounts(ctx, store, scope, owns, query):
         selected = _account_payload(raw["payload"], row["account_key"]) if raw else None
         if raw is None or (raw["payload"].get("format_version") == 2 and selected is None):
             continue
-        row.update(report_id=rid, revision_no=raw.get("revision_no"), generated_at=raw["generated_at"],
+        _, refresh = _refresh(selected, refresh_states.get(rid), _members(raw["payload"]).get(row["account_key"]))
+        row.update(collection_status=_collection_status(selected), refresh=public_payload(refresh),
+                   report_id=rid, revision_no=raw.get("revision_no"), generated_at=raw["generated_at"],
                    status=selected["status"] if selected else "collecting",
                    details_status=selected.get("details", {}).get("status", "legacy_unavailable") if selected else "legacy_unavailable")
     return {"rows": page_rows, "total": total, "page": page,
@@ -246,12 +280,14 @@ def detail(ctx, store, scope, owns, query):
                     and SC.ACT_APPROVE in SC.allowed_actions(ctx.org, scope, owns[pid])
                     and store.report_latest_ids(report["period_key"], [pid]).get(pid) == rid)
         annotations.update(can_edit=editable, can_approve=editable)
+    states = store.report_refresh_states(rid)
+    validation, refresh = _refresh(selected, states, None if key == "company" else members[key])
     return {**{field: public_payload(report[field]) for field in ("report_id", "period_key", "revision_no",
                 "revision_fingerprint", "generated_at", "review_status", "validation", "change_summary") if field in report},
             "possibility_id": pid, "company_name": companies[pid]["company_name"], "owner": W._owner(ctx, owns[pid]),
             "status": selected.get("status", report["status"]), "can_review": False, "payload": cleaned,
-            "validation": public_payload(report.get("validation", {})) if key == "company" else
-                          public_payload(selected.get("validation", {"status": "unknown", "scope": "account"})),
+            "validation": public_payload(validation), "refresh": public_payload(refresh),
+            "collection_status": _collection_status(selected),
             "change_summary": public_payload(report.get("change_summary")) if key == "company" else
                               public_payload(selected.get("change_summary")),
             "scope": scope_info, "annotations": public_payload(annotations)}

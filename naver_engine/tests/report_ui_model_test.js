@@ -660,3 +660,34 @@ test('인쇄 재확인 중 디자인·초안 변경 후 도착한 권한 거절�
     assert.equal(fixture.downloads.length,0);
   }
 });
+
+test('보고서 상태는 기본 누락과 전환 미확인을 구분하고 수집·대조·판 생성 시각을 각각 표시한다', async () => {
+  const fixture=harness(); fixture.ui.load();
+  const data=listData();
+  data.rows=[
+    {...data.rows[0],status:'partial',collection_status:'conversion_unconfirmed',generated_at:'판생성-10시',refresh:{scope:'current',source_collected_at:'수집-11시',last_success_at:null,status:'failed'}},
+    {...data.rows[0],account_key:'account-b',status:'partial',collection_status:'basic_incomplete'},
+    {...data.rows[0],account_key:'account-c',status:'ready',collection_status:'complete'}
+  ];
+  fixture.requests[0].resolve(full(data)); await flush();
+  const text=fixture.$('reportsRows').textContent;
+  assert.match(text,/기본 자료 완결 · 전환 미확인/);
+  assert.match(text,/기본 자료 누락/);
+  assert.match(text,/기본·전환 자료 완결/);
+  assert.match(text,/성과 수집 수집-11시/);
+  assert.match(text,/기본·전환 전체 재대조 성공 미확인/);
+  assert.match(text,/재대조 실패 · 확인 필요/);
+  assert.match(text,/수치판 생성 판생성-10시/);
+  assert.equal(fixture.requests.length,1,'상태 표시는 수집을 시작하지 않는다');
+  findButton(fixture.$('reportsRows'),'보고서 보기').fire('click');
+  const report=detailData(); report.status='partial'; report.collection_status='conversion_unconfirmed';
+  report.refresh={scope:'current',source_collected_at:'수집-11시',last_success_at:'대조-10시',last_attempt_at:'시도-12시',status:'pending'};
+  fixture.requests[1].resolve(report); await flush();
+  const detail=fixture.$('reportDetail').textContent;
+  assert.match(detail,/최근 성과 수집 수집-11시/);
+  assert.match(detail,/기본·전환 전체 재대조 성공 대조-10시/);
+  assert.match(detail,/최근 재대조 시도 시도-12시/);
+  assert.match(detail,/현재판의 최신 확인 상태 · 재대조 대기/);
+  assert.match(detail,/수치판 생성 2026-09-28T10:00:00/);
+  assert.equal(fixture.requests.length,2);
+});

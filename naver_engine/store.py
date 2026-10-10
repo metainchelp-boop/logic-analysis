@@ -1876,6 +1876,65 @@ def _report_snapshot_detail(store, report_id):
         return row
 
 
+def _report_refresh_states_batch(store, report_ids):
+    """최대 한 페이지의 최신 상태를 묶어 읽는다. 구 자료도 행마다 원천을 재조회하지 않는다."""
+    from . import report_refresh as RF
+    raw_ids = tuple(report_ids)
+    if len(raw_ids) > 100:
+        raise StoreRefused("보고서 목록은 최대 100개씩 조회합니다")
+    for rid in raw_ids:
+        _pos_int(rid, "보고서")
+    ids = tuple(sorted(set(raw_ids)))
+    if not ids:
+        return {}
+    marks = ",".join("?" for _ in ids)
+    with _report_read_snapshot(store):
+        reports = _rows(store._conn.execute("""SELECT r.report_id,r.possibility_id,r.period_key,
+            v.expected_customers_json,v.payload_json,COALESCE(d.pending,0) AS pending
+            FROM naver_auto_report_snapshot r JOIN naver_auto_report_validation v
+              ON v.possibility_id=r.possibility_id AND v.period_key=r.period_key
+            LEFT JOIN naver_auto_report_dirty d ON d.possibility_id=r.possibility_id AND d.period_key=r.period_key
+            WHERE r.report_id IN ("""+marks+")", ids))
+        if not reports:
+            return {}
+        keys = sorted({row["period_key"] for row in reports})
+        if len(keys) != 1:
+            raise StoreRefused("같은 보고 기간만 묶어 조회합니다")
+        key, pids = keys[0], sorted({row["possibility_id"] for row in reports})
+        latest = _report_latest_ids(store, key, pids)
+        reports = [row for row in reports if latest.get(row["possibility_id"]) == row["report_id"]]
+        if not reports:
+            return {}
+        period, now = _report_period(key), store._now()
+        for report in reports:
+            report["expected"] = json.loads(report["expected_customers_json"])
+            report["validation"] = json.loads(report["payload_json"])
+        customers = sorted({cid for row in reports for cid in row["expected"]})
+        daily, jobs, queued = [], [], []
+        for offset in range(0, len(customers), 400):
+            chunk = customers[offset:offset+400]
+            params = (*chunk, str(period.start), str(period.end))
+            placeholders = ",".join("?" for _ in chunk)
+            daily.extend(_rows(store._conn.execute("""SELECT * FROM naver_auto_daily_performance
+                WHERE customer_id IN ("""+placeholders+") AND day BETWEEN ? AND ?", params)))
+            jobs.extend(_rows(store._conn.execute("""SELECT customer_id,possibility_id,period_start,period_end,status,checked_at,generation
+                FROM naver_auto_performance_job WHERE customer_id IN ("""+placeholders+") AND period_end>=? AND period_start<=? ORDER BY checked_at", params)))
+            queued.extend(_rows(store._conn.execute("""SELECT customer_id,possibility_id,period_start,period_end
+                FROM naver_auto_manual_read WHERE customer_id IN ("""+placeholders+") AND consumed_at IS NULL AND period_end>=? AND period_start<=?", params)))
+        result = {}
+        for report in reports:
+            pid, expected, saved = report["possibility_id"], report["expected"], report["validation"]
+            company_rows = [row for row in daily if row["possibility_id"] == pid and row["customer_id"] in expected]
+            company_jobs = [row for row in jobs if row["possibility_id"] == pid]
+            company_queued = [row for row in queued if row["possibility_id"] == pid]
+            def state(scope, prior):
+                return RF.scope_state(period, scope, [row for row in company_rows if row["customer_id"] in scope],
+                    company_jobs, company_queued, prior, saved.get("_required_after"), bool(report["pending"]), now)
+            result[report["report_id"]] = {"company": state(expected, saved),
+                "accounts": {str(cid): state([cid], {}) for cid in expected}}
+        return result
+
+
 def _report_snapshots(store):
     from .store import _rows
     with _report_read_snapshot(store):
@@ -3008,6 +3067,12 @@ class ManagedStorage:
 
     def report_snapshot_detail(self, report_id):
         return _report_snapshot_detail(self, report_id)
+
+    def report_refresh_states(self, report_id):
+        return _report_refresh_states_batch(self, [report_id]).get(report_id)
+
+    def report_refresh_states_batch(self, report_ids):
+        return _report_refresh_states_batch(self, report_ids)
 
     def report_latest_ids(self, period_key, possibility_ids):
         return _report_latest_ids(self, period_key, possibility_ids)

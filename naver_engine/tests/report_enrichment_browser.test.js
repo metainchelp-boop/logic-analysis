@@ -9,6 +9,11 @@ const fixtureBox = {};
 vm.runInNewContext(source.slice(source.indexOf('function listData()'), source.indexOf('function findButton(')) +
   source.slice(source.indexOf('function expandedData()'), source.indexOf('function allNodes(')), fixtureBox);
 const report = fixtureBox.expandedData();
+report.collection_status='conversion_unconfirmed';
+report.refresh={scope:'current',status:'failed',source_collected_at:'2026-10-05T11:00:00+09:00',last_success_at:null,last_attempt_at:'2026-10-05T12:00:00+09:00'};
+const list = fixtureBox.listData();
+list.rows[0].status='partial';list.rows[0].collection_status=report.collection_status;list.rows[0].refresh=report.refresh;
+list.rows[0].generated_at='2026-10-05T10:00:00+09:00';
 report.company_name = '합성 검증 업체 <img src=x onerror=alert(1)>';
 report.annotations.state='approved'; report.annotations.author={actor:0,at:'2026-09-28T10:00:00+09:00'};
 report.annotations.approved_by=0; report.annotations.approved_at='2026-09-28T11:00:00+09:00';
@@ -93,8 +98,17 @@ async function assertTextSafe(page,scope) {
           context:()=> 'fixed',active:()=>true,selection:()=> 'all',onList(){},onDetailVerified(){},validation:()=>null,changes:()=>null,denied:()=>false,purge(){},go(){},toast(){},
           fetchList:(path,apply)=>{window.reportRequests.push({method:'GET',path});apply(list);return Promise.resolve();},api:(method,path)=>{window.reportRequests.push({method,path});if(method!=='GET'||!path.startsWith('/reports/detail?'))throw new Error('unexpected API');return Promise.resolve(structuredClone(report));}});
         await window.testReportUI.load(); document.querySelector('#reportsRows button').click();
-      },{report:JSON.parse(JSON.stringify(report)),list:JSON.parse(JSON.stringify(fixtureBox.listData()))});
+      },{report:JSON.parse(JSON.stringify(report)),list:JSON.parse(JSON.stringify(list))});
       await page.waitForSelector('.nr-report-paper');
+      const listText=await page.locator('#reportsRows').textContent();
+      assert.ok(listText.includes('기본 자료 완결 · 전환 미확인'));
+      assert.ok(listText.includes('재대조 실패 · 확인 필요'));
+      assert.ok(listText.includes('성과 수집 2026-10-05T11:00:00+09:00'));
+      assert.ok(listText.includes('기본·전환 전체 재대조 성공 미확인'));
+      const refreshText=await page.locator('.nr-refresh-summary').textContent();
+      assert.ok(refreshText.includes('재대조 실패 · 확인 필요'));
+      assert.ok(refreshText.includes('전체 기간 완결을 뜻하지 않습니다'));
+      assert.ok(refreshText.includes('수치판 생성 '+report.generated_at));
       const requests=await page.evaluate(()=>window.reportRequests.length);
       const baseline=await frozenValues(page.locator('.nr-report-paper'));
       await page.locator('#reportNote-shared_comment').fill(draftComment);

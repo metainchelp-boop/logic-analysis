@@ -66,7 +66,24 @@
       if (['spend','conversion_value','cpa','cpc'].indexOf(key) >= 0) return env.won(n);
       return round(n) + (['ctr','roas','cvr'].indexOf(key) >= 0 ? '%' : '');
     }
-    function statusChip(status) { return h('span',{class:'pill ' + (status === 'ready' ? 'p-green' : status === 'partial' ? 'p-amber' : 'p-gray')},stateLabel(status)); }
+    function statusChip(report) {
+      var status = typeof report === 'string' ? report : report.status;
+      var collection = report && report.collection_status;
+      var labels = {complete:'기본·전환 자료 완결',conversion_unconfirmed:'기본 자료 완결 · 전환 미확인',basic_incomplete:'기본 자료 누락 · 점검 필요'};
+      return h('span',{class:'pill ' + (collection === 'complete' || !collection && status === 'ready' ? 'p-green' : collection === 'basic_incomplete' || collection === 'conversion_unconfirmed' || status === 'partial' ? 'p-amber' : 'p-gray')},labels[collection] || stateLabel(status));
+    }
+    function confirmedTime(at) { return at ? env.datedTime(at) : '미확인'; }
+    function refreshLabel(refresh) {
+      return {complete:'기본·전환 전체 재대조 완료',pending:'재대조 대기',failed:'재대조 실패 · 확인 필요',updating:'정정 집계 갱신 중'}[(refresh || {}).status] || '재대조 상태 미확인';
+    }
+    function refreshSummary(report) {
+      var refresh = report.refresh || {};
+      return h('section',{class:'nr-refresh-summary','aria-label':'성과 자료 갱신 확인'},
+        h('p',{class:'report-meta'},(refresh.scope === 'current' ? '현재판의 최신 확인 상태 · ' : '선택한 저장판의 확인 상태 · ') + refreshLabel(refresh)),
+        h('p',{class:'report-meta'},'최근 성과 수집 ' + confirmedTime(refresh.source_collected_at) + ' · 기본·전환 전체 재대조 성공 ' + confirmedTime(refresh.last_success_at)),
+        h('p',{class:'report-meta'},'최근 재대조 시도 ' + confirmedTime(refresh.last_attempt_at) + ' · 수치판 생성 ' + confirmedTime(report.generated_at)),
+        h('p',{class:'hint'},'수치는 선택한 저장판 기준입니다. 전체 재대조 성공은 선택 범위의 모든 날짜에서 기본·전환 자료가 확인된 경우입니다. 최근 수집 시각은 일부 자료의 읽기 완료 시각이며 전체 기간 완결을 뜻하지 않습니다. 조회·새로고침은 수집을 시작하지 않습니다.'));
+    }
     function format(n,unit,signed) {
       if (!finite(n)) return '—';
       var result = unit === 'money' ? env.won(n) : round(n) + (unit === 'percent' ? '%' : '');
@@ -164,7 +181,9 @@
               h('span',{class:'nr-id'},'광고 계정 ID ' + (row.ad_account_no || '미확인'))),
             h('td',null,row.owner && row.owner.name || '담당 미확인',h('span',{class:'w'},row.workflow || '단계 미확인')),
             h('td',null,env.periodText(period.start,period.end)),
-            h('td',null,statusChip(row.status),h('span',{class:'w'},row.generated_at ? env.datedTime(row.generated_at) : '생성 후 확인할 수 있습니다')),
+            h('td',null,statusChip(row),h('span',{class:'w'},refreshLabel(row.refresh)),h('span',{class:'w'},'성과 수집 ' + confirmedTime((row.refresh || {}).source_collected_at)),
+              h('span',{class:'w'},'기본·전환 전체 재대조 성공 ' + confirmedTime((row.refresh || {}).last_success_at)),
+              h('span',{class:'w'},'수치판 생성 ' + confirmedTime(row.generated_at))),
             h('td',null,h('button',{type:'button',class:'btn sm',disabled:!row.report_id,'aria-label':row.company_name + ' ' + (row.ad_account_no || row.account_name || '') + ' 보고서 보기',onclick:function () { if (listReady && !selected && context() === ctx && env.active() && lastList === data) open(row,row.account_key); }},row.report_id ? '보고서 보기' : '생성 대기'))];
           cells.forEach(function (cell,index) { cell.setAttribute('data-label',labels[index]); });
           return h.apply(null,['tr',{'data-account-key':row.account_key,'data-report':row.report_id}].concat(cells));
@@ -410,7 +429,7 @@
             (scope.accounts || []).map(function (account) { return (account.account_name || '계정') + ' (' + (account.ad_account_no || '번호 미확인') + ')'; }).join(', ') :
             (scope.account_name || '계정 이름 미확인') + ' · 광고 계정 ID ' + (scope.ad_account_no || '미확인')),
           h('p',{class:'report-meta'},'담당 ' + (report.owner && report.owner.name || '미확인') + ' · 저장된 ' + env.num(report.revision_no) + '판'),
-          h('p',{class:'hint'},'자료 기준 ' + env.datedTime(report.generated_at)),
+          h('p',{class:'hint'},'수치판 생성 ' + env.datedTime(report.generated_at)),
           h('p',{class:'nr-compare-note'},'비교 기간: ' + (comparison.period ? env.periodText(comparison.period.start,comparison.period.end) : '자료 미보관') + ' · 전주/전월 비교이며 이전 판 정정과 다릅니다. 비율 차이는 %p로 표시합니다.'));
       }
       function brief() {
@@ -485,7 +504,7 @@
             h('p',{class:'hint'},'선택한 디자인의 브라우저 인쇄창에서 PDF로 저장하세요. 저장 완료 여부는 브라우저에서 확인합니다.')),
           h('div',{class:'nr-scope-row'},h('div',{class:'chips','aria-label':'보고서 집계 범위'},
             h('button',{type:'button',class:'chip' + (scope.kind === 'account' ? ' on' : ''),'aria-pressed':String(scope.kind === 'account'),onclick:function () { switchScope(chosen.account_key); }},'이 광고 계정'),
-            h('button',{type:'button',class:'chip' + (scope.kind === 'company' ? ' on' : ''),'aria-pressed':String(scope.kind === 'company'),onclick:function () { switchScope('company'); }},'업체 전체 합산')),statusChip(report.status))),
+            h('button',{type:'button',class:'chip' + (scope.kind === 'company' ? ' on' : ''),'aria-pressed':String(scope.kind === 'company'),onclick:function () { switchScope('company'); }},'업체 전체 합산')),statusChip(report)),refreshSummary(report)),
         makePaper(report,{layout:layout}),sharedView ? null : h('section',{class:'card nr-internal-review'},annotations(report,mark,ctx),
           h('details',{class:'nr-quality'},h('summary',null,'내부 검토 · 정정 이력 확인'),env.validation(report),env.changes(report),history(report,mark,ctx))));
       renderChart(report,mark,ctx);
