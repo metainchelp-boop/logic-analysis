@@ -21,9 +21,9 @@ class V22ReviewTest(unittest.TestCase):
     def test_exact_reviewed_source_schema_scope_and_assets(self):
         code=shared.load(MODULE);policy=shared.load('naver_preview_code_only');rollback=shared.load('naver_preview_code_rollback')
         self.assertEqual(code.OLD_COMMIT,'83ec2d34ad1d06471f638671c283bccd58533f08')
-        self.assertEqual(code.TARGET_COMMIT,'3b3ad2afeff137d29c40ad2e8cba34034cf5af3b')
-        self.assertEqual(code.TARGET_SOURCE_SHA256,'ea663c8d4a9a69fbd1688076e27dba0f4148cbabd29202c7a21155c6e7a8c812')
-        self.assertEqual(code.STORE_SHA256['target'],'187f4c7693bb32350b8a3b4c31a1ebb58480e92c317977a45fdbcf1377c2df3e')
+        self.assertEqual(code.TARGET_COMMIT,'09b216f26509fed97179114ee97cb0d4169ce5f8')
+        self.assertEqual(code.TARGET_SOURCE_SHA256,'92ff305fca89a636834f039676f742fc9d0d06b3ad598297102864fdc9157481')
+        self.assertEqual(code.STORE_SHA256['target'],'d3f06fd855c3f3c490e09fc777bd92109fb176b7fb167c2f5f7063253cba3786')
         self.assertEqual(policy.REVIEWED_TRANSITION_V22,pins(code))
         self.assertEqual(rollback.REVIEWED_ROLLBACK_V22,pins(code)+(frozenset(code.CODE_PATHS),))
         self.assertEqual(len(code.CODE_PATHS),20);self.assertEqual(len(code.ADDED_SOURCE_PATHS),10)

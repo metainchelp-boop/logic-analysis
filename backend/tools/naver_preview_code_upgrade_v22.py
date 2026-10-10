@@ -13,11 +13,11 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 OLD_COMMIT = '83ec2d34ad1d06471f638671c283bccd58533f08'
-TARGET_COMMIT = '3b3ad2afeff137d29c40ad2e8cba34034cf5af3b'
+TARGET_COMMIT = '09b216f26509fed97179114ee97cb0d4169ce5f8'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 OLD_SOURCE_SHA256 = 'bc369f7c5cf7da96ffe33175efd6284247888786c8a769a878694f2050c785fc'
-TARGET_SOURCE_SHA256 = 'ea663c8d4a9a69fbd1688076e27dba0f4148cbabd29202c7a21155c6e7a8c812'
-STORE_SHA256 = {'old': 'fe85c4df66addd727298e0b1406876c43bd84b727368203c791570590deefa4c', 'target': '187f4c7693bb32350b8a3b4c31a1ebb58480e92c317977a45fdbcf1377c2df3e'}
+TARGET_SOURCE_SHA256 = '92ff305fca89a636834f039676f742fc9d0d06b3ad598297102864fdc9157481'
+STORE_SHA256 = {'old': 'fe85c4df66addd727298e0b1406876c43bd84b727368203c791570590deefa4c', 'target': 'd3f06fd855c3f3c490e09fc777bd92109fb176b7fb167c2f5f7063253cba3786'}
 CODE_PATHS = {'naver_engine/web.py', 'naver_engine/setup_checks.py', 'naver_engine/marketing_strategy.py', 'backend/naver_page/index.html', 'naver_runtime/__main__.py', 'backend/naver_page/automation-ui.js', 'naver_engine/store.py', 'naver_runtime/claude_provider.py', 'backend/naver_page/app.js', 'backend/naver_page/report-pdf.js', 'backend/naver_page/learning-ui.js', 'naver_engine/views.py', 'naver_engine/automation_views.py', 'naver_engine/learning_assets.py', 'naver_engine/learning_retrieval.py', 'naver_engine/approval_documents.py', 'naver_engine/report_views.py', 'backend/naver_page/report-ui.js', 'naver_runtime/learning_provider.py', 'backend/naver_page/app.css'}
 ADDED_SOURCE_PATHS = frozenset({'naver_engine/approval_documents.py', 'naver_engine/setup_checks.py', 'naver_engine/automation_views.py', 'backend/naver_page/learning-ui.js', 'naver_engine/marketing_strategy.py', 'backend/naver_page/automation-ui.js', 'naver_engine/learning_assets.py', 'naver_runtime/claude_provider.py', 'naver_engine/learning_retrieval.py', 'naver_runtime/learning_provider.py'})
 ENGINE_COMPOSE_SHA256 = '62e33c3d2815579a28031973b956cd36031171f26ead4e21ad2d72adfe2a5ef7'
