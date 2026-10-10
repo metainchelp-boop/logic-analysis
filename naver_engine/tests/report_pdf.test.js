@@ -97,7 +97,7 @@ test('direct download fails closed for missing or changed authority and uses a s
     const input = report(); input.company_name = '../한글\\업체\u0000:*?<>|';
     const result = await pdf.download(input, {isCurrent: () => true});
     assert.equal(clicks, 1);
-    assert.ok(result.filename.endsWith('_1234567_주간_2026-09-21_2026-09-27_v3.pdf'));
+    assert.ok(result.filename.endsWith('_주간보고서_2026-09-21_2026-09-27_1234567_v3.pdf'));
     assert.ok(!/[\\/:*?<>|\u0000-\u001f]/.test(result.filename));
     assert.equal(link.download, result.filename);
     assert.equal(result.bytes > 1000, true);

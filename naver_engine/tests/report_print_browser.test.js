@@ -66,6 +66,7 @@ const csp="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'sel
         return NaverReportPDF.print(qaReport,{layout,paper,isCurrent:()=>true});
       },layout);
       assert.deepEqual(result,{started:true});
+      assert.equal(await page.title(),report.company_name+'_주간보고서_2026-09-21_2026-09-27_'+report.scope.ad_account_no+'_v'+report.revision_no);
       await page.emulateMedia({media:'print'});
       const state=await page.evaluate(()=>{
         const root=document.querySelector('#naver-report-print-root'),paper=root.querySelector('.nr-report-paper'),table=paper.querySelector('.nr-metric-table');
@@ -86,6 +87,7 @@ const csp="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'sel
         console.log('PDF QA artifact: '+target+' ('+bytes.length+' bytes)');}
       await page.evaluate(()=>window.dispatchEvent(new Event('afterprint')));
       assert.equal(await page.locator('#naver-report-print-root').count(),0);
+      assert.equal(await page.title(),'');
       await page.emulateMedia({media:'screen'});
       console.log('native print '+layout.toUpperCase()+': PASS; public renderer, 17 metrics, external CSS CSP, print-only scope, cleanup'+(writePDFs?', synthetic A4 PDF':''));
     }

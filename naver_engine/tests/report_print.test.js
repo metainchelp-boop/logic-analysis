@@ -15,7 +15,7 @@ function report() {
 }
 function platform() {
   const listeners = new Map(), timers = new Map(), mediaListeners = new Set(); let nextTimer = 0, prints = 0;
-  const document = {fonts:{ready:Promise.resolve()}};
+  const document = {title:'네이버 관제',fonts:{ready:Promise.resolve()}};
   class Element {
     constructor(tag) { this.nodeType=1; this.tagName=tag.toUpperCase(); this.ownerDocument=document; this.parentNode=null; this.children=[]; this.values=new Map(); }
     get attributes() { return Array.from(this.values,([name,value])=>({name,value})); }
@@ -59,6 +59,41 @@ test('native print starts only the supplied public paper and retains it until af
   env.event('afterprint');
   assert.equal(env.document.querySelectorAll('#naver-report-print-root').length,0);
   assert.equal(env.document.body.classList.contains('nr-printing'),false);
+});
+
+test('native PDF filename follows the selected advertiser, period and account for every layout',async()=>{
+  const env=platform(), seen=[];
+  env.root.print=()=>seen.push(env.document.title);
+  for(const kind of ['weekly','monthly']) for(const layout of ['a','b','c']) {
+    const input=report();input.company_name=kind==='weekly'?'주간 검증 업체':'월간 검증 업체';
+    input.scope.ad_account_no='1234567';
+    input.payload.period=kind==='weekly'?{kind,start:'2026-09-28',end:'2026-10-04'}:{kind,start:'2026-09-01',end:'2026-09-30'};
+    const label=kind==='weekly'?'주간':'월간';
+    const expected=input.company_name+'_'+label+'보고서_'+input.payload.period.start+'_'+input.payload.period.end+'_1234567_v3';
+    await env.api.print(input,{layout,paper:env.paper(input,layout),isCurrent:()=>true});
+    assert.equal(seen.at(-1),expected);assert.equal(env.document.title,expected);
+    env.event('afterprint');assert.equal(env.document.title,'네이버 관제');
+  }
+  assert.equal(seen.length,6);
+});
+
+test('native PDF title is safe and restored on cancellation or print failure',async()=>{
+  const env=platform(), input=report();
+  input.company_name='../한글\\업체\u0000:*?<>|';input.scope={kind:'company',account_key:'company-a'};
+  await env.api.print(input,{layout:'a',paper:env.paper(input),isCurrent:()=>true});
+  assert.equal(env.document.title,'_한글_업체 _______주간보고서_2026-09-28_2026-10-04_전체합산_v3');
+  assert.ok(!/[\\/:*?"<>|\u0000-\u001f]/.test(env.document.title));
+  env.api.cancelPrint();assert.equal(env.document.title,'네이버 관제');
+  env.root.print=()=>{throw new Error('native unavailable');};
+  await assert.rejects(()=>env.api.print(input,{layout:'b',paper:env.paper(input,'b'),isCurrent:()=>true}),/native unavailable/);
+  assert.equal(env.document.title,'네이버 관제');
+});
+
+test('print cleanup preserves a newer page title set by navigation',async()=>{
+  const env=platform();
+  await env.api.print(report(),{layout:'a',paper:env.paper(),isCurrent:()=>true});
+  env.document.title='다른 화면';env.event('pagehide');
+  assert.equal(env.document.title,'다른 화면');
 });
 
 test('private controls, annotation history and active content cannot enter a printed paper',async()=>{

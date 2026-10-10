@@ -385,8 +385,8 @@
     const view = pinned(report);
     const safe = value => text(value).replace(/[\\/:*?"<>|]/g, '_').replace(/^[.\s]+|[.\s]+$/g, '').slice(0, 60) || '보고서';
     const account = report.scope.kind === 'company' ? '전체합산' : safe(report.scope.ad_account_no || '미보관');
-    return safe(view.company) + '_' + account + '_' + view.kind + '_' + view.p.period.start + '_' +
-      view.p.period.end + '_v' + report.revision_no + '.pdf';
+    return safe(view.company) + '_' + view.kind + '보고서_' + view.p.period.start + '_' +
+      view.p.period.end + '_' + account + '_v' + report.revision_no + '.pdf';
   }
   async function download(report, options) {
     const current = () => {
@@ -475,6 +475,7 @@
       if (state.closed) return;
       state.closed = true;
       if (state.cancelWait) state.cancelWait();
+      if (state.printTitle && document.title === state.printTitle) document.title = state.originalTitle;
       container.remove(); document.body.classList.remove('nr-printing');
       root.removeEventListener('afterprint', state.afterPrint);
       root.removeEventListener('pagehide', state.cleanup);
@@ -505,6 +506,10 @@
       await waitForPrintFonts(document, state);
       if (state.closed || activePrint !== state || !current()) fail('REPORT_PDF_STALE');
       printPaper(snapshot, layout, paper, document, container);
+      // Native Save as PDF takes its suggested filename from the document title.
+      state.originalTitle = document.title;
+      state.printTitle = filename(snapshot).slice(0, -4);
+      document.title = state.printTitle;
       state.phase = 'printing';
       root.print();
       return {started: true}; // The native dialog does not disclose whether a PDF was saved.
