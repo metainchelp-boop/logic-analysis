@@ -104,7 +104,9 @@ def _refresh(selected, states, cid):
         from .report_refresh import source_collected_at
         try:
             generated = datetime.fromisoformat((selected or {}).get("generated_at") or "")
-            source_at = source_collected_at((selected or {}).get("_source_manifest", []), R._now(generated))
+            if generated.tzinfo is None or generated.utcoffset() is None:
+                raise ValueError("generated timezone is unknown")
+            source_at = source_collected_at((selected or {}).get("_source_manifest", []), generated.astimezone(R.KST))
         except (TypeError, ValueError):
             source_at = None
     return validation, {"scope": "current" if current else "saved", "source_collected_at": source_at,

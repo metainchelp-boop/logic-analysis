@@ -66,8 +66,8 @@ def scope_state(period, expected, rows, jobs, queued, prior, required_after, dir
     successful = [at for at in successes if at is not None and at <= now]
     source_attempts = [_time(row.get("checked_at")) for row in rows]
     source_attempts = [at for at in source_attempts if at is not None and at <= now]
-    attempted = max(attempts) if attempts else max(source_attempts, default=None)
+    attempted = max(attempts) if len(attempts) > 0 else max(source_attempts, default=None)
     validation = {"status": status, "pending_account_days": pending,
         "last_checked_at": max(successful).isoformat() if successful else None,
-        "last_attempt_at": attempted.isoformat() if attempted else None}
+        "last_attempt_at": attempted.isoformat() if attempted is not None else None}
     return {"validation": validation, "source_collected_at": source_collected_at(rows, now)}

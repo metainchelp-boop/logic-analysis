@@ -79,9 +79,9 @@
     function refreshSummary(report) {
       var refresh = report.refresh || {};
       return h('section',{class:'nr-refresh-summary','aria-label':'성과 자료 갱신 확인'},
-        h('p',{class:'report-meta'},(refresh.scope === 'current' ? '현재판의 최신 확인 상태 · ' : '선택한 저장판의 확인 상태 · ') + refreshLabel(refresh)),
-        h('p',{class:'report-meta'},'최근 성과 수집 ' + confirmedTime(refresh.source_collected_at) + ' · 기본·전환 전체 재대조 성공 ' + confirmedTime(refresh.last_success_at)),
-        h('p',{class:'report-meta'},'최근 재대조 시도 ' + confirmedTime(refresh.last_attempt_at) + ' · 수치판 생성 ' + confirmedTime(report.generated_at)),
+        h('p',{class:'hint nr-refresh-meta'},(refresh.scope === 'current' ? '현재판의 최신 확인 상태 · ' : '선택한 저장판의 확인 상태 · ') + refreshLabel(refresh)),
+        h('p',{class:'hint nr-refresh-meta'},'최근 성과 수집 ' + confirmedTime(refresh.source_collected_at) + ' · 기본·전환 전체 재대조 성공 ' + confirmedTime(refresh.last_success_at)),
+        h('p',{class:'hint nr-refresh-meta'},'최근 재대조 시도 ' + confirmedTime(refresh.last_attempt_at) + ' · 수치판 생성 ' + confirmedTime(report.generated_at)),
         h('p',{class:'hint'},'수치는 선택한 저장판 기준입니다. 전체 재대조 성공은 선택 범위의 모든 날짜에서 기본·전환 자료가 확인된 경우입니다. 최근 수집 시각은 일부 자료의 읽기 완료 시각이며 전체 기간 완결을 뜻하지 않습니다. 조회·새로고침은 수집을 시작하지 않습니다.'));
     }
     function format(n,unit,signed) {
