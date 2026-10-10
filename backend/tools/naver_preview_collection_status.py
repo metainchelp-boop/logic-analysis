@@ -25,8 +25,6 @@ SCREEN_OVERHAUL_COMMIT = 'a981b35e298aa58a52b30e266792bd0f36506c5d'
 WRITER_RELIEF_COMMIT = '25dc24d8760a06b2321d4fbde481769c3ce32c34'
 LATENCY_FIX_COMMIT = '6198be366344a82923e10ba5e323877026d82f48'
 DASHBOARD_LATENCY_FIX_COMMIT = 'e4f64e165ebdf81d4127218d5c91ff6904e75958'
-# Additional active profiles require these exact source/archive/store/baseline pins.
-# They do not widen ordinary collection readers or the incident-suspended release.
 PROFILE_RELEASES = {
     '953c2ccdb1d74a4fd339de013a1bbbbc5f50e3b6': (
         '461be6b6ae6d09d74108f9f96a5e2bcf68feffdd2728c43f1b5e460be743ac80',
@@ -123,6 +121,12 @@ if (type(PASSIVE_COMMIT_V16) is str and re.fullmatch('[0-9a-f]{40}', PASSIVE_COM
         and all(type(value) is str and re.fullmatch('[0-9a-f]{64}', value)
             for value in (PASSIVE_SOURCE_SHA256_V16, PASSIVE_STORE_SHA256_V16))):
     PASSIVE_RELEASES[PASSIVE_COMMIT_V16] = PASSIVE_RELEASE_V16
+
+PASSIVE_COMMIT_V17 = '7c99e18e29e6cb4d3f32eb41b6983529126d8f3a'
+PASSIVE_SOURCE_SHA256_V17 = '874ea72edfef7c5a375f26cf8bdb103aa487779bd06e208aada7b1a5184dcee2'
+if (type(PASSIVE_COMMIT_V17) is str and re.fullmatch('[0-9a-f]{40}', PASSIVE_COMMIT_V17)
+        and type(PASSIVE_SOURCE_SHA256_V17) is str and re.fullmatch('[0-9a-f]{64}', PASSIVE_SOURCE_SHA256_V17)):
+    PASSIVE_RELEASES[PASSIVE_COMMIT_V17] = (PASSIVE_SOURCE_SHA256_V17, *PASSIVE_RELEASE_V16[1:])
 
 
 MONITORING_COMMITS = frozenset((MONITORING_COMMIT, REPORTS_COMMIT, SHM_LOCK_FIX_COMMIT, OWNER_ACTIONS_COMMIT,
