@@ -2202,7 +2202,9 @@ jobs:
           import hashlib,io,json,os,pathlib,tarfile
           inputs=json.loads(os.environ['INPUTS_JSON'])
           assert inputs.pop('ad_prepare') in ('learning-center-static-check','learning-center-static-install','learning-center-static-rollback')
-          assert inputs.pop('ad_expected_baseline')=='' and all(v=='off' for v in inputs.values())
+          assert inputs.pop('ad_expected_baseline','')==''
+          assert set(inputs)=={'collector','rank_link','capacity','structure','expired','queue','urlshape','use_branch_code'}
+          assert all(v=='off' for v in inputs.values())
           p=pathlib.Path('releases/learning-center-static-patch-20261011.tar.gz')
           raw=p.read_bytes()
           assert hashlib.sha256(raw).hexdigest()=='2f8a6b3fb73ce5e471915a3ba45eb92da13b0ac08679e93c78f711daaf0a778b'
