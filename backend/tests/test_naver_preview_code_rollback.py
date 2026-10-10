@@ -23,25 +23,26 @@ class PostSuccessRollbackTest(unittest.TestCase):
         helper = shared.load('naver_preview_code_rollback')
         policy = shared.load('naver_preview_code_only')
         code = shared.load(code_module)
-        if code_module.endswith(('v14','v15','v16','v17','v18')):
+        if code_module.endswith(('v14','v15','v16','v17','v18','v19')):
             code.REPORT_ASSETS = {route:(len(route.encode()),hashlib.sha256(route.encode()).hexdigest(),mime)
                 for route,(_,_,mime) in code.REPORT_ASSETS.items()}
         # V6/V7/V8 retain their reviewed commit/archive pins. Older fixtures
         # preserve their original test-only later release returning to source 49.
-        if code_module not in ('naver_preview_code_upgrade_v6', 'naver_preview_code_upgrade_v7', 'naver_preview_code_upgrade_v8', 'naver_preview_code_upgrade_v9', 'naver_preview_code_upgrade_v10', 'naver_preview_code_upgrade_v11', 'naver_preview_code_upgrade_v12', 'naver_preview_code_upgrade_v13', 'naver_preview_code_upgrade_v14', 'naver_preview_code_upgrade_v15', 'naver_preview_code_upgrade_v16', 'naver_preview_code_upgrade_v17', 'naver_preview_code_upgrade_v18'):
+        if code_module not in ('naver_preview_code_upgrade_v6', 'naver_preview_code_upgrade_v7', 'naver_preview_code_upgrade_v8', 'naver_preview_code_upgrade_v9', 'naver_preview_code_upgrade_v10', 'naver_preview_code_upgrade_v11', 'naver_preview_code_upgrade_v12', 'naver_preview_code_upgrade_v13', 'naver_preview_code_upgrade_v14', 'naver_preview_code_upgrade_v15', 'naver_preview_code_upgrade_v16', 'naver_preview_code_upgrade_v17', 'naver_preview_code_upgrade_v18','naver_preview_code_upgrade_v19'):
             code.OLD_COMMIT = '49c42d645b90732071d0c61b8f9aaf7660e8b765'
             code.OLD_SOURCE_SHA256 = '69b9f79ab243eac6d3d32fe67ce267b96bdd923323997fd2661934bc6a5459d4'
             if code_module != 'naver_preview_code_upgrade_v5':
                 code.TARGET_COMMIT = 'b' * 40
                 code.TARGET_SOURCE_SHA256 = 'd' * 64
-        if code_module.endswith(('v11','v12','v13','v14','v15','v16','v17','v18')) and code.TARGET_COMMIT is None:
+        if code_module.endswith(('v11','v12','v13','v14','v15','v16','v17','v18','v19')) and code.TARGET_COMMIT is None:
             code.TARGET_COMMIT,code.TARGET_SOURCE_SHA256='b'*40,'d'*64
         store = shared.StoreScopeTest.SOURCE
         digest = hashlib.sha256(store).hexdigest()
-        target_store=store+b'\n# synthetic V11 read performance change\n' if code_module.endswith(('v11','v12','v13','v14','v15','v18')) else store
+        target_store=store+b'\n# synthetic V11 read performance change\n' if code_module.endswith(('v11','v12','v13','v14','v15','v18','v19')) else store
         code.STORE_SHA256 = {'old':digest,'target':hashlib.sha256(target_store).hexdigest()}
         # Existing forward review validation is real, with synthetic in-memory pins.
-        setattr(policy, 'REVIEWED_TRANSITION_V18' if code_module.endswith('v18')
+        setattr(policy, 'REVIEWED_TRANSITION_V19' if code_module.endswith('v19')
+                else 'REVIEWED_TRANSITION_V18' if code_module.endswith('v18')
                 else 'REVIEWED_TRANSITION_V17' if code_module.endswith('v17')
                 else 'REVIEWED_TRANSITION_V16' if code_module.endswith('v16')
                 else 'REVIEWED_TRANSITION_V15' if code_module.endswith('v15')
@@ -70,6 +71,10 @@ class PostSuccessRollbackTest(unittest.TestCase):
             helper.REVIEWED_ROLLBACK_V18 = helper.transition(code)
             code.OLD_REPORT_UI = code.REPORT_ASSETS['/naver/report-ui.js']
             policy.REVIEWED_OLD_REPORT_UI_V18 = code.OLD_REPORT_UI
+        if code_module.endswith('v19'):
+            helper.REVIEWED_ROLLBACK_V19 = helper.transition(code)
+            code.OLD_REPORT_UI = code.REPORT_ASSETS['/naver/report-ui.js']
+            policy.REVIEWED_OLD_REPORT_UI_V19 = code.OLD_REPORT_UI
         release = Mock()
         original_release = shared.load('naver_preview_release')
         release.ROOT = root
@@ -92,7 +97,7 @@ class PostSuccessRollbackTest(unittest.TestCase):
             for name in code.CODE_PATHS:
                 if path == old and name in getattr(code, 'ADDED_SOURCE_PATHS', ()):
                     continue
-                if code_module.endswith(('v11','v12','v13','v14','v15','v18')) and name=='naver_engine/store.py':continue
+                if code_module.endswith(('v11','v12','v13','v14','v15','v18','v19')) and name=='naver_engine/store.py':continue
                 file = path / name
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_bytes(b'old' if path == old else b'new')
@@ -104,7 +109,7 @@ class PostSuccessRollbackTest(unittest.TestCase):
             new_compose=old_compose.replace(b'    cpus: "0.50"\n',b'    cpus: "1.00"\n').replace(b'    mem_limit: 512m\n',b'    mem_limit: 768m\n')
             (old/'compose.naver-engine.yml').write_bytes(old_compose)
             (new/'compose.naver-engine.yml').write_bytes(new_compose)
-        if code_module.endswith(('v10','v11','v12','v13','v14','v15','v16','v17','v18')):
+        if code_module.endswith(('v10','v11','v12','v13','v14','v15','v16','v17','v18','v19')):
             old_compose=json.loads((Path(__file__).parent/'fixtures/v9-engine-compose-old.json').read_text())['compose'].encode()
             compose=old_compose.replace(b'    cpus: "0.50"\n',b'    cpus: "1.00"\n').replace(b'    mem_limit: 512m\n',b'    mem_limit: 768m\n')
             assert hashlib.sha256(compose).hexdigest()==code.ENGINE_COMPOSE_SHA256
@@ -260,6 +265,9 @@ class PostSuccessRollbackTest(unittest.TestCase):
         v18 = shared.load('naver_preview_code_upgrade_v18')
         if v18.TARGET_COMMIT is not None and v18.TARGET_SOURCE_SHA256 is not None:
             names.append('naver_preview_code_upgrade_v18')
+        v19 = shared.load('naver_preview_code_upgrade_v19')
+        if v19.TARGET_COMMIT is not None and v19.TARGET_SOURCE_SHA256 is not None:
+            names.append('naver_preview_code_upgrade_v19')
         self.assertEqual(helper.REVIEWED_ROLLBACKS,frozenset(helper.transition(shared.load(name)) for name in names))
         for code_name in ('naver_preview_code_upgrade', 'naver_preview_code_upgrade_v3',
                           'naver_preview_code_upgrade_v4'):
