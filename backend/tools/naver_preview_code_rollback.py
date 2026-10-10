@@ -144,6 +144,16 @@ STAGE = 'input'
 OPERATION = 'none'
 
 
+# V20 exact three-path inverse; all prior transitions are preserved.
+REVIEWED_ROLLBACK_V20 = ('00701771c0583477357010e9ac731263770f1da5', '27ed22b1e77213912db3750ddeb91d046fa770f5', '5c77d0197fb088600e11234660f3bf3013c03eafd8e3b756b8be7b91f34fc0e3', '3dd748de6c2f737af6c5cdf9e8b94a073329f0dcc2a2bf91ff7e180e35da80fd', 'aa39afff20c48225d70e80a899234c68b862aeaa53fae43c2e0769346f3b6d62', 'aa39afff20c48225d70e80a899234c68b862aeaa53fae43c2e0769346f3b6d62', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_engine/report_refresh.py', 'naver_engine/report_views.py', 'backend/naver_page/report-ui.js'}))
+if (type(REVIEWED_ROLLBACK_V20[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V20[1])
+        and all(type(REVIEWED_ROLLBACK_V20[index]) is str
+            and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V20[index]) for index in (3, 4, 5))):
+    REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V20})
+
+STAGE = 'input'
+OPERATION = 'none'
+
 def transition(code):
     return (code.OLD_COMMIT, code.TARGET_COMMIT, code.OLD_SOURCE_SHA256,
             code.TARGET_SOURCE_SHA256, code.STORE_SHA256.get('old'),
@@ -192,6 +202,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
                 or value['package'].get('source_tar_gz_sha256') != digest):
             raise ValueError('CODE_ROLLBACK_SOURCE')
     if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17, REVIEWED_ROLLBACK_V18, REVIEWED_ROLLBACK_V19):
+        code.compatible_inverse_source(path, old_path, upgrade)
+    if transition(code) == REVIEWED_ROLLBACK_V20:
         code.compatible_inverse_source(path, old_path, upgrade)
     code.compatible_source(old_path, path, upgrade)
     files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)
@@ -245,6 +257,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
                 or upgrade.manifest(release, code.TARGET_COMMIT, prepared, started=True) != (path, receipt)):
             raise ValueError('CODE_ROLLBACK_SOURCE')
         if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17, REVIEWED_ROLLBACK_V18, REVIEWED_ROLLBACK_V19):
+            code.compatible_inverse_source(path, old_path, upgrade)
+        if transition(code) == REVIEWED_ROLLBACK_V20:
             code.compatible_inverse_source(path, old_path, upgrade)
         code.compatible_source(old_path, path, upgrade)
 

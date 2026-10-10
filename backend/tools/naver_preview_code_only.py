@@ -136,6 +136,11 @@ REVIEWED_OLD_REPORT_UI_V18 = (60450, 'c629f0f2485f9ba5d524b6cbf1329e562958b7099f
 REVIEWED_TRANSITION_V19 = ('7f32d70d97876b806cc5bc44a7cc0f9688caeada', '00701771c0583477357010e9ac731263770f1da5', 'd6a2d1fe521287c9cedfba1132e5a81164ed2e2745ddea7ea01d74c2beb80a13', '5c77d0197fb088600e11234660f3bf3013c03eafd8e3b756b8be7b91f34fc0e3', 'b01a1e21cc87df1ef5a3935a30cc25d96b0ec3ced0fcc42a2bc9999685ef7d95', 'aa39afff20c48225d70e80a899234c68b862aeaa53fae43c2e0769346f3b6d62', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
 REVIEWED_OLD_REPORT_UI_V19 = (62666, '3f5ba0938c922ce8fbcaae59a8893d2b031b22d335554f0befd8dfd477d5d6c2', 'text/javascript; charset=utf-8')
 
+# V20 exact conversion-state presentation transition; pending targets have no authority.
+REVIEWED_TRANSITION_V20 = ('00701771c0583477357010e9ac731263770f1da5', '27ed22b1e77213912db3750ddeb91d046fa770f5', '5c77d0197fb088600e11234660f3bf3013c03eafd8e3b756b8be7b91f34fc0e3', '3dd748de6c2f737af6c5cdf9e8b94a073329f0dcc2a2bf91ff7e180e35da80fd', 'aa39afff20c48225d70e80a899234c68b862aeaa53fae43c2e0769346f3b6d62', 'aa39afff20c48225d70e80a899234c68b862aeaa53fae43c2e0769346f3b6d62', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
+REVIEWED_OLD_REPORT_UI_V20 = (62666, '3f5ba0938c922ce8fbcaae59a8893d2b031b22d335554f0befd8dfd477d5d6c2', 'text/javascript; charset=utf-8')
+REVIEWED_REPORT_UI_V20 = (64396, '4e93625a940beddedd3dac1ce52e1a74ff8588ede9f74ecb9c71c23b8f023a91', 'text/javascript; charset=utf-8')
+
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
         return 'naver_preview_code_upgrade'
@@ -218,6 +223,12 @@ def code_module_name(source_commit):
             and all(type(REVIEWED_TRANSITION_V19[index]) is str
                 and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V19[index]) for index in (3, 4, 5))):
         return 'naver_preview_code_upgrade_v19'
+    if (type(source_commit) is str and type(REVIEWED_TRANSITION_V20[1]) is str
+            and source_commit == REVIEWED_TRANSITION_V20[1]
+            and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V20[1])
+            and all(type(REVIEWED_TRANSITION_V20[index]) is str
+                and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V20[index]) for index in (3, 4, 5))):
+        return 'naver_preview_code_upgrade_v20'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -288,6 +299,10 @@ def require_review(code):
         if (transition == REVIEWED_TRANSITION_V19
             and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
             and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
+                for index in (3, 4, 5))) else {'naver_engine/report_refresh.py', 'naver_engine/report_views.py', 'backend/naver_page/report-ui.js'}
+        if (transition == REVIEWED_TRANSITION_V20
+            and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
+            and all(type(transition[index]) is str and re.fullmatch('[0-9a-f]{64}', transition[index])
                 for index in (3, 4, 5))) else None)
     if transition == REVIEWED_TRANSITION_V14 and (
             getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset({'naver_engine/report_enrichment.py', 'naver_engine/report_notes.py'})
@@ -321,6 +336,16 @@ def require_review(code):
             or getattr(code, 'CLOSED_LINK_ROUTES', None) != ('/links/reject', '/links/preview')
             or getattr(code, 'OLD_REPORT_UI', None) != REVIEWED_OLD_REPORT_UI_V19
             or getattr(code, 'REPORT_ASSETS', {}).get('/naver/report-ui.js') != REVIEWED_OLD_REPORT_UI_V19):
+        raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
+    if transition == REVIEWED_TRANSITION_V20 and (
+            getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset()
+            or getattr(code, 'TARGET_ACTION_ROUTES', None) != ('/reports/notes',)
+            or getattr(code, 'OWNER_ACTION_ROUTES', None) != (
+                '/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all',
+                '/settings/thresholds', '/holds/org/confirm', '/holds/stages/confirm', '/holds/accounts/confirm', '/links/revoke')
+            or getattr(code, 'CLOSED_LINK_ROUTES', None) != ('/links/reject', '/links/preview')
+            or getattr(code, 'OLD_REPORT_UI', None) != REVIEWED_OLD_REPORT_UI_V20
+            or getattr(code, 'REPORT_ASSETS', {}).get('/naver/report-ui.js') != REVIEWED_REPORT_UI_V20):
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
