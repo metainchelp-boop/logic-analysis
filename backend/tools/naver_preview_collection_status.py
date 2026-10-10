@@ -128,6 +128,14 @@ if (type(PASSIVE_COMMIT_V17) is str and re.fullmatch('[0-9a-f]{40}', PASSIVE_COM
         and type(PASSIVE_SOURCE_SHA256_V17) is str and re.fullmatch('[0-9a-f]{64}', PASSIVE_SOURCE_SHA256_V17)):
     PASSIVE_RELEASES[PASSIVE_COMMIT_V17] = (PASSIVE_SOURCE_SHA256_V17, *PASSIVE_RELEASE_V16[1:])
 
+PASSIVE_COMMIT_V18 = 'c3ce2b47ce088483c734e8ba5cef569ecfa66e77'
+PASSIVE_SOURCE_SHA256_V18 = '7a23f9717056b483915a076d658f85aab5f5cf662e7bc5454a64788db847123e'
+PASSIVE_STORE_SHA256_V18 = 'b01a1e21cc87df1ef5a3935a30cc25d96b0ec3ced0fcc42a2bc9999685ef7d95'
+if (type(PASSIVE_COMMIT_V18) is str and re.fullmatch('[0-9a-f]{40}', PASSIVE_COMMIT_V18)
+        and all(type(value) is str and re.fullmatch('[0-9a-f]{64}', value)
+            for value in (PASSIVE_SOURCE_SHA256_V18, PASSIVE_STORE_SHA256_V18))):
+    PASSIVE_RELEASES[PASSIVE_COMMIT_V18] = (PASSIVE_SOURCE_SHA256_V18, PASSIVE_STORE_SHA256_V18, PASSIVE_RELEASE_V16[2])
+
 
 MONITORING_COMMITS = frozenset((MONITORING_COMMIT, REPORTS_COMMIT, SHM_LOCK_FIX_COMMIT, OWNER_ACTIONS_COMMIT,
                                 SCREEN_OVERHAUL_COMMIT, WRITER_RELIEF_COMMIT, LATENCY_FIX_COMMIT,
@@ -165,7 +173,7 @@ DIAGNOSTIC_KINDS = frozenset(('ValueError','RuntimeError','TypeError','KeyError'
     'JSONDecodeError','PermissionError','FileNotFoundError','OSError','OperationalError',
     'DatabaseError','IntegrityError','ProgrammingError','InterfaceError','NotSupportedError',
     'DataError','InternalError','MemoryError','StoreError','StoreBusy','StoreRefused','UNRECOGNIZED'))
-# a981b35 web._h_login/_quiet result codes for action='login' (store.record_access → naver_auto_access_log).
+# Fixed login result codes.
 LOGIN_RESULTS = frozenset('ok narrowed no-scope throttled bad-body sso-rejected erp-unavailable erp-bad-shape'.split())
 LOGIN_BUCKET_MAX = 24
 SQLITE_PRIMARY = {1:'SQLITE_ERROR',5:'SQLITE_BUSY',6:'SQLITE_LOCKED',8:'SQLITE_READONLY',
@@ -730,7 +738,7 @@ def collect_login_audit(connection, now):
     """화면 로그인 기록(action='login')만 — 최근 24시간 결과 코드·10분 칸(KST)별 건수. 사람·대상 번호 칸은 고르지 않는다."""
     since, until = (now-timedelta(hours=24)).isoformat(timespec='microseconds'), now.isoformat(timespec='microseconds')
     codes = tuple(sorted(LOGIN_RESULTS))
-    # 기록 시각은 store._kst_text 꼴(+09:00 · 마이크로초)이라 같은 꼴끼리 글자 비교 = 시각 비교. 다른 꼴은 칸 없이 센다.
+    # Compare only canonical KST stamps.
     rows = connection.execute("SELECT CASE WHEN result IN ("+','.join('?' for _ in codes)+") THEN result "
         "ELSE 'UNRECOGNIZED' END,CASE WHEN at GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:"
         "[0-5][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]+09:00' THEN substr(at,1,15) END,COUNT(*),MIN(at),MAX(at) "
@@ -938,9 +946,7 @@ except Exception as error:
     return '\n'.join(parts).encode()
 
 
-# Run only against the same sealed runtime, in a separate read-only process. This
-# measures /me or dashboard computation, not HTTP authentication or the engine's
-# own GIL queue. Dashboard mode exports only timings and fixed CPU/memory fields.
+# Sealed read-only computation timing, excluding HTTP auth and engine GIL.
 LATENCY_SOURCE = r'''
 PROFILE_PHASES = frozenset(('identity','reader','org','scope','context','me','staff_counts','bell',
     'aggregate_catalog','aggregate_org','aggregate_performance','aggregate_structure','aggregate_inventory',
@@ -1615,9 +1621,7 @@ RELAY_KINDS = frozenset('engine-loop engine-not-configured relay-busy relay-no-t
     + 'FileNotFoundError PermissionError ConnectionAbortedError ConnectionError BlockingIOError InterruptedError NotADirectoryError HTTPException LineTooLong ResponseNotReady CannotSendRequest CannotSendHeader ImproperConnectionState NotConnected UnknownProtocol UnknownTransferEncoding InvalidURL'.split())
 KST = timezone(timedelta(hours=9))
 TYPE_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
-# a981b35 기록 틀(logging "%(levelname)s %(name)s %(message)s" · 중계는 uvicorn 기본 꼴/lastResort).
-# 25dc24d 는 같은 꼴의 줄 하나(화면 API 저장소 바쁨)만 더한다 — 나머지 줄은 a981b35 와 글자 그대로.
-# 줄 전체가 틀과 맞을 때만 갈래로 센다. 네트워크 시간도 고정 틀의 제한된 숫자만 내보낸다.
+# Exact reviewed logging formats only; bounded numeric network times.
 NETWORK_DIAGNOSTIC_PATTERN = (r'kind=(DNS|TLS_CERT|TLS|TIMEOUT|DEADLINE|RESET|REFUSED|ABORTED|BROKEN_PIPE|'
     r'UNREACHABLE|HTTP_INCOMPLETE|HTTP_DISCONNECTED|HTTP|OTHER|UNRECOGNIZED) '
     r'phase=(OPEN|BODY|TRANSPORT|UNRECOGNIZED) '

@@ -35,22 +35,22 @@ class V8PreservationTest(unittest.TestCase):
     def test_shared_business_functions_are_unchanged_after_exact_passive_metadata_delta(self):
         class OldDispatch(ast.NodeTransformer):
             def visit_If(self,node):
-                exact=ast.parse('if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17):\n    code.compatible_inverse_source(path, old_path, upgrade)').body[0]
+                exact=ast.parse('if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17, REVIEWED_ROLLBACK_V18):\n    code.compatible_inverse_source(path, old_path, upgrade)').body[0]
                 if ast.dump(node,include_attributes=False)==ast.dump(exact,include_attributes=False):
                     return None
                 if ast.dump(node.test,include_attributes=False)==ast.dump(ast.parse('transition(code) == REVIEWED_ROLLBACK_V14',mode='eval').body,include_attributes=False):
                     return None
-                if any(isinstance(n,ast.Name) and n.id in ("REVIEWED_TRANSITION_V8","REVIEWED_TRANSITION_V9","REVIEWED_TRANSITION_V10","REVIEWED_TRANSITION_V11","REVIEWED_TRANSITION_V12","REVIEWED_TRANSITION_V13","REVIEWED_TRANSITION_V14","REVIEWED_TRANSITION_V15","REVIEWED_TRANSITION_V16","REVIEWED_TRANSITION_V17") for n in ast.walk(node.test)):
+                if any(isinstance(n,ast.Name) and n.id in ("REVIEWED_TRANSITION_V8","REVIEWED_TRANSITION_V9","REVIEWED_TRANSITION_V10","REVIEWED_TRANSITION_V11","REVIEWED_TRANSITION_V12","REVIEWED_TRANSITION_V13","REVIEWED_TRANSITION_V14","REVIEWED_TRANSITION_V15","REVIEWED_TRANSITION_V16","REVIEWED_TRANSITION_V17","REVIEWED_TRANSITION_V18") for n in ast.walk(node.test)):
                     return None
                 return self.generic_visit(node)
             def visit_BoolOp(self,node):
                 exact=ast.parse("code.STORE_SHA256.get('old') != code.STORE_SHA256.get('target') and transition(code) != REVIEWED_ROLLBACK_V11 and transition(code) != REVIEWED_ROLLBACK_V12 and transition(code) != REVIEWED_ROLLBACK_V13 and transition(code) != REVIEWED_ROLLBACK_V14",mode="eval").body
                 v15=ast.parse(ast.unparse(exact)+' and transition(code) != REVIEWED_ROLLBACK_V15',mode='eval').body
-                if ast.dump(node,include_attributes=False) in (ast.dump(exact,include_attributes=False),ast.dump(v15,include_attributes=False)):
+                if ast.dump(node,include_attributes=False) in (ast.dump(exact,include_attributes=False),ast.dump(v15,include_attributes=False),ast.dump(ast.parse(ast.unparse(v15)+' and transition(code) != REVIEWED_ROLLBACK_V18',mode='eval').body,include_attributes=False)):
                     return self.visit(node.values[0])
                 return self.generic_visit(node)
             def visit_IfExp(self,node):
-                if any(isinstance(n,ast.Name) and n.id in ("REVIEWED_TRANSITION_V8","REVIEWED_TRANSITION_V9","REVIEWED_TRANSITION_V10","REVIEWED_TRANSITION_V11","REVIEWED_TRANSITION_V12","REVIEWED_TRANSITION_V13","REVIEWED_TRANSITION_V14","REVIEWED_TRANSITION_V15","REVIEWED_TRANSITION_V16","REVIEWED_TRANSITION_V17") for n in ast.walk(node.test)):
+                if any(isinstance(n,ast.Name) and n.id in ("REVIEWED_TRANSITION_V8","REVIEWED_TRANSITION_V9","REVIEWED_TRANSITION_V10","REVIEWED_TRANSITION_V11","REVIEWED_TRANSITION_V12","REVIEWED_TRANSITION_V13","REVIEWED_TRANSITION_V14","REVIEWED_TRANSITION_V15","REVIEWED_TRANSITION_V16","REVIEWED_TRANSITION_V17","REVIEWED_TRANSITION_V18") for n in ast.walk(node.test)):
                     return self.visit(node.orelse)
                 return self.generic_visit(node)
         expected={
@@ -171,6 +171,11 @@ class V8PreservationTest(unittest.TestCase):
             self.assertEqual(status.PASSIVE_RELEASES[status.PASSIVE_COMMIT_V17],
                 (code.TARGET_SOURCE_SHA256,code.STORE_SHA256['target'],code.EXPECTED_BASELINE))
             passive.remove(status.PASSIVE_COMMIT_V17)
+        if status.PASSIVE_COMMIT_V18 in passive:
+            code=shared.load('naver_preview_code_upgrade_v18')
+            self.assertEqual(status.PASSIVE_RELEASES[status.PASSIVE_COMMIT_V18],
+                (code.TARGET_SOURCE_SHA256,code.STORE_SHA256['target'],code.EXPECTED_BASELINE))
+            passive.remove(status.PASSIVE_COMMIT_V18)
         self.assertEqual(passive,{
             "74b79ce6381178abf9b74fff43b0fcb03c5aa60b","383c8511964c13e24e884a4cee561fc9bee64102",
             "96f10f05b0e92651e04b2076999fa6c6ace7291e","7985925dcc4ed9d75c28ae43a456964cdc78c63f"})

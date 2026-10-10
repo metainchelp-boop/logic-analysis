@@ -126,6 +126,13 @@ if (type(REVIEWED_ROLLBACK_V17[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIE
             and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V17[index]) for index in (3, 4, 5))):
     REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V17})
 
+# V18 exact inverse including removal of the new read projection.
+REVIEWED_ROLLBACK_V18 = ('7c99e18e29e6cb4d3f32eb41b6983529126d8f3a', 'c3ce2b47ce088483c734e8ba5cef569ecfa66e77', '874ea72edfef7c5a375f26cf8bdb103aa487779bd06e208aada7b1a5184dcee2', '7a23f9717056b483915a076d658f85aab5f5cf662e7bc5454a64788db847123e', 'cc050c8c3d8c0d2a8e4977ec0e8e5b271ff7fc932a8d35a6c0f10dadc11ddb56', 'b01a1e21cc87df1ef5a3935a30cc25d96b0ec3ced0fcc42a2bc9999685ef7d95', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_engine/report_refresh.py', 'naver_engine/report_views.py', 'naver_engine/store.py', 'backend/naver_page/report-ui.js'}))
+if (type(REVIEWED_ROLLBACK_V18[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V18[1])
+        and all(type(REVIEWED_ROLLBACK_V18[index]) is str
+            and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V18[index]) for index in (3, 4, 5))):
+    REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V18})
+
 STAGE = 'input'
 OPERATION = 'none'
 
@@ -145,7 +152,8 @@ def require_review(policy, code):
                 and transition(code) != REVIEWED_ROLLBACK_V12
                 and transition(code) != REVIEWED_ROLLBACK_V13
                 and transition(code) != REVIEWED_ROLLBACK_V14
-                and transition(code) != REVIEWED_ROLLBACK_V15)):
+                and transition(code) != REVIEWED_ROLLBACK_V15
+                and transition(code) != REVIEWED_ROLLBACK_V18)):
         raise ValueError('CODE_ROLLBACK_NOT_REVIEWED')
 
 
@@ -175,7 +183,7 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
         if (value['package'].get('baseline') != prepared['baseline']
                 or value['package'].get('source_tar_gz_sha256') != digest):
             raise ValueError('CODE_ROLLBACK_SOURCE')
-    if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17):
+    if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17, REVIEWED_ROLLBACK_V18):
         code.compatible_inverse_source(path, old_path, upgrade)
     code.compatible_source(old_path, path, upgrade)
     files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)
@@ -228,7 +236,7 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
         if (upgrade.manifest(release, code.OLD_COMMIT, started=True) != (old_path, old_receipt)
                 or upgrade.manifest(release, code.TARGET_COMMIT, prepared, started=True) != (path, receipt)):
             raise ValueError('CODE_ROLLBACK_SOURCE')
-        if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17):
+        if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17, REVIEWED_ROLLBACK_V18):
             code.compatible_inverse_source(path, old_path, upgrade)
         code.compatible_source(old_path, path, upgrade)
 
