@@ -69,12 +69,23 @@
     function statusChip(report) {
       var status = typeof report === 'string' ? report : report.status;
       var collection = report && report.collection_status;
-      var labels = {complete:'기본·전환 자료 완결',conversion_unconfirmed:'기본 자료 완결 · 전환 미확인',basic_incomplete:'기본 자료 누락 · 점검 필요'};
+      var labels = {complete:'기본·전환 자료 완결',conversion_unconfirmed:'기본 자료 완결 · 전환 산정 근거 미확인',basic_incomplete:'기본 자료 누락 · 점검 필요'};
       return h('span',{class:'pill ' + (collection === 'complete' || !collection && status === 'ready' ? 'p-green' : collection === 'basic_incomplete' || collection === 'conversion_unconfirmed' || status === 'partial' ? 'p-amber' : 'p-gray')},labels[collection] || stateLabel(status));
     }
     function confirmedTime(at) { return at ? env.datedTime(at) : '미확인'; }
     function refreshLabel(refresh) {
+      if (refresh && refresh.scope === 'current' && refresh.status === 'pending' && refresh.conversion_response && refresh.conversion_response.status === 'complete') return '수치 응답 대조 완료 · 전환 산정 근거 확인 필요';
       return {complete:'기본·전환 전체 재대조 완료',pending:'재대조 대기',failed:'재대조 실패 · 확인 필요',updating:'정정 집계 갱신 중'}[(refresh || {}).status] || '재대조 상태 미확인';
+    }
+    function responseSummary(refresh, detailed) {
+      var response = refresh && refresh.scope === 'current' && refresh.conversion_response;
+      if (!response || !finite(response.expected_account_days) || response.expected_account_days <= 0) return null;
+      var text = '현재 원천 전환 수치 응답 ' + env.num(response.received_account_days) + '/' + env.num(response.expected_account_days) + ' 계정×일';
+      if (!detailed) return h('span',{class:'w'},text);
+      return h('div',{'aria-label':'현재 원천 전환 응답 범위'},h('p',{class:'hint nr-refresh-meta'},text + ' · ' + (response.status === 'complete' ? '응답 수집 완료' : '응답 미완결')),
+        h('p',{class:'hint'},'0 응답 ' + env.num(response.zero_account_days) + ' · 양수 응답 ' + env.num(response.positive_account_days) +
+          ' · 미제공·유효하지 않은 값 ' + env.num(response.missing_or_null_account_days) + ' · 최신 수집 근거 미확인 ' + env.num(response.source_unverified_account_days) + ' · 기본 자료 미완결 ' + env.num(response.basic_incomplete_account_days)),
+        h('p',{class:'hint'},'숫자 0은 네이버가 반환한 전환수·전환금액이 모두 0인 경우입니다. 응답 수집 완료는 전환 추적 설치·정상 동작을 뜻하지 않습니다. 이 최신 상태를 저장판 수치나 PDF에 합산하지 않습니다.'));
     }
     function refreshSummary(report) {
       var refresh = report.refresh || {};
@@ -82,6 +93,7 @@
         h('p',{class:'hint nr-refresh-meta'},(refresh.scope === 'current' ? '현재판의 최신 확인 상태 · ' : '선택한 저장판의 확인 상태 · ') + refreshLabel(refresh)),
         h('p',{class:'hint nr-refresh-meta'},'최근 성과 수집 ' + confirmedTime(refresh.source_collected_at) + ' · 기본·전환 전체 재대조 성공 ' + confirmedTime(refresh.last_success_at)),
         h('p',{class:'hint nr-refresh-meta'},'최근 재대조 시도 ' + confirmedTime(refresh.last_attempt_at) + ' · 수치판 생성 ' + confirmedTime(report.generated_at)),
+        responseSummary(refresh,true),
         h('p',{class:'hint'},'수치는 선택한 저장판 기준입니다. 전체 재대조 성공은 선택 범위의 모든 날짜에서 기본·전환 자료가 확인된 경우입니다. 최근 수집 시각은 일부 자료의 읽기 완료 시각이며 전체 기간 완결을 뜻하지 않습니다. 조회·새로고침은 수집을 시작하지 않습니다.'));
     }
     function format(n,unit,signed) {
@@ -181,7 +193,7 @@
               h('span',{class:'nr-id'},'광고 계정 ID ' + (row.ad_account_no || '미확인'))),
             h('td',null,row.owner && row.owner.name || '담당 미확인',h('span',{class:'w'},row.workflow || '단계 미확인')),
             h('td',null,env.periodText(period.start,period.end)),
-            h('td',null,statusChip(row),h('span',{class:'w'},refreshLabel(row.refresh)),h('span',{class:'w'},'성과 수집 ' + confirmedTime((row.refresh || {}).source_collected_at)),
+            h('td',null,statusChip(row),h('span',{class:'w'},refreshLabel(row.refresh)),responseSummary(row.refresh,false),h('span',{class:'w'},'성과 수집 ' + confirmedTime((row.refresh || {}).source_collected_at)),
               h('span',{class:'w'},'기본·전환 전체 재대조 성공 ' + confirmedTime((row.refresh || {}).last_success_at)),
               h('span',{class:'w'},'수치판 생성 ' + confirmedTime(row.generated_at))),
             h('td',null,h('button',{type:'button',class:'btn sm',disabled:!row.report_id,'aria-label':row.company_name + ' ' + (row.ad_account_no || row.account_name || '') + ' 보고서 보기',onclick:function () { if (listReady && !selected && context() === ctx && env.active() && lastList === data) open(row,row.account_key); }},row.report_id ? '보고서 보기' : '생성 대기'))];

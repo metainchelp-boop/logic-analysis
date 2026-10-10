@@ -101,7 +101,7 @@ async function assertTextSafe(page,scope) {
       },{report:JSON.parse(JSON.stringify(report)),list:JSON.parse(JSON.stringify(list))});
       await page.waitForSelector('.nr-report-paper');
       const listText=await page.locator('#reportsRows').textContent();
-      assert.ok(listText.includes('기본 자료 완결 · 전환 미확인'));
+      assert.ok(listText.includes('기본 자료 완결 · 전환 산정 근거 미확인'));
       assert.ok(listText.includes('재대조 실패 · 확인 필요'));
       assert.ok(listText.includes('성과 수집 2026-10-05T11:00:00+09:00'));
       assert.ok(listText.includes('기본·전환 전체 재대조 성공 미확인'));

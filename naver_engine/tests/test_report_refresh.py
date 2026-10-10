@@ -188,6 +188,39 @@ class ReportRefreshTests(unittest.TestCase):
         self.store.generate_reports(self.store.now)
         self.assertEqual(self.detail(self.latest(period))["collection_status"], "basic_incomplete")
 
+    def test_numeric_zero_response_is_separate_from_saved_conversion_evidence_and_historical_editions(self):
+        period = R.period("weekly", date(2026, 9, 28))
+        self.store.seed(period.start, period.end)
+        self.store._conn.execute("UPDATE naver_auto_daily_performance SET conversion_complete=0,conversions=0,conversion_value=0")
+        self.store.generate_reports(self.store.now)
+        rid = self.latest(period)
+        saved = self.store.report_snapshot_detail(rid)
+        before, statements = self.store._conn.total_changes, []
+        self.store._conn.set_trace_callback(statements.append)
+        try:
+            report = self.detail(rid)
+            body = RV.accounts(self.ctx, self.store, None, {11: None}, {"kind":"weekly", "anchor":"2026-09-28"})
+        finally:
+            self.store._conn.set_trace_callback(None)
+        response = report["refresh"]["conversion_response"]
+        self.assertEqual(response["status"], "complete")
+        self.assertEqual(response["received_account_days"], 7)
+        self.assertEqual(response["zero_account_days"], 7)
+        self.assertEqual(report["validation"]["status"], "pending")
+        self.assertEqual(report["collection_status"], "conversion_unconfirmed")
+        self.assertIsNone(report["payload"]["totals"]["conversions"])
+        row = next(row for row in body["rows"] if row["account_key"] == RV.account_key(101))
+        self.assertEqual(row["refresh"]["conversion_response"], response)
+        self.assertEqual(self.store._conn.total_changes, before)
+        self.assertEqual(self.store.report_snapshot_detail(rid), saved)
+        self.store.now += timedelta(hours=1)
+        self.store.seed(period.start, period.end, spend=2000)
+        self.store.generate_reports(self.store.now)
+        historical = self.detail(rid)
+        self.assertEqual(historical["refresh"]["scope"], "saved")
+        self.assertNotIn("conversion_response", historical["refresh"])
+        self.assertEqual(historical["payload"], report["payload"])
+
 
 if __name__ == "__main__":
     unittest.main()

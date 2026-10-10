@@ -671,7 +671,7 @@ test('보고서 상태는 기본 누락과 전환 미확인을 구분하고 수�
   ];
   fixture.requests[0].resolve(full(data)); await flush();
   const text=fixture.$('reportsRows').textContent;
-  assert.match(text,/기본 자료 완결 · 전환 미확인/);
+  assert.match(text,/기본 자료 완결 · 전환 산정 근거 미확인/);
   assert.match(text,/기본 자료 누락/);
   assert.match(text,/기본·전환 자료 완결/);
   assert.match(text,/성과 수집 수집-11시/);
@@ -690,4 +690,30 @@ test('보고서 상태는 기본 누락과 전환 미확인을 구분하고 수�
   assert.match(detail,/현재판의 최신 확인 상태 · 재대조 대기/);
   assert.match(detail,/수치판 생성 2026-09-28T10:00:00/);
   assert.equal(fixture.requests.length,2);
+});
+
+test('현재 전환 숫자 응답 완료는 저장판의 전환 근거·지표를 바꾸지 않고 과거판에 붙지 않는다', async () => {
+  const fixture=harness(); fixture.ui.load();
+  const data=listData();
+  const response={status:'complete',expected_account_days:7,received_account_days:7,zero_account_days:7,positive_account_days:0,missing_or_null_account_days:0,source_unverified_account_days:0,basic_incomplete_account_days:0};
+  data.rows[0].collection_status='conversion_unconfirmed';
+  data.rows[0].refresh={scope:'current',status:'pending',conversion_response:response};
+  fixture.requests[0].resolve(full(data)); await flush();
+  assert.match(fixture.$('reportsRows').textContent,/현재 원천 전환 수치 응답 7\/7 계정×일/);
+  assert.match(fixture.$('reportsRows').textContent,/수치 응답 대조 완료 · 전환 산정 근거 확인 필요/);
+  findButton(fixture.$('reportsRows'),'보고서 보기').fire('click');
+  const report=detailData(); report.collection_status='conversion_unconfirmed';
+  report.refresh={scope:'current',status:'pending',conversion_response:response};
+  const saved=JSON.stringify(report.payload);
+  fixture.requests[1].resolve(report); await flush();
+  const text=fixture.$('reportDetail').textContent;
+  assert.match(text,/0 응답 7 · 양수 응답 0 · 미제공·유효하지 않은 값 0/);
+  assert.match(text,/전환 추적 설치·정상 동작을 뜻하지 않습니다/);
+  assert.equal(JSON.stringify(report.payload),saved);
+  assert.equal(fixture.requests.length,2,'응답 범위 표시가 수집·문안 저장을 시작하지 않는다');
+  const history=harness(); history.ui.load(); history.requests[0].resolve(full(listData())); await flush();
+  findButton(history.$('reportsRows'),'보고서 보기').fire('click');
+  const old=detailData(); old.refresh={scope:'saved',status:'pending',conversion_response:response};
+  history.requests[1].resolve(old); await flush();
+  assert.doesNotMatch(history.$('reportDetail').textContent,/현재 원천 전환 수치 응답/);
 });

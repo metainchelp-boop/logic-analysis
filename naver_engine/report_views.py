@@ -109,9 +109,11 @@ def _refresh(selected, states, cid):
             source_at = source_collected_at((selected or {}).get("_source_manifest", []), generated.astimezone(R.KST))
         except (TypeError, ValueError):
             source_at = None
+    response = {"conversion_response": current["conversion_response"]} if current and "conversion_response" in current else {}
     return validation, {"scope": "current" if current else "saved", "source_collected_at": source_at,
                         "last_success_at": validation.get("last_checked_at"),
-                        "last_attempt_at": validation.get("last_attempt_at"), "status": validation.get("status", "unknown")}
+                        "last_attempt_at": validation.get("last_attempt_at"), "status": validation.get("status", "unknown"),
+                        **response}
 
 
 def accounts(ctx, store, scope, owns, query):

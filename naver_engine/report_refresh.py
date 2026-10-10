@@ -26,6 +26,8 @@ def scope_state(period, expected, rows, jobs, queued, prior, required_after, dir
     """이미 저장된 원천·작업 증거만 사용한다. 전환 미확인을 0/성공으로 바꾸지 않는다."""
     by_day = {(row["customer_id"], row["day"]): row for row in rows}
     pending, failed, attempts, proven = 0, False, [], []
+    response = {key+"_account_days": 0 for key in ("expected", "received", "zero", "positive",
+        "missing_or_null", "source_unverified", "basic_incomplete")}
     for cid in expected:
         for offset in range((period.end-period.start).days+1):
             day = str(period.start+timedelta(days=offset))
@@ -36,6 +38,8 @@ def scope_state(period, expected, rows, jobs, queued, prior, required_after, dir
             proof = bool(row and row["basic_complete"] and row["conversion_complete"]
                 and checked and source and generation and base <= generation <= checked <= now
                 and source <= checked and source.date() >= generation.date() and R._collected(row, day, now))
+            response_fresh = bool(row and checked and source and generation and base <= generation <= checked <= now
+                and source <= checked and source.date() >= generation.date() and R._collected(row, day, now))
             if proof:
                 proven.append(checked)
             relevant = [job for job in jobs if job["customer_id"] == cid and job["period_start"] <= day <= job["period_end"]]
@@ -45,18 +49,35 @@ def scope_state(period, expected, rows, jobs, queued, prior, required_after, dir
                 attempted = _time(newest.get("checked_at"))
                 if attempted is None or attempted > now:
                     good = False
+                    response_fresh = False
                 else:
                     attempts.append(attempted)
                 required = _time(newest.get("generation"))
+                if required is None:
+                    response_fresh = False
                 if required and (generation is None or generation < required):
                     good = False
+                    response_fresh = False
                 if newest["status"] != "ok" and attempted is not None and attempted <= now and (checked is None or attempted >= checked):
                     good = False
+                    response_fresh = False
                     failed = failed or newest["status"] in ("retry", "limited", "reauth_required")
             if any(request["customer_id"] == cid and request["period_start"] <= day <= request["period_end"] for request in queued):
                 good = False
+                response_fresh = False
             if not good:
                 pending += 1
+            response["expected_account_days"] += 1
+            if not row or row.get("basic_complete") != 1 or not all(R._number(row.get(key)) for key in R.BASIC_FIELDS):
+                response["basic_incomplete_account_days"] += 1
+            elif not response_fresh:
+                response["source_unverified_account_days"] += 1
+            elif not all(R._number(row.get(key)) for key in R.CONVERSION_FIELDS):
+                response["missing_or_null_account_days"] += 1
+            else:
+                response["received_account_days"] += 1
+                response["zero_account_days" if all(row[key] == 0 for key in R.CONVERSION_FIELDS)
+                         else "positive_account_days"] += 1
     status = "complete" if expected and not pending else "failed" if failed else "pending"
     if dirty and status == "complete":
         status = "updating"
@@ -70,4 +91,9 @@ def scope_state(period, expected, rows, jobs, queued, prior, required_after, dir
     validation = {"status": status, "pending_account_days": pending,
         "last_checked_at": max(successful).isoformat() if successful else None,
         "last_attempt_at": attempted.isoformat() if attempted is not None else None}
-    return {"validation": validation, "source_collected_at": source_collected_at(rows, now)}
+    # 현재 원천의 숫자 응답 여부이며 측정 설정·산정 근거 또는 저장판 수치의 완결 판정이 아니다.
+    response["status"] = ("complete" if response["expected_account_days"] > 0
+        and response["received_account_days"] == response["expected_account_days"]
+        else "partial" if response["received_account_days"] > 0 else "unavailable")
+    return {"validation": validation, "source_collected_at": source_collected_at(rows, now),
+        "conversion_response": response}
