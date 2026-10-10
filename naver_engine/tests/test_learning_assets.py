@@ -79,6 +79,40 @@ class LearningAssetsTests(unittest.TestCase):
             self.addCleanup(reopened.close)
             self.assertEqual(L.get_asset(reopened, 11, "customer:101", "case-a"), new)
 
+    def test_store_evidence_api_rolls_back_partial_history_without_committing_caller(self):
+        self.connection.execute("INSERT INTO naver_auto_meta(key,value) VALUES('unrelated','keep')")
+        self.assertTrue(self.connection.in_transaction)
+        connection = self.connection
+        class DenyHeadWrite:
+            def execute(self, sql, values=()):
+                if "ON CONFLICT" in sql:
+                    raise sqlite3.OperationalError("synthetic head failure")
+                return connection.execute(sql, values)
+        repository = S.learning_asset_storage(DenyHeadWrite())
+        with self.assertRaises(sqlite3.OperationalError):
+            repository.record(11, "customer:101", 10, AT, 0, "atomic", performance())
+        self.assertTrue(self.connection.in_transaction)
+        self.assertEqual(self.connection.execute("SELECT value FROM naver_auto_meta WHERE key='unrelated'").fetchone()[0], "keep")
+        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM naver_auto_meta WHERE key LIKE 'learning-%'").fetchone()[0], 0)
+
+    def test_store_evidence_api_preserves_existing_read_connection_authorizer(self):
+        first = self.save(performance())
+        seen = []
+        def readonly(action, *args):
+            if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE):
+                seen.append(action)
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        self.connection.set_authorizer(readonly)
+        repository = S.learning_asset_storage(self.connection)
+        self.assertIs(S.learning_asset_storage(repository), repository)
+        self.assertEqual(repository.get_asset(11, "customer:101", "case-a"), first)
+        with self.assertRaises(sqlite3.DatabaseError):
+            repository.record(11, "customer:101", 20, AT, 1, "case-a", action="review")
+        self.assertTrue(seen)
+        self.assertEqual(repository.get_asset(11, "customer:101", "case-a"), first)
+        self.assertEqual(len(repository.list_assets(11, "customer:101", include_history=True)), 1)
+
     def test_reviewed_retrieval_scope_privacy_known_metadata_and_null_not_zero(self):
         self.save(performance())
         self.review()

@@ -916,7 +916,7 @@ class App:
         ctx, owns, _names, _current = self._report_context(v, now)
         try:
             result = {**REPORTS.detail(ctx, v.store, v.scope, owns, req.query), "checked_at": now.isoformat()}
-            if "marketing_strategy" in result:
+            if isinstance(result.get("marketing_strategy"), dict):
                 configured = self._strategy_provider is not None
                 result["marketing_strategy"]["provider_status"] = {"configured": configured,
                     "state": "ready" if configured else "not_enabled",

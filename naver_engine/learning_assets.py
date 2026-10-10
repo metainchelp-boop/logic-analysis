@@ -9,7 +9,6 @@ import hashlib
 import json
 import math
 import re
-import sqlite3
 
 from . import store as S
 
@@ -344,8 +343,8 @@ def assess(document, at, registration=None):
     return result
 
 
-def _load(connection, key):
-    row = connection.execute("SELECT length(value),substr(value,1,?) FROM naver_auto_meta WHERE key=?", (MAX_CHARS + 1, key)).fetchone()
+def decode_record(row, key):
+    """Validate a bounded stored row without touching the persistence connection."""
     if row is None:
         return None
     try:
@@ -394,91 +393,19 @@ def _present(record):
     return result
 
 
-def record(connection, possibility_id, account_key, actor, at, expected_version, asset_id, document=None, action="save"):
-    """Append within the caller's transaction; a savepoint also protects standalone use."""
-    identity = _identity(possibility_id, account_key, asset_id)
-    if actor is not None:
-        _integer(actor, maximum=MAX_VERSION)
-    _at(at)
-    _integer(expected_version, maximum=MAX_VERSION - 1)
-    _enum(action, {"save", "review", "reject"})
-    if action != "save" and document is not None:
-        _refuse()
-    clean = normalize_document(document) if action == "save" else None
-    if actor is None and (action != "save" or clean["kind"] != "performance" or
-                          not {"report_id", "report_revision"} <= set(clean["source_refs"])):
-        _refuse("시스템 관측은 확인된 보고서에서만 저장할 수 있습니다")
-    if clean is not None and clean["kind"] == "setting_change" and clean["evidence"]["observed_at"] is not None and _at(clean["evidence"]["observed_at"]) > _at(at):
-        _refuse("미래의 세팅을 관측 결과로 저장할 수 없습니다")
-    request = {"actor": actor, "expected_version": expected_version, "action": action, "document": clean}
-    digest = hashlib.sha256(json.dumps(request, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()).hexdigest()
-    head = "learning-head:" + identity + asset_id
-    history = "learning-version:" + identity + asset_id + ":"
-    connection.execute("SAVEPOINT learning_asset_record")
-    try:
-        prior = _load(connection, history + f"{expected_version + 1:016d}")
-        if prior is not None and prior["request_digest"] == digest:
-            connection.execute("RELEASE SAVEPOINT learning_asset_record")
-            return _present(prior)
-        current = _load(connection, head)
-        if (current["version"] if current else 0) != expected_version:
-            _refuse("학습 자산이 변경되었습니다. 최신 판을 다시 확인해 주세요")
-        if action != "save":
-            if current is None or current["state"] != "draft":
-                _refuse("학습 자산의 초안을 먼저 확인해 주세요")
-            clean = current["document"]
-        if current is not None and current["document"]["kind"] != clean["kind"]:
-            _refuse("학습 자산 종류는 새 자산으로 기록해 주세요")
-        registration = (current["registration"] if current is not None else
-                        {"at": at, "spec_hash": _spec_hash(clean)} if clean["kind"] == "experiment" else None)
-        saved = {"asset_id": asset_id, "version": expected_version + 1,
-            "state": {"save": "draft", "review": "reviewed", "reject": "rejected"}[action],
-            "identity": {"possibility_id": possibility_id, "account_key": account_key},
-            "author": {"actor": actor, "at": at} if action == "save" else current["author"],
-            "reviewed_by": None if action == "save" else actor, "reviewed_at": None if action == "save" else at,
-            "document": clean, "assessment": assess(clean, at, registration), "registration": registration, "request_digest": digest}
-        raw = json.dumps(saved, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        if len(raw) > MAX_CHARS:
-            _refuse("학습 자산이 너무 큽니다")
-        connection.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?)", (history + f"{saved['version']:016d}", raw))
-        connection.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (head, raw))
-        connection.execute("RELEASE SAVEPOINT learning_asset_record")
-        return _present(saved)
-    except Exception as error:
-        connection.execute("ROLLBACK TO SAVEPOINT learning_asset_record")
-        connection.execute("RELEASE SAVEPOINT learning_asset_record")
-        if isinstance(error, sqlite3.IntegrityError):
-            raise S.StoreRefused("학습 자산이 변경되었습니다. 최신 판을 다시 확인해 주세요") from None
-        raise
+def record(repository, possibility_id, account_key, actor, at, expected_version, asset_id, document=None, action="save"):
+    """Compatibility entry; Store owns persistence and the caller's transaction."""
+    return S.learning_asset_storage(repository).record(possibility_id, account_key, actor, at,
+        expected_version, asset_id, document, action=action)
 
 
-def list_assets(connection, possibility_id, account_key, limit=100, include_history=False, asset_id=None):
-    identity = _identity(possibility_id, account_key, asset_id)
-    _integer(limit, minimum=1, maximum=MAX_ASSETS)
-    _boolean(include_history)
-    prefix = ("learning-version:" if include_history else "learning-head:") + identity
-    if asset_id is not None:
-        prefix += asset_id + (":" if include_history else "")
-    keys = connection.execute("SELECT key FROM naver_auto_meta WHERE key>=? AND key<? ORDER BY key DESC LIMIT ?", (prefix, prefix + "\uffff", limit)).fetchall()
-    out = []
-    for row in keys:
-        if asset_id is not None and not include_history and row[0] != prefix:
-            continue
-        item = _load(connection, row[0])
-        if item["identity"] != {"possibility_id": possibility_id, "account_key": account_key}:
-            raise S.StoreError("저장된 학습 자산의 범위를 확인해 주세요")
-        out.append(_present(item))
-    return out
+def list_assets(repository, possibility_id, account_key, limit=100, include_history=False, asset_id=None):
+    return S.learning_asset_storage(repository).list_assets(possibility_id, account_key,
+        limit=limit, include_history=include_history, asset_id=asset_id)
 
 
-def get_asset(connection, possibility_id, account_key, asset_id):
-    identity = _identity(possibility_id, account_key, asset_id)
-    item = _load(connection, "learning-head:" + identity + asset_id)
-    if item is None:
-        return None
-    if item["identity"] != {"possibility_id": possibility_id, "account_key": account_key} or item["asset_id"] != asset_id:
-        raise S.StoreError("저장된 학습 자산의 범위를 확인해 주세요")
-    return _present(item)
+def get_asset(repository, possibility_id, account_key, asset_id):
+    return S.learning_asset_storage(repository).get_asset(possibility_id, account_key, asset_id)
 
 
 def retrieve(connection, possibility_id, account_key, metadata=None, limit=5):

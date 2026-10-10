@@ -49,8 +49,9 @@ def retrieve_scoped(connection, allowed_pairs, target_pid, target_key, metadata=
     bounded and reports truncation rather than claiming a complete corpus scan.
     """
     allowed = _pairs(allowed_pairs, target_pid, target_key)
+    repository = S.learning_asset_storage(connection)
     target = (target_pid, target_key)
-    own_window = L.list_assets(connection, *target, limit=L.MAX_ASSETS)
+    own_window = L.list_assets(repository, *target, limit=L.MAX_ASSETS)
     own = [item for item in own_window if item["state"] == "reviewed"]
     own.sort(key=lambda item: (item["reviewed_at"], item["asset_id"]), reverse=True)
     wanted = L.metadata_document(metadata) if metadata is not None else (
@@ -63,28 +64,13 @@ def retrieve_scoped(connection, allowed_pairs, target_pid, target_key, metadata=
     if cross_enabled:
         for offset in range(0, len(others), BATCH_SIZE):
             batch = others[offset:offset+BATCH_SIZE]
-            clauses, params, prefixes = [], [], {}
-            for pair in batch:
-                prefix = "learning-head:" + L._identity(*pair)
-                prefixes[prefix] = pair
-                clauses.append("(key>=? AND key<?)")
-                params.extend((prefix, prefix + "\uffff"))
             remaining = MAX_CANDIDATES - scanned
-            # The state substring is only a canonical-storage prefilter. _load
-            # verifies the full record and reviewed state before it is usable.
-            rows = connection.execute("SELECT key FROM naver_auto_meta WHERE (" + " OR ".join(clauses) +
-                ") AND instr(value,?)>0 ORDER BY key DESC LIMIT ?", (*params, '"state":"reviewed"', remaining+1)).fetchall()
+            records = repository.reviewed_candidates(batch, limit=remaining+1)
             scanned_accounts += len(batch)
-            if len(rows) > remaining:
+            if len(records) > remaining:
                 truncated = True
-                rows = rows[:remaining]
-            for row in rows:
-                prefix = next((prefix for prefix in prefixes if row[0].startswith(prefix)), None)
-                if prefix is None:
-                    raise S.StoreError("학습 사례의 저장 범위를 확인해 주세요")
-                item = L._load(connection, row[0])
-                if item["identity"] != {"possibility_id": prefixes[prefix][0], "account_key": prefixes[prefix][1]}:
-                    raise S.StoreError("학습 사례의 저장 범위를 확인해 주세요")
+                records = records[:remaining]
+            for item in records:
                 scanned += 1
                 if item["state"] != "reviewed":
                     continue

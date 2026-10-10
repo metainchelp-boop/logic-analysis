@@ -676,6 +676,146 @@ class StoreRefused(StoreError):
     """이 자리·이 모양으로는 받지 않는다."""
 
 
+class LearningAssetStorage:
+    """Evidence persistence on an existing Store-owned connection.
+
+    This adapter never opens a database, changes an authorizer, commits the
+    caller's transaction or grants access. ManagedStorage resolves authorization
+    before calling it; immutable versions and bounded reads stay in this file.
+    """
+
+    def __init__(self, connection):
+        self._connection = connection
+
+    def load(self, key):
+        from . import learning_assets as LA
+        row = self._connection.execute(
+            "SELECT length(value),substr(value,1,?) FROM naver_auto_meta WHERE key=?",
+            (LA.MAX_CHARS + 1, key)).fetchone()
+        return LA.decode_record(row, key)
+
+    def record(self, possibility_id, account_key, actor, at, expected_version, asset_id, document=None, action="save"):
+        """Append within the caller's transaction; a savepoint also protects standalone use."""
+        from . import learning_assets as LA
+        identity = LA._identity(possibility_id, account_key, asset_id)
+        if actor is not None:
+            LA._integer(actor, maximum=LA.MAX_VERSION)
+        LA._at(at)
+        LA._integer(expected_version, maximum=LA.MAX_VERSION - 1)
+        LA._enum(action, {"save", "review", "reject"})
+        if action != "save" and document is not None:
+            LA._refuse()
+        clean = LA.normalize_document(document) if action == "save" else None
+        if actor is None and (action != "save" or clean["kind"] != "performance" or
+                              not {"report_id", "report_revision"} <= set(clean["source_refs"])):
+            LA._refuse("시스템 관측은 확인된 보고서에서만 저장할 수 있습니다")
+        if clean is not None and clean["kind"] == "setting_change" and clean["evidence"]["observed_at"] is not None and LA._at(clean["evidence"]["observed_at"]) > LA._at(at):
+            LA._refuse("미래의 세팅을 관측 결과로 저장할 수 없습니다")
+        request = {"actor": actor, "expected_version": expected_version, "action": action, "document": clean}
+        digest = hashlib.sha256(json.dumps(request, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()).hexdigest()
+        head = "learning-head:" + identity + asset_id
+        history = "learning-version:" + identity + asset_id + ":"
+        self._connection.execute("SAVEPOINT learning_asset_record")
+        try:
+            prior = self.load(history + f"{expected_version + 1:016d}")
+            if prior is not None and prior["request_digest"] == digest:
+                self._connection.execute("RELEASE SAVEPOINT learning_asset_record")
+                return LA._present(prior)
+            current = self.load(head)
+            if (current["version"] if current else 0) != expected_version:
+                LA._refuse("학습 자산이 변경되었습니다. 최신 판을 다시 확인해 주세요")
+            if action != "save":
+                if current is None or current["state"] != "draft":
+                    LA._refuse("학습 자산의 초안을 먼저 확인해 주세요")
+                clean = current["document"]
+            if current is not None and current["document"]["kind"] != clean["kind"]:
+                LA._refuse("학습 자산 종류는 새 자산으로 기록해 주세요")
+            registration = (current["registration"] if current is not None else
+                            {"at": at, "spec_hash": LA._spec_hash(clean)} if clean["kind"] == "experiment" else None)
+            saved = {"asset_id": asset_id, "version": expected_version + 1,
+                "state": {"save": "draft", "review": "reviewed", "reject": "rejected"}[action],
+                "identity": {"possibility_id": possibility_id, "account_key": account_key},
+                "author": {"actor": actor, "at": at} if action == "save" else current["author"],
+                "reviewed_by": None if action == "save" else actor, "reviewed_at": None if action == "save" else at,
+                "document": clean, "assessment": LA.assess(clean, at, registration), "registration": registration, "request_digest": digest}
+            raw = json.dumps(saved, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+            if len(raw) > LA.MAX_CHARS:
+                LA._refuse("학습 자산이 너무 큽니다")
+            self._connection.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?)", (history + f"{saved['version']:016d}", raw))
+            self._connection.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (head, raw))
+            self._connection.execute("RELEASE SAVEPOINT learning_asset_record")
+            return LA._present(saved)
+        except Exception as error:
+            self._connection.execute("ROLLBACK TO SAVEPOINT learning_asset_record")
+            self._connection.execute("RELEASE SAVEPOINT learning_asset_record")
+            if isinstance(error, _sqlite3.IntegrityError):
+                raise StoreRefused("학습 자산이 변경되었습니다. 최신 판을 다시 확인해 주세요") from None
+            raise
+
+    def list_assets(self, possibility_id, account_key, limit=100, include_history=False, asset_id=None):
+        from . import learning_assets as LA
+        identity = LA._identity(possibility_id, account_key, asset_id)
+        LA._integer(limit, minimum=1, maximum=LA.MAX_ASSETS)
+        LA._boolean(include_history)
+        prefix = ("learning-version:" if include_history else "learning-head:") + identity
+        if asset_id is not None:
+            prefix += asset_id + (":" if include_history else "")
+        keys = self._connection.execute("SELECT key FROM naver_auto_meta WHERE key>=? AND key<? ORDER BY key DESC LIMIT ?", (prefix, prefix + "\uffff", limit)).fetchall()
+        out = []
+        for row in keys:
+            if asset_id is not None and not include_history and row[0] != prefix:
+                continue
+            item = self.load(row[0])
+            if item["identity"] != {"possibility_id": possibility_id, "account_key": account_key}:
+                raise StoreError("저장된 학습 자산의 범위를 확인해 주세요")
+            out.append(LA._present(item))
+        return out
+
+    def get_asset(self, possibility_id, account_key, asset_id):
+        from . import learning_assets as LA
+        identity = LA._identity(possibility_id, account_key, asset_id)
+        item = self.load("learning-head:" + identity + asset_id)
+        if item is None:
+            return None
+        if item["identity"] != {"possibility_id": possibility_id, "account_key": account_key} or item["asset_id"] != asset_id:
+            raise StoreError("저장된 학습 자산의 범위를 확인해 주세요")
+        return LA._present(item)
+
+    def reviewed_candidates(self, pairs, *, limit):
+        """Read a bounded, explicitly scoped candidate window; never search all accounts."""
+        from . import learning_assets as LA
+        if not isinstance(pairs, (list, tuple)) or not 1 <= len(pairs) <= 50:
+            raise StoreRefused("학습 사례의 현재 열람 범위를 확인해 주세요")
+        LA._integer(limit, minimum=1, maximum=1001)
+        clauses, params, prefixes = [], [], {}
+        for pair in pairs:
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                raise StoreRefused("학습 사례의 현재 열람 범위를 확인해 주세요")
+            prefix = "learning-head:" + LA._identity(*pair)
+            prefixes[prefix] = tuple(pair)
+            clauses.append("(key>=? AND key<?)")
+            params.extend((prefix, prefix + "\uffff"))
+        rows = self._connection.execute(
+            "SELECT key FROM naver_auto_meta WHERE (" + " OR ".join(clauses) +
+            ") AND instr(value,?)>0 ORDER BY key DESC LIMIT ?",
+            (*params, '"state":"reviewed"', limit)).fetchall()
+        records = []
+        for row in rows:
+            prefix = next((prefix for prefix in prefixes if row[0].startswith(prefix)), None)
+            if prefix is None:
+                raise StoreError("학습 사례의 저장 범위를 확인해 주세요")
+            item = self.load(row[0])
+            if item["identity"] != {"possibility_id": prefixes[prefix][0], "account_key": prefixes[prefix][1]}:
+                raise StoreError("학습 사례의 저장 범위를 확인해 주세요")
+            records.append(LA._present(item))
+        return records
+
+
+def learning_asset_storage(repository):
+    """Use one explicit Store evidence API; retain existing connection-call compatibility."""
+    return repository if isinstance(repository, LearningAssetStorage) else LearningAssetStorage(repository)
+
+
 class SyncBraked(StoreRefused):
     """목록이 한꺼번에 크게 줄어 「목록에 없음」을 찍기 전에 멈췄다 — 아무것도 적지 않았다(개수·코드만 싣는다).
 
@@ -3238,11 +3378,11 @@ class ManagedStorage:
         """계정 원본을 보존한 학습 자산. 조회로 수집·검수·AI 호출을 시작하지 않는다."""
         from . import learning_assets as LA
         with _report_read_snapshot(self):
-            items = LA.list_assets(self._conn, possibility_id, account_key)
+            items = LearningAssetStorage(self._conn).list_assets(possibility_id, account_key)
             return {"version": 1, "items": items,
                     "templates": {kind: LA.document_template(kind) for kind in ("performance", "setting_change", "experiment")},
                     "counts": {state: sum(r["state"] == state for r in items) for state in ("draft", "reviewed", "rejected")},
-                    "retrieval": LA.retrieve(self._conn, possibility_id, account_key),
+                    "retrieval": LA.retrieve(LearningAssetStorage(self._conn), possibility_id, account_key),
                     "window_limit": 100, "has_more": len(items) == 100,
                     "capture_pending": self._conn.execute("SELECT COUNT(*) FROM naver_auto_meta WHERE key>=? AND key<? AND value='pending'",
                         (f"learning-capture-pending:{possibility_id}:", f"learning-capture-pending:{possibility_id}:\uffff")).fetchone()[0],
@@ -3270,10 +3410,10 @@ class ManagedStorage:
             raise StoreRefused("보고서·계획 식별자는 서버 기록에서만 사용할 수 있습니다")
         with self._tx() as c:
             self._learning_actor(possibility_id, account_key, actor, now)
-            current = LA.get_asset(c, possibility_id, account_key, asset_id)
+            current = LearningAssetStorage(c).get_asset(possibility_id, account_key, asset_id)
             if action == "save" and current and current["document"]["source_refs"]:
                 raise StoreRefused("보고서·계획 원천 기록은 수정할 수 없습니다. 별도 자산으로 기록해 주세요")
-            return LA.record(c, possibility_id, account_key, actor, at, expected_version,
+            return LearningAssetStorage(c).record(possibility_id, account_key, actor, at, expected_version,
                              asset_id, document, action=action)
 
     def _capture_learning_report(self, connection, possibility_id, report_id, payload, at, actor=None):
@@ -3293,8 +3433,8 @@ class ManagedStorage:
             document.update(title="저장 보고서 성과 관측", evidence=evidence,
                             source_refs={"report_id": report_id, "report_revision": payload["revision_fingerprint"]})
             key, asset_id = RV.account_key(int(cid)), "report-" + str(report_id)
-            if LA.get_asset(connection, possibility_id, key, asset_id) is None:
-                LA.record(connection, possibility_id, key, actor, at, 0, asset_id, document, action="save")
+            if LearningAssetStorage(connection).get_asset(possibility_id, key, asset_id) is None:
+                LearningAssetStorage(connection).record(possibility_id, key, actor, at, 0, asset_id, document, action="save")
 
     def capture_learning_report(self, possibility_id, account_key, actor, now):
         """기존 최신 보고서를 명시적으로 편입한다. 없는 자료를 새로 계산·수집하지 않는다."""
@@ -3317,7 +3457,7 @@ class ManagedStorage:
                 found += 1
                 self._capture_learning_report(c, possibility_id, row[0], {**payload, "_account_reports": accounts},
                                               _kst_text(now, "학습 기록 시각"), actor)
-                all_present = all(LA.get_asset(c, possibility_id, RV.account_key(int(cid)), "report-"+str(row[0])) is not None
+                all_present = all(LearningAssetStorage(c).get_asset(possibility_id, RV.account_key(int(cid)), "report-"+str(row[0])) is not None
                                   for cid in payload.get("_account_reports", {}))
                 if all_present:
                     self._set_meta(c, f"learning-capture-pending:{possibility_id}:{row[0]}", "recorded")
@@ -3351,7 +3491,7 @@ class ManagedStorage:
                          source_refs={"plan_version": saved["version"]})
             event["evidence"].update(execution="planned", before=before, after=after,
                 changed_variable=changed[0] if len(changed) == 1 else "multiple", observed_at=None)
-            LA.record(connection, metadata["possibility_id"], metadata["account_key"], actor, at, 0,
+            LearningAssetStorage(connection).record(metadata["possibility_id"], metadata["account_key"], actor, at, 0,
                       "plan-" + str(saved["version"]), event, action="save")
         if kind == "report-strategy" and approved:
             old_ref = connection.execute("SELECT value FROM naver_auto_meta WHERE key=?",
@@ -3377,7 +3517,7 @@ class ManagedStorage:
                 provenance = result["learning_provenance"]
                 valid = self.automation_plan(pid, account_key)["version"] == provenance["plan_version"]
                 for ref in provenance["case_refs"]:
-                    asset = LA.get_asset(self._conn, ref.get("possibility_id", pid), ref.get("account_key", account_key), ref["asset_id"])
+                    asset = LearningAssetStorage(self._conn).get_asset(ref.get("possibility_id", pid), ref.get("account_key", account_key), ref["asset_id"])
                     valid = valid and asset is not None and asset["version"] == ref["version"] and asset["state"] == "reviewed"
                 result["learning_provenance"] = {**provenance, "case_refs": [
                     {"asset_id": ref["asset_id"] if ref.get("possibility_id", pid) == pid and ref.get("account_key", account_key) == account_key
@@ -3410,7 +3550,7 @@ class ManagedStorage:
             companies, pairs = AV.context(ctx, self, scope)
             allowed_pairs = [(company, RV.account_key(cid)) for cid, company in pairs.items()
                              if company in companies and cid in ctx.accounts]
-            retrieved = LR.retrieve_scoped(self._conn, allowed_pairs, pid, account_key)
+            retrieved = LR.retrieve_scoped(LearningAssetStorage(self._conn), allowed_pairs, pid, account_key)
             learning = retrieved["context"]
             plan_context = {"version": plan["version"], "state": plan["state"],
                             "document": {k: v for k, v in plan["plan"].items() if k != "notes"}}
@@ -3516,7 +3656,7 @@ class ManagedStorage:
                         source_pid, source_key = case.get("possibility_id", pid), case.get("account_key", account_key)
                         if (source_pid, source_key) not in allowed:
                             raise StoreRefused("AI 참조 사례의 현재 담당 범위가 변경되었습니다")
-                        asset = LA.get_asset(c, source_pid, source_key, case["asset_id"])
+                        asset = LearningAssetStorage(c).get_asset(source_pid, source_key, case["asset_id"])
                         if asset is None or asset["version"] != case["version"] or asset["state"] != "reviewed":
                             raise StoreRefused("AI가 참조한 사례가 변경되었습니다. 초안을 다시 생성해 주세요")
                 clean, source = current["document"], current["source"]
