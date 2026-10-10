@@ -19,8 +19,10 @@
 <header class="top" id="top" hidden>
   <div class="row1">
     <div class="brand">네이버 관제</div>
-    <nav class="menu" aria-label="메뉴">
-      <button type="button" data-go="/naver/" data-sales-only="true" hidden>내 광고주 성과</button>
+    <nav class="ns-menu" id="salesMenu" aria-label="영업 조회 메뉴" hidden>
+      <button type="button" id="salesHome">내 광고주 성과</button>
+    </nav>
+    <nav class="menu" id="managementMenu" aria-label="메뉴">
       <button type="button" data-go="/naver/">🛰 관제</button>
       <button type="button" data-go="/naver/dashboard">📊 성과·보고서</button>
       <button type="button" data-go="/naver/transfers">📋 이관 현황</button>

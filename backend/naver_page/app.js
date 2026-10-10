@@ -688,6 +688,7 @@
     Array.prototype.forEach.call(document.querySelectorAll('.menu button'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-go') === menuKey);
     });
+    $('salesHome').classList.toggle('on', name === 'sales');
   }
   function parse(path) {
     var m = SCREEN.exec(path);
@@ -779,9 +780,8 @@
     var me = state.me;
     $('top').hidden = false;
     var sales = me.scope === 'SALES_READ';
-    Array.prototype.forEach.call(document.querySelectorAll('.menu button'), function (b) {
-      b.hidden = sales ? b.getAttribute('data-sales-only') !== 'true' : b.getAttribute('data-sales-only') === 'true';
-    });
+    $('managementMenu').hidden = sales;
+    $('salesMenu').hidden = !sales;
     $('bell').hidden = sales;
     $('runtimeStatus').hidden = sales;
     if (sales) {
@@ -2819,6 +2819,7 @@
 
   // ── 고정 단추 ────────────────────────────────────────────────────
   function bind() {
+    $('salesHome').addEventListener('click', function () { go('/naver/'); });
     Array.prototype.forEach.call(document.querySelectorAll('[data-go]'), function (b) {
       b.addEventListener('click', function () { go(b.getAttribute('data-go')); });
     });

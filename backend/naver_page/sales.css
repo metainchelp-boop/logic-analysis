@@ -1,4 +1,8 @@
 /* 판매 전용 화면. 모든 선택자는 별도 접두사로 관리 화면과 분리한다. */
+.ns-menu{display:flex;gap:2px;flex-wrap:wrap;max-width:100%}
+.ns-menu button{background:none;border:0;border-radius:8px;padding:8px 12px;margin:9px 0;font-weight:500;font-size:14px;color:var(--erp-gnb-text);white-space:nowrap}
+.ns-menu button:hover{color:#fff;background:rgba(255,255,255,.08)}
+.ns-menu button.on{color:#fff;font-weight:700;background:rgba(255,255,255,.15)}
 .ns-sales{max-width:1440px;margin:0 auto;color:#1e293b;font-size:14px;line-height:1.55}
 .ns-sales *{box-sizing:border-box}
 .ns-heading{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin:0 0 20px}

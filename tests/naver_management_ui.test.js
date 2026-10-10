@@ -60,15 +60,18 @@ function inventory(rows = [], coverage) {
 }
 function launch(options = {}) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(m => [m[1], new Element()]));
-  const requests = [], events = {}, opened = [];
+  const requests = [], events = {}, opened = [], salesMounts = [];
   const location = new URL('https://watch.invalid/naver/' + (options.screen || 'transfers'));
   const window = { addEventListener: (k, fn) => { events[k] = fn; }, open: (...args) => {opened.push(args); return null;} };
+  if (options.salesUI) window.NaverSalesUI = {reset() {}, mount: settings => salesMounts.push(settings)};
   const createElement = tag => new Element(tag, (id, element) => elements.set(id, element));
+  // 실제 고객 화면의 고정 탭 부모를 구성한다. 동적 계정 선택 상자가 그 앞에 삽입된다.
+  const clientTabs = createElement('div'); elements.get('s-client').appendChild(clientTabs);
   const document = { visibilityState: 'visible', getElementById: id => elements.get(id), createElement,
     createElementNS: (_namespace, tag) => createElement(tag),
     createTextNode: text => ({ textContent: String(text) }), addEventListener() {}, body: { contains: () => true },
     querySelectorAll: selector => selector === '.modal' ? [...elements].filter(([id]) => id.startsWith('m-')).map(([, el]) => el) : [],
-    querySelector: () => null };
+    querySelector: selector => selector === '#s-client .tabs' ? clientTabs : null };
   const history = { pushState: (_, __, url) => { location.href = new URL(url, location).href; } };
   const context = vm.createContext({ window, document, location, history, URL, URLSearchParams, AbortController, performance,
     sessionStorage: { getItem: () => JSON.stringify({ token: 'synthetic', exp: Date.now() + 3600000 }) },
@@ -96,7 +99,7 @@ function launch(options = {}) {
     } });
   vm.runInContext(reportUI, context);
   vm.runInContext(app, context);
-  return { elements, requests, opened, location, text: id => elements.get(id).textContent,
+  return { elements, requests, opened, location, salesMounts, text: id => elements.get(id).textContent,
     buttons: id => tree(elements.get(id)).filter(el => el.tagName === 'BUTTON'),
     scope(value) { const el = elements.get('scope'); el.value = value; el.dispatch('change'); },
     navigate(screen) { location.href = new URL('/naver/' + screen, location).href; events.popstate(); } };
@@ -109,6 +112,27 @@ async function showAccounts(run) {
   assert.equal(run.elements.get('managedCoverage').hidden, true);
   assert.equal(run.elements.get('s-transfers').classList.contains('view-unverified'), false);
 }
+
+test('영업 전용 메뉴는 관리 메뉴를 숨기고 자체 단추·직접 주소에서도 전용 조회만 다시 연다', async () => {
+  const run = launch({screen:'', me:{scope:'SALES_READ',name:'합성 영업'}, salesUI:true,
+    respond:() => ({items:[],total:0,page:1,page_size:100})});
+  await flush();
+  assert.equal(run.elements.get('managementMenu').hidden,true);
+  assert.equal(run.elements.get('salesMenu').hidden,false);
+  assert.equal(run.elements.get('runtimeStatus').hidden,true);
+  assert.equal(run.elements.get('bell').hidden,true);
+  assert.equal(run.salesMounts.length,1);
+  assert.deepEqual(run.requests.map(req => req.url),['/api/naver-auto/me']);
+  run.elements.get('salesHome').dispatch('click'); await flush();
+  assert.equal(run.salesMounts.length,2);
+  run.navigate('clients/11'); await flush();
+  assert.equal(run.salesMounts.length,3);
+  assert.equal(run.elements.get('s-sales').classList.contains('on'),true);
+  assert.equal(run.elements.get('s-client').classList.contains('on'),false);
+  await run.salesMounts.at(-1).api('/sales/clients',{kind:'weekly'});
+  assert.deepEqual(run.requests.map(req => req.url),['/api/naver-auto/me','/api/naver-auto/sales/clients?kind=weekly']);
+  assert.ok(run.requests.every(req => req.method === 'GET'));
+});
 
 test('이관 목록은 비즈머니 높은 순으로 정렬하고 동률·0·음수·미확인을 보존한다', async () => {
   const values = [null, 0, -3, 10.5, 10.5, '900', true, 20, Number.MAX_SAFE_INTEGER + 1];
@@ -970,7 +994,7 @@ test('보고서는 계정 목록에서 기간·부분합·누락 상세를 열�
   assert.match(run.text('reportDetail'), /월간 보고서.*2026-09-01 ~ 2026-09-30/);
   assert.match(run.text('reportDetail'), /광고비.*123,000원.*확인된 범위 · 전체 수치 아님/);
   assert.match(run.text('reportDetail'), /누락 1.*2026-09-03.*일부 지표 미수신.*광고비/);
-  assert.match(run.text('reportDetail'), /다운로드는 발송이 아닙니다/);
+  assert.match(run.text('reportDetail'), /PDF 저장은 발송이 아닙니다/);
   assert.ok(!run.buttons('reportDetail').some(button => /검토 승인|검토 보류|게시|발송/.test(button.textContent)));
   assert.equal(run.requests.filter(r => r.method !== 'GET').length, 0);
 });
@@ -1037,7 +1061,7 @@ test('모니터링 보고서는 서버 검토 권한이 있어도 검토 상태�
     run.elements.get('reviewNote').value = '기간과 누락을 확인함';
     run.elements.get('reviewSave').dispatch('click'); await flush();
     assert.equal(run.requests.filter(r => r.method !== 'GET').length,0);
-    assert.match(run.text('reportDetail'),/다운로드는 발송이 아닙니다/);
+    assert.match(run.text('reportDetail'),/PDF 저장은 발송이 아닙니다/);
   }
 });
 

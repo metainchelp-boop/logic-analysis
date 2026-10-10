@@ -53,12 +53,27 @@ CSS_CODE = re.sub(r"/\*.*?\*/", "", CSS, flags=re.S)
 
 
 class TextRulesTest(unittest.TestCase):
+    def test_sales_navigation_is_separate_from_existing_management_menu(self):
+        menus = re.findall(r'<nav\b([^>]*)>(.*?)</nav>', HTML, flags=re.S)
+        management = [body for attrs, body in menus if re.search(r'class="menu"', attrs)]
+        self.assertEqual(len(management), 1)
+        self.assertEqual(re.findall(r'data-go="([^"]+)"', management[0]),
+                         ['/naver/', '/naver/dashboard', '/naver/transfers', '/naver/settings'])
+        self.assertNotIn('data-sales', management[0])
+        sales = [body for attrs, body in menus if 'id="salesMenu"' in attrs]
+        self.assertEqual(len(sales), 1)
+        self.assertIn('id="salesHome"', sales[0])
+        self.assertNotIn('data-go', sales[0])
+        self.assertNotIn('class="menu"', next(attrs for attrs, body in menus if body == sales[0]))
+
     def test_no_inline_script_or_handlers_or_styles(self):
         scripts = re.findall(r"<script\b([^>]*)>(.*?)</script>", HTML, flags=re.S | re.I)
-        self.assertEqual(len(scripts), 4)
-        for (attrs, body), name in zip(scripts, ('sso-bootstrap.js', 'report-ui.js', 'report-pdf.js', 'app.js')):
+        self.assertEqual(len(scripts), 5)
+        for (attrs, body), (name, deferred) in zip(scripts, (
+                ('sso-bootstrap.js', False), ('report-ui.js', True), ('report-pdf.js', True),
+                ('sales-ui.js', True), ('app.js', True))):
             self.assertEqual(body.strip(), "")
-            self.assertIn('src="/naver/' + name + '"', attrs)
+            self.assertEqual(attrs.strip(), 'src="/naver/' + name + '"' + (' defer' if deferred else ''))
         self.assertNotRegex(HTML, r"\son[a-z]+\s*=", "인라인 손잡이(onclick= …)")
         self.assertNotRegex(HTML, r"\sstyle\s*=", "인라인 스타일 속성")
         self.assertNotIn("javascript:", HTML.lower())
