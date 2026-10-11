@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-export-inspect, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -2391,3 +2391,58 @@ jobs:
                     with os.fdopen(fd,'wb') as stream: stream.write(data)
             subprocess.run(['/usr/bin/python3','-I','-B',str(target/'install_static.py'),'--root','/root/logic-analysis-deploy/frontend','--mode',mode],check=True,timeout=30)
             PY
+  completion-export-inspect:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-completion-export-inspect'
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Metadata-only exact helper and closed empty inputs
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_saved_exports_inspect -q
+          python3 - <<'PYCODE'
+          import base64,hashlib,json,os,pathlib
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('ad_prepare')=='preview-completion-export-inspect'
+          assert inputs.pop('ad_expected_baseline')=='none' and all(v=='off' for v in inputs.values())
+          source=pathlib.Path('backend/tools/naver_saved_exports_inspect.py').read_bytes()
+          assert hashlib.sha256(source).hexdigest()=='4d3c06229f6c98e29ef274e16d6bd966f7d4f8f5aa26ca5c3e4fa1372cfdc6de'
+          encoded=base64.b64encode(source).decode();assert len(encoded)<=32768
+          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('COMPLETION_EXPORT_INSPECT_B64='+encoded+'\n')
+          PYCODE
+      - name: Read fixed path stat and identity metadata only
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          COMPLETION_EXPORT_INSPECT_B64: ${{ env.COMPLETION_EXPORT_INSPECT_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: COMPLETION_EXPORT_INSPECT_B64
+          command_timeout: 1m
+          script: |
+            set -eu
+            timeout 20s /usr/bin/python3 -I -B - <<'PYCODE'
+            import base64,hashlib,json,os,sys,types
+            try:
+                encoded=os.environ['COMPLETION_EXPORT_INSPECT_B64']
+                if len(encoded)>32768:raise ValueError('INSPECT_SIZE')
+                source=base64.b64decode(encoded,validate=True)
+                if hashlib.sha256(source).hexdigest()!='4d3c06229f6c98e29ef274e16d6bd966f7d4f8f5aa26ca5c3e4fa1372cfdc6de':raise ValueError('INSPECT_PIN')
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                module=types.ModuleType('approved_completion_export_inspect');exec(source,module.__dict__)
+                result=module.inspect_host()
+                raw=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
+                if len(raw.encode())>16384:raise ValueError('INSPECT_RESULT_SIZE')
+                print('NAVER_COMPLETION_EXPORT_METADATA='+raw)
+            except Exception:
+                print('NAVER_COMPLETION_EXPORT_METADATA={"version":1,"error":"INSPECT_REFUSED"}');sys.exit(1)
+            PYCODE
