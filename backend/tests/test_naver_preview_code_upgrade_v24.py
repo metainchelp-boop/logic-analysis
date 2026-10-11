@@ -417,6 +417,8 @@ class V24ProfileTest(unittest.TestCase):
             base = subprocess.run(['git', 'show', 'fdf9055b11434c9b04ec7ef4808eab589e5152da:backend/tools/' + name + '.py'],
                                   capture_output=True, check=True, cwd=TOOLS).stdout
             before, after = ast.parse(base), ast.parse((TOOLS / (name + '.py')).read_bytes())
+            from test_naver_preview_loading_v8_preservation import strip_v25_additions
+            after = strip_v25_additions(after)
             def has_v24(node):
                 return any(isinstance(child, ast.Name) and child.id.endswith('_V24') for child in ast.walk(node))
             body = []
@@ -457,7 +459,10 @@ class V24ProfileTest(unittest.TestCase):
                             source=source('naver_preview_code_rollback'), code_only_source=source('naver_preview_code_only'),
                             release_source=source('naver_preview_release'), operation='preview-code-only-rollback', function='run')}
         encode, decode, _ = shared.ContractTest().workflow_transport()
-        for kind, bundle in bundles.items():
+        from test_naver_preview_code_upgrade_v25 import V25TransportTest
+        compact = V25TransportTest().compactor()
+        for kind, original in bundles.items():
+            bundle = compact(original)
             raw = json.dumps(bundle).encode()
             with self.subTest(kind=kind):
                 self.assertLessEqual(len(raw), 229376)

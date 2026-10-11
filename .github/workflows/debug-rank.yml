@@ -73,7 +73,35 @@ jobs:
           set -eu
           python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
           python3 - <<'PY'
-          import base64,gzip,json,os,pathlib
+          import ast,base64,gzip,io,json,os,pathlib,tokenize
+          def compact_sources(bundle):
+              def fields(value):
+                  if isinstance(value, ast.AST):
+                      return (type(value).__name__, tuple((name, fields(item)) for name, item in ast.iter_fields(value)))
+                  if isinstance(value, list):
+                      return tuple(fields(item) for item in value)
+                  return value
+              result = dict(bundle)
+              for key, source in bundle.items():
+                  if key != 'source' and not key.endswith('_source'):
+                      continue
+                  if type(source) is not str:
+                      raise ValueError('SOURCE_AST_MISMATCH')
+                  lines = source.splitlines(keepends=True)
+                  strings = set()
+                  tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+                  for token in tokens:
+                      if token.type == tokenize.STRING:
+                          strings.update(range(token.start[0], token.end[0] + 1))
+                  for token in tokens:
+                      if token.type == tokenize.COMMENT:
+                          index = token.start[0] - 1
+                          lines[index] = lines[index][:token.start[1]].rstrip() + '\n'
+                  compact = ''.join(line for number, line in enumerate(lines, 1) if line.strip() or number in strings)
+                  if fields(ast.parse(source)) != fields(ast.parse(compact)):
+                      raise ValueError('SOURCE_AST_MISMATCH')
+                  result[key] = compact
+              return result
           def encode_ops(bundle):
               raw=json.dumps(bundle).encode()
               if bundle['operation'] not in ('preview-code-upgrade','preview-code-diagnose','preview-collection-status','preview-code-only-upgrade','preview-code-only-rollback','preview-resource-trial','preview-report-recovery','preview-report-recovery-v19','preview-conversion-diagnostics'):
@@ -153,6 +181,8 @@ jobs:
               bundle['code_source']=pathlib.Path('backend/tools/'+code_module+'.py').read_text()
           if operation=='preview-code-only-rollback':
               bundle['code_only_source']=pathlib.Path('backend/tools/naver_preview_code_only.py').read_text()
+          if operation in ('preview-code-only-upgrade','preview-code-only-rollback') and code_module in ('naver_preview_code_upgrade_v24','naver_preview_code_upgrade_v25'):
+              bundle=compact_sources(bundle)
           with open(os.environ['GITHUB_ENV'],'a') as stream:
               stream.write('PREVIEW_OPS_B64='+encode_ops(bundle)+'\n')
           PY
@@ -324,7 +354,35 @@ jobs:
         run: |
           set -eu
           python3 - <<'PY'
-          import base64,gzip,importlib.util,json,os,pathlib,sys
+          import ast,base64,gzip,importlib.util,io,json,os,pathlib,sys,tokenize
+          def compact_sources(bundle):
+              def fields(value):
+                  if isinstance(value, ast.AST):
+                      return (type(value).__name__, tuple((name, fields(item)) for name, item in ast.iter_fields(value)))
+                  if isinstance(value, list):
+                      return tuple(fields(item) for item in value)
+                  return value
+              result = dict(bundle)
+              for key, source in bundle.items():
+                  if key != 'source' and not key.endswith('_source'):
+                      continue
+                  if type(source) is not str:
+                      raise ValueError('SOURCE_AST_MISMATCH')
+                  lines = source.splitlines(keepends=True)
+                  strings = set()
+                  tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+                  for token in tokens:
+                      if token.type == tokenize.STRING:
+                          strings.update(range(token.start[0], token.end[0] + 1))
+                  for token in tokens:
+                      if token.type == tokenize.COMMENT:
+                          index = token.start[0] - 1
+                          lines[index] = lines[index][:token.start[1]].rstrip() + '\n'
+                  compact = ''.join(line for number, line in enumerate(lines, 1) if line.strip() or number in strings)
+                  if fields(ast.parse(source)) != fields(ast.parse(compact)):
+                      raise ValueError('SOURCE_AST_MISMATCH')
+                  result[key] = compact
+              return result
           sys.path.insert(0,'backend/tools')
           from naver_preview_download import download
           from naver_preview_release import validate_package
@@ -338,8 +396,12 @@ jobs:
               if approved_config_operation_id is not None:
                   assert operation=='preview-code-only-prepare'
                   import naver_preview_code_only
-                  assert package.get('source_commit')==naver_preview_code_only.REVIEWED_TRANSITION_V24[1]
-                  assert approved_config_operation_id==naver_preview_code_only.REVIEWED_CONFIG_OPERATION_V24
+                  if (type(naver_preview_code_only.REVIEWED_TRANSITION_V25[1]) is str
+                          and package.get('source_commit')==naver_preview_code_only.REVIEWED_TRANSITION_V25[1]):
+                      assert approved_config_operation_id==naver_preview_code_only.REVIEWED_CONFIG_OPERATION_V25
+                  else:
+                      assert package.get('source_commit')==naver_preview_code_only.REVIEWED_TRANSITION_V24[1]
+                      assert approved_config_operation_id==naver_preview_code_only.REVIEWED_CONFIG_OPERATION_V24
               if operation=='preview-code-only-prepare':
                   import naver_preview_code_only
                   selected=naver_preview_code_only.code_module_name(package.get('source_commit'))
@@ -370,6 +432,8 @@ jobs:
                   bundle['code_only_source']=pathlib.Path('backend/tools/naver_preview_code_only.py').read_text()
               if approved_config_operation_id is not None:
                   bundle['approved_config_operation_id']=approved_config_operation_id
+              if operation=='preview-code-only-prepare' and code_module in ('naver_preview_code_upgrade_v24','naver_preview_code_upgrade_v25'):
+                  bundle=compact_sources(bundle)
               raw=json.dumps(bundle).encode()
               if len(raw)>229376:
                   raise ValueError('PREPARE_BUNDLE_SIZE')
@@ -417,8 +481,12 @@ jobs:
                         policy=types.ModuleType('approved_code_only');exec(bundle['code_only_source'],policy.__dict__)
                         policy.require_review(code)
                         if bundle.get('approved_config_operation_id') is not None:
-                            assert code.TARGET_COMMIT==policy.REVIEWED_TRANSITION_V24[1]
-                            assert bundle['approved_config_operation_id']==policy.REVIEWED_CONFIG_OPERATION_V24
+                            if (type(policy.REVIEWED_TRANSITION_V25[1]) is str
+                                    and code.TARGET_COMMIT==policy.REVIEWED_TRANSITION_V25[1]):
+                                assert bundle['approved_config_operation_id']==policy.REVIEWED_CONFIG_OPERATION_V25
+                            else:
+                                assert code.TARGET_COMMIT==policy.REVIEWED_TRANSITION_V24[1]
+                                assert bundle['approved_config_operation_id']==policy.REVIEWED_CONFIG_OPERATION_V24
                     elif bundle.get('approved_config_operation_id') is not None:
                         raise ValueError('CONFIG_PRESERVE_NOT_APPROVED')
                     package=code.validate_package(bundle['package'],module)
