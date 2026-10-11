@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, learning-center-static-check, learning-center-static-install, learning-center-static-rollback, preview-claude-diagnostics]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -2260,4 +2260,88 @@ jobs:
                     fd=os.open(target/member.name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
                     with os.fdopen(fd,'wb') as stream: stream.write(data)
             subprocess.run(['/usr/bin/python3','-I','-B',str(target/'install_static.py'),'--root','/root/logic-analysis-deploy/frontend','--mode',mode],check=True,timeout=30)
+            PY
+  claude-diagnostics:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-claude-diagnostics-20261011' && inputs.ad_prepare == 'preview-claude-diagnostics'
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 고정 읽기 전용 진단 합성 검증
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -B -m unittest discover -s backend/tests -p 'test_naver_preview_claude_diagnostics.py' -q
+          python3 -B - <<'PY'
+          import base64,gzip,hashlib,json,os,pathlib,sys
+          sys.path.insert(0,'backend/tools')
+          import naver_preview_claude_diagnostics as d
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('ad_prepare')=='preview-claude-diagnostics'
+          supplied=inputs.pop('ad_expected_baseline')
+          assert all(value=='off' for value in inputs.values())
+          package=dict(baseline=d.BASELINE,source_commit=d.SOURCE,source_tar_gz_sha256=d.ARCHIVE,
+                       target='foodin-weekly-20260928',mode='metadata-and-synthetic-only')
+          if supplied:
+              assert json.loads(supplied)==package
+          d.validate_package(package)
+          names={'diagnostic':'naver_preview_claude_diagnostics.py','release':'naver_preview_release.py',
+                 'host':'naver_erp_tunnel_service_install.py','logs':'naver_preview_collection_status.py'}
+          sources={name:pathlib.Path('backend/tools',file).read_text() for name,file in names.items()}
+          bundle=dict(package=package,sources=sources)
+          raw=json.dumps(bundle).encode()
+          assert 0<len(raw)<=229376
+          encoded=base64.b64encode(gzip.compress(raw,mtime=0)).decode()
+          assert len(encoded)<=73728
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('CLAUDE_DIAG_B64='+encoded+'\n')
+          print('CLAUDE_DIAG_SOURCE_DIGESTS '+json.dumps({name:hashlib.sha256(value.encode()).hexdigest() for name,value in sources.items()},sort_keys=True))
+          PY
+      - name: 실제 호출 없이 예약·전략판·합성 입력 진단
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          CLAUDE_DIAG_B64: ${{ env.CLAUDE_DIAG_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: CLAUDE_DIAG_B64
+          command_timeout: 5m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import base64,json,os,re,types,zlib
+            module=None
+            try:
+                encoded=os.environ['CLAUDE_DIAG_B64']
+                assert len(encoded)<=73728
+                decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+                raw=decoder.decompress(base64.b64decode(encoded,validate=True),229377)
+                assert 0<len(raw)<=229376 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+                bundle=json.loads(raw)
+                assert set(bundle)=={'package','sources'} and set(bundle['sources'])=={'diagnostic','release','host','logs'}
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                loaded={}
+                for name,source in bundle['sources'].items():
+                    loaded[name]=types.ModuleType('approved_claude_'+name)
+                    exec(source,loaded[name].__dict__)
+                module=loaded['diagnostic']
+                result=module.run(bundle['package'],loaded['host'].NativeHost(),loaded['release'],loaded['logs'])
+            except Exception as error:
+                stage=getattr(module,'STAGE','input')
+                result=dict(ok=False,stage=stage if stage in ('input','preflight','read_only_metadata_and_synthetic','postflight') else 'unrecognized',
+                    error_code=str(error) if re.fullmatch('CLAUDE_DIAG_[A-Z_]{1,48}',str(error)) else 'CLAUDE_DIAG_EXECUTION_FAILED',
+                    paid_provider_calls=None,database_mutations=0,external_calls=0,services_restarted=0)
+            print('CLAUDE_DIAG_RECEIPT '+json.dumps(result,sort_keys=True))
+            if result.get('ok') is not True:
+                raise SystemExit(1)
             PY
