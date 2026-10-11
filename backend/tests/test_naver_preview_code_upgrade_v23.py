@@ -178,6 +178,8 @@ class V23TransportTest(unittest.TestCase):
         import shlex,zlib
         encode,decode,remote=shared.ContractTest().workflow_transport()
         for kind,bundle in self.bundles().items():
+            from test_naver_preview_code_upgrade_v25 import V25TransportTest
+            bundle = V25TransportTest().compactor()(bundle)
             with self.subTest(kind=kind):
                 raw=json.dumps(bundle).encode();self.assertLessEqual(len(raw),229376)
                 wire='prepare-gzip-v1:'+base64.b64encode(gzip.compress(raw,mtime=0)).decode() if kind=='prepare' else encode(bundle)

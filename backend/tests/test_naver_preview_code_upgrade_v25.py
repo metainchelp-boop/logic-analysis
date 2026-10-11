@@ -344,13 +344,13 @@ class V25TransportTest(unittest.TestCase):
                         and part.func.id == 'compact_sources' for statement in node.body if isinstance(statement, ast.Assign) for part in ast.walk(statement)):
                     calls.append(ast.unparse(node.test))
         self.assertEqual(set(calls), {
-            "operation in ('preview-code-only-upgrade', 'preview-code-only-rollback') and code_module in ('naver_preview_code_upgrade_v24', 'naver_preview_code_upgrade_v25')",
-            "operation == 'preview-code-only-prepare' and code_module in ('naver_preview_code_upgrade_v24', 'naver_preview_code_upgrade_v25')"})
+            "operation in ('preview-code-only-upgrade', 'preview-code-only-rollback') and code_module in ('naver_preview_code_upgrade_v14', 'naver_preview_code_upgrade_v18', 'naver_preview_code_upgrade_v19', 'naver_preview_code_upgrade_v20', 'naver_preview_code_upgrade_v21', 'naver_preview_code_upgrade_v22', 'naver_preview_code_upgrade_v23', 'naver_preview_code_upgrade_v24', 'naver_preview_code_upgrade_v25', 'naver_preview_code_upgrade_v26')",
+            "operation == 'preview-code-only-prepare' and code_module in ('naver_preview_code_upgrade_v14', 'naver_preview_code_upgrade_v18', 'naver_preview_code_upgrade_v19', 'naver_preview_code_upgrade_v20', 'naver_preview_code_upgrade_v21', 'naver_preview_code_upgrade_v22', 'naver_preview_code_upgrade_v23', 'naver_preview_code_upgrade_v24', 'naver_preview_code_upgrade_v25', 'naver_preview_code_upgrade_v26')"})
         self.assertEqual(len(calls), 2)
         old_builder = previous.V24WorkflowOptionTest()
-        _, historical, _ = old_builder.builder('naver_preview_code_upgrade_v23')
+        _, historical, _ = old_builder.builder('naver_preview_code_upgrade_v8')
         self.assertIsNotNone(historical)
-        self.assertEqual(historical['code_source'], (TOOLS / 'naver_preview_code_upgrade_v23.py').read_text())
+        self.assertEqual(historical['code_source'], (TOOLS / 'naver_preview_code_upgrade_v8.py').read_text())
         self.assertEqual(historical['code_only_source'], (TOOLS / 'naver_preview_code_only.py').read_text())
         _, current, _ = old_builder.builder(MODULE, '74c912dddf824fae99012849bc4c19a5')
         self.assertIsNotNone(current)

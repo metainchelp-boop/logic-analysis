@@ -186,6 +186,12 @@ if (type(REVIEWED_ROLLBACK_V25[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIE
         and all(type(REVIEWED_ROLLBACK_V25[i]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V25[i]) for i in (3,4,5))):
     REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V25})
 
+# V26 exact provider-only inverse; retain the live V25 configuration and data.
+REVIEWED_ROLLBACK_V26 = (REVIEWED_ROLLBACK_V25[1], '737a65952f2ddbc05a235cf2b139a4a11f4e7673', REVIEWED_ROLLBACK_V25[3], '957ed0362ba9e3775a832c78011dc838c39297855d1f8ce901038d4e0c4e4450', REVIEWED_ROLLBACK_V25[5], REVIEWED_ROLLBACK_V25[5], REVIEWED_ROLLBACK_V25[6], frozenset({'naver_runtime/claude_provider.py'}))
+if (type(REVIEWED_ROLLBACK_V26[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V26[1])
+        and all(type(REVIEWED_ROLLBACK_V26[i]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V26[i]) for i in (3,4,5))):
+    REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V26})
+
 def transition(code):
     return (code.OLD_COMMIT, code.TARGET_COMMIT, code.OLD_SOURCE_SHA256,
             code.TARGET_SOURCE_SHA256, code.STORE_SHA256.get('old'),
@@ -249,6 +255,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
     if transition(code) == REVIEWED_ROLLBACK_V24:
         code.compatible_inverse_source(path, old_path, upgrade)
     if transition(code) == REVIEWED_ROLLBACK_V25:
+        code.compatible_inverse_source(path, old_path, upgrade)
+    if transition(code) == REVIEWED_ROLLBACK_V26:
         code.compatible_inverse_source(path, old_path, upgrade)
     code.compatible_source(old_path, path, upgrade)
     files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)

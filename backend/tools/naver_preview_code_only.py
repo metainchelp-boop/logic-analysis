@@ -172,6 +172,14 @@ REVIEWED_OLD_ASSETS_V25 = dict(REVIEWED_ASSETS_V24)
 REVIEWED_CONFIG_OPERATION_V25 = '74c912dddf824fae99012849bc4c19a5'
 REVIEWED_CONFIG_SETTINGS_V25 = dict(REVIEWED_CONFIG_SETTINGS_V24)
 
+# V26 is closed until the exact allowed-reference source and native archive are pinned.
+REVIEWED_TRANSITION_V26 = (REVIEWED_TRANSITION_V25[1], '737a65952f2ddbc05a235cf2b139a4a11f4e7673', REVIEWED_TRANSITION_V25[3], '957ed0362ba9e3775a832c78011dc838c39297855d1f8ce901038d4e0c4e4450', REVIEWED_TRANSITION_V25[5], REVIEWED_TRANSITION_V25[5], REVIEWED_TRANSITION_V25[6])
+REVIEWED_CONFIG_OPERATION_V26 = REVIEWED_CONFIG_OPERATION_V25
+REVIEWED_CONFIG_CHAIN_V26 = (
+    (REVIEWED_TRANSITION_V24[1], REVIEWED_TRANSITION_V24[3], '38122455056', REVIEWED_TRANSITION_V24[0]),
+    (REVIEWED_TRANSITION_V25[1], REVIEWED_TRANSITION_V25[3], '38126684468', REVIEWED_TRANSITION_V25[0]),
+)
+
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
         return 'naver_preview_code_upgrade'
@@ -282,6 +290,10 @@ def code_module_name(source_commit):
             and type(REVIEWED_TRANSITION_V25[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V25[1])
             and all(type(REVIEWED_TRANSITION_V25[i]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V25[i]) for i in (3,4,5))):
         return 'naver_preview_code_upgrade_v25'
+    if (type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V26[1]
+            and type(REVIEWED_TRANSITION_V26[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V26[1])
+            and all(type(REVIEWED_TRANSITION_V26[i]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V26[i]) for i in (3,4,5))):
+        return 'naver_preview_code_upgrade_v26'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -485,6 +497,32 @@ def require_review(code):
         }
         if any(getattr(code, name, None) != value for name, value in expected_metadata.items()):
             raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
+    if (transition == REVIEWED_TRANSITION_V26
+            and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
+            and all(type(transition[i]) is str and re.fullmatch('[0-9a-f]{64}', transition[i]) for i in (3,4,5))):
+        expected_paths = {'naver_runtime/claude_provider.py'}
+        expected_metadata = {
+            'ADDED_SOURCE_PATHS': frozenset(),
+            'REMOVABLE_SOURCE_PREFIXES': (),
+            'TARGET_ACTION_ROUTES': ('/reports/notes', '/reports/strategy', '/automation/plans', '/automation/learning'),
+            'OWNER_ACTION_ROUTES': ('/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all', '/settings/thresholds', '/holds/org/confirm', '/holds/stages/confirm', '/holds/accounts/confirm', '/links/revoke'),
+            'CLOSED_LINK_ROUTES': ('/links/reject', '/links/preview'),
+            'SALES_GET_ROUTES': ('/sales/clients', '/sales/detail', '/sales/report'),
+            'REPORT_ASSETS': REVIEWED_ASSETS_V25,
+            'OLD_REPORT_ASSETS': REVIEWED_ASSETS_V25,
+            'OLD_REPORT_UI': REVIEWED_ASSETS_V25['/naver/report-ui.js'],
+            'OLD_APP': REVIEWED_ASSETS_V25['/naver/app.js'],
+            'APPROVED_CONFIG_OPERATION_ID': REVIEWED_CONFIG_OPERATION_V26,
+            'CONFIG_SOURCE_COMMIT': '9ddb0a30e16e4177e8d419318a6f23eb6c206e2f',
+            'CONFIG_ROLLBACK_COMMIT': '09b216f26509fed97179114ee97cb0d4169ce5f8',
+            'CONFIG_PREDECESSOR_COMMIT': REVIEWED_TRANSITION_V26[0],
+            'CONFIG_PREDECESSOR_ARCHIVE': REVIEWED_TRANSITION_V26[2],
+            'CONFIG_PREDECESSOR_PREPARE_RUN': '38126684468',
+            'CONFIG_PRESERVATION_CHAIN': REVIEWED_CONFIG_CHAIN_V26,
+            'CONFIG_SETTINGS': REVIEWED_CONFIG_SETTINGS_V25,
+        }
+        if any(getattr(code, name, None) != value for name, value in expected_metadata.items()):
+            raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
@@ -492,6 +530,13 @@ def require_review(code):
 def prepare(package, host, release, lifecycle, upgrade, code, *, approved_config_operation_id=None):
     code.STAGE, code.OPERATION = 'code_prepare_preflight', 'package'
     require_review(code)
+    if (approved_config_operation_id is not None and type(REVIEWED_TRANSITION_V26[1]) is str
+            and code.TARGET_COMMIT == REVIEWED_TRANSITION_V26[1]):
+        if approved_config_operation_id != REVIEWED_CONFIG_OPERATION_V26:
+            raise ValueError('CONFIG_PRESERVE_NOT_APPROVED')
+        result = code.prepare(package, host, release, lifecycle, upgrade,
+                              approved_config_operation_id=approved_config_operation_id)
+        return dict(result, database_policy='preserve-in-place', database_opened_by_controller=False)
     if (approved_config_operation_id is not None and type(REVIEWED_TRANSITION_V25[1]) is str
             and code.TARGET_COMMIT == REVIEWED_TRANSITION_V25[1]):
         if approved_config_operation_id != REVIEWED_CONFIG_OPERATION_V25:

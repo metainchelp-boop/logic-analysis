@@ -290,6 +290,8 @@ class V14TransportTest(unittest.TestCase):
     def test_forward_and_inverse_bundle_fit_original_wire_limits(self):
         encode, decode, _ = shared.ContractTest().workflow_transport()
         for bundle in self.bundles():
+            from test_naver_preview_code_upgrade_v25 import V25TransportTest
+            bundle = V25TransportTest().compactor()(bundle)
             with self.subTest(operation=bundle['operation']):
                 self.assertLessEqual(len(json.dumps(bundle).encode()), 229376)
                 wire = encode(bundle)
@@ -305,6 +307,8 @@ class V14TransportTest(unittest.TestCase):
         import test_naver_preview_code_only as legacy
         encode, _, remote = shared.ContractTest().workflow_transport()
         for bundle in self.bundles():
+            from test_naver_preview_code_upgrade_v25 import V25TransportTest
+            bundle = V25TransportTest().compactor()(bundle)
             # Execute an explicitly unpinned helper, irrespective of final source pins.
             import ast
             source = bundle['code_source']

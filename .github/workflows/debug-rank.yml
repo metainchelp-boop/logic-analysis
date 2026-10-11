@@ -81,6 +81,9 @@ jobs:
                   if isinstance(value, list):
                       return tuple(fields(item) for item in value)
                   return value
+              def literals(items):
+                  return tuple((token.type, token.string) for token in items
+                      if token.type == tokenize.STRING or tokenize.tok_name[token.type].startswith('FSTRING'))
               result = dict(bundle)
               for key, source in bundle.items():
                   if key != 'source' and not key.endswith('_source'):
@@ -91,13 +94,25 @@ jobs:
                   strings = set()
                   tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
                   for token in tokens:
-                      if token.type == tokenize.STRING:
+                      if token.type == tokenize.STRING or tokenize.tok_name[token.type].startswith('FSTRING'):
                           strings.update(range(token.start[0], token.end[0] + 1))
                   for token in tokens:
                       if token.type == tokenize.COMMENT:
                           index = token.start[0] - 1
                           lines[index] = lines[index][:token.start[1]].rstrip() + '\n'
                   compact = ''.join(line for number, line in enumerate(lines, 1) if line.strip() or number in strings)
+                  pairs, level = [], 0
+                  for token in tokenize.generate_tokens(io.StringIO(compact).readline):
+                      value = token.string
+                      if token.type == tokenize.INDENT:
+                          level += 1
+                          value = ' ' * level
+                      elif token.type == tokenize.DEDENT:
+                          level -= 1
+                      pairs.append((token.type, value))
+                  compact = tokenize.untokenize(pairs)
+                  if literals(tokens) != literals(tokenize.generate_tokens(io.StringIO(compact).readline)):
+                      raise ValueError('SOURCE_STRING_MISMATCH')
                   if fields(ast.parse(source)) != fields(ast.parse(compact)):
                       raise ValueError('SOURCE_AST_MISMATCH')
                   result[key] = compact
@@ -181,7 +196,7 @@ jobs:
               bundle['code_source']=pathlib.Path('backend/tools/'+code_module+'.py').read_text()
           if operation=='preview-code-only-rollback':
               bundle['code_only_source']=pathlib.Path('backend/tools/naver_preview_code_only.py').read_text()
-          if operation in ('preview-code-only-upgrade','preview-code-only-rollback') and code_module in ('naver_preview_code_upgrade_v24','naver_preview_code_upgrade_v25'):
+          if operation in ('preview-code-only-upgrade','preview-code-only-rollback') and code_module in ('naver_preview_code_upgrade_v14','naver_preview_code_upgrade_v18','naver_preview_code_upgrade_v19','naver_preview_code_upgrade_v20','naver_preview_code_upgrade_v21','naver_preview_code_upgrade_v22','naver_preview_code_upgrade_v23','naver_preview_code_upgrade_v24','naver_preview_code_upgrade_v25','naver_preview_code_upgrade_v26'):
               bundle=compact_sources(bundle)
           with open(os.environ['GITHUB_ENV'],'a') as stream:
               stream.write('PREVIEW_OPS_B64='+encode_ops(bundle)+'\n')
@@ -362,6 +377,9 @@ jobs:
                   if isinstance(value, list):
                       return tuple(fields(item) for item in value)
                   return value
+              def literals(items):
+                  return tuple((token.type, token.string) for token in items
+                      if token.type == tokenize.STRING or tokenize.tok_name[token.type].startswith('FSTRING'))
               result = dict(bundle)
               for key, source in bundle.items():
                   if key != 'source' and not key.endswith('_source'):
@@ -372,13 +390,25 @@ jobs:
                   strings = set()
                   tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
                   for token in tokens:
-                      if token.type == tokenize.STRING:
+                      if token.type == tokenize.STRING or tokenize.tok_name[token.type].startswith('FSTRING'):
                           strings.update(range(token.start[0], token.end[0] + 1))
                   for token in tokens:
                       if token.type == tokenize.COMMENT:
                           index = token.start[0] - 1
                           lines[index] = lines[index][:token.start[1]].rstrip() + '\n'
                   compact = ''.join(line for number, line in enumerate(lines, 1) if line.strip() or number in strings)
+                  pairs, level = [], 0
+                  for token in tokenize.generate_tokens(io.StringIO(compact).readline):
+                      value = token.string
+                      if token.type == tokenize.INDENT:
+                          level += 1
+                          value = ' ' * level
+                      elif token.type == tokenize.DEDENT:
+                          level -= 1
+                      pairs.append((token.type, value))
+                  compact = tokenize.untokenize(pairs)
+                  if literals(tokens) != literals(tokenize.generate_tokens(io.StringIO(compact).readline)):
+                      raise ValueError('SOURCE_STRING_MISMATCH')
                   if fields(ast.parse(source)) != fields(ast.parse(compact)):
                       raise ValueError('SOURCE_AST_MISMATCH')
                   result[key] = compact
@@ -396,7 +426,10 @@ jobs:
               if approved_config_operation_id is not None:
                   assert operation=='preview-code-only-prepare'
                   import naver_preview_code_only
-                  if (type(naver_preview_code_only.REVIEWED_TRANSITION_V25[1]) is str
+                  if (type(naver_preview_code_only.REVIEWED_TRANSITION_V26[1]) is str
+                          and package.get('source_commit')==naver_preview_code_only.REVIEWED_TRANSITION_V26[1]):
+                      assert approved_config_operation_id==naver_preview_code_only.REVIEWED_CONFIG_OPERATION_V26
+                  elif (type(naver_preview_code_only.REVIEWED_TRANSITION_V25[1]) is str
                           and package.get('source_commit')==naver_preview_code_only.REVIEWED_TRANSITION_V25[1]):
                       assert approved_config_operation_id==naver_preview_code_only.REVIEWED_CONFIG_OPERATION_V25
                   else:
@@ -432,7 +465,7 @@ jobs:
                   bundle['code_only_source']=pathlib.Path('backend/tools/naver_preview_code_only.py').read_text()
               if approved_config_operation_id is not None:
                   bundle['approved_config_operation_id']=approved_config_operation_id
-              if operation=='preview-code-only-prepare' and code_module in ('naver_preview_code_upgrade_v24','naver_preview_code_upgrade_v25'):
+              if operation=='preview-code-only-prepare' and code_module in ('naver_preview_code_upgrade_v14','naver_preview_code_upgrade_v18','naver_preview_code_upgrade_v19','naver_preview_code_upgrade_v20','naver_preview_code_upgrade_v21','naver_preview_code_upgrade_v22','naver_preview_code_upgrade_v23','naver_preview_code_upgrade_v24','naver_preview_code_upgrade_v25','naver_preview_code_upgrade_v26'):
                   bundle=compact_sources(bundle)
               raw=json.dumps(bundle).encode()
               if len(raw)>229376:
@@ -481,7 +514,10 @@ jobs:
                         policy=types.ModuleType('approved_code_only');exec(bundle['code_only_source'],policy.__dict__)
                         policy.require_review(code)
                         if bundle.get('approved_config_operation_id') is not None:
-                            if (type(policy.REVIEWED_TRANSITION_V25[1]) is str
+                            if (type(policy.REVIEWED_TRANSITION_V26[1]) is str
+                                    and code.TARGET_COMMIT==policy.REVIEWED_TRANSITION_V26[1]):
+                                assert bundle['approved_config_operation_id']==policy.REVIEWED_CONFIG_OPERATION_V26
+                            elif (type(policy.REVIEWED_TRANSITION_V25[1]) is str
                                     and code.TARGET_COMMIT==policy.REVIEWED_TRANSITION_V25[1]):
                                 assert bundle['approved_config_operation_id']==policy.REVIEWED_CONFIG_OPERATION_V25
                             else:

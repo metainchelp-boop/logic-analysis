@@ -295,6 +295,8 @@ class V19TransportTest(unittest.TestCase):
         import base64, gzip, zlib
         encode, decode, _ = shared.ContractTest().workflow_transport()
         for kind, bundle in self.bundles().items():
+            from test_naver_preview_code_upgrade_v25 import V25TransportTest
+            bundle = V25TransportTest().compactor()(bundle)
             raw = json.dumps(bundle).encode()
             with self.subTest(kind=kind):
                 self.assertLessEqual(len(raw), 229376 if kind == 'prepare' else 229376)
@@ -316,6 +318,8 @@ class V19TransportTest(unittest.TestCase):
         import test_naver_preview_code_only as legacy
         encode, _, remote = shared.ContractTest().workflow_transport()
         for kind, bundle in self.bundles().items():
+            from test_naver_preview_code_upgrade_v25 import V25TransportTest
+            bundle = V25TransportTest().compactor()(bundle)
             if kind == 'prepare':
                 continue
             bundle['code_source'] = bundle['code_source'].replace(repr(TARGET), 'None').replace(repr(ARCHIVE), 'None').replace(repr(STORE), 'None')
