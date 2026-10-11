@@ -330,7 +330,13 @@ jobs:
               operation=inputs.pop('ad_prepare')
               assert operation in ('preview-prepare','preview-upgrade-prepare','preview-code-prepare','preview-code-only-prepare')
               package=json.loads(inputs.pop('ad_expected_baseline'))
+              approved_config_operation_id=package.pop('approved_config_operation_id',None)
               assert all(value=='off' for value in inputs.values())
+              if approved_config_operation_id is not None:
+                  assert operation=='preview-code-only-prepare'
+                  import naver_preview_code_only
+                  assert package.get('source_commit')==naver_preview_code_only.REVIEWED_TRANSITION_V24[1]
+                  assert approved_config_operation_id==naver_preview_code_only.REVIEWED_CONFIG_OPERATION_V24
               if operation=='preview-code-only-prepare':
                   import naver_preview_code_only
                   selected=naver_preview_code_only.code_module_name(package.get('source_commit'))
@@ -359,6 +365,8 @@ jobs:
               if operation=='preview-code-only-prepare':
                   bundle['operation']=operation
                   bundle['code_only_source']=pathlib.Path('backend/tools/naver_preview_code_only.py').read_text()
+              if approved_config_operation_id is not None:
+                  bundle['approved_config_operation_id']=approved_config_operation_id
               raw=json.dumps(bundle).encode()
               if len(raw)>229376:
                   raise ValueError('PREPARE_BUNDLE_SIZE')
@@ -405,6 +413,11 @@ jobs:
                     if bundle.get('operation')=='preview-code-only-prepare':
                         policy=types.ModuleType('approved_code_only');exec(bundle['code_only_source'],policy.__dict__)
                         policy.require_review(code)
+                        if bundle.get('approved_config_operation_id') is not None:
+                            assert code.TARGET_COMMIT==policy.REVIEWED_TRANSITION_V24[1]
+                            assert bundle['approved_config_operation_id']==policy.REVIEWED_CONFIG_OPERATION_V24
+                    elif bundle.get('approved_config_operation_id') is not None:
+                        raise ValueError('CONFIG_PRESERVE_NOT_APPROVED')
                     package=code.validate_package(bundle['package'],module)
                 else:
                     package=module.validate_package(bundle['package'])
@@ -482,7 +495,11 @@ jobs:
                         module=types.ModuleType('approved_code');exec(bundle['code_source'],module.__dict__)
                         if bundle.get('operation')=='preview-code-only-prepare':
                             policy=types.ModuleType('approved_code_only');exec(bundle['code_only_source'],policy.__dict__)
-                            result=policy.prepare(bundle['package'],host.NativeHost(),release,lifecycle,upgrade,module)
+                            if bundle.get('approved_config_operation_id') is not None:
+                                result=policy.prepare(bundle['package'],host.NativeHost(),release,lifecycle,upgrade,module,
+                                                      approved_config_operation_id=bundle['approved_config_operation_id'])
+                            else:
+                                result=policy.prepare(bundle['package'],host.NativeHost(),release,lifecycle,upgrade,module)
                         else:
                             result=module.prepare(bundle['package'],host.NativeHost(),release,lifecycle,upgrade)
                     else:

@@ -172,6 +172,13 @@ if (type(REVIEWED_ROLLBACK_V23[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIE
     REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V23})
 
 
+# V24 returns to the exact unlimited source while preserving the current environment.
+REVIEWED_ROLLBACK_V24 = ('9ddb0a30e16e4177e8d419318a6f23eb6c206e2f', '10a46ddce2116e274e27fabaf73c7a94be6cda62', '82bc650ca426b0cbd674603dbd0ee2e4be87e898b6c5b2f10c5632e3ce430687', '6a2a1075b1b2c31f47d45d8afdd080e8da786e49c3fdf173e82e51c0a3e3705c', '1f3ce4f659a88ebb607c2bb063aa4cd057d4e6776a3544eb08bdc43c08a12e17', '1f3ce4f659a88ebb607c2bb063aa4cd057d4e6776a3544eb08bdc43c08a12e17', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', frozenset({'naver_runtime/claude_provider.py', 'naver_runtime/learning_provider.py', 'naver_engine/web.py', 'backend/naver_page/report-ui.js'}))
+if (type(REVIEWED_ROLLBACK_V24[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_ROLLBACK_V24[1])
+        and all(type(REVIEWED_ROLLBACK_V24[i]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_ROLLBACK_V24[i]) for i in (3,4,5))):
+    REVIEWED_ROLLBACKS |= frozenset({REVIEWED_ROLLBACK_V24})
+
+
 def transition(code):
     return (code.OLD_COMMIT, code.TARGET_COMMIT, code.OLD_SOURCE_SHA256,
             code.TARGET_SOURCE_SHA256, code.STORE_SHA256.get('old'),
@@ -231,6 +238,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
     if transition(code) == REVIEWED_ROLLBACK_V22:
         code.compatible_inverse_source(path, old_path, upgrade)
     if transition(code) == REVIEWED_ROLLBACK_V23:
+        code.compatible_inverse_source(path, old_path, upgrade)
+    if transition(code) == REVIEWED_ROLLBACK_V24:
         code.compatible_inverse_source(path, old_path, upgrade)
     code.compatible_source(old_path, path, upgrade)
     files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)
@@ -292,6 +301,8 @@ def run(package, host, release, lifecycle, upgrade, policy, code):
         if transition(code) == REVIEWED_ROLLBACK_V22:
             code.compatible_inverse_source(path, old_path, upgrade)
         if transition(code) == REVIEWED_ROLLBACK_V23:
+            code.compatible_inverse_source(path, old_path, upgrade)
+        if transition(code) == REVIEWED_ROLLBACK_V24:
             code.compatible_inverse_source(path, old_path, upgrade)
         code.compatible_source(old_path, path, upgrade)
 

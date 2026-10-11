@@ -59,6 +59,11 @@ V22_EXACT_IFS = ("if type(source_commit) is str and source_commit == REVIEWED_TR
 # Only these entire V23 exact-profile nodes may normalize; all prior frozen digests remain fixed.
 V23_EXACT_IFS = ("if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V23[1] and (type(REVIEWED_TRANSITION_V23[1]) is str) and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V23[1]) and all((type(REVIEWED_TRANSITION_V23[i]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V23[i]) for i in (3, 4, 5))):\n    return 'naver_preview_code_upgrade_v23'", "if transition == REVIEWED_TRANSITION_V23 and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1]) and all((type(transition[i]) is str and re.fullmatch('[0-9a-f]{64}', transition[i]) for i in (3, 4, 5))):\n    expected_paths = {'naver_runtime/learning_provider.py', 'naver_engine/web.py', 'backend/naver_page/report-ui.js', 'naver_engine/store.py', 'backend/naver_page/automation-ui.js'}\n    if getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset() or getattr(code, 'REMOVABLE_SOURCE_PREFIXES', None) != () or getattr(code, 'TARGET_ACTION_ROUTES', None) != ('/reports/notes', '/reports/strategy', '/automation/plans', '/automation/learning') or (getattr(code, 'OWNER_ACTION_ROUTES', None) != ('/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all', '/settings/thresholds', '/holds/org/confirm', '/holds/stages/confirm', '/holds/accounts/confirm', '/links/revoke')) or (getattr(code, 'CLOSED_LINK_ROUTES', None) != ('/links/reject', '/links/preview')) or (getattr(code, 'SALES_GET_ROUTES', None) != ('/sales/clients', '/sales/detail', '/sales/report')) or (getattr(code, 'REPORT_ASSETS', None) != REVIEWED_ASSETS_V23) or (getattr(code, 'OLD_REPORT_ASSETS', None) != REVIEWED_OLD_ASSETS_V23) or (getattr(code, 'OLD_REPORT_UI', None) != REVIEWED_OLD_ASSETS_V23['/naver/report-ui.js']) or (getattr(code, 'OLD_APP', None) != REVIEWED_OLD_ASSETS_V23['/naver/app.js']):\n        raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')", 'if transition(code) == REVIEWED_ROLLBACK_V23:\n    code.compatible_inverse_source(path, old_path, upgrade)')
 
+# Only these exact reviewed V24 nodes and optional prepare dispatch may normalize.
+V24_EXACT_IFS = ("if type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V24[1] and (type(REVIEWED_TRANSITION_V24[1]) is str) and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V24[1]) and all((type(REVIEWED_TRANSITION_V24[i]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V24[i]) for i in (3, 4, 5))):\n    return 'naver_preview_code_upgrade_v24'", "if transition == REVIEWED_TRANSITION_V24 and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1]) and all((type(transition[i]) is str and re.fullmatch('[0-9a-f]{64}', transition[i]) for i in (3, 4, 5))):\n    expected_paths = {'naver_runtime/learning_provider.py', 'naver_runtime/claude_provider.py', 'naver_engine/web.py', 'backend/naver_page/report-ui.js'}\n    if getattr(code, 'ADDED_SOURCE_PATHS', None) != frozenset() or getattr(code, 'REMOVABLE_SOURCE_PREFIXES', None) != () or getattr(code, 'TARGET_ACTION_ROUTES', None) != ('/reports/notes', '/reports/strategy', '/automation/plans', '/automation/learning') or (getattr(code, 'OWNER_ACTION_ROUTES', None) != ('/issues/1/ack', '/issues/1/resolve', '/issues/1/except', '/bell/1/read', '/bell/read-all', '/settings/thresholds', '/holds/org/confirm', '/holds/stages/confirm', '/holds/accounts/confirm', '/links/revoke')) or (getattr(code, 'CLOSED_LINK_ROUTES', None) != ('/links/reject', '/links/preview')) or (getattr(code, 'SALES_GET_ROUTES', None) != ('/sales/clients', '/sales/detail', '/sales/report')) or (getattr(code, 'REPORT_ASSETS', None) != REVIEWED_ASSETS_V24) or (getattr(code, 'OLD_REPORT_ASSETS', None) != REVIEWED_OLD_ASSETS_V24) or (getattr(code, 'OLD_REPORT_UI', None) != REVIEWED_OLD_ASSETS_V24['/naver/report-ui.js']) or (getattr(code, 'OLD_APP', None) != REVIEWED_OLD_ASSETS_V24['/naver/app.js']) or (getattr(code, 'APPROVED_CONFIG_OPERATION_ID', None) != REVIEWED_CONFIG_OPERATION_V24) or (getattr(code, 'CONFIG_SOURCE_COMMIT', None) != REVIEWED_TRANSITION_V24[0]) or (getattr(code, 'CONFIG_ROLLBACK_COMMIT', None) != '09b216f26509fed97179114ee97cb0d4169ce5f8') or (getattr(code, 'CONFIG_SETTINGS', None) != REVIEWED_CONFIG_SETTINGS_V24):\n        raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')", 'if transition(code) == REVIEWED_ROLLBACK_V24:\n    code.compatible_inverse_source(path, old_path, upgrade)')
+V24_EXACT_PREPARE = "def prepare(package, host, release, lifecycle, upgrade, code, *, approved_config_operation_id=None):\n    code.STAGE, code.OPERATION = ('code_prepare_preflight', 'package')\n    require_review(code)\n    if approved_config_operation_id is not None:\n        if code.TARGET_COMMIT != REVIEWED_TRANSITION_V24[1] or approved_config_operation_id != REVIEWED_CONFIG_OPERATION_V24:\n            raise ValueError('CONFIG_PRESERVE_NOT_APPROVED')\n        result = code.prepare(package, host, release, lifecycle, upgrade, approved_config_operation_id=approved_config_operation_id)\n    else:\n        result = code.prepare(package, host, release, lifecycle, upgrade)\n    return dict(result, database_policy='preserve-in-place', database_opened_by_controller=False)"
+V24_OLD_PREPARE = "def prepare(package, host, release, lifecycle, upgrade, code):\n    code.STAGE, code.OPERATION = ('code_prepare_preflight', 'package')\n    require_review(code)\n    result = code.prepare(package, host, release, lifecycle, upgrade)\n    return dict(result, database_policy='preserve-in-place', database_opened_by_controller=False)"
+
 class V8PreservationTest(unittest.TestCase):
     def test_v20_guard_scope_selector_and_inverse_mutations_do_not_normalize_away(self):
         original_tree = tree
@@ -160,10 +165,42 @@ class V8PreservationTest(unittest.TestCase):
                     V8PreservationTest().test_shared_business_functions_are_unchanged_after_exact_passive_metadata_delta()
             self.assertTrue(changed)
 
+    def test_v24_guard_scope_selector_inverse_and_config_option_mutations_do_not_normalize_away(self):
+        original_tree = tree
+        for mutation in ('selector','scope','guard','inverse','config_option'):
+            changed = False
+            def altered(name):
+                nonlocal changed
+                value = original_tree(name)
+                if name != ('naver_preview_code_rollback' if mutation=='inverse' else 'naver_preview_code_only'):
+                    return value
+                for node in ast.walk(value):
+                    if mutation=='selector' and isinstance(node,ast.Return) and isinstance(node.value,ast.Constant) and node.value.value=='naver_preview_code_upgrade_v24':
+                        node.value.value='naver_preview_code_upgrade_v23';changed=True;break
+                    if mutation=='scope' and isinstance(node,ast.If) and ast.unparse(node.test).startswith('transition == REVIEWED_TRANSITION_V24') and isinstance(node.body[0],ast.Assign):
+                        node.body[0].value.elts.append(ast.Constant(value='naver_engine/store.py'));changed=True;break
+                    if mutation=='guard' and isinstance(node,ast.If) and ast.unparse(node.test).startswith('transition == REVIEWED_TRANSITION_V24'):
+                        guard=node.body[1]
+                        assert isinstance(guard,ast.If) and isinstance(guard.body[0],ast.Raise)
+                        guard.body=[ast.Pass()];changed=True;break
+                    if mutation=='inverse' and isinstance(node,ast.If) and ast.unparse(node.test)=='transition(code) == REVIEWED_ROLLBACK_V24':
+                        node.body=[ast.Pass()];changed=True;break
+                    if mutation=='config_option' and isinstance(node,ast.FunctionDef) and node.name=='prepare':
+                        node.args.kw_defaults[0]=ast.Constant(value='auto-preserve');changed=True;break
+                return value
+            with self.subTest(mutation=mutation),patch(__name__+'.tree',side_effect=altered):
+                with self.assertRaises(AssertionError):
+                    V8PreservationTest().test_shared_business_functions_are_unchanged_after_exact_passive_metadata_delta()
+            self.assertTrue(changed)
+
     def test_shared_business_functions_are_unchanged_after_exact_passive_metadata_delta(self):
         class OldDispatch(ast.NodeTransformer):
+            def visit_FunctionDef(self,node):
+                if ast.dump(node,include_attributes=False)==ast.dump(ast.parse(V24_EXACT_PREPARE).body[0],include_attributes=False):
+                    return ast.parse(V24_OLD_PREPARE).body[0]
+                return self.generic_visit(node)
             def visit_If(self,node):
-                if any(ast.dump(node,include_attributes=False)==ast.dump(ast.parse(source).body[0],include_attributes=False) for source in V20_EXACT_IFS + V21_EXACT_IFS + V22_EXACT_IFS + V23_EXACT_IFS):
+                if any(ast.dump(node,include_attributes=False)==ast.dump(ast.parse(source).body[0],include_attributes=False) for source in V20_EXACT_IFS + V21_EXACT_IFS + V22_EXACT_IFS + V23_EXACT_IFS + V24_EXACT_IFS):
                     return None
                 exact=ast.parse('if transition(code) in (REVIEWED_ROLLBACK_V14, REVIEWED_ROLLBACK_V15, REVIEWED_ROLLBACK_V16, REVIEWED_ROLLBACK_V17, REVIEWED_ROLLBACK_V18, REVIEWED_ROLLBACK_V19):\n    code.compatible_inverse_source(path, old_path, upgrade)').body[0]
                 if ast.dump(node,include_attributes=False)==ast.dump(exact,include_attributes=False):

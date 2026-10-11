@@ -294,6 +294,9 @@ class PostSuccessRollbackTest(unittest.TestCase):
         v23 = shared.load('naver_preview_code_upgrade_v23')
         if v23.TARGET_COMMIT is not None and v23.TARGET_SOURCE_SHA256 is not None:
             names.append('naver_preview_code_upgrade_v23')
+        v24 = shared.load('naver_preview_code_upgrade_v24')
+        if v24.TARGET_COMMIT is not None and v24.TARGET_SOURCE_SHA256 is not None:
+            names.append('naver_preview_code_upgrade_v24')
         self.assertEqual(helper.REVIEWED_ROLLBACKS,frozenset(helper.transition(shared.load(name)) for name in names))
         for code_name in ('naver_preview_code_upgrade', 'naver_preview_code_upgrade_v3',
                           'naver_preview_code_upgrade_v4'):

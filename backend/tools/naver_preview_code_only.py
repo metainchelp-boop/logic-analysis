@@ -157,6 +157,13 @@ REVIEWED_TRANSITION_V23 = ('09b216f26509fed97179114ee97cb0d4169ce5f8', '9ddb0a30
 REVIEWED_ASSETS_V23 = {'/naver/sso-bootstrap.js': (4588, 'b32369913287c49fa43fa210db73742f51c203066273b0334b4d6ebbb335b289', 'text/javascript; charset=utf-8'), '/naver/report-ui.js': (82378, 'e71fe853c13d33176315b17cccc7a818d0a836170eb43651399479c531566e34', 'text/javascript; charset=utf-8'), '/naver/report-pdf.js': (37921, '454ccb5f20b3a8f125ac9f1e1cc765041a0d23e8a881fa11ccbfea5b5c848964', 'text/javascript; charset=utf-8'), '/naver/sales-ui.js': (17774, '00553781030990970c88dcd6d86c11730cf9c60cf9ce7a7963f2b091cd5aa2ff', 'text/javascript; charset=utf-8'), '/naver/automation-ui.js': (22976, '0828746fd2c60d43dd9e6f448782d1c46d543ecf2eb243590df8130ac5f6d2d3', 'text/javascript; charset=utf-8'), '/naver/learning-ui.js': (23619, '9cae047e4cf163d20e9e597df364da3565c88ed622b4cfe2d6ab651a1274ef7e', 'text/javascript; charset=utf-8'), '/naver/app.js': (222000, 'f119f80f3fac01de107f7ce45a2ed39f5443dfc4a79db8f8c67ad06678549078', 'text/javascript; charset=utf-8'), '/naver/app.css': (57115, '82174f6c25649692b68df439bb8f61329a218f6d052e77b8e9b0e9dd1970bee7', 'text/css; charset=utf-8'), '/naver/sales.css': (5905, 'f27843cb1e1e63a41d85f5f794035f47c62ec72dda5971f95dd9ed58226ba09d', 'text/css; charset=utf-8'), '/naver/vendor/report-pdf/NanumGothic-Regular.ttf.gz': (697020, '72d1bf88a642ede8ff7da422031106fc697ea4c79b1cfd2994bffc57df4dab07', 'application/gzip'), '/naver/vendor/report-pdf/pdf-lib-1.17.1.min.js': (525099, '0f9a5cad07941f0826586c94e089d89b918c46e5c17cf2d5a3c6f666e3bc694f', 'text/javascript; charset=utf-8'), '/naver/vendor/report-pdf/fontkit-1.1.1.umd.min.js': (758440, 'd8df561b9fba98e24f2e5130e40948809281bbbc55a20c412359f1a0a5eb35a6', 'text/javascript; charset=utf-8'), '/naver/vendor/report-pdf/sha256-1.0.0.min.js': (8156, 'a050d794e170699bd1a69d33908d0942c68901cb88347016064b60b240f0067e', 'text/javascript; charset=utf-8')}
 REVIEWED_OLD_ASSETS_V23 = {'/naver/sso-bootstrap.js': (4588, 'b32369913287c49fa43fa210db73742f51c203066273b0334b4d6ebbb335b289', 'text/javascript; charset=utf-8'), '/naver/report-ui.js': (82234, '0ed72876c510d8ba8950341e997724ed2918391661166dfc91a08fbff0fb383f', 'text/javascript; charset=utf-8'), '/naver/report-pdf.js': (37921, '454ccb5f20b3a8f125ac9f1e1cc765041a0d23e8a881fa11ccbfea5b5c848964', 'text/javascript; charset=utf-8'), '/naver/sales-ui.js': (17774, '00553781030990970c88dcd6d86c11730cf9c60cf9ce7a7963f2b091cd5aa2ff', 'text/javascript; charset=utf-8'), '/naver/automation-ui.js': (22984, 'd6f63bbec77bd0bbd777f51bb383102815df0900e50b0865758355a9aa45cf0f', 'text/javascript; charset=utf-8'), '/naver/learning-ui.js': (23619, '9cae047e4cf163d20e9e597df364da3565c88ed622b4cfe2d6ab651a1274ef7e', 'text/javascript; charset=utf-8'), '/naver/app.js': (222000, 'f119f80f3fac01de107f7ce45a2ed39f5443dfc4a79db8f8c67ad06678549078', 'text/javascript; charset=utf-8'), '/naver/app.css': (57115, '82174f6c25649692b68df439bb8f61329a218f6d052e77b8e9b0e9dd1970bee7', 'text/css; charset=utf-8'), '/naver/sales.css': (5905, 'f27843cb1e1e63a41d85f5f794035f47c62ec72dda5971f95dd9ed58226ba09d', 'text/css; charset=utf-8'), '/naver/vendor/report-pdf/NanumGothic-Regular.ttf.gz': (697020, '72d1bf88a642ede8ff7da422031106fc697ea4c79b1cfd2994bffc57df4dab07', 'application/gzip'), '/naver/vendor/report-pdf/pdf-lib-1.17.1.min.js': (525099, '0f9a5cad07941f0826586c94e089d89b918c46e5c17cf2d5a3c6f666e3bc694f', 'text/javascript; charset=utf-8'), '/naver/vendor/report-pdf/fontkit-1.1.1.umd.min.js': (758440, 'd8df561b9fba98e24f2e5130e40948809281bbbc55a20c412359f1a0a5eb35a6', 'text/javascript; charset=utf-8'), '/naver/vendor/report-pdf/sha256-1.0.0.min.js': (8156, 'a050d794e170699bd1a69d33908d0942c68901cb88347016064b60b240f0067e', 'text/javascript; charset=utf-8')}
 
+# V24 is closed until the exact telemetry source and native archive are reviewed.
+REVIEWED_TRANSITION_V24 = ('9ddb0a30e16e4177e8d419318a6f23eb6c206e2f', '10a46ddce2116e274e27fabaf73c7a94be6cda62', '82bc650ca426b0cbd674603dbd0ee2e4be87e898b6c5b2f10c5632e3ce430687', '6a2a1075b1b2c31f47d45d8afdd080e8da786e49c3fdf173e82e51c0a3e3705c', '1f3ce4f659a88ebb607c2bb063aa4cd057d4e6776a3544eb08bdc43c08a12e17', '1f3ce4f659a88ebb607c2bb063aa4cd057d4e6776a3544eb08bdc43c08a12e17', '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76')
+REVIEWED_ASSETS_V24 = {'/naver/sso-bootstrap.js': (4588, 'b32369913287c49fa43fa210db73742f51c203066273b0334b4d6ebbb335b289', 'text/javascript; charset=utf-8'), '/naver/report-ui.js': (85266, 'fd5acc39a37754cd5b35860d83b2f52cd730c2755edcae82122de7067a96fe6d', 'text/javascript; charset=utf-8'), '/naver/report-pdf.js': (37921, '454ccb5f20b3a8f125ac9f1e1cc765041a0d23e8a881fa11ccbfea5b5c848964', 'text/javascript; charset=utf-8'), '/naver/sales-ui.js': (17774, '00553781030990970c88dcd6d86c11730cf9c60cf9ce7a7963f2b091cd5aa2ff', 'text/javascript; charset=utf-8'), '/naver/automation-ui.js': (22976, '0828746fd2c60d43dd9e6f448782d1c46d543ecf2eb243590df8130ac5f6d2d3', 'text/javascript; charset=utf-8'), '/naver/learning-ui.js': (23619, '9cae047e4cf163d20e9e597df364da3565c88ed622b4cfe2d6ab651a1274ef7e', 'text/javascript; charset=utf-8'), '/naver/app.js': (222000, 'f119f80f3fac01de107f7ce45a2ed39f5443dfc4a79db8f8c67ad06678549078', 'text/javascript; charset=utf-8'), '/naver/app.css': (57115, '82174f6c25649692b68df439bb8f61329a218f6d052e77b8e9b0e9dd1970bee7', 'text/css; charset=utf-8'), '/naver/sales.css': (5905, 'f27843cb1e1e63a41d85f5f794035f47c62ec72dda5971f95dd9ed58226ba09d', 'text/css; charset=utf-8'), '/naver/vendor/report-pdf/NanumGothic-Regular.ttf.gz': (697020, '72d1bf88a642ede8ff7da422031106fc697ea4c79b1cfd2994bffc57df4dab07', 'application/gzip'), '/naver/vendor/report-pdf/pdf-lib-1.17.1.min.js': (525099, '0f9a5cad07941f0826586c94e089d89b918c46e5c17cf2d5a3c6f666e3bc694f', 'text/javascript; charset=utf-8'), '/naver/vendor/report-pdf/fontkit-1.1.1.umd.min.js': (758440, 'd8df561b9fba98e24f2e5130e40948809281bbbc55a20c412359f1a0a5eb35a6', 'text/javascript; charset=utf-8'), '/naver/vendor/report-pdf/sha256-1.0.0.min.js': (8156, 'a050d794e170699bd1a69d33908d0942c68901cb88347016064b60b240f0067e', 'text/javascript; charset=utf-8')}
+REVIEWED_OLD_ASSETS_V24 = {'/naver/sso-bootstrap.js': (4588, 'b32369913287c49fa43fa210db73742f51c203066273b0334b4d6ebbb335b289', 'text/javascript; charset=utf-8'), '/naver/report-ui.js': (82378, 'e71fe853c13d33176315b17cccc7a818d0a836170eb43651399479c531566e34', 'text/javascript; charset=utf-8'), '/naver/report-pdf.js': (37921, '454ccb5f20b3a8f125ac9f1e1cc765041a0d23e8a881fa11ccbfea5b5c848964', 'text/javascript; charset=utf-8'), '/naver/sales-ui.js': (17774, '00553781030990970c88dcd6d86c11730cf9c60cf9ce7a7963f2b091cd5aa2ff', 'text/javascript; charset=utf-8'), '/naver/automation-ui.js': (22976, '0828746fd2c60d43dd9e6f448782d1c46d543ecf2eb243590df8130ac5f6d2d3', 'text/javascript; charset=utf-8'), '/naver/learning-ui.js': (23619, '9cae047e4cf163d20e9e597df364da3565c88ed622b4cfe2d6ab651a1274ef7e', 'text/javascript; charset=utf-8'), '/naver/app.js': (222000, 'f119f80f3fac01de107f7ce45a2ed39f5443dfc4a79db8f8c67ad06678549078', 'text/javascript; charset=utf-8'), '/naver/app.css': (57115, '82174f6c25649692b68df439bb8f61329a218f6d052e77b8e9b0e9dd1970bee7', 'text/css; charset=utf-8'), '/naver/sales.css': (5905, 'f27843cb1e1e63a41d85f5f794035f47c62ec72dda5971f95dd9ed58226ba09d', 'text/css; charset=utf-8'), '/naver/vendor/report-pdf/NanumGothic-Regular.ttf.gz': (697020, '72d1bf88a642ede8ff7da422031106fc697ea4c79b1cfd2994bffc57df4dab07', 'application/gzip'), '/naver/vendor/report-pdf/pdf-lib-1.17.1.min.js': (525099, '0f9a5cad07941f0826586c94e089d89b918c46e5c17cf2d5a3c6f666e3bc694f', 'text/javascript; charset=utf-8'), '/naver/vendor/report-pdf/fontkit-1.1.1.umd.min.js': (758440, 'd8df561b9fba98e24f2e5130e40948809281bbbc55a20c412359f1a0a5eb35a6', 'text/javascript; charset=utf-8'), '/naver/vendor/report-pdf/sha256-1.0.0.min.js': (8156, 'a050d794e170699bd1a69d33908d0942c68901cb88347016064b60b240f0067e', 'text/javascript; charset=utf-8')}
+REVIEWED_CONFIG_OPERATION_V24 = '74c912dddf824fae99012849bc4c19a5'
+REVIEWED_CONFIG_SETTINGS_V24 = {'NAVER_CLAUDE_ENABLED': 'true', 'CLAUDE_MODEL': 'claude-sonnet-5-5', 'NAVER_CLAUDE_MONTHLY_CAP_USD': 'unlimited', 'NAVER_CLAUDE_INPUT_USD_PER_MILLION': '2', 'NAVER_CLAUDE_OUTPUT_USD_PER_MILLION': '10', 'NAVER_CLAUDE_TIMEOUT_SECONDS': '20'}
+
 def code_module_name(source_commit):
     if type(source_commit) is str and source_commit == REVIEWED_TRANSITION[1]:
         return 'naver_preview_code_upgrade'
@@ -259,6 +266,10 @@ def code_module_name(source_commit):
             and type(REVIEWED_TRANSITION_V23[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V23[1])
             and all(type(REVIEWED_TRANSITION_V23[i]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V23[i]) for i in (3,4,5))):
         return 'naver_preview_code_upgrade_v23'
+    if (type(source_commit) is str and source_commit == REVIEWED_TRANSITION_V24[1]
+            and type(REVIEWED_TRANSITION_V24[1]) is str and re.fullmatch('[0-9a-f]{40}', REVIEWED_TRANSITION_V24[1])
+            and all(type(REVIEWED_TRANSITION_V24[i]) is str and re.fullmatch('[0-9a-f]{64}', REVIEWED_TRANSITION_V24[i]) for i in (3,4,5))):
+        return 'naver_preview_code_upgrade_v24'
     raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
@@ -418,14 +429,39 @@ def require_review(code):
                 or getattr(code,'OLD_REPORT_UI',None) != REVIEWED_OLD_ASSETS_V23['/naver/report-ui.js']
                 or getattr(code,'OLD_APP',None) != REVIEWED_OLD_ASSETS_V23['/naver/app.js']):
             raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
+    if (transition == REVIEWED_TRANSITION_V24
+            and type(transition[1]) is str and re.fullmatch('[0-9a-f]{40}', transition[1])
+            and all(type(transition[i]) is str and re.fullmatch('[0-9a-f]{64}', transition[i]) for i in (3,4,5))):
+        expected_paths = {'naver_runtime/learning_provider.py', 'naver_runtime/claude_provider.py', 'naver_engine/web.py', 'backend/naver_page/report-ui.js'}
+        if (getattr(code,'ADDED_SOURCE_PATHS',None) != frozenset()
+                or getattr(code,'REMOVABLE_SOURCE_PREFIXES',None) != ()
+                or getattr(code,'TARGET_ACTION_ROUTES',None) != ('/reports/notes','/reports/strategy','/automation/plans','/automation/learning')
+                or getattr(code,'OWNER_ACTION_ROUTES',None) != ('/issues/1/ack','/issues/1/resolve','/issues/1/except','/bell/1/read','/bell/read-all','/settings/thresholds','/holds/org/confirm','/holds/stages/confirm','/holds/accounts/confirm','/links/revoke')
+                or getattr(code,'CLOSED_LINK_ROUTES',None) != ('/links/reject','/links/preview')
+                or getattr(code,'SALES_GET_ROUTES',None) != ('/sales/clients','/sales/detail','/sales/report')
+                or getattr(code,'REPORT_ASSETS',None) != REVIEWED_ASSETS_V24
+                or getattr(code,'OLD_REPORT_ASSETS',None) != REVIEWED_OLD_ASSETS_V24
+                or getattr(code,'OLD_REPORT_UI',None) != REVIEWED_OLD_ASSETS_V24['/naver/report-ui.js']
+                or getattr(code,'OLD_APP',None) != REVIEWED_OLD_ASSETS_V24['/naver/app.js']
+                or getattr(code,'APPROVED_CONFIG_OPERATION_ID',None) != REVIEWED_CONFIG_OPERATION_V24
+                or getattr(code,'CONFIG_SOURCE_COMMIT',None) != REVIEWED_TRANSITION_V24[0]
+                or getattr(code,'CONFIG_ROLLBACK_COMMIT',None) != '09b216f26509fed97179114ee97cb0d4169ce5f8'
+                or getattr(code,'CONFIG_SETTINGS',None) != REVIEWED_CONFIG_SETTINGS_V24):
+            raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
     if expected_paths is None or code.CODE_PATHS != expected_paths or code.TEST_PATHS != frozenset():
         raise ValueError('CODE_ONLY_RELEASE_NOT_REVIEWED')
 
 
-def prepare(package, host, release, lifecycle, upgrade, code):
+def prepare(package, host, release, lifecycle, upgrade, code, *, approved_config_operation_id=None):
     code.STAGE, code.OPERATION = 'code_prepare_preflight', 'package'
     require_review(code)
-    result = code.prepare(package, host, release, lifecycle, upgrade)
+    if approved_config_operation_id is not None:
+        if code.TARGET_COMMIT != REVIEWED_TRANSITION_V24[1] or approved_config_operation_id != REVIEWED_CONFIG_OPERATION_V24:
+            raise ValueError('CONFIG_PRESERVE_NOT_APPROVED')
+        result = code.prepare(package, host, release, lifecycle, upgrade,
+                              approved_config_operation_id=approved_config_operation_id)
+    else:
+        result = code.prepare(package, host, release, lifecycle, upgrade)
     return dict(result, database_policy='preserve-in-place', database_opened_by_controller=False)
 
 
