@@ -9,7 +9,7 @@ on:
       claude_config:
         description: '서버 내 기존 Claude 키 연결/복구. 고정 관제 2개 릴리스만, 월 한도 없음, 유료 호출 없음.'
         type: choice
-        options: ['off', activate, recover]
+        options: ['off', activate, recover, probe-models]
         required: false
         default: 'off'
       ad_prepare:
@@ -2397,4 +2397,108 @@ jobs:
                 sys.exit(1)
             print(json.dumps(result,sort_keys=True,separators=(',',':')))
             # CLAUDE_CONFIG_REMOTE_END
+            PY
+
+  claude-models:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-claude-model-probe-20261011' && inputs.claude_config == 'probe-models' }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Validate fixed read-only probe and offline tests
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -m unittest discover -s backend/tests -p 'test_naver_claude*.py' -q
+          python3 - <<'PY'
+          # CLAUDE_MODELS_PACKAGE_BEGIN
+          import base64,gzip,json,os,pathlib,sys
+          sys.path.insert(0,'backend/tools')
+          import naver_claude_config as controller,naver_claude_models_probe as probe
+          def unique(pairs):
+              result={}
+              for key,value in pairs:
+                  if key in result:
+                      raise ValueError('MODEL_PROBE_INPUT')
+                  result[key]=value
+              return result
+          inputs=json.loads(os.environ['INPUTS_JSON'],object_pairs_hook=unique)
+          assert inputs.pop('claude_config')=='probe-models'
+          request=json.loads(inputs.pop('ad_expected_baseline'),object_pairs_hook=unique)
+          probe.validate_request(request,controller)
+          assert set(inputs)=={'ad_prepare','collector','rank_link','capacity','structure','expired','queue','urlshape','use_branch_code'}
+          assert all(value=='off' for value in inputs.values())
+          names=('naver_claude_models_probe','naver_claude_config','naver_preview_release','naver_preview_upgrade','naver_preview_lifecycle','naver_erp_tunnel_service_install')
+          raw=json.dumps({'request':request,'modules':{name:pathlib.Path('backend/tools/'+name+'.py').read_text() for name in names}},
+                         sort_keys=True,separators=(',',':')).encode()
+          assert len(raw)<=262144
+          encoded=base64.b64encode(gzip.compress(raw,mtime=0)).decode()
+          assert len(encoded)<=65536
+          with open(os.environ['GITHUB_ENV'],'a') as output:
+              output.write('CLAUDE_MODELS_B64='+encoded+'\n')
+          # CLAUDE_MODELS_PACKAGE_END
+          PY
+      - name: One official models GET, no messages or restart
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          CLAUDE_MODELS_B64: ${{ env.CLAUDE_MODELS_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: CLAUDE_MODELS_B64
+          command_timeout: 90s
+          script: |
+            set -eu
+            /usr/bin/python3 -I -S -B - <<'PY'
+            # CLAUDE_MODELS_REMOTE_BEGIN
+            import base64,contextlib,io,json,os,sys,types,zlib
+            def unique(pairs):
+                result={}
+                for key,value in pairs:
+                    if key in result:
+                        raise ValueError('MODEL_PROBE_INPUT')
+                    result[key]=value
+                return result
+            def decode(encoded):
+                if not isinstance(encoded,str) or not 0<len(encoded)<=65536:
+                    raise ValueError('MODEL_PROBE_TRANSPORT')
+                decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+                raw=decoder.decompress(base64.b64decode(encoded,validate=True),262145)
+                if len(raw)>262144 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+                    raise ValueError('MODEL_PROBE_TRANSPORT')
+                bundle=json.loads(raw,object_pairs_hook=unique)
+                names={'naver_claude_models_probe','naver_claude_config','naver_preview_release','naver_preview_upgrade','naver_preview_lifecycle','naver_erp_tunnel_service_install'}
+                if (not isinstance(bundle,dict) or set(bundle)!={'request','modules'} or not isinstance(bundle['modules'],dict) or
+                        set(bundle['modules'])!=names or any(not isinstance(source,str) or not source for source in bundle['modules'].values())):
+                    raise ValueError('MODEL_PROBE_TRANSPORT')
+                return bundle
+            try:
+                bundle=decode(os.environ['CLAUDE_MODELS_B64'])
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+                    modules={}
+                    for name,source in bundle['modules'].items():
+                        module=types.ModuleType('approved_'+name)
+                        exec(compile(source,'<reviewed-'+name+'>','exec'),module.__dict__)
+                        modules[name]=module
+                    probe=modules['naver_claude_models_probe']
+                    result=probe.run(bundle['request'],modules['naver_erp_tunnel_service_install'].NativeHost(),
+                        modules['naver_preview_release'],modules['naver_preview_upgrade'],modules['naver_preview_lifecycle'],
+                        modules['naver_claude_config'])
+                    result=probe.public_result(result)
+            except BaseException:
+                print('{"classification":"source_refused","configured_model_present":false,"fallback_model_present":false,"http_status":null}')
+                sys.exit(1)
+            print(json.dumps(result,sort_keys=True,separators=(',',':')))
+            # CLAUDE_MODELS_REMOTE_END
             PY

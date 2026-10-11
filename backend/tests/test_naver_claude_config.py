@@ -418,9 +418,9 @@ class WorkflowTests(unittest.TestCase):
     def test_all_nine_old_jobs_guard_config_mode(self):
         text = WORKFLOW.read_text()
         jobs = re.findall(r'^  ([a-z0-9-]+):\n    if: (.+)$', text, re.M)
-        self.assertEqual(len(jobs), 10)
+        self.assertEqual(len(jobs), 11)
         for name, condition in jobs:
-            if name != 'claude-config':
+            if name not in ('claude-config', 'claude-models'):
                 self.assertTrue(condition.startswith("${{ (!inputs.claude_config || inputs.claude_config == 'off') && ("))
         job = text.split('  claude-config:\n', 1)[1]
         self.assertIn('group: deploy-logic-analysis\n      cancel-in-progress: false', job)
