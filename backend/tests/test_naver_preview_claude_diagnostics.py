@@ -140,6 +140,41 @@ class ClaudeDiagnosticsTest(unittest.TestCase):
         self.assertEqual(value['status'],'not_performed')
         self.assertEqual(value['code'],'ACTOR_UNAVAILABLE')
 
+    def test_actual_workflow_bundle_fits_symmetric_bounded_transport(self):
+        import base64
+        import gzip
+        import re
+        import zlib
+        root=Path(__file__).resolve().parents[2]
+        workflow=(root/'.github/workflows/debug-rank.yml').read_text().split('  claude-diagnostics:',1)[1]
+        wire_limits=[int(value) for value in re.findall(r'assert len\(encoded\)<=([0-9]+)',workflow)]
+        raw_limits=[int(value) for value in re.findall(r'0<len\(raw\)<=([0-9]+)',workflow)]
+        decode_limits=[int(value) for value in re.findall(r'decoder.decompress\(base64.b64decode\(encoded,validate=True\),([0-9]+)\)',workflow)]
+        self.assertEqual(wire_limits,[81920,81920])
+        self.assertEqual(raw_limits,[229376,229376])
+        self.assertEqual(decode_limits,[229377])
+        names={'diagnostic':'naver_preview_claude_diagnostics.py','release':'naver_preview_release.py',
+               'host':'naver_erp_tunnel_service_install.py','logs':'naver_preview_collection_status.py'}
+        package=dict(baseline=D.BASELINE,source_commit=D.SOURCE,source_tar_gz_sha256=D.ARCHIVE,
+                     target='foodin-weekly-20260928',mode='metadata-and-synthetic-only')
+        sources={name:(root/'backend/tools'/file).read_text() for name,file in names.items()}
+        raw=json.dumps(dict(package=package,sources=sources)).encode()
+        wire=base64.b64encode(gzip.compress(raw,mtime=0))
+        self.assertLessEqual(len(raw),raw_limits[0])
+        self.assertLessEqual(len(wire),wire_limits[0])
+        decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+        decoded=decoder.decompress(base64.b64decode(wire,validate=True),decode_limits[0])
+        self.assertEqual(decoded,raw)
+        self.assertTrue(decoder.eof)
+        self.assertFalse(decoder.unused_data or decoder.unconsumed_tail)
+        self.assertIn('decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail',workflow)
+        decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+        decoder.decompress(gzip.compress(raw,mtime=0)+b'forbidden-trailing',decode_limits[0])
+        self.assertTrue(decoder.unused_data)
+        decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+        decoded=decoder.decompress(gzip.compress(b'x'*decode_limits[0],mtime=0),decode_limits[0])
+        self.assertGreater(len(decoded),raw_limits[0])
+
     def test_latest_reserve_actor_stays_internal(self):
         c=sqlite3.connect(self.path)
         c.execute("INSERT INTO naver_auto_access_log VALUES(1,987654,'learning-ai-reserve','ok')");c.commit();c.close()

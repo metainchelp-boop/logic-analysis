@@ -2301,7 +2301,7 @@ jobs:
           raw=json.dumps(bundle).encode()
           assert 0<len(raw)<=229376
           encoded=base64.b64encode(gzip.compress(raw,mtime=0)).decode()
-          assert len(encoded)<=73728
+          assert len(encoded)<=81920
           with open(os.environ['GITHUB_ENV'],'a') as stream:
               stream.write('CLAUDE_DIAG_B64='+encoded+'\n')
           print('CLAUDE_DIAG_SOURCE_DIGESTS '+json.dumps({name:hashlib.sha256(value.encode()).hexdigest() for name,value in sources.items()},sort_keys=True))
@@ -2323,7 +2323,7 @@ jobs:
             module=None
             try:
                 encoded=os.environ['CLAUDE_DIAG_B64']
-                assert len(encoded)<=73728
+                assert len(encoded)<=81920
                 decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
                 raw=decoder.decompress(base64.b64decode(encoded,validate=True),229377)
                 assert 0<len(raw)<=229376 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
