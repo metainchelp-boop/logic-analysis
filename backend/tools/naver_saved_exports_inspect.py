@@ -21,7 +21,7 @@ ENGINE_DIRECTORY = Path('/var/lib/metainc/naver-engine')
 PYTHONS = ('/usr/bin/python3', '/usr/local/bin/python3')
 SYSTEMCTL = '/usr/bin/systemctl'
 SYSTEMD_ANALYZE = '/usr/bin/systemd-analyze'
-EXPORTER_CANDIDATE = 'naver-saved-export'
+EXPORTER_CANDIDATE = 'nobody'
 NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_.-]{0,63}\Z')
 
 
@@ -92,20 +92,20 @@ def _executable(path):
     entry = _metadata(path)
     # Standard runtime executables may be symlinks. Report only the followed
     # stat, never its target path; source/database symlinks stay disallowed.
-    target = {'regular': False, 'root_owned_nonwritable': False}
+    target = {'regular': False, 'binary_policy_ok': False}
     try:
         item = os.stat(path)
         target = {'regular': stat.S_ISREG(item.st_mode),
-                  'root_owned_nonwritable': bool(stat.S_ISREG(item.st_mode) and
-                                                item.st_uid == 0 and
-                                                not item.st_mode & 0o022)}
+                  'binary_policy_ok': bool(stat.S_ISREG(item.st_mode) and
+                                           item.st_uid == 0 and
+                                           not item.st_mode & 0o022)}
     except OSError:
         pass
     return {**entry, **target}
 
 
 def _systemd_version(binary):
-    if not binary['root_owned_nonwritable']:
+    if not binary['binary_policy_ok']:
         return None
     try:
         result = subprocess.run([SYSTEMCTL, '--version'], check=False,
