@@ -16,6 +16,44 @@ TOOLS = Path(__file__).parents[1] / 'tools'
 encoded, sha = previous.encoded, previous.sha
 
 
+def historical_transport_functions(workflow):
+    """Compare both complete codec ASTs except the exact appended read-only route."""
+    import re, textwrap
+    route = 'preview-conversion-recovery-v26'
+    selectors = {
+        ast.dump(ast.parse("bundle['operation']", mode='eval').body): (ast.NotIn, route),
+        ast.dump(ast.parse("bundle.get('operation')", mode='eval').body): (ast.In, route),
+        ast.dump(ast.parse("(bundle.get('operation'),bundle.get('function'))", mode='eval').body):
+            (ast.NotIn, (route, 'run')),
+    }
+
+    class ExactRouteOnly(ast.NodeTransformer):
+        def visit_Compare(self, node):
+            self.generic_visit(node)
+            allowed = selectors.get(ast.dump(node.left))
+            if (allowed is None or len(node.ops) != 1 or type(node.ops[0]) is not allowed[0]
+                    or len(node.comparators) != 1 or not isinstance(node.comparators[0], ast.Tuple)):
+                return node
+            entries = node.comparators[0].elts
+            expected = ast.parse(repr(allowed[1]), mode='eval').body
+            matches = [index for index, entry in enumerate(entries) if ast.dump(entry) == ast.dump(expected)]
+            # Only one appended opcode (or exact opcode/run pair), never other constants or contexts.
+            if matches == [len(entries)-1] and len(entries) > 1:
+                node.comparators[0].elts = entries[:-1]
+            return node
+
+    found = {}
+    for body in re.findall(r"python3(?: -I -B)? - <<'PY'\n(.*?)\n\s*PY", workflow, re.S):
+        for node in ast.parse(textwrap.dedent(body)).body:
+            if isinstance(node, ast.FunctionDef) and node.name in ('encode_ops', 'decode_ops'):
+                if node.name in found:
+                    raise AssertionError('duplicate historical codec definition')
+                found[node.name] = ast.dump(ExactRouteOnly().visit(node), include_attributes=False)
+    if set(found) != {'encode_ops', 'decode_ops'}:
+        raise AssertionError('both historical codec ASTs are required')
+    return found
+
+
 def pin_synthetic(code):
     code.TARGET_COMMIT = 'f' * 40
     code.TARGET_SOURCE_SHA256 = 'e' * 64
@@ -309,19 +347,57 @@ class V25TransportTest(unittest.TestCase):
                     self.assertEqual(decoded, bundle)
 
     def test_original_encoders_decoders_and_historical_non_code_operations_are_unchanged(self):
-        import re, textwrap
         current = (TOOLS.parents[1] / '.github/workflows/debug-rank.yml').read_text()
         base = subprocess.check_output(['git', 'show', '5b5db11192980485919bb2b3c8484f0f62df9e0a:.github/workflows/debug-rank.yml'], cwd=TOOLS).decode()
-        def functions(value):
-            found = {}
-            for body in re.findall(r"python3 - <<'PY'\n(.*?)\n\s*PY", value, re.S):
-                for node in ast.parse(textwrap.dedent(body)).body:
-                    if isinstance(node, ast.FunctionDef) and node.name in ('encode_ops', 'decode_ops'):
-                        found[node.name] = ast.dump(node, include_attributes=False)
-            return found
-        self.assertEqual(functions(current), functions(base))
+        self.assertEqual(historical_transport_functions(current), historical_transport_functions(base))
         shared.ContractTest().test_transport_keeps_other_operations_byte_identical_and_code_mode_exact()
         shared.ContractTest().test_transport_rejects_oversize_corrupt_truncated_and_trailing_gzip()
+
+    def test_historical_transport_normalizes_only_the_exact_appended_route(self):
+        current = (TOOLS.parents[1] / '.github/workflows/debug-rank.yml').read_text()
+        base = subprocess.check_output(['git', 'show', '5b5db11192980485919bb2b3c8484f0f62df9e0a:.github/workflows/debug-rank.yml'], cwd=TOOLS).decode()
+        historical = historical_transport_functions(base)
+        self.assertEqual(historical_transport_functions(current), historical)
+        for old, new in (('len(raw)>229376', 'len(raw)>229375'),
+                ('len(encoded)>73728', 'len(encoded)>73727'),
+                ('validate=True', 'validate=False'),
+                ('not decoder.eof', 'False'), ('decoder.unused_data', 'False'),
+                ('decoder.unconsumed_tail', 'False'),
+                ("('preview-conversion-recovery-v26','run')", "('preview-conversion-recovery-v26','apply')"),
+                ("'preview-resource-trial','preview-report-recovery'", "'unreviewed-operation','preview-report-recovery'"),
+                ("'CODE_OPS_JSON_SIZE'", "'preview-conversion-recovery-v26'"),
+                ("'preview-conversion-recovery-v26'):", "'preview-conversion-recovery-v26','preview-conversion-recovery-v26'):"),
+                ("bundle['operation'] not in", "bundle['operation'] in")):
+            with self.subTest(mutation=(old, new)):
+                self.assertIn(old, current)
+                changed = current.replace(old, new, 1)
+                self.assertNotEqual(historical_transport_functions(changed), historical)
+        with self.assertRaisesRegex(AssertionError, 'duplicate historical codec definition'):
+            historical_transport_functions(current+"\npython3 - <<'PY'\ndef encode_ops(bundle):\n    return None\nPY\n")
+        with self.assertRaisesRegex(AssertionError, 'both historical codec ASTs are required'):
+            historical_transport_functions(current.replace('def decode_ops(encoded):', 'def other_decoder(encoded):'))
+
+    def test_new_readonly_route_keeps_the_original_codec_rejections(self):
+        import base64, gzip, zlib
+        encode, decode, _ = shared.ContractTest().workflow_transport()
+        bundle = dict(operation='preview-conversion-recovery-v26', function='run', package={})
+        wire = encode(bundle)
+        self.assertTrue(wire.startswith('code-gzip-v1:'))
+        self.assertEqual(decode(wire), bundle)
+        with self.assertRaisesRegex(ValueError, 'CODE_OPS_ENCODING'):
+            decode(base64.b64encode(json.dumps(bundle).encode()).decode())
+        with self.assertRaisesRegex(ValueError, 'CODE_OPS_OPERATION'):
+            decode(encode(dict(bundle, function='apply')))
+        packed = gzip.compress(json.dumps(bundle).encode())
+        for data in (packed[:-1], packed+b'private-tail', packed+packed,
+                     gzip.compress(b' '*229377), b'invalid-gzip'):
+            with self.subTest(size=len(data)), self.assertRaises((ValueError, zlib.error)):
+                decode('code-gzip-v1:'+base64.b64encode(data).decode())
+        for bad in ('code-gzip-v1:!!!', 'code-gzip-v1:'+'A'*73728):
+            with self.assertRaises(ValueError):
+                decode(bad)
+        with self.assertRaisesRegex(ValueError, 'CODE_OPS_JSON_SIZE'):
+            encode(dict(bundle, source='x'*229376))
 
     def test_empty_ast_fields_are_compared_and_not_normalized_away(self):
         compact = self.compactor(); real = ast.parse; count = 0
