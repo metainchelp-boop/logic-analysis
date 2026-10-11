@@ -63,6 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: 승인된 관제 전용 작업·합성 검사
         env:
@@ -252,6 +253,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: 제한 실행 입력·합성 검사
         env:
@@ -312,6 +314,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: 만료되는 GitHub 암호문 수신·승인된 소스 지문 검증
         env:
