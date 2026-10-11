@@ -6,6 +6,11 @@ name: Debug Rank Batch (읽기 전용 진단)
 on:
   workflow_dispatch:
     inputs:
+      claude_key_probe:
+        description: '기존 로직 분석의 Claude 키 존재 여부 두 bool만 확인. 값·파일·DB 조회·API 호출·재시작 없음.'
+        type: boolean
+        required: false
+        default: false
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
@@ -50,8 +55,78 @@ on:
         default: 'off'
 
 jobs:
+  claude-key-probe:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-claude-key-probe-20261011' && inputs.claude_key_probe == true }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 입력 격리·합성 검사 — 서버 연결 없음
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -m unittest discover -s backend/tests -p 'test_claude_key_probe.py' -q
+          python3 -I -S -B - <<'CLAUDE_PROBE_INPUT'
+          import json, os, sys
+          try:
+              inputs = json.loads(os.environ['INPUTS_JSON'])
+              fields = {'claude_key_probe', 'ad_prepare', 'ad_expected_baseline', 'collector', 'rank_link',
+                        'capacity', 'structure', 'expired', 'queue', 'urlshape', 'use_branch_code'}
+              if (not isinstance(inputs, dict) or set(inputs) != fields or
+                      inputs.pop('claude_key_probe') is not True or inputs.pop('ad_expected_baseline') != '' or
+                      any(value != 'off' for value in inputs.values())):
+                  raise ValueError()
+          except Exception:
+              print('CLAUDE_KEY_PROBE_INPUT_REJECTED')
+              sys.exit(1)
+          CLAUDE_PROBE_INPUT
+      - name: 기존 앱의 Claude 키 존재 bool만 확인 — 설정 변경 없음
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30s
+          script: |
+            set -eu
+            /usr/bin/python3 -I -S -B - <<'CLAUDE_KEY_PROBE'
+            import json, subprocess, sys
+            names = ('ANTHROPIC_API_KEY', 'CLAUDE_API_KEY')
+            program = 'import json, os; print(json.dumps({name: bool(os.environ.get(name)) for name in ' + repr(names) + '}, sort_keys=True))'
+            def unique(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError()
+                    result[key] = value
+                return result
+            try:
+                completed = subprocess.run(
+                    ['/usr/bin/docker', 'exec', 'logic-analysis', 'python', '-I', '-S', '-B', '-c', program],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    timeout=10, check=False, env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'})
+                if completed.returncode != 0 or not isinstance(completed.stdout, bytes) or not 0 < len(completed.stdout) <= 256:
+                    raise ValueError()
+                result = json.loads(completed.stdout, object_pairs_hook=unique)
+                if not isinstance(result, dict) or set(result) != set(names) or any(type(value) is not bool for value in result.values()):
+                    raise ValueError()
+                print(json.dumps(result, sort_keys=True, separators=(',', ':')))
+            except Exception:
+                print('CLAUDE_KEY_PROBE_FAILED')
+                sys.exit(1)
+            CLAUDE_KEY_PROBE
+
   preview-ops:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-backup' || inputs.ad_prepare == 'preview-inspect' || inputs.ad_prepare == 'preview-plan' || inputs.ad_prepare == 'preview-publish' || inputs.ad_prepare == 'preview-rollback' || inputs.ad_prepare == 'preview-lifecycle' || inputs.ad_prepare == 'preview-status' || inputs.ad_prepare == 'preview-data-audit' || inputs.ad_prepare == 'preview-collection-status' || inputs.ad_prepare == 'preview-link-audit' || inputs.ad_prepare == 'preview-legacy-audit' || inputs.ad_prepare == 'preview-upgrade' || inputs.ad_prepare == 'preview-code-upgrade' || inputs.ad_prepare == 'preview-code-diagnose' || inputs.ad_prepare == 'preview-code-only-upgrade' || inputs.ad_prepare == 'preview-code-only-rollback' || inputs.ad_prepare == 'preview-resource-trial' || inputs.ad_prepare == 'preview-report-recovery' || inputs.ad_prepare == 'preview-report-recovery-v19' || inputs.ad_prepare == 'preview-conversion-diagnostics') }}
+    if: ${{ !inputs.claude_key_probe && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-backup' || inputs.ad_prepare == 'preview-inspect' || inputs.ad_prepare == 'preview-plan' || inputs.ad_prepare == 'preview-publish' || inputs.ad_prepare == 'preview-rollback' || inputs.ad_prepare == 'preview-lifecycle' || inputs.ad_prepare == 'preview-status' || inputs.ad_prepare == 'preview-data-audit' || inputs.ad_prepare == 'preview-collection-status' || inputs.ad_prepare == 'preview-link-audit' || inputs.ad_prepare == 'preview-legacy-audit' || inputs.ad_prepare == 'preview-upgrade' || inputs.ad_prepare == 'preview-code-upgrade' || inputs.ad_prepare == 'preview-code-diagnose' || inputs.ad_prepare == 'preview-code-only-upgrade' || inputs.ad_prepare == 'preview-code-only-rollback' || inputs.ad_prepare == 'preview-resource-trial' || inputs.ad_prepare == 'preview-report-recovery' || inputs.ad_prepare == 'preview-report-recovery-v19' || inputs.ad_prepare == 'preview-conversion-diagnostics')) }}
     permissions:
       contents: read
     concurrency:
@@ -84,6 +159,7 @@ jobs:
                   raise ValueError('CODE_OPS_WIRE_SIZE')
               return encoded
           inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('claude_key_probe', False) is False
           operation=inputs.pop('ad_prepare')
           module,function={'preview-backup':('naver_preview_backup_probe','run'),
             'preview-status':('naver_preview_status','run'),
@@ -241,7 +317,7 @@ jobs:
             sys.exit(0 if result.get('ok') else 1)
             PY
   preview-start:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-start' }}
+    if: ${{ !inputs.claude_key_probe && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-start') }}
     permissions:
       contents: read
     concurrency:
@@ -265,6 +341,7 @@ jobs:
           sys.path.insert(0,'backend/tools')
           from naver_preview_release import validate_package
           inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('claude_key_probe', False) is False
           assert inputs.pop('ad_prepare')=='preview-start'
           package=validate_package(json.loads(inputs.pop('ad_expected_baseline')))
           assert package['operation']=='start' and all(v=='off' for v in inputs.values())
@@ -301,7 +378,7 @@ jobs:
             sys.exit(0 if result.get('ok') else 1)
             PY
   preview-prepare:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-prepare' || inputs.ad_prepare == 'preview-upgrade-prepare' || inputs.ad_prepare == 'preview-code-prepare' || inputs.ad_prepare == 'preview-code-only-prepare') }}
+    if: ${{ !inputs.claude_key_probe && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-prepare' || inputs.ad_prepare == 'preview-upgrade-prepare' || inputs.ad_prepare == 'preview-code-prepare' || inputs.ad_prepare == 'preview-code-only-prepare')) }}
     permissions:
       contents: read
     concurrency:
@@ -327,6 +404,7 @@ jobs:
           from naver_preview_release import validate_package
           try:
               inputs=json.loads(os.environ['INPUTS_JSON'])
+              assert inputs.pop('claude_key_probe', False) is False
               operation=inputs.pop('ad_prepare')
               assert operation in ('preview-prepare','preview-upgrade-prepare','preview-code-prepare','preview-code-only-prepare')
               package=json.loads(inputs.pop('ad_expected_baseline'))
@@ -501,7 +579,7 @@ jobs:
             sys.exit(0 if result.get('ok') else 1)
             PY
   preview-envelope:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-envelope' }}
+    if: ${{ !inputs.claude_key_probe && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-envelope') }}
     permissions:
       contents: read
     concurrency:
@@ -523,6 +601,7 @@ jobs:
           python3 - <<'PY'
           import base64,json,os,pathlib,re
           inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('claude_key_probe', False) is False
           assert inputs.pop('ad_prepare')=='preview-envelope'
           expected=inputs.pop('ad_expected_baseline')
           assert re.fullmatch('[0-9a-f]{64}',expected) and all(v=='off' for v in inputs.values())
@@ -568,7 +647,7 @@ jobs:
             print('NAVER_PREVIEW_ENVELOPE='+json.dumps(receipt,sort_keys=True))
             PY
   tunnel-native:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-native' }}
+    if: ${{ !inputs.claude_key_probe && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-native') }}
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -584,11 +663,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -c 'import json,os; d=json.loads(os.environ["INPUTS_JSON"]); assert d.pop("ad_prepare")=="tunnel-native"; assert d.pop("ad_expected_baseline", "")==""; assert all(v=="off" for v in d.values())'
+          python3 -c 'import json,os; d=json.loads(os.environ["INPUTS_JSON"]); assert d.pop("claude_key_probe", False) is False; assert d.pop("ad_prepare")=="tunnel-native"; assert d.pop("ad_expected_baseline", "")==""; assert all(v=="off" for v in d.values())'
           python3 -m unittest discover -s backend/tests -p 'test_naver_tunnel_bpf_native_ci.py' -q
           sudo env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted CI=true NAVER_TUNNEL_BPF_NATIVE_CI=1 timeout 25s /usr/bin/python3 -I -B backend/tools/naver_tunnel_bpf_native_ci.py
   ad-deploy-prepare:
-    if: ${{ inputs.ad_prepare == 'inspect' || inputs.ad_prepare == 'prepare' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-keygen') }}
+    if: ${{ !inputs.claude_key_probe && (inputs.ad_prepare == 'inspect' || inputs.ad_prepare == 'prepare' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-keygen')) }}
     permissions:
       contents: read
     concurrency:
@@ -614,7 +693,7 @@ jobs:
               [[ "$AD_EXPECTED_BASELINE" =~ ^[0-9a-f]{64}$ ]] || exit 1
               test "$AD_RUN_EVENT" = workflow_dispatch || exit 1
               test "$AD_RUN_REF" = refs/heads/codex/ad-deploy-prep-20261001 || exit 1
-              python3 -c 'import json, os, sys; values=json.loads(os.environ["AD_RUN_INPUTS"]); allowed={"ad_prepare", "ad_expected_baseline"}; sys.exit(0 if all(value == "off" for name, value in values.items() if name not in allowed) else 1)' || exit 1
+              python3 -c 'import json, os, sys; values=json.loads(os.environ["AD_RUN_INPUTS"]); assert values.pop("claude_key_probe", False) is False; allowed={"ad_prepare", "ad_expected_baseline"}; sys.exit(0 if all(value == "off" for name, value in values.items() if name not in allowed) else 1)' || exit 1
               ;;
             *) exit 1 ;;
           esac
@@ -1044,7 +1123,7 @@ jobs:
             PY
 
   ad-tunnel-install:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'tunnel-install' || inputs.ad_prepare == 'tunnel-activate') }}
+    if: ${{ !inputs.claude_key_probe && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'tunnel-install' || inputs.ad_prepare == 'tunnel-activate')) }}
     permissions:
       contents: read
     concurrency:
@@ -1079,6 +1158,7 @@ jobs:
                       or os.environ.get('AD_RUN_REF') != 'refs/heads/codex/ad-deploy-prep-20261001'):
                   raise ValueError('invalid_context')
               inputs = json.loads(os.environ['AD_RUN_INPUTS'], object_pairs_hook=unique_pairs)
+              assert inputs.pop('claude_key_probe', False) is False
               if (inputs.get('ad_prepare') not in ('tunnel-install', 'tunnel-activate') or any(value != 'off'
                       for name, value in inputs.items() if name not in ('ad_prepare', 'ad_expected_baseline'))):
                   raise ValueError('invalid_mode')
@@ -1165,7 +1245,7 @@ jobs:
             INSTALL_REMOTE
 
   diagnose:
-    if: ${{ !inputs.ad_prepare || inputs.ad_prepare == 'off' }}
+    if: ${{ !inputs.claude_key_probe && (!inputs.ad_prepare || inputs.ad_prepare == 'off') }}
     runs-on: ubuntu-latest
     steps:
       # 브랜치 코드 미리보기용 — 평소(off)엔 받아만 두고 쓰지 않는다.
@@ -2182,7 +2262,7 @@ jobs:
               | sort | uniq -c | sort -rn | head -15
 
   learning-center-static:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'learning-center-static-check' || inputs.ad_prepare == 'learning-center-static-install' || inputs.ad_prepare == 'learning-center-static-rollback')
+    if: ${{ !inputs.claude_key_probe && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'learning-center-static-check' || inputs.ad_prepare == 'learning-center-static-install' || inputs.ad_prepare == 'learning-center-static-rollback')) }}
     permissions:
       contents: read
     concurrency:
@@ -2201,6 +2281,7 @@ jobs:
           python3 - <<'PY'
           import hashlib,io,json,os,pathlib,tarfile
           inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('claude_key_probe', False) is False
           assert inputs.pop('ad_prepare') in ('learning-center-static-check','learning-center-static-install','learning-center-static-rollback')
           assert inputs.pop('ad_expected_baseline','')==''
           assert set(inputs)=={'collector','rank_link','capacity','structure','expired','queue','urlshape','use_branch_code'}
