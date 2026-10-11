@@ -1,7 +1,8 @@
-"""Explicitly enabled, fixed-host Claude transport and conservative cost limits.
+"""Explicitly enabled, fixed-host Claude transport and conservative cost records.
 
 Import and configuration do not make requests. No model or price is inferred.
-The store reserves maximum_call_microusd before each call against a durable cap.
+The store records maximum_call_microusd before each call. Only an explicit
+unlimited setting disables the optional monthly application cap.
 """
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
 import http.client
@@ -72,7 +73,9 @@ def provider_from_environment(environment=None):
     env = os.environ if environment is None else environment
     if env.get("NAVER_CLAUDE_ENABLED") != "true":
         return None
-    cap = _decimal(env.get("NAVER_CLAUDE_MONTHLY_CAP_USD"), 100000)
+    cap_setting = env.get("NAVER_CLAUDE_MONTHLY_CAP_USD")
+    unlimited = cap_setting == "unlimited"
+    cap = None if unlimited else _decimal(cap_setting, 100000)
     input_price = _decimal(env.get("NAVER_CLAUDE_INPUT_USD_PER_MILLION"), 10000)
     output_price = _decimal(env.get("NAVER_CLAUDE_OUTPUT_USD_PER_MILLION"), 10000)
     timeout = float(_decimal(env.get("NAVER_CLAUDE_TIMEOUT_SECONDS", "10"), 20))
@@ -82,7 +85,8 @@ def provider_from_environment(environment=None):
     # A byte per token is a conservative input bound for this bounded UTF-8 body.
     # Round the call upward and the monthly allowance downward to avoid overspend.
     provider.maximum_call_microusd = int((MAX_REQUEST_BYTES * input_price + MAX_OUTPUT_TOKENS * output_price).to_integral_value(rounding=ROUND_CEILING))
-    provider.monthly_budget_microusd = int((cap * 1000000).to_integral_value(rounding=ROUND_FLOOR))
-    if provider.monthly_budget_microusd < 1 or provider.maximum_call_microusd < 1:
+    provider.monthly_budget_unlimited = unlimited
+    provider.monthly_budget_microusd = None if unlimited else int((cap * 1000000).to_integral_value(rounding=ROUND_FLOOR))
+    if (not unlimited and provider.monthly_budget_microusd < 1) or provider.maximum_call_microusd < 1:
         raise StrategyRefused("PROVIDER_CONFIGURATION_INVALID")
     return provider

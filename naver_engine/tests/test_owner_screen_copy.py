@@ -61,7 +61,7 @@ class OwnerScreenCopyTest(unittest.TestCase):
         source = (PAGE / 'automation-ui.js').read_text()
         html = (PAGE / 'index.html').read_text()
         self.assertIn('검수 사례는 전략 초안에 활용하며 실제 광고 집행은 별도입니다', html)
-        for text in ('Claude는 키·모델·비용 상한 설정 후 보고서에서 명시적으로 생성', '실제 광고 자동 실행은 미연결',
+        for text in ('Claude는 키·모델 연결 설정 후 보고서에서 명시적으로 생성', '실제 광고 자동 실행은 미연결',
                      '계획 승인이 실행 완료를 뜻하지 않습니다', '자료 미확인을 설정 누락으로 보지 않으며',
                      '이전 기간 비교를 통제된 A/B 실험이나 승자 선정으로 표시하지 않습니다'):
             self.assertIn(text, source)

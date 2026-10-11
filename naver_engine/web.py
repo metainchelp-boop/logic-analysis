@@ -920,7 +920,9 @@ class App:
                 configured = self._strategy_provider is not None
                 result["marketing_strategy"]["provider_status"] = {"configured": configured,
                     "state": "ready" if configured else "not_enabled",
-                    "reason": "월간 예약 한도 안에서 명시 생성" if configured else "API 키·모델·비용 상한 설정 전",
+                    "reason": ("별도 월 한도 없이 명시 생성" if getattr(self._strategy_provider, "monthly_budget_unlimited", False) is True
+                               else "월간 예약 한도 안에서 명시 생성") if configured else "API 키·모델 연결 설정 전",
+                    "monthly_budget_unlimited": getattr(self._strategy_provider, "monthly_budget_unlimited", False) is True,
                     "maximum_call_microusd": getattr(self._strategy_provider, "maximum_call_microusd", None)}
             return 200, result
         except REPORTS.QueryInvalid:
@@ -1065,7 +1067,8 @@ class App:
                 selected = REPORTS.detail(ctx, st, fresh.scope, owns, {"report_id": str(report_id), "account_key": key})
                 SC.require_client(ctx.org, fresh.scope, owns, selected["possibility_id"], SC.ACT_APPROVE)
                 return st.reserve_learning_call(prepared, v.idx, current, uuid.uuid4().hex,
-                    getattr(provider, "maximum_call_microusd", None), getattr(provider, "monthly_budget_microusd", None))
+                    getattr(provider, "maximum_call_microusd", None), getattr(provider, "monthly_budget_microusd", None),
+                    unlimited=getattr(provider, "monthly_budget_unlimited", False))
             reservation = self._control_write(v, now, "learning-ai-reserve", reserve)
             try:
                 generated = STR.generate(prepared["payload"], provider=provider,

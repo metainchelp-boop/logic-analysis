@@ -140,6 +140,44 @@ class LearningWorkflowWebTest(unittest.TestCase):
         self.assertEqual(self.strategy("generate_claude")[0], 503)
         self.assertEqual(self.store._conn.execute("SELECT COUNT(*) FROM naver_auto_meta WHERE key LIKE 'learning-call:%'").fetchone()[0], 0)
 
+    def test_explicit_unlimited_generates_past_former_cap_and_records_every_call(self):
+        self.prepare()
+        seen = self.provider()
+        self.app._strategy_provider.monthly_budget_microusd = None
+        self.app._strategy_provider.monthly_budget_unlimited = True
+        for version in range(3):
+            status, result, *_ = self.strategy("generate_claude", version)
+            self.assertEqual(status, 200, result)
+            self.assertEqual(result["cost_reservation"]["monthly_reserved_microusd"], (version + 1) * 100)
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(self.store._conn.execute("SELECT COUNT(*) FROM naver_auto_meta WHERE key LIKE 'learning-call:%'").fetchone()[0], 3)
+        status = self.detail()[1]["marketing_strategy"]["provider_status"]
+        self.assertTrue(status["configured"])
+        self.assertTrue(status["monthly_budget_unlimited"])
+        self.assertIn("별도 월 한도 없이", status["reason"])
+
+    def test_missing_budget_or_ambiguous_unlimited_flag_refuses_before_provider(self):
+        self.prepare()
+        seen = self.provider()
+        for flag, budget in ((False, None), (True, 200), ("true", None), (1, None), (None, None)):
+            with self.subTest(flag=flag, budget=budget):
+                self.app._strategy_provider.monthly_budget_microusd = budget
+                self.app._strategy_provider.monthly_budget_unlimited = flag
+                self.assertEqual(self.strategy("generate_claude")[0], 409)
+        self.assertEqual(seen, [])
+        self.assertEqual(self.store._conn.execute("SELECT COUNT(*) FROM naver_auto_meta WHERE key LIKE 'learning-call:%'").fetchone()[0], 0)
+
+    def test_unlimited_failure_keeps_reservation_without_automatic_retry(self):
+        self.prepare()
+        seen = self.provider(lambda: (_ for _ in ()).throw(RuntimeError("PRIVATE PROVIDER ERROR")))
+        self.app._strategy_provider.monthly_budget_microusd = None
+        self.app._strategy_provider.monthly_budget_unlimited = True
+        status, body, *_ = self.strategy("generate_claude")
+        self.assertEqual(status, 503)
+        self.assertNotIn("PRIVATE", str(body))
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(self.store._conn.execute("SELECT COUNT(*) FROM naver_auto_meta WHERE key LIKE 'learning-call:%'").fetchone()[0], 1)
+
     def test_corrupt_budget_is_not_an_allowance(self):
         self.prepare()
         seen = self.provider()

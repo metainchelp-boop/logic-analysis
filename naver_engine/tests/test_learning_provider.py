@@ -70,8 +70,22 @@ class LearningProviderTests(unittest.TestCase):
             provider = P.provider_from_environment(environment())
             self.assertEqual(provider.model, "explicit-test-model")
             self.assertEqual(provider.monthly_budget_microusd, 20000000)
+            self.assertFalse(provider.monthly_budget_unlimited)
             self.assertEqual(provider.maximum_call_microusd, 90536)
             self.assertNotIn("FAKE_TEST_ONLY_KEY", repr(provider))
+
+    def test_explicit_unlimited_keeps_cost_accounting_without_network(self):
+        with patch.object(P.http.client, "HTTPSConnection", side_effect=AssertionError("network")):
+            provider = P.provider_from_environment({**environment(), "NAVER_CLAUDE_MONTHLY_CAP_USD": "unlimited"})
+        self.assertTrue(provider.monthly_budget_unlimited)
+        self.assertIsNone(provider.monthly_budget_microusd)
+        self.assertEqual(provider.maximum_call_microusd, 90536)
+
+    def test_missing_misspelled_or_coerced_unlimited_never_disables_limit(self):
+        for value in (None, "", "Unlimited", "unlimited ", "none", "false", False):
+            with self.subTest(value=value):
+                with self.assertRaises(STR.StrategyRefused):
+                    P.provider_from_environment({**environment(), "NAVER_CLAUDE_MONTHLY_CAP_USD": value})
 
     def test_nonfinite_nonpositive_and_out_of_bounds_config_are_refused(self):
         for key in ("NAVER_CLAUDE_MONTHLY_CAP_USD", "NAVER_CLAUDE_INPUT_USD_PER_MILLION", "NAVER_CLAUDE_OUTPUT_USD_PER_MILLION"):

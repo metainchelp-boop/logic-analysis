@@ -185,7 +185,7 @@
       function percent(name) { return finite(policy[name]) ? env.num(policy[name]) + '%' : '미확인'; }
       return h('div',{class:'na-content'},h('div',{class:'na-section'},h('h2',null,account.company_name + ' · ' + (account.account_name || '개별 계정')),
         h('p',{class:'na-plan-meta'},'광고 계정 ID ' + (account.ad_account_no || '미확인') + ' · 계약 단계 ' + (account.workflow || '미확인'))),
-        h('div',{class:'na-note warn'},'계획·성과·세팅·실험 이력을 기록하고 검수합니다. 계획 승인과 학습 기록은 실제 광고 집행이 아닙니다. 실제 광고 자동 실행은 미연결 상태입니다. Claude는 키·모델·비용 상한 설정 후 보고서에서 명시적으로 생성합니다.'),
+        h('div',{class:'na-note warn'},'계획·성과·세팅·실험 이력을 기록하고 검수합니다. 계획 승인과 학습 기록은 실제 광고 집행이 아닙니다. 실제 광고 자동 실행은 미연결 상태입니다. Claude는 키·모델 연결 설정 후 보고서에서 명시적으로 생성합니다.'),
         h('nav',{class:'na-tabs','aria-label':'자동화 계획 보기'},Object.keys(TABS).map(function (name) { return h('button',{type:'button',class:'chip' + (tab === name ? ' on' : ''),'aria-pressed':String(tab === name),onclick:function () { if (!current()) return; tab = name; render(); }},TABS[name]); })),
         h('div',{class:'na-layout'},h('div',null,content),h('aside',{class:'card'},h('h3',null,'실행 전 준비 상태'),h('p',{class:'na-note'},'목표·한도·대상 계획을 검토하는 단계입니다. 승인 후에도 현재 실행 기능은 활성화되지 않습니다.'),
           h('p',{class:'hint'},'향후 실행 전에는 계약 단계·현재 설정·네이버 자체 자동입찰 여부를 확인해야 합니다. 현재 실제 실행 검증 경로는 미연결입니다.'),

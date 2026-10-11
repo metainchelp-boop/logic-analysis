@@ -111,7 +111,7 @@ test('fourteen stored setup checks preserve unknowns without inventing setup err
   await run.start(account(),data);
   for(let i=0;i<14;i++)assert.ok(run.root.textContent.includes('설정 점검 '+i));
   assert.match(run.root.textContent,/확인 필요 1자료 미확인 13/);
-  assert.match(run.root.textContent,/Claude는 키·모델·비용 상한 설정 후 보고서에서 명시적으로 생성/);
+  assert.match(run.root.textContent,/Claude는 키·모델 연결 설정 후 보고서에서 명시적으로 생성/);
   assert.equal(run.calls.filter(r=>r.method==='POST').length,0);
 });
 test('account pages are capped at 100 and next page requests keep the current selection',async()=>{

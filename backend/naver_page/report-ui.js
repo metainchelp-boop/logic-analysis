@@ -490,7 +490,7 @@
       return h('section',{class:'nr-strategy-editor','data-private':'true'},h('h3',null,'마케터 전략 · 담당자 검토'),
         h('p',{class:'hint'},'전략 ' + env.num(a.version || 0) + '판 · ' + ({empty:'작성 전',draft:'공유 검토 전',approved:'공유 승인'}[a.state] || '상태 미확인') +
           ' · ' + (a.source === 'rule_based' ? '저장 집계 기반 규칙 진단' : a.source === 'staff' ? '담당자 작성·검토 문안' : a.source === 'claude' ? 'AI 초안 · 담당자 검토 필요' : '작성 방식 미확인')),
-        h('p',{class:'nr-notice'},a.provider_status && a.provider_status.configured === true ? 'Claude는 저장 성과·현재 계획·검수 사례를 사용합니다. 담당 범위 안에서 업종·목표·광고유형이 확인된 사례만 익명으로 참조하고, 월간 비용 예약 상한 안에서 생성합니다. 실제 광고 집행은 별도입니다.' : '저장 집계 초안은 무료 규칙 진단입니다. Claude는 API 키·모델·비용 상한 설정 전이며 유료 호출을 시작하지 않습니다. 검수 사례를 먼저 축적할 수 있습니다.'),
+        h('p',{class:'nr-notice'},a.provider_status && a.provider_status.configured === true ? 'Claude는 저장 성과·현재 계획·검수 사례를 사용합니다. 담당 범위 안에서 업종·목표·광고유형이 확인된 사례만 익명으로 참조합니다. ' + (a.provider_status.monthly_budget_unlimited === true ? '별도 월 사용 한도 없이 생성하며 비용 예약을 기록합니다.' : '월간 비용 예약 상한 안에서 생성합니다.') + ' 실제 광고 집행은 별도입니다.' : '저장 집계 초안은 무료 규칙 진단입니다. Claude는 API 키·모델 연결 설정 전이며 유료 호출을 시작하지 않습니다. 검수 사례를 먼저 축적할 수 있습니다.'),
         a.references_current === false ? h('p',{class:'nr-notice'},'참조 계획 또는 학습 사례가 변경되어 기존 AI 전략의 공유·PDF 반영을 보류했습니다. 새 자료로 다시 생성해 주세요.') : null,
         a.learning_provenance ? h('p',{class:'hint'},'AI 참조 사례 ' + env.num(a.learning_provenance.case_refs.length) + '건 · 계획 ' + env.num(a.learning_provenance.plan_version) + '판 · 모델 ' + (a.learning_provenance.model || '미확인')) : null,
         h('div',{class:'nr-note-grid'},field('diagnosis','현재 진단',1800),field('direction','앞으로의 전략 방향',1400),

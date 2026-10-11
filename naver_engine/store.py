@@ -3585,12 +3585,14 @@ class ManagedStorage:
                       (f"learning-strategy:{identity}:{out['version']}", _json(provenance)))
             return out
 
-    def reserve_learning_call(self, prepared, actor, now, job_id, maximum_microusd, monthly_microusd):
-        """실패 요청도 회수하지 않는 보수적인 월간 비용 예약. 실제 청구액으로 표시하지 않는다."""
+    def reserve_learning_call(self, prepared, actor, now, job_id, maximum_microusd, monthly_microusd, *, unlimited=False):
+        """보수적인 비용 기록. 명시적 무제한 설정만 월 한도 검사를 생략한다."""
         self._need_writer()
         if (not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{32}", job_id)
                 or type(maximum_microusd) is not int or not 0 < maximum_microusd <= 10**12
-                or type(monthly_microusd) is not int or not 0 < monthly_microusd <= 10**12):
+                or type(unlimited) is not bool
+                or (unlimited and monthly_microusd is not None)
+                or (not unlimited and (type(monthly_microusd) is not int or not 0 < monthly_microusd <= 10**12))):
             raise StoreRefused("Claude 호출 비용 한도를 확인해 주세요")
         with self._tx() as c:
             fresh = self.prepare_learning_strategy(prepared["report_id"], prepared["account_key"], prepared["revision_fingerprint"],
@@ -3603,7 +3605,7 @@ class ManagedStorage:
             if row and (not isinstance(row[0], str) or not re.fullmatch(r"0|[1-9][0-9]{0,12}", row[0]) or int(row[0]) > 10**12):
                 raise StoreError("저장된 Claude 비용 누계를 확인해 주세요")
             used = int(row[0]) if row else 0
-            if used + maximum_microusd > monthly_microusd:
+            if not unlimited and used + maximum_microusd > monthly_microusd:
                 raise StoreRefused("Claude 월간 호출 비용 한도에 도달했습니다")
             c.execute("INSERT INTO naver_auto_meta(key,value) VALUES(?,?)",
                       ("learning-call:" + job_id, _json({"actor": actor, "at": _kst_text(now, "AI 호출 예약 시각"),
