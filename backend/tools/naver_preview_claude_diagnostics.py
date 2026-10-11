@@ -1,4 +1,4 @@
-"""Pinned V23 read-only Foodin diagnostics. Never configure/call a live provider."""
+"""Pinned V24 read-only Foodin diagnostics. Never configure/call a live provider."""
 import hashlib
 import json
 import os
@@ -9,11 +9,11 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
-SOURCE = '9ddb0a30e16e4177e8d419318a6f23eb6c206e2f'
-ARCHIVE = '82bc650ca426b0cbd674603dbd0ee2e4be87e898b6c5b2f10c5632e3ce430687'
+SOURCE = '10a46ddce2116e274e27fabaf73c7a94be6cda62'
+ARCHIVE = '6a2a1075b1b2c31f47d45d8afdd080e8da786e49c3fdf173e82e51c0a3e3705c'
 STORE = '1f3ce4f659a88ebb607c2bb063aa4cd057d4e6776a3544eb08bdc43c08a12e17'
 BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-BRANCH = 'refs/heads/codex/naver-claude-diagnostics-20261011'
+BRANCH = 'refs/heads/codex/naver-claude-diagnostics-v24-20261011'
 STAGE = 'input'
 MAX_OUTPUT = 16384
 PROJECTION_SOURCE = r'''
@@ -21,6 +21,20 @@ KST = timezone(timedelta(hours=9))
 TARGET_PID = 51952
 TARGET_ACCOUNT = 1030001
 PERIOD = 'weekly:2026-09-28:2026-10-04'
+WINDOW_START = '2026-10-11T07:50:00+00:00'
+WINDOW_END = '2026-10-11T07:55:00+00:00'
+WINDOW_SQL_START = '2026-10-11T16:50:00+09:00'
+WINDOW_SQL_END = '2026-10-11T16:55:00+09:00'
+GENERATION_CODES = frozenset(('timeout','tls','network','protocol','request-size','response-size',
+    'response-shape','envelope-json','document-json','truncated','configuration','context-invalid',
+    'document-invalid','numeric-citation-required','reference-unavailable','unconnected-evidence','unknown'))
+ERROR_CODES = frozenset('CLAUDE_DIAG_'+name for name in (
+    'BUDGET_METADATA','COMPOSE_CHANGED','CONTAINER_CHANGED','CONTAINER_ID','DATABASE_PATH','DATA_MOUNT',
+    'DEADLINE','HOST_BASELINE','IDENTITY','IMAGE','MUTATION','NUMBER','OUTPUT_FIELDS','OUTPUT_LIMIT',
+    'OUTPUT_SCOPE','PACKAGE_PIN','POST_ENGINE','POST_RELAY','POST_LEGACY_BASELINE','POST_RUNTIME',
+    'READER_MODE','READ_FAILED','RECEIPT_SIZE','RESERVATION_METADATA','RUNTIME_CHANGED','RUNTIME_SIZE',
+    'SCHEMA','SOURCE_MOUNT','SOURCE_NOT_READY','STORE_PIN','STRATEGY_LIMIT','STRATEGY_METADATA',
+    'TARGET_ACCOUNT','TARGET_REPORT','TIME','WINDOW_LIMIT','WINDOW_TIME'))
 STATES = frozenset(('empty','draft','approved'))
 SOURCES = frozenset(('claude','staff','rule_based'))
 SAFE_CODES = frozenset(('CONTEXT_INVALID','LEARNING_CONTEXT_INVALID','PLAN_CONTEXT_INVALID',
@@ -52,6 +66,31 @@ def stamp(value):
         return parsed.astimezone(timezone.utc).isoformat()
     except (TypeError, ValueError, OverflowError):
         raise ValueError('CLAUDE_DIAG_TIME') from None
+
+def window_stamp(value):
+    normalized=stamp(value)
+    if normalized is None or not WINDOW_START <= normalized < WINDOW_END:
+        raise ValueError('CLAUDE_DIAG_WINDOW_TIME')
+    return normalized
+
+def generation_audit(connection):
+    # These records do not carry a report/account identity. Never infer attribution.
+    rows=connection.execute('SELECT at,result FROM naver_auto_access_log '
+        "WHERE action='learning-ai-generation' AND at>=? AND at<? ORDER BY log_id LIMIT 33",
+        (WINDOW_SQL_START,WINDOW_SQL_END)).fetchall()
+    if len(rows)>32:
+        raise ValueError('CLAUDE_DIAG_WINDOW_LIMIT')
+    events=[];unrecognized=0
+    for at,result in rows:
+        normalized=window_stamp(at)
+        if type(result) is str and result.startswith('failed-') and result[7:] in GENERATION_CODES:
+            events.append(dict(at=normalized,code=result[7:],http_status=None))
+        elif type(result) is str and re.fullmatch('failed-http-[1-5][0-9]{2}',result):
+            events.append(dict(at=normalized,code='http',http_status=int(result[-3:])))
+        else:
+            unrecognized+=1
+    return dict(start_at=WINDOW_START,end_at=WINDOW_END,scope='instance_window_not_account_attributed',
+        matched_count=len(events),unrecognized_count=unrecognized,events=events)
 
 def readonly_authorizer(action, arg1, arg2, database, source):
     if action in (sqlite3.SQLITE_SELECT,sqlite3.SQLITE_READ,sqlite3.SQLITE_TRANSACTION,
@@ -96,6 +135,16 @@ def collect_metadata(connection, now):
         raise ValueError('CLAUDE_DIAG_RESERVATION_METADATA')
     reservations = dict(count=number(count),total_reserved_microusd=number(amount or 0),
         first_at=stamp(first),last_at=stamp(last),scope='instance_total_not_account_attributed',actual_billed_amount=False)
+    row=connection.execute('SELECT COUNT(*),COALESCE(SUM(amount),0),MIN(at),MAX(at) FROM ('
+        'SELECT CASE WHEN '+safe+' THEN CASE WHEN '+valid+" THEN json_extract(value,'$.reserved_microusd') END END amount,"
+        'CASE WHEN '+safe+" THEN json_extract(value,'$.at') END at FROM naver_auto_meta "
+        "WHERE key>='learning-call:' AND key<'learning-call;') WHERE at>=? AND at<?",
+        (WINDOW_SQL_START,WINDOW_SQL_END)).fetchone()
+    window_reservations=dict(count=number(row[0]),total_reserved_microusd=number(row[1]),
+        first_at=window_stamp(row[2]) if row[2] is not None else None,
+        last_at=window_stamp(row[3]) if row[3] is not None else None,
+        scope='instance_window_not_account_attributed',actual_billed_amount=False)
+    audit_window=generation_audit(connection)
     month = now.astimezone(KST).strftime('%Y-%m')
     row = connection.execute("SELECT length(value),substr(value,1,14) FROM naver_auto_meta WHERE key=?",('learning-budget:'+month,)).fetchone()
     if row is not None and (row[0]>13 or type(row[1]) is not str or not re.fullmatch('0|[1-9][0-9]{0,12}',row[1])):
@@ -123,18 +172,29 @@ def collect_metadata(connection, now):
         " THEN json_extract(value,'$.state') END,CASE WHEN "+safe+" THEN json_extract(value,'$.source') END,CASE WHEN "+safe+
         " THEN json_extract(value,'$.author.at') END FROM naver_auto_meta WHERE key=?",(key,)).fetchone()
     target=dict(report_exists=True,period=PERIOD,report_generated_at=stamp(generated),strategy_exists=row is not None,
-        version=0,state='empty',source=None,updated_at=None)
+        version=0,state='empty',source=None,updated_at=None,claude_draft_versions=0)
     if row is not None:
         valid,version,state,source,at=row
         if valid!=1 or number(version)<1 or state not in STATES or source not in SOURCES:
             raise ValueError('CLAUDE_DIAG_STRATEGY_METADATA')
         target.update(version=version,state=state,source=source,updated_at=stamp(at))
+    prefix='report-strategy-version:'+str(report_id)+':'+account_key+':'
+    versions=connection.execute('SELECT '+safe+',CASE WHEN '+safe+" THEN json_extract(value,'$.version') END,CASE WHEN "+safe+
+        " THEN json_extract(value,'$.state') END,CASE WHEN "+safe+" THEN json_extract(value,'$.source') END "
+        'FROM naver_auto_meta WHERE key>=? AND key<? LIMIT 1001',(prefix,prefix+';')).fetchall()
+    if len(versions)>1000:
+        raise ValueError('CLAUDE_DIAG_STRATEGY_LIMIT')
+    for valid,version,state,source in versions:
+        if valid!=1 or number(version)<1 or state not in STATES or source not in SOURCES:
+            raise ValueError('CLAUDE_DIAG_STRATEGY_METADATA')
+        if state=='draft' and source=='claude':target['claude_draft_versions']+=1
     # Reuse only the most recent successful reserve actor internally. Never
     # invent owner 0, emit the actor, or interpret a new scope refusal as the
     # original paid-call failure. Scope is rechecked by prepare below.
     actor_row=connection.execute("SELECT emp_idx FROM naver_auto_access_log WHERE action='learning-ai-reserve' AND result='ok' ORDER BY log_id DESC LIMIT 1").fetchone()
     actor=actor_row[0] if actor_row and type(actor_row[0]) is int and 0<=actor_row[0]<=2**53-1 else None
-    return dict(reservations=reservations,monthly_reservation=budget,audit=audit,target_strategy=target), (report_id,account_key,fingerprint,target['version'],actor)
+    return dict(reservations=reservations,window_reservations=window_reservations,monthly_reservation=budget,
+        audit=audit,audit_window=audit_window,target_strategy=target), (report_id,account_key,fingerprint,target['version'],actor)
 
 def synthetic_preflight(reader, identity, now, model):
     # The real provider factory is never called. A fixed fake key and forced stub
@@ -245,17 +305,25 @@ try:
     print(encoded)
 except Exception as error:
     code=str(error)
-    print(json.dumps({'failure':code if re.fullmatch('CLAUDE_DIAG_[A-Z_]{1,48}',code) else 'CLAUDE_DIAG_READ_FAILED'}))
+    print(json.dumps({'failure':code if code in ERROR_CODES else 'CLAUDE_DIAG_READ_FAILED'}))
 '''
     return (prefix+PROJECTION_SOURCE+suffix.replace('__STORE_SHA__',repr(STORE))).encode()
 
 
 def validate_result(value):
-    fields(value,'reservations monthly_reservation audit target_strategy synthetic_preflight')
+    fields(value,'reservations window_reservations monthly_reservation audit audit_window target_strategy synthetic_preflight')
     row=value['reservations'];fields(row,'count total_reserved_microusd first_at last_at scope actual_billed_amount')
     for key in ('count','total_reserved_microusd'):number(row[key])
     for key in ('first_at','last_at'):stamp(row[key])
     if row['scope']!='instance_total_not_account_attributed' or row['actual_billed_amount'] is not False:
+        raise ValueError('CLAUDE_DIAG_OUTPUT_SCOPE')
+    row=value['window_reservations'];fields(row,'count total_reserved_microusd first_at last_at scope actual_billed_amount')
+    for key in ('count','total_reserved_microusd'):number(row[key])
+    if row['scope']!='instance_window_not_account_attributed' or row['actual_billed_amount'] is not False:
+        raise ValueError('CLAUDE_DIAG_OUTPUT_SCOPE')
+    for key in ('first_at','last_at'):
+        if row[key] is not None:window_stamp(row[key])
+    if (row['count']==0)!=(row['first_at'] is None and row['last_at'] is None):
         raise ValueError('CLAUDE_DIAG_OUTPUT_SCOPE')
     row=value['monthly_reservation'];fields(row,'month reserved_microusd actual_billed_amount')
     if type(row['month']) is not str or not re.fullmatch('[0-9]{4}-(0[1-9]|1[0-2])',row['month']) or row['actual_billed_amount'] is not False:
@@ -265,11 +333,25 @@ def validate_result(value):
     for row in value['audit'].values():
         fields(row,'ok denied other')
         for count in row.values():number(count)
-    row=value['target_strategy'];fields(row,'report_exists period report_generated_at strategy_exists version state source updated_at')
+    row=value['audit_window'];fields(row,'start_at end_at scope matched_count unrecognized_count events')
+    if (row['start_at']!=WINDOW_START or row['end_at']!=WINDOW_END or
+            row['scope']!='instance_window_not_account_attributed' or type(row['events']) is not list or
+            number(row['matched_count'])!=len(row['events']) or
+            number(row['matched_count'])+number(row['unrecognized_count'])>32):
+        raise ValueError('CLAUDE_DIAG_OUTPUT_SCOPE')
+    for event in row['events']:
+        fields(event,'at code http_status');window_stamp(event['at'])
+        if event['code']=='http':
+            if type(event['http_status']) is not int or not 100<=event['http_status']<=599:
+                raise ValueError('CLAUDE_DIAG_OUTPUT_SCOPE')
+        elif event['code'] not in GENERATION_CODES or event['http_status'] is not None:
+            raise ValueError('CLAUDE_DIAG_OUTPUT_SCOPE')
+    row=value['target_strategy'];fields(row,'report_exists period report_generated_at strategy_exists version state source updated_at claude_draft_versions')
     if (row['report_exists'] is not True or row['period']!=PERIOD or type(row['strategy_exists']) is not bool or
             row['state'] not in STATES or row['source'] not in SOURCES|{None}):
         raise ValueError('CLAUDE_DIAG_OUTPUT_SCOPE')
-    number(row['version']);stamp(row['report_generated_at']);stamp(row['updated_at'])
+    number(row['version']);stamp(row['report_generated_at']);stamp(row['updated_at']);number(row['claude_draft_versions'])
+    if row['claude_draft_versions']>1000:raise ValueError('CLAUDE_DIAG_OUTPUT_SCOPE')
     if (row['strategy_exists']!=(row['version']>0) or (not row['strategy_exists'] and (row['state']!='empty' or row['source'] is not None or row['updated_at'] is not None))):
         raise ValueError('CLAUDE_DIAG_OUTPUT_SCOPE')
     row=value['synthetic_preflight'];fields(row,'status code request_serialized request_bytes synthetic_transport_calls learning_cases conversion_complete external_calls draft_mutations')
@@ -302,7 +384,7 @@ def capture_docker_logs(identity):
         raise ValueError('CLAUDE_DIAG_CONTAINER_ID')
     process=None
     try:
-        process=subprocess.Popen(['docker','logs','--since','24h','--tail','300','--timestamps',identity],
+        process=subprocess.Popen(['docker','logs','--since',WINDOW_START,'--until',WINDOW_END,'--tail','300','--timestamps',identity],
             stdout=subprocess.PIPE,stderr=subprocess.PIPE,stdin=subprocess.DEVNULL,
             env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C'})
         streams={process.stdout:bytearray(),process.stderr:bytearray()};total=0
@@ -334,7 +416,7 @@ def capture_docker_logs(identity):
 
 def log_summary(engine, relay):
     result={name:dict(available=False,entries_inspected=0,unmatched_entries=0,
-        engine_timeout=0,engine_cut=0,store_busy=0,store_refused=0,store_error=0,unexpected_error=0) for name in ('engine','relay')}
+        engine_timeout=0,engine_cut=0,store_busy=0,store_refused=0,store_error=0,unexpected_error=0,events=[]) for name in ('engine','relay')}
     for unit,identity in (('engine',engine),('relay',relay)):
         raw=capture_docker_logs(identity)
         if raw is None:continue
@@ -347,14 +429,56 @@ def log_summary(engine, relay):
                 if (not separator or len(message)>4096 or not re.fullmatch(
                     r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})',tick)):
                     raise ValueError('LOG_SHAPE')
+                tick=window_stamp(tick.replace('Z','+00:00'))
                 message=re.sub(r'^naver-'+unit+r'(?:-1)?\s+\|\s*','',message)
             except (ValueError,UnicodeError):
                 out['unmatched_entries']+=1;continue
             for label,pattern in LOG_PATTERNS[unit]:
                 if re.fullmatch(pattern,message):
-                    out[label]+=1;break
+                    out[label]+=1;out['events'].append(dict(at=tick,code=label));break
             else:out['unmatched_entries']+=1
+        if len(out['events'])>32:
+            result[unit]=dict(available=False,entries_inspected=0,unmatched_entries=0,
+                engine_timeout=0,engine_cut=0,store_busy=0,store_refused=0,store_error=0,unexpected_error=0,events=[])
     return result
+
+
+def runtime_fingerprint(release, prepared):
+    # Whole-file preservation check only. The value and fingerprint never leave the host.
+    path=release.SECRET_ROOT/'runtime.env'
+    release.trusted_private_file(path)
+    if path.stat().st_size>65536:
+        raise ValueError('CLAUDE_DIAG_RUNTIME_SIZE')
+    fingerprint=release.sha(path.read_bytes())
+    if fingerprint!=prepared.get('files',{}).get(str(path)):
+        raise ValueError('CLAUDE_DIAG_RUNTIME_CHANGED')
+    return fingerprint
+
+
+def fixed_error(error):
+    code=str(error)
+    return code if code in ERROR_CODES else 'CLAUDE_DIAG_READ_FAILED'
+
+
+def postflight(host,release,identities,before,receipt,receipt_fingerprint,prepared,runtime_before):
+    failure=None
+    for name in before:
+        try:
+            if container(release,identities[name])!=before[name]:raise ValueError()
+        except Exception:
+            if failure is None:failure='CLAUDE_DIAG_POST_'+name.upper()
+    try:
+        legacy_unchanged=host.baseline()==BASELINE
+    except Exception:
+        legacy_unchanged=False
+    if not legacy_unchanged and failure is None:failure='CLAUDE_DIAG_POST_LEGACY_BASELINE'
+    try:
+        runtime_unchanged=(receipt_fingerprint==release.sha(receipt.read_bytes()) and
+            runtime_before==runtime_fingerprint(release,prepared))
+    except Exception:
+        runtime_unchanged=False
+    if not runtime_unchanged and failure is None:failure='CLAUDE_DIAG_POST_RUNTIME'
+    return failure,legacy_unchanged,runtime_unchanged
 
 
 def run(package, host, release):
@@ -370,6 +494,8 @@ def run(package, host, release):
     if (prepared.get('ok') is not True or prepared.get('source_commit')!=SOURCE or prepared.get('stage')!='prepared' or
             prepared.get('package',{}).get('source_tar_gz_sha256')!=ARCHIVE or prepared.get('package',{}).get('baseline')!=BASELINE):
         raise ValueError('CLAUDE_DIAG_SOURCE_NOT_READY')
+    receipt_fingerprint=release.sha(receipt.read_bytes())
+    runtime_before=runtime_fingerprint(release,prepared)
     identities={}
     before={}
     for name in ('engine','relay'):
@@ -395,23 +521,29 @@ def run(package, host, release):
         if name=='engine' and len([m for m in mounts if m.get('Type')=='bind' and m.get('Source')=='/var/lib/metainc/naver-engine' and m.get('Destination')=='/var/lib/naver-engine'])!=1:
             raise ValueError('CLAUDE_DIAG_DATA_MOUNT')
     STAGE='read_only_metadata_and_synthetic'
+    value=None;summary=None;primary_error=None
     try:
         raw=release.command(['docker','exec','-i','--user','10001:10001',identities['engine'],'python','-I','-B','-'],data=script(),timeout=30)
         if len(raw)>MAX_OUTPUT:
             raise ValueError('CLAUDE_DIAG_OUTPUT_LIMIT')
-        value=json.loads(raw,object_pairs_hook=release.unique)
-        if type(value) is dict and set(value)=={'failure'}:
-            raise ValueError(value['failure'] if type(value['failure']) is str and re.fullmatch('CLAUDE_DIAG_[A-Z_]{1,48}',value['failure']) else 'CLAUDE_DIAG_READ_FAILED')
-        validate_result(value)
+        candidate=json.loads(raw,object_pairs_hook=release.unique)
+        if type(candidate) is dict and set(candidate)=={'failure'}:
+            raise ValueError(candidate['failure'] if type(candidate['failure']) is str and candidate['failure'] in ERROR_CODES else 'CLAUDE_DIAG_READ_FAILED')
+        validate_result(candidate)
+        value=candidate
         summary=log_summary(identities['engine'],identities['relay'])
+    except Exception as error:
+        primary_error=fixed_error(error)
     finally:
         STAGE='postflight'
-        if any(container(release,identities[name])!=before[name] for name in before) or host.baseline()!=BASELINE:
-            raise ValueError('CLAUDE_DIAG_POST_BASELINE')
-    return dict(ok=True,mode='claude-diagnostics-v23-readonly',source_commit=SOURCE,diagnostics=value,logs=summary,
-        logs_scope='last_24h_tail_300_fixed_error_patterns_not_attempt_attributed',paid_provider_calls=None,
-        provider_outcome='not_recorded',database_mutations=0,external_calls=0,services_restarted=0,
-        existing_app_baseline_unchanged=True)
+        post_error,legacy_unchanged,runtime_unchanged=postflight(host,release,identities,before,receipt,
+            receipt_fingerprint,prepared,runtime_before)
+    return dict(ok=primary_error is None and post_error is None,mode='claude-diagnostics-v24-readonly',
+        source_commit=SOURCE,diagnostics=value,logs=summary,primary_error=primary_error,postflight_error=post_error,
+        postflight_verified=post_error is None,
+        logs_scope='fixed_0750_0755_utc_tail_300_patterns_not_account_attributed',paid_provider_calls=None,
+        provider_outcome='closed_audit_codes_only_no_paid_call_receipt',database_mutations=0,external_calls=0,services_restarted=0,
+        existing_app_baseline_unchanged=legacy_unchanged,runtime_config_unchanged=runtime_unchanged)
 
 
 def container(release,identity):

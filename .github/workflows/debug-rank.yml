@@ -2262,7 +2262,7 @@ jobs:
             subprocess.run(['/usr/bin/python3','-I','-B',str(target/'install_static.py'),'--root','/root/logic-analysis-deploy/frontend','--mode',mode],check=True,timeout=30)
             PY
   claude-diagnostics:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-claude-diagnostics-20261011' && inputs.ad_prepare == 'preview-claude-diagnostics'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-claude-diagnostics-v24-20261011' && inputs.ad_prepare == 'preview-claude-diagnostics'
     permissions:
       contents: read
     concurrency:
@@ -2339,7 +2339,7 @@ jobs:
             except Exception as error:
                 stage=getattr(module,'STAGE','input')
                 result=dict(ok=False,stage=stage if stage in ('input','preflight','read_only_metadata_and_synthetic','postflight') else 'unrecognized',
-                    error_code=str(error) if re.fullmatch('CLAUDE_DIAG_[A-Z_]{1,48}',str(error)) else 'CLAUDE_DIAG_EXECUTION_FAILED',
+                    error_code=str(error) if str(error) in getattr(module,'ERROR_CODES',()) else 'CLAUDE_DIAG_EXECUTION_FAILED',
                     paid_provider_calls=None,database_mutations=0,external_calls=0,services_restarted=0)
             print('CLAUDE_DIAG_RECEIPT '+json.dumps(result,sort_keys=True))
             if result.get('ok') is not True:
