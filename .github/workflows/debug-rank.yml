@@ -1,11 +1,17 @@
 name: Debug Rank Batch (읽기 전용 진단)
 
 # 08:00 순위 추적 배치·수집 상태 점검 — 수동 실행 전용(push 트리거 없음 = 재배포 미유발).
-# 작업 브랜치 ref 로 dispatch. 전 쿼리 읽기 전용(SELECT) — 데이터 변경 없음.
+# 작업 브랜치 ref 로 dispatch. 변경 작업은 전용 모드와 고정 범위에 한정한다.
 
 on:
   workflow_dispatch:
     inputs:
+      claude_config:
+        description: '서버 내 기존 Claude 키 연결/복구. 고정 관제 2개 릴리스만, 월 한도 없음, 유료 호출 없음.'
+        type: choice
+        options: ['off', activate, recover]
+        required: false
+        default: 'off'
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
@@ -51,7 +57,7 @@ on:
 
 jobs:
   preview-ops:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-backup' || inputs.ad_prepare == 'preview-inspect' || inputs.ad_prepare == 'preview-plan' || inputs.ad_prepare == 'preview-publish' || inputs.ad_prepare == 'preview-rollback' || inputs.ad_prepare == 'preview-lifecycle' || inputs.ad_prepare == 'preview-status' || inputs.ad_prepare == 'preview-data-audit' || inputs.ad_prepare == 'preview-collection-status' || inputs.ad_prepare == 'preview-link-audit' || inputs.ad_prepare == 'preview-legacy-audit' || inputs.ad_prepare == 'preview-upgrade' || inputs.ad_prepare == 'preview-code-upgrade' || inputs.ad_prepare == 'preview-code-diagnose' || inputs.ad_prepare == 'preview-code-only-upgrade' || inputs.ad_prepare == 'preview-code-only-rollback' || inputs.ad_prepare == 'preview-resource-trial' || inputs.ad_prepare == 'preview-report-recovery' || inputs.ad_prepare == 'preview-report-recovery-v19' || inputs.ad_prepare == 'preview-conversion-diagnostics') }}
+    if: ${{ (!inputs.claude_config || inputs.claude_config == 'off') && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-backup' || inputs.ad_prepare == 'preview-inspect' || inputs.ad_prepare == 'preview-plan' || inputs.ad_prepare == 'preview-publish' || inputs.ad_prepare == 'preview-rollback' || inputs.ad_prepare == 'preview-lifecycle' || inputs.ad_prepare == 'preview-status' || inputs.ad_prepare == 'preview-data-audit' || inputs.ad_prepare == 'preview-collection-status' || inputs.ad_prepare == 'preview-link-audit' || inputs.ad_prepare == 'preview-legacy-audit' || inputs.ad_prepare == 'preview-upgrade' || inputs.ad_prepare == 'preview-code-upgrade' || inputs.ad_prepare == 'preview-code-diagnose' || inputs.ad_prepare == 'preview-code-only-upgrade' || inputs.ad_prepare == 'preview-code-only-rollback' || inputs.ad_prepare == 'preview-resource-trial' || inputs.ad_prepare == 'preview-report-recovery' || inputs.ad_prepare == 'preview-report-recovery-v19' || inputs.ad_prepare == 'preview-conversion-diagnostics')) }}
     permissions:
       contents: read
     concurrency:
@@ -241,7 +247,7 @@ jobs:
             sys.exit(0 if result.get('ok') else 1)
             PY
   preview-start:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-start' }}
+    if: ${{ (!inputs.claude_config || inputs.claude_config == 'off') && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-start') }}
     permissions:
       contents: read
     concurrency:
@@ -301,7 +307,7 @@ jobs:
             sys.exit(0 if result.get('ok') else 1)
             PY
   preview-prepare:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-prepare' || inputs.ad_prepare == 'preview-upgrade-prepare' || inputs.ad_prepare == 'preview-code-prepare' || inputs.ad_prepare == 'preview-code-only-prepare') }}
+    if: ${{ (!inputs.claude_config || inputs.claude_config == 'off') && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-prepare' || inputs.ad_prepare == 'preview-upgrade-prepare' || inputs.ad_prepare == 'preview-code-prepare' || inputs.ad_prepare == 'preview-code-only-prepare')) }}
     permissions:
       contents: read
     concurrency:
@@ -501,7 +507,7 @@ jobs:
             sys.exit(0 if result.get('ok') else 1)
             PY
   preview-envelope:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-envelope' }}
+    if: ${{ (!inputs.claude_config || inputs.claude_config == 'off') && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-envelope') }}
     permissions:
       contents: read
     concurrency:
@@ -568,7 +574,7 @@ jobs:
             print('NAVER_PREVIEW_ENVELOPE='+json.dumps(receipt,sort_keys=True))
             PY
   tunnel-native:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-native' }}
+    if: ${{ (!inputs.claude_config || inputs.claude_config == 'off') && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-native') }}
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -588,7 +594,7 @@ jobs:
           python3 -m unittest discover -s backend/tests -p 'test_naver_tunnel_bpf_native_ci.py' -q
           sudo env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted CI=true NAVER_TUNNEL_BPF_NATIVE_CI=1 timeout 25s /usr/bin/python3 -I -B backend/tools/naver_tunnel_bpf_native_ci.py
   ad-deploy-prepare:
-    if: ${{ inputs.ad_prepare == 'inspect' || inputs.ad_prepare == 'prepare' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-keygen') }}
+    if: ${{ (!inputs.claude_config || inputs.claude_config == 'off') && (inputs.ad_prepare == 'inspect' || inputs.ad_prepare == 'prepare' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-keygen')) }}
     permissions:
       contents: read
     concurrency:
@@ -1044,7 +1050,7 @@ jobs:
             PY
 
   ad-tunnel-install:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'tunnel-install' || inputs.ad_prepare == 'tunnel-activate') }}
+    if: ${{ (!inputs.claude_config || inputs.claude_config == 'off') && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'tunnel-install' || inputs.ad_prepare == 'tunnel-activate')) }}
     permissions:
       contents: read
     concurrency:
@@ -1165,7 +1171,7 @@ jobs:
             INSTALL_REMOTE
 
   diagnose:
-    if: ${{ !inputs.ad_prepare || inputs.ad_prepare == 'off' }}
+    if: ${{ (!inputs.claude_config || inputs.claude_config == 'off') && (!inputs.ad_prepare || inputs.ad_prepare == 'off') }}
     runs-on: ubuntu-latest
     steps:
       # 브랜치 코드 미리보기용 — 평소(off)엔 받아만 두고 쓰지 않는다.
@@ -2182,7 +2188,7 @@ jobs:
               | sort | uniq -c | sort -rn | head -15
 
   learning-center-static:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'learning-center-static-check' || inputs.ad_prepare == 'learning-center-static-install' || inputs.ad_prepare == 'learning-center-static-rollback')
+    if: ${{ (!inputs.claude_config || inputs.claude_config == 'off') && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'learning-center-static-check' || inputs.ad_prepare == 'learning-center-static-install' || inputs.ad_prepare == 'learning-center-static-rollback')) }}
     permissions:
       contents: read
     concurrency:
@@ -2203,6 +2209,7 @@ jobs:
           inputs=json.loads(os.environ['INPUTS_JSON'])
           assert inputs.pop('ad_prepare') in ('learning-center-static-check','learning-center-static-install','learning-center-static-rollback')
           assert inputs.pop('ad_expected_baseline','')==''
+          assert inputs.pop('claude_config','off')=='off'
           assert set(inputs)=={'collector','rank_link','capacity','structure','expired','queue','urlshape','use_branch_code'}
           assert all(v=='off' for v in inputs.values())
           p=pathlib.Path('releases/learning-center-static-patch-20261011.tar.gz')
@@ -2260,4 +2267,134 @@ jobs:
                     fd=os.open(target/member.name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
                     with os.fdopen(fd,'wb') as stream: stream.write(data)
             subprocess.run(['/usr/bin/python3','-I','-B',str(target/'install_static.py'),'--root','/root/logic-analysis-deploy/frontend','--mode',mode],check=True,timeout=30)
+            PY
+
+  claude-config:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-claude-config-20261011' && (inputs.claude_config == 'activate' || inputs.claude_config == 'recover') }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Validate public request and synthetic transaction tests
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -m unittest discover -s backend/tests -p 'test_naver_claude_config.py' -q
+          python3 - <<'PY'
+          # CLAUDE_CONFIG_PACKAGE_BEGIN
+          import base64,gzip,json,os,pathlib,sys
+          sys.path.insert(0,'backend/tools')
+          import naver_claude_config as controller
+          def unique(pairs):
+              result={}
+              for key,value in pairs:
+                  if key in result:
+                      raise ValueError('CONFIG_DUPLICATE_INPUT')
+                  result[key]=value
+              return result
+          # Only this public six-field request is transported; never a secret input.
+          inputs=json.loads(os.environ['INPUTS_JSON'],object_pairs_hook=unique)
+          mode=inputs.pop('claude_config')
+          request=json.loads(inputs.pop('ad_expected_baseline'),object_pairs_hook=unique)
+          controller.validate_request(request)
+          assert mode==request['operation']
+          assert set(inputs)=={'ad_prepare','collector','rank_link','capacity','structure','expired','queue','urlshape','use_branch_code'}
+          assert all(value=='off' for value in inputs.values())
+          names=('naver_claude_config','naver_preview_release','naver_preview_upgrade','naver_preview_lifecycle','naver_erp_tunnel_service_install')
+          bundle={'request':request,'modules':{name:pathlib.Path('backend/tools/'+name+'.py').read_text() for name in names}}
+          raw=json.dumps(bundle,sort_keys=True,separators=(',',':')).encode()
+          assert len(raw)<=262144
+          encoded=base64.b64encode(gzip.compress(raw,mtime=0)).decode()
+          assert len(encoded)<=65536
+          with open(os.environ['GITHUB_ENV'],'a') as output:
+              output.write('CLAUDE_CONFIG_B64='+encoded+'\n')
+          # CLAUDE_CONFIG_PACKAGE_END
+          PY
+      - name: Apply or recover server-local Claude configuration
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          CLAUDE_CONFIG_B64: ${{ env.CLAUDE_CONFIG_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: CLAUDE_CONFIG_B64
+          command_timeout: 9m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -S -B - <<'PY'
+            # CLAUDE_CONFIG_REMOTE_BEGIN
+            import base64,contextlib,io,json,os,sys,types,zlib
+            controller=None
+            def unique(pairs):
+                result={}
+                for key,value in pairs:
+                    if key in result:
+                        raise ValueError('CONFIG_DUPLICATE_INPUT')
+                    result[key]=value
+                return result
+            def decode(encoded):
+                if not isinstance(encoded,str) or not 0<len(encoded)<=65536:
+                    raise ValueError('CONFIG_TRANSPORT')
+                packed=base64.b64decode(encoded,validate=True)
+                decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+                raw=decoder.decompress(packed,262145)
+                if len(raw)>262144 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+                    raise ValueError('CONFIG_TRANSPORT')
+                bundle=json.loads(raw,object_pairs_hook=unique)
+                names={'naver_claude_config','naver_preview_release','naver_preview_upgrade','naver_preview_lifecycle','naver_erp_tunnel_service_install'}
+                if (not isinstance(bundle,dict) or set(bundle)!={'request','modules'} or
+                        not isinstance(bundle['modules'],dict) or set(bundle['modules'])!=names or
+                        any(not isinstance(source,str) or not source for source in bundle['modules'].values())):
+                    raise ValueError('CONFIG_TRANSPORT')
+                return bundle
+            def public_result(result,request):
+                expected={'ok':True,'state':'committed' if request['operation']=='activate' else 'recovered',
+                          'operation_id':request['operation_id'],'source_commit':controller.SOURCE_COMMIT,
+                          'rollback_commit':controller.ROLLBACK_COMMIT,'model':controller.MODEL,
+                          'monthly_limit':'unlimited' if request['operation']=='activate' else 'restored',
+                          'server_local_key_reuse':request['operation']=='activate','paid_api_calls':0,
+                          'database_opened_by_controller':False,'legacy_services_changed':False,
+                          'code_rollback_requires_config_recovery':True}
+                if (not isinstance(result,dict) or result!=expected or
+                        any(type(result[key]) is not type(value) for key,value in expected.items())):
+                    raise ValueError('CONFIG_RESULT')
+                return expected
+            try:
+                bundle=decode(os.environ['CLAUDE_CONFIG_B64'])
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+                    modules={}
+                    for name,source in bundle['modules'].items():
+                        module=types.ModuleType('approved_'+name)
+                        exec(compile(source,'<reviewed-'+name+'>','exec'),module.__dict__)
+                        modules[name]=module
+                    controller=modules['naver_claude_config']
+                    controller.validate_request(bundle['request'])
+                    result=controller.run(bundle['request'],modules['naver_erp_tunnel_service_install'].NativeHost(),
+                        modules['naver_preview_release'],modules['naver_preview_upgrade'],modules['naver_preview_lifecycle'])
+                    result=public_result(result,bundle['request'])
+            except BaseException as failure:
+                stages={'input','preflight','candidate','stop','replace','start','recovery_preflight','recovery_restore'}
+                stage=getattr(controller,'STAGE','input')
+                if stage not in stages:
+                    stage='input'
+                codes={'CONFIG_FAILED_RECOVERED','CONFIG_FAILED_RECOVERY_REQUIRED','CONFIG_RECOVERY_REQUIRED',
+                       'CONFIG_OTHER_TRANSACTION','CONFIG_COMMITTED_DRIFT','CONFIG_RECOVERY_DRIFT',
+                       'CONFIG_CANDIDATE_REJECTED','CONFIG_KEY_SOURCE_POLICY','CONFIG_KEY_SOURCE_CHANGED',
+                       'CONFIG_KEY_SOURCE_IDENTITY','CONFIG_UNSTARTED_STATE'}
+                code=failure.args[0] if len(failure.args)==1 and type(failure.args[0]) is str and failure.args[0] in codes else 'CONFIG_FAILED'
+                print(json.dumps({'ok':False,'code':code,'stage':stage},sort_keys=True,separators=(',',':')))
+                sys.exit(1)
+            print(json.dumps(result,sort_keys=True,separators=(',',':')))
+            # CLAUDE_CONFIG_REMOTE_END
             PY
