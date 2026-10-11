@@ -4,6 +4,9 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
+import subprocess
+import time
 from datetime import datetime, timezone
 
 SOURCE = '9ddb0a30e16e4177e8d419318a6f23eb6c206e2f'
@@ -283,30 +286,78 @@ def validate_result(value):
         raise ValueError('CLAUDE_DIAG_OUTPUT_SCOPE')
 
 
-def log_summary(logs, engine, relay):
-    # Existing audited projection consumes raw logs; this additional projection
-    # emits fixed counters only, never its parsed exception strings or snippets.
-    sample=logs.recent_runtime_logs(engine,relay)
+LOG_PATTERNS = {
+    'engine': (
+        ('store_busy', r'WARNING naver_engine\.web 화면 API 저장소 바쁨: \S{1,64}'),
+        ('store_refused', r'WARNING naver_engine\.web 화면 API 저장소 거절: \S{1,64}'),
+        ('store_error', r'WARNING naver_engine\.web 화면 API 저장소 오류: \S{1,64}'),
+        ('unexpected_error', r'ERROR naver_engine\.web 화면 API 뜻밖의 오류: \S{1,64}')),
+    'relay': tuple((label,r'(?:WARNING:?[ ]+(?:(?:app\.)?naver_relay )?)?관제 엔진 중계 실패: '+kind)
+        for label,kind in (('engine_timeout','engine-timeout'),('engine_cut','engine-cut')))}
+
+
+def capture_docker_logs(identity):
+    # Fixed command, bounded memory/time. Raw stdout/stderr never leave this process.
+    if type(identity) is not str or not re.fullmatch('[0-9a-f]{64}',identity):
+        raise ValueError('CLAUDE_DIAG_CONTAINER_ID')
+    process=None
+    try:
+        process=subprocess.Popen(['docker','logs','--since','24h','--tail','300','--timestamps',identity],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,stdin=subprocess.DEVNULL,
+            env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C'})
+        streams={process.stdout:bytearray(),process.stderr:bytearray()};total=0
+        deadline=time.monotonic()+5
+        with selectors.DefaultSelector() as ready:
+            for stream in streams:ready.register(stream,selectors.EVENT_READ)
+            while ready.get_map():
+                remaining=deadline-time.monotonic()
+                if remaining<=0:return None
+                for key,_ in ready.select(remaining):
+                    chunk=os.read(key.fileobj.fileno(),min(65536,1048577-total))
+                    if not chunk:ready.unregister(key.fileobj);continue
+                    total+=len(chunk)
+                    if total>1048576:return None
+                    streams[key.fileobj].extend(chunk)
+        if process.wait(timeout=max(0.001,deadline-time.monotonic()))!=0:return None
+        return b'\n'.join(bytes(value).rstrip(b'\r\n') for value in streams.values() if value)
+    except (OSError,subprocess.SubprocessError):
+        return None
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                try:process.kill()
+                except ProcessLookupError:pass
+            process.wait()
+            for stream in (process.stdout,process.stderr):
+                if stream is not None:stream.close()
+
+
+def log_summary(engine, relay):
     result={name:dict(available=False,entries_inspected=0,unmatched_entries=0,
         engine_timeout=0,engine_cut=0,store_busy=0,store_refused=0,store_error=0,unexpected_error=0) for name in ('engine','relay')}
-    for row in sample['sources']:
-        if row.get('source')!='docker' or row.get('unit') not in result:
-            continue
-        out=result[row['unit']]
-        if row.get('available') is not True:
-            continue
-        out.update(available=True,entries_inspected=number(row['entries_inspected']),
-                   unmatched_entries=number(row['templates']['unmatched_entries']))
-        categories=row['templates']['categories']
-        for source,target in (('web_store_busy','store_busy'),('web_store_refused','store_refused'),
-                              ('web_store_error','store_error'),('web_unexpected_error','unexpected_error')):
-            out[target]=number(categories.get(source,{}).get('count',0))
-        kinds=categories.get('relay_failed',{}).get('kinds',{})
-        out['engine_timeout']=number(kinds.get('engine-timeout',0));out['engine_cut']=number(kinds.get('engine-cut',0))
+    for unit,identity in (('engine',engine),('relay',relay)):
+        raw=capture_docker_logs(identity)
+        if raw is None:continue
+        rows=raw.splitlines()
+        if len(rows)>300:continue
+        out=result[unit];out.update(available=True,entries_inspected=len(rows))
+        for row in rows:
+            try:
+                text=row.decode('utf-8');tick,separator,message=text.partition(' ')
+                if (not separator or len(message)>4096 or not re.fullmatch(
+                    r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})',tick)):
+                    raise ValueError('LOG_SHAPE')
+                message=re.sub(r'^naver-'+unit+r'(?:-1)?\s+\|\s*','',message)
+            except (ValueError,UnicodeError):
+                out['unmatched_entries']+=1;continue
+            for label,pattern in LOG_PATTERNS[unit]:
+                if re.fullmatch(pattern,message):
+                    out[label]+=1;break
+            else:out['unmatched_entries']+=1
     return result
 
 
-def run(package, host, release, logs):
+def run(package, host, release):
     global STAGE
     STAGE='preflight';validate_package(package)
     if os.geteuid()!=0 or host.baseline()!=BASELINE:
@@ -352,13 +403,13 @@ def run(package, host, release, logs):
         if type(value) is dict and set(value)=={'failure'}:
             raise ValueError(value['failure'] if type(value['failure']) is str and re.fullmatch('CLAUDE_DIAG_[A-Z_]{1,48}',value['failure']) else 'CLAUDE_DIAG_READ_FAILED')
         validate_result(value)
-        summary=log_summary(logs,identities['engine'],identities['relay'])
+        summary=log_summary(identities['engine'],identities['relay'])
     finally:
         STAGE='postflight'
         if any(container(release,identities[name])!=before[name] for name in before) or host.baseline()!=BASELINE:
             raise ValueError('CLAUDE_DIAG_POST_BASELINE')
     return dict(ok=True,mode='claude-diagnostics-v23-readonly',source_commit=SOURCE,diagnostics=value,logs=summary,
-        logs_scope='last_24h_tail_300_per_source_not_attempt_attributed',paid_provider_calls=None,
+        logs_scope='last_24h_tail_300_fixed_error_patterns_not_attempt_attributed',paid_provider_calls=None,
         provider_outcome='not_recorded',database_mutations=0,external_calls=0,services_restarted=0,
         existing_app_baseline_unchanged=True)
 

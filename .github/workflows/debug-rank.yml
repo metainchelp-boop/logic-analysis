@@ -2295,13 +2295,13 @@ jobs:
               assert json.loads(supplied)==package
           d.validate_package(package)
           names={'diagnostic':'naver_preview_claude_diagnostics.py','release':'naver_preview_release.py',
-                 'host':'naver_erp_tunnel_service_install.py','logs':'naver_preview_collection_status.py'}
+                 'host':'naver_erp_tunnel_service_install.py'}
           sources={name:pathlib.Path('backend/tools',file).read_text() for name,file in names.items()}
           bundle=dict(package=package,sources=sources)
           raw=json.dumps(bundle).encode()
-          assert 0<len(raw)<=229376
+          assert 0<len(raw)<=131072
           encoded=base64.b64encode(gzip.compress(raw,mtime=0)).decode()
-          assert len(encoded)<=81920
+          assert len(encoded)<=49152
           with open(os.environ['GITHUB_ENV'],'a') as stream:
               stream.write('CLAUDE_DIAG_B64='+encoded+'\n')
           print('CLAUDE_DIAG_SOURCE_DIGESTS '+json.dumps({name:hashlib.sha256(value.encode()).hexdigest() for name,value in sources.items()},sort_keys=True))
@@ -2323,19 +2323,19 @@ jobs:
             module=None
             try:
                 encoded=os.environ['CLAUDE_DIAG_B64']
-                assert len(encoded)<=81920
+                assert len(encoded)<=49152
                 decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
-                raw=decoder.decompress(base64.b64decode(encoded,validate=True),229377)
-                assert 0<len(raw)<=229376 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+                raw=decoder.decompress(base64.b64decode(encoded,validate=True),131073)
+                assert 0<len(raw)<=131072 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
                 bundle=json.loads(raw)
-                assert set(bundle)=={'package','sources'} and set(bundle['sources'])=={'diagnostic','release','host','logs'}
+                assert set(bundle)=={'package','sources'} and set(bundle['sources'])=={'diagnostic','release','host'}
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 loaded={}
                 for name,source in bundle['sources'].items():
                     loaded[name]=types.ModuleType('approved_claude_'+name)
                     exec(source,loaded[name].__dict__)
                 module=loaded['diagnostic']
-                result=module.run(bundle['package'],loaded['host'].NativeHost(),loaded['release'],loaded['logs'])
+                result=module.run(bundle['package'],loaded['host'].NativeHost(),loaded['release'])
             except Exception as error:
                 stage=getattr(module,'STAGE','input')
                 result=dict(ok=False,stage=stage if stage in ('input','preflight','read_only_metadata_and_synthetic','postflight') else 'unrecognized',

@@ -90,7 +90,7 @@ class ClaudeDiagnosticsTest(unittest.TestCase):
         D.validate_package(package)
         for replacement in ({**package,'mode':'generate'}, {**package,'api_key':'PRIVATE'}, {**package,'source_commit':'a'*40}):
             with patch.object(D.os,'geteuid',side_effect=AssertionError('too early')):
-                with self.assertRaisesRegex(ValueError,'^CLAUDE_DIAG_PACKAGE_PIN$'):D.run(replacement,None,None,None)
+                with self.assertRaisesRegex(ValueError,'^CLAUDE_DIAG_PACKAGE_PIN$'):D.run(replacement,None,None)
 
     def test_script_clears_env_forces_stub_and_blocks_network(self):
         body=D.script().decode();compile(body,'<synthetic-diagnostic>','exec')
@@ -100,15 +100,40 @@ class ClaudeDiagnosticsTest(unittest.TestCase):
             self.assertIn(required,body)
 
     def test_safe_log_projection_emits_fixed_counts(self):
-        class Logs:
-            @staticmethod
-            def recent_runtime_logs(engine,relay):
-                return {'sources':[{'source':'docker','unit':'relay','available':True,'entries_inspected':2,
-                    'templates':{'unmatched_entries':1,'categories':{'relay_failed':{'count':1,'kinds':{'engine-timeout':1,'PRIVATE':10}}}}}]}
-        value=D.log_summary(Logs,'a'*64,'b'*64)
+        def capture(identity):
+            if identity=='a'*64:
+                return b'2026-10-11T07:00:00Z PRIVATE-LOG-TEXT\n'
+            return ('2026-10-11T07:00:01Z WARNING naver_relay 관제 엔진 중계 실패: engine-timeout\n'
+                    '2026-10-11T07:00:02Z WARNING naver_relay 관제 엔진 중계 실패: PRIVATE\n').encode()
+        with patch.object(D,'capture_docker_logs',side_effect=capture):value=D.log_summary('a'*64,'b'*64)
         self.assertEqual(value['relay']['engine_timeout'],1)
+        self.assertEqual(value['relay']['unmatched_entries'],1)
+        self.assertEqual(value['engine']['unmatched_entries'],1)
         self.assertNotIn('PRIVATE',json.dumps(value))
-        self.assertIs(value['engine']['available'],False)
+        self.assertIs(value['engine']['available'],True)
+
+    def test_log_capture_refuses_unfixed_identity_before_process(self):
+        with patch.object(D.subprocess,'Popen',side_effect=AssertionError('must not run')):
+            with self.assertRaisesRegex(ValueError,'^CLAUDE_DIAG_CONTAINER_ID$'):D.capture_docker_logs('injected')
+
+    def test_log_capture_enforces_memory_bound_and_reaps_synthetic_child(self):
+        original=D.subprocess.Popen;children=[]
+        def synthetic(args,**kwargs):
+            self.assertEqual(args,['docker','logs','--since','24h','--tail','300','--timestamps','a'*64])
+            self.assertEqual(kwargs['env'],{'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C'})
+            child=original([sys.executable,'-c',"import os; os.write(1,b'x'*2097152)"],**kwargs)
+            children.append(child);return child
+        with patch.object(D.subprocess,'Popen',side_effect=synthetic):
+            self.assertIsNone(D.capture_docker_logs('a'*64))
+        self.assertEqual(len(children),1)
+        self.assertIsNotNone(children[0].returncode)
+
+    def test_log_projection_missing_or_oversized_sample_is_unavailable(self):
+        for raw in (None,b'x\n'*301):
+            with self.subTest(raw_missing=raw is None),patch.object(D,'capture_docker_logs',return_value=raw):
+                result=D.log_summary('a'*64,'b'*64)
+                self.assertFalse(result['engine']['available']);self.assertFalse(result['relay']['available'])
+
 
     def test_output_allowlist_rejects_raw_extra(self):
         value,_=self.collect()
@@ -150,11 +175,11 @@ class ClaudeDiagnosticsTest(unittest.TestCase):
         wire_limits=[int(value) for value in re.findall(r'assert len\(encoded\)<=([0-9]+)',workflow)]
         raw_limits=[int(value) for value in re.findall(r'0<len\(raw\)<=([0-9]+)',workflow)]
         decode_limits=[int(value) for value in re.findall(r'decoder.decompress\(base64.b64decode\(encoded,validate=True\),([0-9]+)\)',workflow)]
-        self.assertEqual(wire_limits,[81920,81920])
-        self.assertEqual(raw_limits,[229376,229376])
-        self.assertEqual(decode_limits,[229377])
+        self.assertEqual(wire_limits,[49152,49152])
+        self.assertEqual(raw_limits,[131072,131072])
+        self.assertEqual(decode_limits,[131073])
         names={'diagnostic':'naver_preview_claude_diagnostics.py','release':'naver_preview_release.py',
-               'host':'naver_erp_tunnel_service_install.py','logs':'naver_preview_collection_status.py'}
+               'host':'naver_erp_tunnel_service_install.py'}
         package=dict(baseline=D.BASELINE,source_commit=D.SOURCE,source_tar_gz_sha256=D.ARCHIVE,
                      target='foodin-weekly-20260928',mode='metadata-and-synthetic-only')
         sources={name:(root/'backend/tools'/file).read_text() for name,file in names.items()}
