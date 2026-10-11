@@ -79,10 +79,10 @@ jobs:
           import json, os, sys
           try:
               inputs = json.loads(os.environ['INPUTS_JSON'])
-              fields = {'claude_key_probe', 'ad_prepare', 'ad_expected_baseline', 'collector', 'rank_link',
+              fields = {'claude_key_probe', 'ad_prepare', 'collector', 'rank_link',
                         'capacity', 'structure', 'expired', 'queue', 'urlshape', 'use_branch_code'}
-              if (not isinstance(inputs, dict) or set(inputs) != fields or
-                      inputs.pop('claude_key_probe') is not True or inputs.pop('ad_expected_baseline') != '' or
+              if (not isinstance(inputs, dict) or inputs.pop('ad_expected_baseline', '') != '' or set(inputs) != fields or
+                      inputs.pop('claude_key_probe') is not True or
                       any(value != 'off' for value in inputs.values())):
                   raise ValueError()
           except Exception:

@@ -158,9 +158,13 @@ class WorkflowIsolationTest(unittest.TestCase):
 
     def test_probe_inputs_accept_only_true_and_all_other_modes_off(self):
         script = heredoc('CLAUDE_PROBE_INPUT')
-        status, output, errors, call = run_script(script, {'INPUTS_JSON': json.dumps(defaults())})
-        self.assertEqual((status, output, errors), (0, '', ''))
-        call.assert_not_called()
+        omitted_empty_optional = defaults()
+        omitted_empty_optional.pop('ad_expected_baseline')
+        # GitHub omits an optional default:'' field from toJSON(inputs).
+        for values in (defaults(), omitted_empty_optional):
+            status, output, errors, call = run_script(script, {'INPUTS_JSON': json.dumps(values)})
+            self.assertEqual((status, output, errors), (0, '', ''))
+            call.assert_not_called()
         bad = [{}, [], dict(defaults(), claude_key_probe=False), dict(defaults(), claude_key_probe='true'),
                dict(defaults(), claude_key_probe=1), dict(defaults(), ad_expected_baseline='unexpected'),
                dict(defaults(), extra='off')]
