@@ -458,7 +458,10 @@ class CompletionDatabaseTests(unittest.TestCase):
             size=(data/'engine.db').stat().st_size;original=Path.stat
             def named(path,*args,**kwargs):
                 info=original(path,*args,**kwargs)
-                if path==root/'receipts':return SimpleNamespace(st_dev=info.st_dev+1)
+                if path==root/'receipts':
+                    values={name:getattr(info,name) for name in dir(info) if name.startswith('st_')}
+                    values['st_dev']+=1
+                    return SimpleNamespace(**values)
                 return info
             limits={root/'receipts':2*size+C.DATABASE_RESERVE_BYTES,data:size+C.DATABASE_RESERVE_BYTES}
             def capacity(path):return SimpleNamespace(f_bavail=limits[path],f_frsize=1)
