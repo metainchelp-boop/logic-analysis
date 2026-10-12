@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 
-PINS = {'plan': {'ops_commit': '19586caf7fe5579e7da70d4a2d4205c3ed603996', 'source_directory': '/root/logic-analysis-deploy/data', 'database_name': 'logic_data.db', 'exporter_user': 'nobody', 'source_group': None, 'python_executable': '/usr/bin/python3'}, 'helper_sha256': '2b47884242c1b1e7b67074383f070a79bbdd4f88471c0448a92116cf9b34c7a8', 'scripts': {'naver_product_export.py': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'naver_market_export.py': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}, 'companion_sha256': '4569587ade5f0c6575e7c2504790dbb0efb300b3091d834c2d1471913c499c95'}
+PINS = {'plan': {'ops_commit': '19586caf7fe5579e7da70d4a2d4205c3ed603996', 'source_directory': '/root/logic-analysis-deploy/data', 'database_name': 'logic_data.db', 'exporter_user': 'nobody', 'source_group': None, 'python_executable': '/usr/bin/python3'}, 'helper_sha256': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'scripts': {'naver_product_export.py': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'naver_market_export.py': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}, 'companion_sha256': '4569587ade5f0c6575e7c2504790dbb0efb300b3091d834c2d1471913c499c95'}
 
 
 def canonical(value):

@@ -9,6 +9,7 @@ import io
 from pathlib import Path
 import sqlite3
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -267,7 +268,7 @@ class SavedExportInstallTests(unittest.TestCase):
     def test_companion_and_units_bind_only_dedicated_directories_readonly(self):
         with patch.object(M,'_python_snapshot',side_effect=AssertionError('pure artifact rendering')):
             items=M.artifacts(self.plan,self.scripts,self.pins)
-        self.assertEqual(len(items),9)
+        self.assertEqual(len(items),11)
         engine=json.loads(items[M.COMPANION])['services']['naver-engine']
         self.assertEqual(set(engine),{'environment','volumes'});self.assertEqual(len(engine['volumes']),2)
         for row in engine['volumes']:
@@ -302,12 +303,41 @@ class SavedExportInstallTests(unittest.TestCase):
             for guard in ('NoNewPrivileges=true','CapabilityBoundingSet=','PrivateNetwork=true',
                           'ProtectHome=tmpfs','ProtectSystem=strict','RestrictAddressFamilies=AF_UNIX'):
                 self.assertIn(guard+'\n',coordinator)
-            encoded=next(line for line in coordinator.splitlines() if line.startswith('ExecStart=')).split(' -c ',1)[1]
-            source=json.loads(encoded)
+            source=items[M.COORDINATORS[kind]].decode()
             self.assertEqual(source,M._coordinator_source(self.plan,kind))
             compile(source,'embedded-coordinator','exec')
             self.assertNotIn('%',source);self.assertNotIn('$',source)
             self.assertNotIn('naver_'+kind+'_export.py',coordinator)
+            self.assertIn(f'ExecStart={binary} -I -B {self.install/self.plan["ops_commit"]/M.COORDINATORS[kind]}\n',coordinator)
+            self.assertNotIn(' -c ',coordinator)
+
+    def test_generated_exec_arguments_fit_systemd_v249_path_expansion_bound(self):
+        # v249 expands every Exec argv with a PATH_MAX-1 limit, even without %.
+        # Newer systemd accepting the line does not prove v249 compatibility.
+        plan={**self.plan,'exporter_user':'nobody'}
+        for name,body in M.artifacts(plan,self.scripts,self.pins).items():
+            if not name.endswith('.service'):continue
+            for line in body.decode().splitlines():
+                if line.startswith(('ExecStart=','ExecStartPre=')):
+                    for argument in shlex.split(line.split('=',1)[1]):
+                        self.assertLessEqual(len(argument.encode()),4095,(name,len(argument.encode())))
+
+    def test_generated_coordinator_artifact_is_pinned_installed_and_drift_protected(self):
+        receipt=self.prepare()
+        self.assertEqual(receipt['version'],4)
+        self.assertEqual(set(M.COORDINATORS.values()) & set(receipt['manifest']),set(M.COORDINATORS.values()))
+        M.install(receipt,command=self.command)
+        for kind,name in M.COORDINATORS.items():
+            path=self.install/self.plan['ops_commit']/name
+            self.assertEqual(path.read_bytes(),M._coordinator_source(self.plan,kind).encode())
+            self.assertEqual(path.stat().st_mode&0o777,0o644)
+        path=self.install/self.plan['ops_commit']/M.COORDINATORS['product']
+        path.write_bytes(b'foreign coordinator source\n');self.calls.clear()
+        with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_INSTALLED_CHANGED'):
+            M.verify(receipt,command=self.command)
+        with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_ROLLBACK_DRIFT'):
+            M.rollback(receipt,command=self.command)
+        self.assertEqual(self.calls,[]);self.assertEqual(path.read_bytes(),b'foreign coordinator source\n')
 
     @unittest.skipIf(sys.platform=='darwin','Real systemd parser runs in native Linux CI, not macOS')
     def test_real_systemd_parser_accepts_generated_units_and_rejects_broken_quoting(self):
@@ -340,7 +370,7 @@ class SavedExportInstallTests(unittest.TestCase):
         lines=text.splitlines()
         for index,line in enumerate(lines):
             if line.startswith('ExecStart='):
-                self.assertTrue(line.endswith('"'));lines[index]=line[:-1];break
+                lines[index]=line+' "';break
         parent.write_text('\n'.join(lines)+'\n')
         broken=subprocess.run([analyzer,'verify',*paths],stdin=subprocess.DEVNULL,
             capture_output=True,env=environment,timeout=15,check=False)
@@ -459,8 +489,8 @@ class SavedExportInstallTests(unittest.TestCase):
     def test_owner_only_system_binary_is_unchanged_and_copy_is_group_only(self):
         before=(self.python.read_bytes(),M._file_identity(self.python.stat()))
         receipt=self.prepare()
-        self.assertEqual(receipt['version'],3)
-        self.assertEqual(len(receipt['manifest']),10)
+        self.assertEqual(receipt['version'],4)
+        self.assertEqual(len(receipt['manifest']),12)
         staged=self.staging/receipt['operation_id']/M.INTERPRETER
         self.assertEqual(staged.stat().st_mode&0o777,0o600)
         M.install(receipt,command=self.command)

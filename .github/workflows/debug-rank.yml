@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -2624,7 +2624,7 @@ jobs:
           assert inputs.pop('ad_prepare')=='preview-completion-export-failure-inspect'
           assert inputs.pop('ad_expected_baseline')=='none' and all(v=='off' for v in inputs.values())
           source=pathlib.Path('backend/tools/naver_saved_exports_failure_inspect.py').read_bytes()
-          assert hashlib.sha256(source).hexdigest()=='10737abc0ed210fd6bf39714cb81ff55f5cd9a1df81bba7d83ae56d3c88659cc'
+          assert hashlib.sha256(source).hexdigest()=='f0f9d6d98bca240f906c747896d80ec13e042c26ba6f71ff6e21b45019b2eac2'
           encoded=base64.b64encode(source).decode();assert len(encoded)<=32768
           with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('COMPLETION_EXPORT_INSPECT_B64='+encoded+'\n')
           PYCODE
@@ -2646,7 +2646,7 @@ jobs:
                 encoded=os.environ['COMPLETION_EXPORT_INSPECT_B64']
                 if len(encoded)>32768:raise ValueError('INSPECT_SIZE')
                 source=base64.b64decode(encoded,validate=True)
-                if hashlib.sha256(source).hexdigest()!='10737abc0ed210fd6bf39714cb81ff55f5cd9a1df81bba7d83ae56d3c88659cc':raise ValueError('INSPECT_PIN')
+                if hashlib.sha256(source).hexdigest()!='f0f9d6d98bca240f906c747896d80ec13e042c26ba6f71ff6e21b45019b2eac2':raise ValueError('INSPECT_PIN')
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 module=types.ModuleType('approved_completion_export_failure_inspect');exec(source,module.__dict__)
                 result=module.inspect_host()
@@ -2655,4 +2655,71 @@ jobs:
                 print('NAVER_COMPLETION_EXPORT_FAILURE='+raw)
             except Exception:
                 print('NAVER_COMPLETION_EXPORT_FAILURE={"version":1,"error":"INSPECT_REFUSED"}');sys.exit(1)
+            PYCODE
+
+  completion-export-recover-failed-unit:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-completion-export-recover-failed-unit'
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Exact failed run recovery only; no arbitrary package
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_saved_exports_failed_unit_recovery -q
+          python3 - <<'PYCODE'
+          import base64,hashlib,json,os,pathlib,subprocess
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('ad_prepare')=='preview-completion-export-recover-failed-unit'
+          assert inputs.pop('ad_expected_baseline')=='none' and all(v=='off' for v in inputs.values())
+          source=pathlib.Path('backend/tools/naver_saved_exports_failed_unit_recovery.py').read_bytes()
+          old=subprocess.check_output(['git','show','535a2bf1bd40f479fb913158cae2b7a3d57041a0:backend/tools/naver_saved_exports.py'])
+          assert hashlib.sha256(source).hexdigest()=='f31268a48f00de6879f8a01976478e5da1845d81a8227ef509390ab7eddb7413'
+          assert hashlib.sha256(old).hexdigest()=='2b47884242c1b1e7b67074383f070a79bbdd4f88471c0448a92116cf9b34c7a8'
+          encoded=base64.b64encode(source).decode();previous=base64.b64encode(old).decode()
+          assert len(encoded)+len(previous)<100000
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('COMPLETION_RECOVER_B64='+encoded+'\n')
+              stream.write('COMPLETION_OLD_EXPORT_HELPER_B64='+previous+'\n')
+          PYCODE
+      - name: Recover only failed PREPARE 38195967572 artifacts after all six inactive checks
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          COMPLETION_RECOVER_B64: ${{ env.COMPLETION_RECOVER_B64 }}
+          COMPLETION_OLD_EXPORT_HELPER_B64: ${{ env.COMPLETION_OLD_EXPORT_HELPER_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: COMPLETION_RECOVER_B64,COMPLETION_OLD_EXPORT_HELPER_B64
+          command_timeout: 2m
+          script: |
+            set -eu
+            timeout 90s /usr/bin/python3 -I -B - <<'PYCODE'
+            import base64,hashlib,json,os,sys,types
+            module=None
+            try:
+                encoded=os.environ['COMPLETION_RECOVER_B64'];previous=os.environ['COMPLETION_OLD_EXPORT_HELPER_B64']
+                if len(encoded)+len(previous)>=100000:raise ValueError('RECOVERY_SIZE')
+                source=base64.b64decode(encoded,validate=True);old=base64.b64decode(previous,validate=True)
+                if hashlib.sha256(source).hexdigest()!='f31268a48f00de6879f8a01976478e5da1845d81a8227ef509390ab7eddb7413':raise ValueError('RECOVERY_PIN')
+                if hashlib.sha256(old).hexdigest()!='2b47884242c1b1e7b67074383f070a79bbdd4f88471c0448a92116cf9b34c7a8':raise ValueError('RECOVERY_OLD_PIN')
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                module=types.ModuleType('approved_failed_unit_recovery');exec(source,module.__dict__)
+                result=module.recover(old)
+                print('NAVER_COMPLETION_EXPORT_RECOVERY='+json.dumps(result,sort_keys=True,separators=(',',':')))
+            except Exception as error:
+                result=module.failure_report(error) if module is not None else {"version":1,"state":"refused","stage":"input","issue":"policy"}
+                print("NAVER_COMPLETION_EXPORT_RECOVERY="+json.dumps(result,sort_keys=True,separators=(",",":")));sys.exit(1)
             PYCODE

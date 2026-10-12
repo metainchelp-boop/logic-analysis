@@ -35,6 +35,8 @@ METADATA_PATHS = (
         for kind in ('product', 'market') for suffix in ('service', 'timer')) + tuple(
         (kind+'_reader_service', '/etc/systemd/system/naver-'+kind+'-export-reader.service')
         for kind in ('product', 'market'))
+PARSER_UNITS = tuple(sorted(path for _, path in METADATA_PATHS
+                            if path.endswith(('.service', '.timer'))))
 SOURCE_PATHS = (
     ('source_directory', '/root/logic-analysis-deploy/data'),
     ('source_database', '/root/logic-analysis-deploy/data/logic_data.db'),
@@ -265,6 +267,93 @@ def _metadata(role, path, blocked=False):
         return result
 
 
+def _parser_output(args, *, deadline, maximum):
+    """Only two fixed, read-only commands; bound their combined pipe in memory."""
+    if (args not in (['/usr/bin/systemd-analyze', 'verify', *PARSER_UNITS],
+                     ['/usr/bin/systemd-analyze', '--version']) or
+            type(deadline) not in (int, float) or not 0 < deadline < float('inf') or
+            type(maximum) is not int or not 0 < maximum <= 32768):
+        return None, None, 'unknown'
+    if time.monotonic() >= deadline:
+        return None, None, 'timeout'
+    process = None
+    selector = selectors.DefaultSelector()
+    try:
+        process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, close_fds=True,
+            env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
+                 'SYSTEMD_COLORS': '0', 'SYSTEMD_LOG_LEVEL': 'warning'})
+        selector.register(process.stdout, selectors.EVENT_READ)
+        chunks = []; size = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                return None, None, 'timeout'
+            chunk = os.read(process.stdout.fileno(), min(65536, maximum + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk); size += len(chunk)
+            if size > maximum:
+                return None, None, 'output_limit'
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None, None, 'timeout'
+        code = process.wait(timeout=remaining)
+        if type(code) is not int or not 0 <= code <= 255:
+            return None, None, 'unknown'
+        return b''.join(chunks), code, None
+    except subprocess.TimeoutExpired:
+        return None, None, 'timeout'
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None, None, 'unknown'
+    finally:
+        selector.close()
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+            if process.stdout is not None:
+                process.stdout.close()
+            try:
+                process.wait(timeout=max(0, min(1, deadline-time.monotonic())))
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
+def _unit_parser(paths, *, deadline):
+    result = {'status': 'unavailable', 'systemd_version': None,
+              'returncode': None, 'issue': 'unit_policy'}
+    roles = {role for role, path in METADATA_PATHS if path in PARSER_UNITS}
+    selected = [row for row in paths if row.get('role') in roles]
+    if (len(selected) != 6 or {row['role'] for row in selected} != roles or
+            any(row.get('exists') is not True or row.get('kind') != 'regular' or
+                row.get('mode') != '0644' or type(row.get('uid')) is not int or row['uid'] != 0
+                for row in selected)):
+        return result
+    raw, code, error = _parser_output(['/usr/bin/systemd-analyze', 'verify', *PARSER_UNITS],
+                                     deadline=deadline, maximum=32768)
+    if error:
+        return {**result, 'status': 'limited' if error == 'output_limit' else 'unavailable', 'issue': error}
+    issue = 'none' if code == 0 else 'unknown'
+    if code != 0:
+        # Resolve errors may print the multiline argument. Require both the
+        # parser's exact context and its terminal errno text; return neither.
+        if re.search(rb'\bfailed to resolve unit specifiers\b[\s\S]*?:\s*'
+                     rb'(?:argument list too long|file name too long)(?:\r?\n|$)', raw, re.IGNORECASE):
+            issue = 'argument_too_long'
+        elif re.search(rb'\bunbalanced quoting, ignoring:|\bfailed to parse command line:|'
+                       rb'\bbad unit file setting\b', raw, re.IGNORECASE):
+            issue = 'unit_syntax'
+    result.update(status='observed', returncode=code, issue=issue)
+    version, version_code, error = _parser_output(['/usr/bin/systemd-analyze', '--version'],
+                                                deadline=deadline, maximum=4096)
+    if error is None and version_code == 0:
+        first = version.splitlines()[0] if version else b''
+        match = re.fullmatch(rb'systemd ([1-9][0-9]{0,3})(?: \([\x20-\x7e]*\))?', first)
+        if match:
+            result['systemd_version'] = int(match.group(1))
+    return result
+
+
 def _python_metadata():
     result=[]
     for role,path in (('configured','/usr/bin/python3'),('versioned_310','/usr/bin/python3.10'),
@@ -316,7 +405,8 @@ def inspect_host():
         ancestry[path] = value['kind']; paths.append(value)
     result = {'version': 1, 'diagnostic_only': True, 'journals': journals, 'paths': paths,
             'source_writes': False, 'service_changes': False, 'network_calls': 0,
-            'runtime_executables': _python_metadata(), 'source_files': _source_metadata()}
+            'runtime_executables': _python_metadata(), 'source_files': _source_metadata(),
+            'unit_parser': _unit_parser(paths, deadline=deadline)}
     if len(json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()) > MAX_OUTPUT:
         raise ValueError('INSPECT_RESULT_SIZE')
     return result

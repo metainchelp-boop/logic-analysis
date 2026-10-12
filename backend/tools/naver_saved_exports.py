@@ -32,6 +32,7 @@ OUTPUTS = {'product': Path('/var/lib/metainc/naver-product-source'),
 COMPANION = 'naver-saved-exports.override.yml'
 SOURCE_ALIAS = '/run/naver-saved-source'
 SCRIPTS = ('naver_product_export.py', 'naver_market_export.py')
+COORDINATORS = {'product': 'naver_product_coordinate.py', 'market': 'naver_market_coordinate.py'}
 INTERPRETER = 'python-export'
 KINDS = ('product', 'market')
 MAX_BUNDLE = 5 * 1024 * 1024
@@ -42,7 +43,8 @@ READER_GID = 10001
 PROFILE_KEYS = frozenset({'ops_commit', 'source_directory', 'database_name',
                          'exporter_user', 'source_group', 'python_executable'})
 
-# This is embedded as one systemd-quoted argv, not a shell command or third script.
+# This is generated as an exact root-owned script, never a shell command or argv
+# payload. Older systemd limits expansion of each Exec argument to PATH_MAX-1.
 # The main DB must be a kernel-RO mount while only SQLite's coordination directory
 # is writable. Source application data never passes through this process.
 COORDINATOR_SOURCE = '''import grp,json,os,pwd,sqlite3,stat,subprocess,sys
@@ -228,10 +230,10 @@ def _coordinator_source(plan, kind):
 
 def _unit(plan, kind):
     python = INSTALL / plan['ops_commit'] / INTERPRETER
-    argument = json.dumps(_coordinator_source(plan, kind), ensure_ascii=True)
+    code = INSTALL / plan['ops_commit'] / COORDINATORS[kind]
     return (f'[Unit]\nDescription=Bounded SQLite coordination for saved {kind} export\nAfter=local-fs.target\n\n'
         f'[Service]\nType=oneshot\nUser=root\nGroup={READER_GID}\n'
-        f'WorkingDirectory=/\nExecStart={python} -I -B -c {argument}\n'
+        f'WorkingDirectory=/\nExecStart={python} -I -B {code}\n'
         'UMask=0022\nTimeoutStartSec=65\nMemoryMax=64M\nTasksMax=16\n'
         'NoNewPrivileges=true\nCapabilityBoundingSet=\nPrivateNetwork=true\nPrivateTmp=true\n'
         'PrivateDevices=true\nProtectSystem=strict\nProtectHome=tmpfs\n'
@@ -288,6 +290,7 @@ def artifacts(plan, scripts, pins):
     result = dict(scripts)
     result[COMPANION] = render_companion(plan)
     for kind in KINDS:
+        result[COORDINATORS[kind]] = _coordinator_source(plan, kind).encode()
         result[f'naver-{kind}-export.service'] = _unit(plan, kind)
         result[f'naver-{kind}-export-reader.service'] = _reader_unit(plan, kind)
         result[f'naver-{kind}-export.timer'] = _timer(kind)
@@ -488,7 +491,7 @@ def prepare(plan, *, scripts, pins, operation_id):
     if staged_identity != reopened_identity or staged_body != binary:
         _fail('EXPORT_PREPARED_CHANGED')
     content[INTERPRETER] = binary
-    receipt = {'version': 3, 'operation_id': operation_id, 'plan': plan,
+    receipt = {'version': 4, 'operation_id': operation_id, 'plan': plan,
                'plan_sha256': _sha(_json(plan)), 'source_identity': source,
                'runtime_identity': identity,
                'manifest': {name: _sha(body) for name, body in sorted(content.items())},
@@ -501,14 +504,14 @@ def prepare(plan, *, scripts, pins, operation_id):
 def _prepared(receipt):
     if (not isinstance(receipt, dict) or set(receipt) != {'version', 'operation_id', 'plan', 'plan_sha256',
             'source_identity', 'runtime_identity', 'manifest', 'companion_sha256', 'interpreter'} or
-            type(receipt['version']) is not int or receipt['version'] != 3 or
+            type(receipt['version']) is not int or receipt['version'] != 4 or
             not isinstance(receipt['operation_id'], str) or re.fullmatch('[0-9a-f]{32}', receipt['operation_id']) is None):
         _fail('EXPORT_RECEIPT')
     plan = _plan(receipt['plan'])
     folder = STAGING / receipt['operation_id']; _directory(STAGING, mode=0o700); _directory(folder, mode=0o700)
     if _regular(folder / 'prepared.json', mode=0o600) != _json(receipt):
         _fail('EXPORT_RECEIPT')
-    names = set(SCRIPTS) | {COMPANION, INTERPRETER} | {f'naver-{kind}-export.{suffix}' for kind in KINDS for suffix in ('service', 'timer')}
+    names = set(SCRIPTS) | set(COORDINATORS.values()) | {COMPANION, INTERPRETER} | {f'naver-{kind}-export.{suffix}' for kind in KINDS for suffix in ('service', 'timer')}
     names.update(f'naver-{kind}-export-reader.service' for kind in KINDS)
     if not isinstance(receipt['manifest'], dict) or set(receipt['manifest']) != names:
         _fail('EXPORT_RECEIPT')
@@ -527,7 +530,8 @@ def _prepared(receipt):
             receipt['plan_sha256'] != _sha(_json(plan)) or
             receipt['companion_sha256'] != _sha(render_companion(plan)) or
             content[COMPANION] != render_companion(plan) or
-            any(content[f'naver-{kind}-export.service'] != _unit(plan, kind) or
+            any(content[COORDINATORS[kind]] != _coordinator_source(plan, kind).encode() or
+                content[f'naver-{kind}-export.service'] != _unit(plan, kind) or
                 content[f'naver-{kind}-export-reader.service'] != _reader_unit(plan, kind) or
                 content[f'naver-{kind}-export.timer'] != _timer(kind) for kind in KINDS)):
         _fail('EXPORT_PREPARED_CHANGED')
@@ -596,7 +600,7 @@ def install(receipt, *, command):
         actual, installed_identity = _binary(path, mode=0o550, group=READER_GID)
         if installed_identity != state['interpreter_identity'] or actual != content[INTERPRETER]:
             _fail('EXPORT_INSTALLED_CHANGED')
-        for name in SCRIPTS:
+        for name in (*SCRIPTS, *COORDINATORS.values()):
             path = script_dir / name
             state['created_files'].append(str(path)); _journal(folder, receipt, state)
             _write_new(path, content[name], 0o644)
@@ -632,7 +636,7 @@ def verify(receipt, *, command, require_timers=True, now=None):
     for name, body in content.items():
         if name == COMPANION:
             continue
-        path = INSTALL / plan['ops_commit'] / name if name in (*SCRIPTS, INTERPRETER) else UNITS / name
+        path = INSTALL / plan['ops_commit'] / name if name in (*SCRIPTS, *COORDINATORS.values(), INTERPRETER) else UNITS / name
         if name == INTERPRETER:
             actual, identity = _binary(path, mode=0o550, group=READER_GID)
             if identity != state.get('interpreter_identity') or actual != body:
@@ -691,7 +695,7 @@ def _rollback_state(receipt):
         _fail('EXPORT_ROOT_REQUIRED')
     plan, folder, content = _prepared(receipt)
     state = json.loads(_regular(folder / 'installed.json', mode=0o600))
-    allowed = {str(INSTALL / plan['ops_commit'] / name): content[name] for name in (*SCRIPTS, INTERPRETER)}
+    allowed = {str(INSTALL / plan['ops_commit'] / name): content[name] for name in (*SCRIPTS, *COORDINATORS.values(), INTERPRETER)}
     allowed.update({str(UNITS / name): body for name, body in content.items() if name.endswith(('.service', '.timer'))})
     if (state.get('operation_id') != receipt['operation_id'] or not isinstance(state.get('created_files'), list) or
             len(state['created_files']) != len(set(state['created_files'])) or any(path not in allowed for path in state['created_files'])):

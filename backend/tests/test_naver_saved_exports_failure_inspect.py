@@ -168,11 +168,13 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
         info=SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0,st_gid=0)
         with patch.object(I,'_journal',side_effect=journal),patch.object(I.time,'time_ns',return_value=NOW*1000),\
             patch.object(I.os,'lstat',return_value=info),patch.object(I.os,'stat',return_value=info),\
-            patch.object(I.os.path,'realpath',side_effect=lambda path:path):
+            patch.object(I.os.path,'realpath',side_effect=lambda path:path),\
+            patch.object(I,'_unit_parser',return_value={'status':'observed','systemd_version':9999,
+                'returncode':255,'issue':'argument_too_long'}):
             result=I.inspect_host()
         output=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
         self.assertEqual(set(result),{'version','diagnostic_only','journals','paths','source_writes',
-            'service_changes','network_calls','runtime_executables','source_files'})
+            'service_changes','network_calls','runtime_executables','source_files','unit_parser'})
         self.assertLessEqual(len(output.encode()),32768)
         self.assertEqual(len(result['journals']),4);self.assertEqual(len(result['paths']),14)
         for value in result['journals']:
@@ -421,6 +423,129 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
             self.assertEqual(I.main(),2)
         inspect.assert_not_called()
         self.assertEqual(json.loads(output.call_args.args[0]),{'version':1,'error':'ARGUMENTS_NOT_SUPPORTED'})
+
+
+class UnitParserDiagnosticTests(unittest.TestCase):
+    def metadata(self):
+        return [{'role':role,'exists':True,'kind':'regular','mode':'0644','uid':0,'gid':0}
+                for role,path in I.METADATA_PATHS if path.endswith(('.service','.timer'))]
+
+    def test_exact_six_units_and_current_root_regular_644_policy_are_required(self):
+        expected=tuple(sorted('/etc/systemd/system/naver-'+kind+'-export'+suffix
+            for kind in ('product','market') for suffix in ('.service','.timer','-reader.service')))
+        self.assertEqual(I.PARSER_UNITS,expected)
+        rows=self.metadata()
+        for bad in ([*rows[:-1]], [{**row,'uid':10001} for row in rows],
+                    [{**row,'kind':'symlink'} for row in rows],
+                    [{**row,'mode':'0664'} for row in rows],
+                    [{**row,'exists':False} for row in rows]):
+            with self.subTest(bad=bad),patch.object(I,'_parser_output') as run:
+                result=I._unit_parser(bad,deadline=108)
+            run.assert_not_called()
+            self.assertEqual(result,{'status':'unavailable','systemd_version':None,
+                'returncode':None,'issue':'unit_policy'})
+
+    def test_verify_and_version_are_fixed_readonly_commands_and_raw_output_is_private(self):
+        with patch.object(I,'_parser_output',side_effect=[(b'',0,None),
+            (b'systemd 249 (249.11-private-build)\nSECRET=raw\n',0,None)]) as run:
+            result=I._unit_parser(self.metadata(),deadline=108)
+        self.assertEqual(result,{'status':'observed','systemd_version':249,'returncode':0,'issue':'none'})
+        self.assertEqual(run.call_args_list[0].args[0],['/usr/bin/systemd-analyze','verify',*I.PARSER_UNITS])
+        self.assertEqual(run.call_args_list[1].args[0],['/usr/bin/systemd-analyze','--version'])
+        self.assertEqual([c.kwargs['deadline'] for c in run.call_args_list],[108,108])
+        self.assertEqual([c.kwargs['maximum'] for c in run.call_args_list],[32768,4096])
+        self.assertNotIn('SECRET',json.dumps(result));self.assertNotIn('private',json.dumps(result))
+
+    def test_exact_argument_limit_context_and_reason_are_required_without_raw_promotion(self):
+        cases=[(b'/private/SECRET:9: Failed to resolve unit specifiers in code\ncontinued: Argument list too long\n','argument_too_long'),
+               (b'Failed to resolve unit specifiers in SECRET: File name too long\n','argument_too_long'),
+               (b'Argument list too long\n','unknown'),
+               (b'Failed to resolve unit specifiers in SECRET: unrelated\n','unknown'),
+               (b'Failed to resolve unit specifiers in SECRET: File name too long PRIVATE\n','unknown'),
+               (b'Unbalanced quoting, ignoring: SECRET\n','unit_syntax')]
+        for raw,issue in cases:
+            with self.subTest(issue=issue,raw=raw),patch.object(I,'_parser_output',
+                    side_effect=[(raw,1,None),(b'systemd 249\n',0,None)]):
+                result=I._unit_parser(self.metadata(),deadline=108)
+            self.assertEqual(result['issue'],issue);self.assertEqual(result['returncode'],1)
+            self.assertEqual(set(result),{'status','systemd_version','returncode','issue'})
+            self.assertNotIn('SECRET',json.dumps(result));self.assertNotIn('/private',json.dumps(result))
+
+    def test_version_is_nullable_and_only_strict_first_line_integer_is_public(self):
+        for raw in (b'PRIVATE systemd 249\n',b'systemd 249x\n',b'systemd 0\n',
+                    b'systemd 10000\n',b'systemd 0249\n',b'systemd 249\xff\n'):
+            with self.subTest(raw=raw),patch.object(I,'_parser_output',
+                    side_effect=[(b'PRIVATE',1,None),(raw,0,None)]):
+                result=I._unit_parser(self.metadata(),deadline=108)
+            self.assertIsNone(result['systemd_version']);self.assertEqual(result['issue'],'unknown')
+        with patch.object(I,'_parser_output',side_effect=[(b'',0,None),(None,None,'timeout')]):
+            self.assertEqual(I._unit_parser(self.metadata(),deadline=108),
+                {'status':'observed','systemd_version':None,'returncode':0,'issue':'none'})
+
+    def test_timeout_and_output_limit_are_closed_and_do_not_start_version_probe(self):
+        for error,status in (('timeout','unavailable'),('output_limit','limited'),('unknown','unavailable')):
+            with self.subTest(error=error),patch.object(I,'_parser_output',return_value=(None,None,error)) as run:
+                result=I._unit_parser(self.metadata(),deadline=108)
+            self.assertEqual(run.call_count,1)
+            self.assertEqual(result,{'status':status,'systemd_version':None,'returncode':None,'issue':error})
+
+    def test_host_projection_uses_same_deadline_and_only_fixed_unit_metadata(self):
+        def metadata(path):
+            return SimpleNamespace(st_mode=(stat.S_IFREG|0o644 if path in I.PARSER_UNITS else stat.S_IFDIR|0o755),
+                                   st_uid=0,st_gid=0)
+        with patch.object(I,'_journal',return_value=(b'',None)),\
+             patch.object(I.time,'time_ns',return_value=NOW*1000),patch.object(I.time,'monotonic',return_value=100),\
+             patch.object(I.os,'lstat',side_effect=metadata),patch.object(I,'_python_metadata',return_value=[]),\
+             patch.object(I,'_source_metadata',return_value=[]),\
+             patch.object(I,'_parser_output',side_effect=[(b'PRIVATE unit: bad unit file setting\n',1,None),
+                 (b'systemd 249 (PRIVATE)\n',0,None)]) as run:
+            result=I.inspect_host()
+        self.assertEqual(result['unit_parser'],{'status':'observed','systemd_version':249,
+                                                'returncode':1,'issue':'unit_syntax'})
+        self.assertEqual([call.kwargs['deadline'] for call in run.call_args_list],[108,108])
+        self.assertNotIn('PRIVATE',json.dumps(result));self.assertFalse(result['source_writes'])
+
+    def test_parser_pipe_has_shared_deadline_combined_output_bound_and_no_shell(self):
+        process=Mock();process.stdout.fileno.return_value=7;process.wait.return_value=1;process.poll.return_value=1
+        selector=Mock();selector.select.return_value=[object()]
+        raw=b'PRIVATE: Failed to resolve unit specifiers: File name too long\n'
+        args=['/usr/bin/systemd-analyze','verify',*I.PARSER_UNITS]
+        with patch.object(I.subprocess,'Popen',return_value=process) as start,\
+             patch.object(I.selectors,'DefaultSelector',return_value=selector),\
+             patch.object(I.time,'monotonic',return_value=100),\
+             patch.object(I.os,'read',side_effect=[raw,b'']):
+            result=I._parser_output(args,deadline=108,maximum=32768)
+        self.assertEqual(result,(raw,1,None))
+        self.assertEqual(start.call_args.args[0],args)
+        self.assertIs(start.call_args.kwargs['stderr'],I.subprocess.STDOUT)
+        self.assertIs(start.call_args.kwargs['stdin'],I.subprocess.DEVNULL)
+        self.assertNotIn('shell',start.call_args.kwargs)
+        self.assertEqual(process.wait.call_args_list[0].kwargs['timeout'],8)
+        selector.close.assert_called_once();process.kill.assert_not_called()
+
+    def test_invalid_command_deadline_and_bounds_start_no_process(self):
+        args=['/usr/bin/systemd-analyze','verify',*I.PARSER_UNITS]
+        cases=[(['systemctl','start','private'],108,32768),
+               (args,100,32768),(args,True,32768),(args,float('inf'),32768),
+               (args,float('nan'),32768),(args,108,32769),(args,108,True)]
+        for command,deadline,maximum in cases:
+            with self.subTest(command=command,deadline=deadline,maximum=maximum),\
+                 patch.object(I.time,'monotonic',return_value=100),patch.object(I.subprocess,'Popen') as start:
+                self.assertEqual(I._parser_output(command,deadline=deadline,maximum=maximum),
+                                 (None,None,'timeout' if type(deadline) in (int,float) and deadline<=100 else 'unknown'))
+            start.assert_not_called()
+
+    def test_overflow_or_timeout_kills_parser_without_returning_raw_data(self):
+        for overflow in (False,True):
+            process=Mock();process.stdout.fileno.return_value=7;process.poll.return_value=None
+            selector=Mock();selector.select.return_value=[object()] if overflow else []
+            with self.subTest(overflow=overflow),patch.object(I.subprocess,'Popen',return_value=process),\
+                 patch.object(I.selectors,'DefaultSelector',return_value=selector),\
+                 patch.object(I.time,'monotonic',return_value=100),\
+                 patch.object(I.os,'read',return_value=b'PRIVATE'*(32769//7+1)):
+                result=I._parser_output(['/usr/bin/systemd-analyze','verify',*I.PARSER_UNITS],deadline=108,maximum=32768)
+            self.assertEqual(result,(None,None,'output_limit' if overflow else 'timeout'))
+            process.kill.assert_called_once();selector.close.assert_called_once()
 
 
 if __name__=='__main__':unittest.main()

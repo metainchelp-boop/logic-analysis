@@ -22,6 +22,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Python 3.12
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
@@ -43,7 +44,7 @@ jobs:
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
             LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
-            python -m unittest discover -s backend/tests -p test_naver_saved_exports.py -v \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_saved_exports test_naver_saved_exports_failed_unit_recovery -v \
             2>&1 | tee "$RUNNER_TEMP/product-tests/saved-export-tests.txt"
       - name: 소스·합성 결과 보관 (운영 자료 없음)
         if: always()
