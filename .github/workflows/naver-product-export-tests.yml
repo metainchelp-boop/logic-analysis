@@ -150,6 +150,14 @@ jobs:
             LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
             env PYTHONPATH=backend/tools:backend/tests python -m unittest test_observation_binding_patch test_observation_binding_transport -v \
             2>&1 | tee "$RUNNER_TEMP/product-tests/observation-binding-patch-tests.txt"
+      - name: 소구 가설 진단 코드 패치·328 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_appeal_diagnostic_patch test_appeal_diagnostic_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/appeal-diagnostic-patch-tests.txt"
       - name: 소스·합성 결과 보관 (운영 자료 없음)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

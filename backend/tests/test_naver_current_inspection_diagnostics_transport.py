@@ -141,6 +141,11 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
+        # Remove only this independent P9 registration from historical byte projections.
+        workflow=workflow.replace(section(workflow,'appeal-diagnostic-patch'),'')
+        appeal_diagnostic_options=', preview-appeal-diagnostic-patch-prepare, preview-appeal-diagnostic-patch-apply, preview-appeal-diagnostic-patch-rollback'
+        self.assertEqual(workflow.count(appeal_diagnostic_options),1)
+        workflow=workflow.replace(appeal_diagnostic_options,'')
         # Remove only this independent P8 registration from historical byte projections.
         workflow=workflow.replace(section(workflow,'observation-binding-patch'),'')
         observation_binding_options=', preview-observation-binding-patch-prepare, preview-observation-binding-patch-apply, preview-observation-binding-patch-rollback'
@@ -173,6 +178,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=workflow.replace(section(workflow,'current-inspection-diagnostics'),'').replace(', preview-current-inspection-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'4c14d09d5398ee1ac61162c88ace81a2b4222e36ee01fa6fc39c509554619930')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        appeal_diagnostic_start=native.index('      - name: 소구 가설 진단 코드 패치·328 복구 경계 검사\n')
+        appeal_diagnostic_end=native.index('      - name:',appeal_diagnostic_start+1)
+        native=native[:appeal_diagnostic_start]+native[appeal_diagnostic_end:]
         observation_binding_start=native.index('      - name: 관측 저장 연결 코드 패치·799 복구 경계 검사\n')
         observation_binding_end=native.index('      - name:',observation_binding_start+1)
         native=native[:observation_binding_start]+native[observation_binding_end:]
