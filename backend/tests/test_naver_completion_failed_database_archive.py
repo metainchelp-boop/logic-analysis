@@ -63,7 +63,10 @@ class FailedDatabaseArchiveTests(unittest.TestCase):
         self.assertTrue((self.quarantine/'engine.db').exists())
 
     def test_restore_uses_new_inode_original_owner_and_mode_without_touching_live_database(self):
-        original=self.snapshot.stat();before=(self.data/'engine.db').read_bytes()
+        # Hold the removed original inode so the filesystem cannot reuse its number.
+        original_fd=os.open(self.snapshot,os.O_RDONLY|os.O_NOFOLLOW)
+        self.addCleanup(os.close,original_fd)
+        original=os.fstat(original_fd);before=(self.data/'engine.db').read_bytes()
         A.execute('archive_canonical_snapshot')
         result=A.execute('restore_canonical_snapshot')
         restored=self.snapshot.stat()
