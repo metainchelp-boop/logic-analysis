@@ -51,6 +51,38 @@ JOB_COLUMNS = ('job_key,customer_id,possibility_id,kind,cycle_day,period_start,p
     "CASE WHEN progress_json IS NULL THEN NULL ELSE '' END AS progress_json,progress_hash")
 MAX_PROGRESS_BYTES, MAX_PROGRESS_TOTAL = 8*1024*1024, 32*1024*1024
 
+READ_PHASE = 'source-pin'
+READ_STAGES = frozenset(('source-pin','import','open','bounds','policy','source-snapshot','scope',
+    'source-validation','setup','proof','output','cleanup','reader-command'))
+READ_KINDS = frozenset(('sqlite-busy','sqlite-interrupted','sqlite-error','shape-invalid','internal','closed-refusal'))
+
+def set_read_stage(stage):
+    global READ_PHASE
+    if stage not in READ_STAGES:raise ValueError('SOURCE_DIAGNOSTICS_OUTPUT_FIELDS')
+    READ_PHASE=stage
+
+def validate_failure_detail(value):
+    if type(value) is not dict or set(value)!={'stage','kind'} or type(value['stage']) is not str or value['stage'] not in READ_STAGES or type(value['kind']) is not str or value['kind'] not in READ_KINDS:
+        raise ValueError('SOURCE_DIAGNOSTICS_OUTPUT_FIELDS')
+    return value
+
+def classify_failure(error,stage=None):
+    stage=READ_PHASE if stage is None else stage
+    code=getattr(error,'sqlite_errorcode',None)
+    if isinstance(error,sqlite3.Error):
+        code=code & 255 if type(code) is int else None
+        kind='sqlite-busy' if code in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED) else 'sqlite-interrupted' if code==sqlite3.SQLITE_INTERRUPT else 'sqlite-error'
+    elif type(error) is ValueError and len(error.args)==1 and type(error.args[0]) is str and error.args[0] in READ_FAILURE_CODES:
+        kind='closed-refusal'
+    elif isinstance(error,(KeyError,TypeError,AttributeError,ValueError,OverflowError,RecursionError,UnicodeError)):
+        kind='shape-invalid'
+    else:kind='internal'
+    return validate_failure_detail({'stage':stage,'kind':kind})
+
+def closed_reader_failure(error):
+    code=error.args[0] if isinstance(error,ValueError) and len(error.args)==1 and type(error.args[0]) is str and error.args[0] in READ_FAILURE_CODES else 'SOURCE_DIAGNOSTICS_READ_FAILED'
+    return {'failure':code,'failure_detail':classify_failure(error)}
+
 def check_deadline(deadline):
     if time.monotonic() >= deadline:
         raise ValueError('SOURCE_DIAGNOSTICS_DEADLINE')
@@ -176,6 +208,7 @@ def context_binding_matches(proof,row,IC,IS):
 def target_projection(store,now,deadline,modules,cid,pid,policy,states,catalog,catalog_state,snapshot,fingerprint,org_current,total):
     S,MS,P,IS,IC= (modules[key] for key in ('S','MS','P','IS','IC'))
     c=store._conn
+    set_read_stage('scope')
     exists=c.execute('SELECT 1 FROM naver_auto_inspection_job WHERE customer_id=? LIMIT 1',(cid,)).fetchone() is not None
     requests=rows(c,'SELECT * FROM naver_auto_manual_read WHERE customer_id=?',(cid,),1,deadline)
     request=requests[0] if requests else None
@@ -191,9 +224,11 @@ def target_projection(store,now,deadline,modules,cid,pid,policy,states,catalog,c
         'ORDER BY generation DESC,checked_at DESC,rowid DESC LIMIT 1',
         (cid,current_pid,revision,cadence,cycle,manual['generation'] if manual else None),1,deadline) if active else []
     row=selected[0] if selected else None
+    set_read_stage('bounds')
     history_count=bounded_bodies(c,cid,current_pid,revision,row,deadline,total) if active and (exists or manual) else 0
     if row is not None:
         row=rows(c,'SELECT * FROM naver_auto_inspection_job WHERE job_key=?',(row['job_key'],),1,deadline)[0]
+    set_read_stage('source-validation')
     job=IS._job(row) if row else None
     current_cycle=bool(row and (row['cycle_day']==cycle if row['kind']!='manual' else
         row['cycle_day']==str(now.date()) and manual is not None and row['generation']==manual['generation']))
@@ -207,6 +242,7 @@ def target_projection(store,now,deadline,modules,cid,pid,policy,states,catalog,c
     row_binding=bool(row and state and IS._binding(row,job,state['possibility_id']))
     request_today=bool(request and datetime.fromisoformat(request['requested_at']).astimezone(KST).date()==now.date())
     newer_manual=bool(job and job['kind']!='manual' and manual and manual['generation']>job['generation'])
+    set_read_stage('setup')
     observation=store.setup_observation(cid,now)
     actual=actual_projection(observation)
     if not exists and not request or not exists and manual is None:branch='NO_OBSERVATION'
@@ -221,6 +257,7 @@ def target_projection(store,now,deadline,modules,cid,pid,policy,states,catalog,c
     else:branch='CURRENT_COMPLETE'
     expected=expected_projection(branch,row)
     if actual!=expected:raise ValueError('SOURCE_DIAGNOSTICS_PROJECTION_MISMATCH')
+    set_read_stage('proof')
     checks=None if row is None else {
         'account_snapshot_matches':snapshot is not None and row['snapshot_at']==S._kst_text(snapshot,'계정 원천'),
         'catalog_accepted':catalog_state=='accepted',
@@ -235,7 +272,7 @@ def target_projection(store,now,deadline,modules,cid,pid,policy,states,catalog,c
         'catalog_proof_current':catalog_proof is not None,'context_proof_present':proof is not None,
         'context_proof_sealed':bool(proof and IC._sealed(proof,IC._CHECKPOINT_FIELDS)),
         'context_binding_matches':context_binding_matches(proof,row,IC,IS),
-        'context_catalog_content_matches':bool(proof and catalog_proof and all(proof.get(k)==catalog_proof[k] for k in ('content_digest','content_epoch','stable_content_at'))),
+        'context_catalog_content_matches':bool(type(proof) is dict and type(catalog_proof) is dict and all(proof.get(k)==catalog_proof[k] for k in ('content_digest','content_epoch','stable_content_at'))),
         'context_current':context is not None,'newer_valid_manual_generation':newer_manual,
         'manual_generation_matches':bool(manual and row['kind']=='manual' and row['generation']==manual['generation'])}
     reasons=[]
@@ -263,6 +300,7 @@ def target_projection(store,now,deadline,modules,cid,pid,policy,states,catalog,c
 def collect(store,now,deadline,modules,targets=TARGETS):
     if targets!=TARGETS:raise ValueError('SOURCE_DIAGNOSTICS_TARGETS')
     now=now.astimezone(KST);c=store._conn
+    set_read_stage('bounds')
     if c.execute("SELECT CASE WHEN length(CAST(value AS BLOB))<=2 THEN value END FROM naver_auto_meta WHERE key='schema_version'").fetchone()!=('21',):
         raise ValueError('SOURCE_DIAGNOSTICS_SCHEMA')
     if c.execute('SELECT COUNT(*) FROM naver_auto_inspection_job').fetchone()[0]>MAX_JOBS:
@@ -281,7 +319,9 @@ def collect(store,now,deadline,modules,targets=TARGETS):
         if type(cid) is not int or not 0<cid<10**15:raise ValueError('SOURCE_DIAGNOSTICS_IDENTITY')
         resolved.append((label,pid,cid))
     S,MS,I,O,Y=(modules[k] for k in ('S','MS','I','O','Y'))
+    set_read_stage('policy')
     states=store.management_states();policies=MS.snapshot(store,now,stage_states=states)
+    set_read_stage('source-snapshot')
     catalog,state=I.catalog_status(store,now);snapshot=store.inventory_snapshot(now)
     fingerprint=store.decision_fingerprint();org_current=O.allows_raising(Y.org_freshness(store,now))
     total=[0];result={}
@@ -310,6 +350,7 @@ def script():
               'from datetime import date,datetime,timedelta,timezone\nTARGETS='+repr(TARGETS)
               +'\nTARGET_NAMESPACE='+repr(TARGET_NAMESPACE)+'\n')
     body = r'''
+pending_failure=None
 try:
     if os.geteuid()!=10001:
         raise ValueError('SOURCE_DIAGNOSTICS_IDENTITY')
@@ -321,11 +362,13 @@ try:
         path=Path('/opt/naver-engine')/relative
         if path.is_symlink() or path.resolve()!=path or not path.is_file() or path.stat().st_size>1048576 or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:
             raise ValueError('SOURCE_DIAGNOSTICS_CODE_PIN')
+    set_read_stage('import')
     sys.path[:0]=['/opt/naver-engine','/opt/naver-engine/backend']
     from naver_engine import store as S,management_store as MS,inventory as I,management as P,inspection_store as IS,inspection_reads as IR,inspection_catalog as IC,sync as Y,product_evidence as PE
     from app.naver_auto import org_snapshot as O
     modules=dict(S=S,MS=MS,I=I,P=P,IS=IS,IR=IR,IC=IC,O=O,Y=Y,PE=PE)
     deadline=time.monotonic()+20
+    set_read_stage('open')
     connection=connect_reader(Path('/var/lib/naver-engine/engine.db'))
     reader=S.Store(connection,'/var/lib/naver-engine/engine.db',None,writer=False)
     try:
@@ -334,22 +377,26 @@ try:
         result=collect(reader,datetime.now(KST),deadline,modules)
         if connection.total_changes!=0:
             raise ValueError('SOURCE_DIAGNOSTICS_MUTATION')
+    except Exception as error:
+        pending_failure=closed_reader_failure(error)
+        raise
     finally:
+        set_read_stage('cleanup')
         try:
             if connection.in_transaction:
                 connection.execute('ROLLBACK')
         finally:
             reader.close()
+    set_read_stage('output')
     check_deadline(deadline)
     encoded=json.dumps(result,sort_keys=True,allow_nan=False,separators=(',',':'))
     if len(encoded.encode())>16384:
         raise ValueError('SOURCE_DIAGNOSTICS_OUTPUT_LIMIT')
     print(encoded)
 except Exception as error:
-    code=str(error) if isinstance(error,ValueError) else ''
-    print(json.dumps({'failure':code if re.fullmatch('SOURCE_DIAGNOSTICS_[A-Z_]{1,48}',code) else 'SOURCE_DIAGNOSTICS_READ_FAILED'}))
+    print(json.dumps(pending_failure if pending_failure is not None else closed_reader_failure(error)))
 '''
-    return (prefix+'CODE_PINS='+repr(CODE_PINS)+'\n'+PROJECTION_SOURCE+body).encode()
+    return (prefix+'CODE_PINS='+repr(CODE_PINS)+'\nREAD_FAILURE_CODES='+repr(READ_FAILURE_CODES)+'\n'+PROJECTION_SOURCE+body).encode()
 
 
 def validate_result(value):
@@ -494,21 +541,28 @@ def run(package, host, release):
         raise ValueError('PREVIEW_DATA_MOUNT')
     STAGE='read_only_source_diagnostics'
     primary=None
+    failure_detail=None
     value=None
     try:
         try:
             raw=release.command(['docker','exec','-i','--user','10001:10001',identity,'python','-I','-B','-'],data=script(),timeout=30)
-        except Exception:
+        except Exception as error:
+            failure_detail=classify_failure(error,'reader-command')
             raise ValueError('SOURCE_DIAGNOSTICS_READER_FAILED') from None
         if len(raw)>MAX_OUTPUT:
             raise ValueError('SOURCE_DIAGNOSTICS_OUTPUT_LIMIT')
         value=json.loads(raw,object_pairs_hook=release.unique)
-        if type(value) is dict and set(value)=={'failure'}:
+        if type(value) is dict and set(value) in ({'failure'},{'failure','failure_detail'}):
+            if 'failure_detail' in value:failure_detail=validate_failure_detail(value['failure_detail'])
             code=value['failure']
             raise ValueError(code if type(code) is str and code in READ_FAILURE_CODES else 'SOURCE_DIAGNOSTICS_READ_FAILED')
         validate_result(value)
     except Exception as error:
-        primary=str(error) if isinstance(error,ValueError) and str(error) in READ_FAILURE_CODES else 'SOURCE_DIAGNOSTICS_READ_FAILED'
+        primary=error.args[0] if isinstance(error,ValueError) and len(error.args)==1 and type(error.args[0]) is str and error.args[0] in READ_FAILURE_CODES else 'SOURCE_DIAGNOSTICS_READ_FAILED'
+        # Legacy one-field failures keep their original basic ABI. Locally
+        # malformed output gains only a closed classification, never its text.
+        if failure_detail is None and not (type(value) is dict and set(value)=={'failure'}):
+            failure_detail=classify_failure(error,'output')
     STAGE='postflight'
     post_engine=post_legacy=None
     try:
@@ -524,9 +578,11 @@ def run(package, host, release):
     if primary is not None or post_engine is not None or post_legacy is not None:
         # Never overwrite an original closed reader failure with a postflight
         # failure, or expose a partial response as a successful diagnostic.
-        return {'ok':False,'mode':MODE,'source_commit':SOURCE,'mutations':0,
+        failure={'ok':False,'mode':MODE,'source_commit':SOURCE,'mutations':0,
             'collection_completion_verified':False,'failure':{'primary_code':primary,
                 'post_engine_code':post_engine,'post_legacy_baseline_code':post_legacy}}
+        if primary is not None and failure_detail is not None:failure['failure_detail']=failure_detail
+        return failure
     return {'ok':True,'mode':MODE,'source_commit':SOURCE,'reader_mode':'sqlite-mode-ro-query-only-authorizer',
         'database_opened_by_controller':False,'mutations':0,'existing_app_baseline_unchanged':True,
         'collection_completion_verified':False,'diagnostics':value}

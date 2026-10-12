@@ -97,7 +97,8 @@ def pinned_product_fixture(product_root):
     scenarios=('no_job','partial','retry','timestamp_refresh','content_change','missing_catalog_proof','tampered_context',
         'complete','confirmed_inflight','snapshot_refresh','fingerprint_change','manual_pending','manual_consumed_pending',
         'manual_period','manual_previous_day','policy_blocked','inactive_no_job_invalid_manual','management_revision','progress_corrupt',
-        'future_checked_at','identity_decoy','duplicate_identity','missing_identity')
+        'future_checked_at','identity_decoy','duplicate_identity','missing_identity',
+        'proof_nonempty_list','proof_string','proof_number')
     summaries=[]
     for scenario in scenarios:
         observed_at=NOW
@@ -125,6 +126,9 @@ def pinned_product_fixture(product_root):
                     observed_at=NOW+timedelta(minutes=1);catalog(observed_at,scenario=='content_change')
                 if scenario=='missing_catalog_proof':st._conn.execute("UPDATE naver_auto_meta SET value='null' WHERE key=?",(IC.CATALOG_KEY,))
                 if scenario=='tampered_context':st._conn.execute("UPDATE naver_auto_meta SET value='null' WHERE key=?",(IC.checkpoint_key(job['job_key']),))
+                if scenario in ('proof_nonempty_list','proof_string','proof_number'):
+                    malformed={'proof_nonempty_list':[1],'proof_string':'PRIVATE_PROOF','proof_number':7}[scenario]
+                    st._conn.execute('UPDATE naver_auto_meta SET value=? WHERE key=?',(json.dumps(malformed),IC.checkpoint_key(job['job_key'])))
                 if scenario=='snapshot_refresh':
                     observed_at=NOW+timedelta(minutes=1);st.record_accounts(kids,observed_at)
                 if scenario=='fingerprint_change':
@@ -156,11 +160,13 @@ def pinned_product_fixture(product_root):
                         assert str(error)==expected_error,(scenario,str(error));summaries.append({'scenario':scenario,'closed_refusal':str(error),'mutations':c.total_changes-before});continue
                     D.validate_result(result);b=result['targets']['foodin'];actual=D.actual_projection(st.setup_observation(cid,observed_at))
                     assert {k:b['observation'][k] for k in actual}==actual
-                    expected_branch={'no_job':'NO_OBSERVATION','partial':'CURRENT_PARTIAL','retry':'CURRENT_PARTIAL','timestamp_refresh':'CURRENT_ROW_INVALID','content_change':'CURRENT_ROW_INVALID','missing_catalog_proof':'CURRENT_ROW_INVALID','tampered_context':'CURRENT_ROW_INVALID','complete':'CURRENT_COMPLETE','confirmed_inflight':'CURRENT_PARTIAL','snapshot_refresh':'CURRENT_ROW_INVALID','fingerprint_change':'CURRENT_ROW_INVALID','manual_pending':'MANUAL_PENDING','manual_consumed_pending':'MANUAL_PENDING','manual_period':'NO_OBSERVATION','manual_previous_day':'NO_OBSERVATION','policy_blocked':'POLICY_INACTIVE','inactive_no_job_invalid_manual':'NO_OBSERVATION','management_revision':'NO_CURRENT_SCOPE_ROW','progress_corrupt':'CHECKPOINT_INVALID','future_checked_at':'CURRENT_ROW_INVALID','identity_decoy':'CURRENT_PARTIAL'}[scenario]
+                    expected_branch={'no_job':'NO_OBSERVATION','partial':'CURRENT_PARTIAL','retry':'CURRENT_PARTIAL','timestamp_refresh':'CURRENT_ROW_INVALID','content_change':'CURRENT_ROW_INVALID','missing_catalog_proof':'CURRENT_ROW_INVALID','tampered_context':'CURRENT_ROW_INVALID','complete':'CURRENT_COMPLETE','confirmed_inflight':'CURRENT_PARTIAL','snapshot_refresh':'CURRENT_ROW_INVALID','fingerprint_change':'CURRENT_ROW_INVALID','manual_pending':'MANUAL_PENDING','manual_consumed_pending':'MANUAL_PENDING','manual_period':'NO_OBSERVATION','manual_previous_day':'NO_OBSERVATION','policy_blocked':'POLICY_INACTIVE','inactive_no_job_invalid_manual':'NO_OBSERVATION','management_revision':'NO_CURRENT_SCOPE_ROW','progress_corrupt':'CHECKPOINT_INVALID','future_checked_at':'CURRENT_ROW_INVALID','identity_decoy':'CURRENT_PARTIAL',
+                        'proof_nonempty_list':'CURRENT_ROW_INVALID','proof_string':'CURRENT_ROW_INVALID','proof_number':'CURRENT_ROW_INVALID'}[scenario]
                     assert b['observation']['branch']==expected_branch,(scenario,b['observation'])
                     if scenario=='timestamp_refresh':assert b['binding_checks']['catalog_stamp_matches'] is False and b['binding_checks']['context_current'] is True
                     if scenario=='snapshot_refresh':assert b['binding_checks']['account_snapshot_matches'] is False
                     if scenario=='confirmed_inflight':assert not b['observation']['complete'] and b['scope']['status']=='reading'
+                    if scenario.startswith('proof_'):assert b['binding_checks']['context_catalog_content_matches'] is False
                     payload=json.dumps(result,ensure_ascii=False,separators=(',',':'))
                     assert all(str(cid) not in payload for _,_,cid in TEST_TARGETS) and 'PRIVATE_NAME' not in payload and 'cmp-private' not in payload
                     assert c.total_changes==before
@@ -237,6 +243,15 @@ class CollectPathTests(unittest.TestCase):
         row=self.collect()
         self.assertEqual(row['observation']['branch'],'CURRENT_ROW_INVALID')
         self.assertFalse(row['binding_checks']['full_account_valid'])
+    def test_truthy_non_dict_proof_is_false_without_changing_actual_stale_projection(self):
+        insert_portable_job(self.store)
+        self.store.setup_observation.side_effect=lambda cid,now:dict(D.expected_projection('CURRENT_ROW_INVALID'),generation=None,checked_at=None) if cid==TEST_TARGETS[1][2] else None
+        self.store._inspection_catalog_proof.return_value=dict(content_digest='d',content_epoch=1,stable_content_at='t')
+        for proof in ([1],'PRIVATE_PROOF',7):
+            self.store._inspection_read_proof.return_value=proof
+            with self.subTest(proof=type(proof).__name__):
+                result=self.collect();self.assertEqual(result['observation']['branch'],'CURRENT_ROW_INVALID')
+                self.assertFalse(result['binding_checks']['context_catalog_content_matches'])
     def test_scope_query_does_not_borrow_other_pid_or_revision(self):
         insert_portable_job(self.store,possibility_id=12345)
         self.store.setup_observation.side_effect=lambda cid,now:dict(D.expected_projection('NO_CURRENT_SCOPE_ROW'),generation=None,checked_at=None) if cid==TEST_TARGETS[1][2] else None
@@ -356,6 +371,32 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(result['failure']['post_engine_code'],'POST_ENGINE_UNVERIFIED')
         self.assertNotIn('PRIVATE',json.dumps(result));self.assertNotIn('diagnostics',result)
 
+    def test_closed_failure_detail_and_both_postflight_codes_are_preserved(self):
+        payload={'failure':'SOURCE_DIAGNOSTICS_READ_FAILED','failure_detail':{'stage':'proof','kind':'shape-invalid'}}
+        result,*_=self.scenario(payload=payload,engine_drift=True,legacy_drift=True)
+        self.assertEqual(result['failure_detail'],payload['failure_detail'])
+        self.assertEqual(result['failure'],dict(primary_code='SOURCE_DIAGNOSTICS_READ_FAILED',post_engine_code='POST_ENGINE_CHANGED',post_legacy_baseline_code='POST_LEGACY_BASELINE_CHANGED'))
+        self.assertNotIn('diagnostics',result)
+
+    def test_legacy_one_field_reader_failure_keeps_basic_abi(self):
+        result,*_=self.scenario(payload={'failure':'SOURCE_DIAGNOSTICS_READ_FAILED'})
+        self.assertNotIn('failure_detail',result)
+        self.assertEqual(set(result),{'ok','mode','source_commit','mutations','collection_completion_verified','failure'})
+
+    def test_invalid_detail_never_leaks_or_skips_postflight(self):
+        payload={'failure':'SOURCE_DIAGNOSTICS_READ_FAILED','failure_detail':{'stage':'PRIVATE_PATH','kind':'sqlite-busy'}}
+        result,_,host,inspects=self.scenario(payload=payload,legacy_drift=True)
+        self.assertEqual(result['failure']['primary_code'],'SOURCE_DIAGNOSTICS_OUTPUT_FIELDS')
+        self.assertEqual(result['failure_detail'],{'stage':'output','kind':'closed-refusal'})
+        self.assertEqual(inspects,2);self.assertEqual(host.baseline.call_count,2)
+        self.assertNotIn('PRIVATE',json.dumps(result))
+
+    def test_success_and_postflight_only_failure_have_no_read_detail(self):
+        for drift in (False,True):
+            result,*_=self.scenario(engine_drift=drift)
+            self.assertNotIn('failure_detail',result)
+
+
     def test_invalid_output_and_postflight_drift_do_not_return_partial_diagnostics(self):
         result,*_=self.scenario(payload=dict(self.result,raw='PRIVATE_RESPONSE'),legacy_drift=True)
         self.assertEqual(result['failure']['primary_code'],'SOURCE_DIAGNOSTICS_OUTPUT_FIELDS')
@@ -409,6 +450,88 @@ class ControllerTests(unittest.TestCase):
 
 
 
+
+
+class FailureDetailTests(unittest.TestCase):
+    def test_detail_is_exact_closed_stage_and_kind(self):
+        for stage in D.READ_STAGES:
+            for kind in D.READ_KINDS:
+                value={'stage':stage,'kind':kind};self.assertEqual(D.validate_failure_detail(value),value)
+
+    def test_unknown_detail_fields_types_and_raw_text_are_rejected(self):
+        for value in (None,[],{'stage':'proof'},{'stage':'proof','kind':'shape-invalid','raw':'PRIVATE'},
+                      {'stage':'/private/file','kind':'internal'},{'stage':'proof','kind':'PRIVATE'},
+                      {'stage':1,'kind':'internal'},{'stage':'proof','kind':True}):
+            with self.subTest(value=type(value).__name__),self.assertRaisesRegex(ValueError,'^SOURCE_DIAGNOSTICS_OUTPUT_FIELDS$'):D.validate_failure_detail(value)
+
+    def test_shape_and_internal_classes_do_not_use_exception_text(self):
+        for error,kind in ((ValueError('PRIVATE'), 'shape-invalid'),(AttributeError('PRIVATE'),'shape-invalid'),
+                           (KeyError('PRIVATE'),'shape-invalid'),(TypeError('PRIVATE'),'shape-invalid'),
+                           (OverflowError('PRIVATE'),'shape-invalid'),(RuntimeError('PRIVATE'),'internal')):
+            detail=D.classify_failure(error,'proof');self.assertEqual(detail,{'stage':'proof','kind':kind})
+            self.assertNotIn('PRIVATE',json.dumps(detail))
+
+    def test_fixed_refusal_code_preserved_but_lookalike_is_generic(self):
+        with patch.object(D,'READ_PHASE','bounds'):
+            value=D.closed_reader_failure(ValueError('SOURCE_DIAGNOSTICS_ROW_LIMIT'))
+            self.assertEqual(value,{'failure':'SOURCE_DIAGNOSTICS_ROW_LIMIT','failure_detail':{'stage':'bounds','kind':'closed-refusal'}})
+            for error in (ValueError('SOURCE_DIAGNOSTICS_PRIVATE'),ValueError('SOURCE_DIAGNOSTICS_ROW_LIMIT','PRIVATE'),RuntimeError('PRIVATE')):
+                value=D.closed_reader_failure(error);self.assertEqual(value['failure'],'SOURCE_DIAGNOSTICS_READ_FAILED');self.assertNotIn('PRIVATE',json.dumps(value))
+
+    def test_sqlite_error_codes_are_classified_without_sql_or_error_text(self):
+        for code,kind in ((sqlite3.SQLITE_BUSY,'sqlite-busy'),(sqlite3.SQLITE_LOCKED,'sqlite-busy'),
+                          (sqlite3.SQLITE_INTERRUPT,'sqlite-interrupted'),(sqlite3.SQLITE_AUTH,'sqlite-error'),
+                          (sqlite3.SQLITE_ERROR,'sqlite-error'),(sqlite3.SQLITE_BUSY|256,'sqlite-busy')):
+            error=sqlite3.OperationalError('PRIVATE_SQL');error.sqlite_errorcode=code
+            self.assertEqual(D.classify_failure(error,'scope'),{'stage':'scope','kind':kind})
+        self.assertEqual(D.classify_failure(sqlite3.DatabaseError('PRIVATE'),'open')['kind'],'sqlite-error')
+
+    def test_actual_sqlite_interrupt_is_closed(self):
+        connection=sqlite3.connect(':memory:')
+        try:
+            connection.set_progress_handler(lambda:1,1)
+            with self.assertRaises(sqlite3.OperationalError) as caught:connection.execute('SELECT 1')
+            self.assertEqual(D.classify_failure(caught.exception,'scope'),{'stage':'scope','kind':'sqlite-interrupted'})
+        finally:connection.close()
+
+    def test_actual_synthetic_sqlite_lock_is_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'synthetic.db';writer=sqlite3.connect(path,isolation_level=None)
+            writer.execute('CREATE TABLE synthetic(value INTEGER)');reader=sqlite3.connect(path,timeout=0)
+            try:
+                writer.execute('BEGIN EXCLUSIVE')
+                with self.assertRaises(sqlite3.OperationalError) as caught:reader.execute('SELECT value FROM synthetic')
+                self.assertEqual(D.classify_failure(caught.exception,'scope'),{'stage':'scope','kind':'sqlite-busy'})
+            finally:writer.execute('ROLLBACK');reader.close();writer.close()
+
+    def test_script_embeds_closed_codes_and_first_failure_before_cleanup(self):
+        source=D.script().decode();compile(source,'<closed-reader>','exec')
+        self.assertIn('READ_FAILURE_CODES='+repr(D.READ_FAILURE_CODES),source)
+        self.assertLess(source.index('pending_failure=closed_reader_failure(error)'),source.index("set_read_stage('cleanup')"))
+        self.assertIn('pending_failure if pending_failure is not None else closed_reader_failure(error)',source)
+        self.assertNotIn('str(error)',source)
+
+    def test_actual_script_preserves_first_closed_failure_when_cleanup_also_fails(self):
+        tree=ast.parse(D.script().decode());outer=tree.body[-1]
+        index=next(i for i,node in enumerate(outer.body) if isinstance(node,ast.Try))
+        isolated=ast.Try(body=outer.body[index:],handlers=outer.handlers,orelse=[],finalbody=[])
+        compiled=compile(ast.fix_missing_locations(ast.Module(body=[isolated],type_ignores=[])),'<actual-closed-reader-cleanup>','exec')
+        scope={name:getattr(D,name) for name in ('set_read_stage','closed_reader_failure','check_deadline','KST')}
+        lines=[];scope.update(pending_failure=None,json=json,datetime=datetime,time=time,deadline=time.monotonic()+20,
+            modules={},connection=NS(set_progress_handler=Mock(),execute=Mock(),total_changes=0,in_transaction=False),
+            reader=NS(close=Mock(side_effect=RuntimeError('PRIVATE_CLEANUP'))),print=lines.append)
+        def collect(*args):D.set_read_stage('proof');raise AttributeError('PRIVATE_PROOF')
+        scope['collect']=collect
+        with patch.object(D,'READ_PHASE','source-pin'):exec(compiled,scope)
+        self.assertEqual(len(lines),1);self.assertNotIn('PRIVATE',lines[0])
+        self.assertEqual(json.loads(lines[0]),{'failure':'SOURCE_DIAGNOSTICS_READ_FAILED','failure_detail':{'stage':'proof','kind':'shape-invalid'}})
+        scope['reader'].close.assert_called_once()
+
+    def test_stage_setter_rejects_unknown(self):
+        with patch.object(D,'READ_PHASE','source-pin'):
+            D.set_read_stage('proof');self.assertEqual(D.READ_PHASE,'proof')
+            with self.assertRaises(ValueError):D.set_read_stage('PRIVATE')
+            self.assertEqual(D.READ_PHASE,'proof')
 
 
 if __name__=='__main__':unittest.main()

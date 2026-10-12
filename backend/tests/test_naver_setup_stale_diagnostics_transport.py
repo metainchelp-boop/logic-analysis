@@ -154,11 +154,34 @@ class PinnedSourceTests(unittest.TestCase):
 
 class ProjectionTests(unittest.TestCase):
     def diagnostic(self):
-        return SimpleNamespace(READ_FAILURE_CODES=frozenset({'SOURCE_DIAGNOSTICS_READ_FAILED','SOURCE_DIAGNOSTICS_TARGET_NOT_FOUND','SOURCE_DIAGNOSTICS_TARGET_AMBIGUOUS'}),validate_result=Mock())
+        spec=importlib.util.spec_from_file_location('closed_failure_detail_test',TOOLS/'naver_setup_stale_diagnostics.py')
+        helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
+        return SimpleNamespace(READ_FAILURE_CODES=frozenset({'SOURCE_DIAGNOSTICS_READ_FAILED','SOURCE_DIAGNOSTICS_TARGET_NOT_FOUND','SOURCE_DIAGNOSTICS_TARGET_AMBIGUOUS'}),validate_result=Mock(),validate_failure_detail=helper.validate_failure_detail)
 
     def test_reader_and_postflight_failures_are_preserved_together(self):
         t=load();d=self.diagnostic();value=failure_value(t);value['failure'].update(post_engine_code='POST_ENGINE_CHANGED',post_legacy_baseline_code='POST_LEGACY_BASELINE_UNVERIFIED')
         self.assertEqual(t.project_result(value,d),value)
+
+    def test_new_closed_detail_is_optional_and_preserved_with_postflight(self):
+        t=load();d=self.diagnostic();value=failure_value(t)
+        self.assertNotIn('failure_detail',t.project_result(value,d))
+        value['failure_detail']={'stage':'proof','kind':'shape-invalid'}
+        value['failure']['post_engine_code']='POST_ENGINE_CHANGED'
+        self.assertEqual(t.project_result(value,d),value)
+
+    def test_detail_unknown_stage_kind_type_or_extra_fields_are_rejected(self):
+        t=load();d=self.diagnostic()
+        for detail in (None,[],{'stage':'proof'},{'stage':'PRIVATE','kind':'internal'},
+                       {'stage':'proof','kind':'PRIVATE'},{'stage':'proof','kind':'internal','raw':'PRIVATE'},
+                       {'stage':1,'kind':'internal'},{'stage':'proof','kind':False}):
+            value=failure_value(t);value['failure_detail']=detail
+            with self.subTest(detail=type(detail).__name__),self.assertRaises(ValueError):t.project_result(value,d)
+
+    def test_postflight_only_failure_cannot_claim_reader_detail(self):
+        t=load();d=self.diagnostic();value=failure_value(t)
+        value['failure'].update(primary_code=None,post_engine_code='POST_ENGINE_CHANGED')
+        value['failure_detail']={'stage':'proof','kind':'internal'}
+        with self.assertRaises(ValueError):t.project_result(value,d)
 
     def test_arbitrary_failure_string_or_extra_raw_field_rejects(self):
         t=load();d=self.diagnostic()

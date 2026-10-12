@@ -26,8 +26,8 @@ MAX_RESULT=20480
 MAX_TRANSPORT_BASE64=32768
 SOURCE_FILES={'diagnostic':'naver_setup_stale_diagnostics.py',
     'host':'naver_erp_tunnel_service_install.py','release':'naver_preview_release.py'}
-SOURCE_SHA256={'diagnostic': 'd481cfc263ca4a238efbe26f59e4749090c10898cf128907c38fdadffb93303e', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'}
-COMPACT_SHA256={'diagnostic': 'e8ed6b2f82a3bfebba52285e6effafdee885d648b31d1581eae53a25d92a68bf', 'host': 'cd6daeb55fe3ed1fd2553404c012d16f46b05bb9a1d651bd929b9787aa758840', 'release': '9681437257dd92309eb0ab2ad33c7c5c3c1e2abed334f1fa1c253fad2288c64a'}
+SOURCE_SHA256={'diagnostic': '588d7ee3c3475ee788d9ccd35e9c9034dd0a08b3f7d97506b104540c9cbb43b1', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'}
+COMPACT_SHA256={'diagnostic': '5edf17d785ba9c0798283ba444e744fe4f6229c44ddadfb4dd52284205dbe48a', 'host': 'cd6daeb55fe3ed1fd2553404c012d16f46b05bb9a1d651bd929b9787aa758840', 'release': '9681437257dd92309eb0ab2ad33c7c5c3c1e2abed334f1fa1c253fad2288c64a'}
 DEFAULTS={name:'off' for name in ('collector','rank_link','capacity','structure','expired','queue','urlshape','use_branch_code')}
 STAGES=frozenset(('input','bootstrap','preflight','read_only_source_diagnostics','postflight'))
 PREFLIGHT_CODES=frozenset(('SOURCE_DIAGNOSTICS_NOT_PINNED SOURCE_DIAGNOSTICS_SOURCE SOURCE_DIAGNOSTICS_BUNDLE '
@@ -172,13 +172,16 @@ def project_result(value,diagnostic):
             raise ValueError('SOURCE_DIAGNOSTICS_RESULT')
         diagnostic.validate_result(value['diagnostics'])
     elif 'failure' in value:
-        if set(value)!={'ok',*common,'failure'} or type(value['failure']) is not dict or set(value['failure'])!={'primary_code','post_engine_code','post_legacy_baseline_code'}:
+        if set(value) not in ({'ok',*common,'failure'},{'ok',*common,'failure','failure_detail'}) or type(value['failure']) is not dict or set(value['failure'])!={'primary_code','post_engine_code','post_legacy_baseline_code'}:
             raise ValueError('SOURCE_DIAGNOSTICS_RESULT')
         failure=value['failure']
         for key,allowed in (('primary_code',diagnostic.READ_FAILURE_CODES),('post_engine_code',POST_ENGINE_CODES),('post_legacy_baseline_code',POST_LEGACY_CODES)):
             if failure[key] is not None and (type(failure[key]) is not str or failure[key] not in allowed):
                 raise ValueError('SOURCE_DIAGNOSTICS_RESULT')
         if all(item is None for item in failure.values()):raise ValueError('SOURCE_DIAGNOSTICS_RESULT')
+        if 'failure_detail' in value:
+            if failure['primary_code'] is None:raise ValueError('SOURCE_DIAGNOSTICS_RESULT')
+            diagnostic.validate_failure_detail(value['failure_detail'])
     else:
         if (set(value)!={'ok',*common,'stage','error_code'} or value['stage'] not in STAGES
                 or value['error_code'] not in PREFLIGHT_CODES):raise ValueError('SOURCE_DIAGNOSTICS_RESULT')
