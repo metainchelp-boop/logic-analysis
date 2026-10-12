@@ -141,6 +141,11 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
+        # Remove only this independent P8 registration from historical byte projections.
+        workflow=workflow.replace(section(workflow,'observation-binding-patch'),'')
+        observation_binding_options=', preview-observation-binding-patch-prepare, preview-observation-binding-patch-apply, preview-observation-binding-patch-rollback'
+        self.assertEqual(workflow.count(observation_binding_options),1)
+        workflow=workflow.replace(observation_binding_options,'')
         # This independent source799 v2 profile is removed only from prior projections.
         workflow=workflow.replace(section(workflow,'observation-799-diagnostics-v2'),'')
         observation_option=', preview-observation-799-diagnostics-v2'
@@ -177,6 +182,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=prior.replace(section(prior,'completion-source-diagnostics'),'').replace(', preview-completion-source-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'cfe595e18bbb83cb2d4feccf2f12bf91169cd360f14a21d60b8cabec1726337e')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        observation_binding_start=native.index('      - name: 관측 저장 연결 코드 패치·799 복구 경계 검사\n')
+        observation_binding_end=native.index('      - name:',observation_binding_start+1)
+        native=native[:observation_binding_start]+native[observation_binding_end:]
         observation_start=native.index('      - name: 현재 799 관측 사유 v2·읽기 전용 진단 검사\n')
         observation_end=native.index('      - name:',observation_start+1)
         native=native[:observation_start]+native[observation_end:]
