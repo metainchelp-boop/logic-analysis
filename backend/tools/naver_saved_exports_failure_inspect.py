@@ -38,7 +38,17 @@ ERROR_PATTERNS = (
     ('export_failed', r'\bEXPORT_FAILED\b'),
     ('readonly', r'read-only file system|attempt to write a readonly database'),
     ('sqlite_open', r'unable to open database file'),
-    ('missing_file', r'no such file or directory|not a directory'))
+    ('missing_file', r'no such file or directory|not a directory'),
+    ('network_namespace', r'failed to set up network namespacing|failed at step network'),
+    ('group_setup', r'failed at step group|failed to (?:set up|determine) (?:supplementary )?group'),
+    ('user_setup', r'failed at step user|failed to (?:set up|determine) user'),
+    ('stdout_setup', r'failed at step std(?:out|err|in)|failed to set up standard (?:input|output|error)'),
+    ('execution_setup', r'failed at step exec|failed to execute'),
+    ('directory_setup', r'failed at step chdir|failed to change (?:root|working) directory'),
+    ('capability_setup', r'failed at step capabilities|failed to apply capabilities'),
+    ('seccomp_setup', r'failed at step seccomp|failed to apply syscall'),
+    ('apparmor_setup', r'failed at step apparmor|failed to apply apparmor'),
+    ('cgroup_setup', r'failed to (?:attach to|create) cgroup'))
 
 
 def _unique(pairs):
