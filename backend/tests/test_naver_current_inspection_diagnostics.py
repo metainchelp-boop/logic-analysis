@@ -1,0 +1,725 @@
+"""Offline closed projection/controller contracts; every database is synthetic."""
+import ast
+from copy import deepcopy
+from dataclasses import dataclass
+from datetime import date, datetime, time as day_time, timedelta, timezone
+import gzip
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import socket
+import sqlite3
+import tempfile
+import time
+from types import SimpleNamespace as NS
+import unittest
+from unittest.mock import Mock, patch
+
+TOOLS=Path(__file__).parents[1]/'tools'
+SPEC=importlib.util.spec_from_file_location('current_source_diagnostics',TOOLS/'naver_current_inspection_diagnostics.py')
+D=importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(D)
+NOW=datetime(2026,10,12,19,tzinfo=D.KST)
+# Deliberately keep the UI account number in a different identifier namespace.
+TEST_TARGETS=tuple((label,pid,adno+10**9) for label,pid,adno in D.TARGETS)
+ADNOS={label:adno for label,pid,adno in D.TARGETS}
+
+
+@dataclass(frozen=True)
+class SelectionSource:
+    owner: object
+    now: object
+    snapshot: object
+    present: object
+    catalog: object
+    catalog_state: object
+    org_allowed: object
+    organization: object
+    fingerprint: object
+    states: object
+    policies: object
+    manual_requests: object
+
+
+class InvalidProgress(Exception):
+    pass
+
+
+def period(cadence, when):
+    day=when.date() if isinstance(when,datetime) else when
+    cycle=day if cadence=='daily' else day-timedelta(days=(day.weekday()+1)%7)
+    end=day-timedelta(days=1) if cadence=='daily' else cycle-timedelta(days=1)
+    return NS(cycle_day=cycle,since=end if cadence=='daily' else end-timedelta(days=6),until=end)
+
+
+def bind(old,job,pid):
+    return bool(old and all(old[key]==job[key] for key in ('stage_revision','generation','catalog_at','matching_fingerprint'))
+        and old['possibility_id']==pid and old['snapshot_at']==job['snapshot_at'].isoformat())
+
+
+class FakeStore:
+    """Read API test double. Real pinned Store equivalence is a separate integration check."""
+    def __init__(self,connection):
+        self._conn=connection
+        self.at=NOW
+        self.catalog_at=NOW.isoformat()
+        self.fingerprint='f'*64
+        self.catalog_state='accepted'
+        self.org_allowed=True
+        self.ready={}
+        self.catalog_proof_current=True
+        self.allow_continuation=False
+        self.states={}
+        self.policies={}
+        for _,pid,cid in TEST_TARGETS:
+            self.states[cid]={'possibility_id':pid,'stage_key':'진행중','stage_revision':'r'+str(cid)}
+            self.policies[cid]={'possibility_id':pid,'stage_key':'진행중','stage_revision':'r'+str(cid),
+                'matched':True,'source_current':True,'decision':NS(cadence='daily',reason='MANAGED_STAGE')}
+
+    def _inspection_catalog_proof(self,now,c=None):
+        return {'generated_at':self.catalog_at,'stable_content_at':self.catalog_at} if self.catalog_proof_current else None
+
+    def _inspection_context(self,c,row,now,catalog):
+        if not row or not catalog:return None
+        return {'role':'complete' if row['status']=='ok' else 'reading' if row['progress_hash'] is None else 'checkpoint'}
+
+    def _inspection_resumable(self,c,row,job,pid,now,catalog):
+        if not self.allow_continuation or not row or not catalog or row['status'] not in ('reading','partial','retry','limited'):
+            return False
+        try:return bool(row['progress_json'] and not json.loads(row['progress_json'])['confirmed'])
+        except (KeyError,ValueError):return False
+
+    def management_states(self): return self.states
+    def inventory_snapshot(self,now): return self.at
+    def decision_fingerprint(self): return self.fingerprint
+    def collection_account_ready(self,cid,now): return self._collection_account_ready(cid,now.isoformat())
+    def _collection_account_ready(self,cid,at): return self.ready.get(cid,True)
+
+    def _performance_job(self,cid,kind,cycle,start,end,row,snapshot,catalog,matching_fingerprint=None):
+        return dict(job_key=f'{cid}:{kind}:{cycle}:{start}:{end}',customer_id=cid,kind=kind,cycle_day=str(cycle),
+            period_start=str(start),period_end=str(end),snapshot_at=snapshot,catalog_at=catalog,
+            stage_revision=row['stage_revision'],matching_fingerprint=matching_fingerprint,
+            generation=datetime.combine(cycle,day_time(0,1),tzinfo=D.KST).isoformat())
+
+    def _inspection_manual_job(self,request,row,snapshot,catalog,fingerprint,now,source):
+        if not request or request['request_kind']=='manual_period' or datetime.fromisoformat(request['requested_at']).date()!=now.date():
+            return None
+        cycle=now.date(); end=cycle-timedelta(days=1)
+        start=end if row['decision'].cadence=='daily' else end-timedelta(days=6)
+        job=self._performance_job(request['customer_id'],'manual',cycle,start,end,row,snapshot,catalog,fingerprint)
+        job.update(job_key='inspection:'+job['job_key']+':'+request['requested_at'],requested_at=request['requested_at'],
+            actor=request['actor'],generation=request['requested_at'])
+        return job if self._inspection_account_valid(job,now,source) else None
+
+    def _inspection_account_valid(self,job,now,source):
+        cid=job['customer_id']; state=self.states.get(cid)
+        if cid not in source.present or source.catalog_state!='accepted' or not source.org_allowed or state is None \
+                or state['stage_revision']!=job['stage_revision'] or job['matching_fingerprint']!=self.fingerprint:
+            return False
+        if job['kind']=='manual':
+            request=source.manual_requests.get(cid)
+            return bool(request and request['actor']==0 and request['possibility_id']==state['possibility_id']
+                and request['requested_at']==job['generation'])
+        request=source.manual_requests.get(cid)
+        if request and request['request_kind']!='manual_period' and request['actor']==0 \
+                and datetime.fromisoformat(request['requested_at']).date()==now.date() and request['requested_at']>job['generation']:
+            return False
+        return job['cycle_day']==str(period(job['kind'],now).cycle_day)
+
+    def _collection_retry_ready(self,row,at):
+        return row['next_try_at']<=at and row['status'] not in ('ok','reauth_required','superseded')
+
+    def inspection_progress(self,job):
+        raw=self._conn.execute('SELECT progress_json,progress_hash FROM naver_auto_inspection_job WHERE job_key=?',(job['job_key'],)).fetchone()
+        if raw is None or raw[0] is None: return None
+        if hashlib.sha256(raw[0].encode()).hexdigest()!=raw[1]: raise InvalidProgress()
+        return json.loads(raw[0])
+
+
+def fixture():
+    connection=sqlite3.connect(':memory:',isolation_level=None)
+    connection.executescript('''
+        CREATE TABLE naver_auto_meta(key TEXT PRIMARY KEY,value TEXT);
+        INSERT INTO naver_auto_meta VALUES('schema_version','21');
+        CREATE TABLE naver_auto_account(customer_id INTEGER PRIMARY KEY,ad_account_no INTEGER,present INTEGER);
+        CREATE TABLE naver_auto_manual_read(customer_id INTEGER PRIMARY KEY,possibility_id INTEGER,requested_at TEXT,
+            actor INTEGER,request_kind TEXT,period_start TEXT,period_end TEXT);
+        CREATE TABLE naver_auto_inspection_job(job_key TEXT PRIMARY KEY,customer_id INTEGER,possibility_id INTEGER,kind TEXT,
+            cycle_day TEXT,period_start TEXT,period_end TEXT,snapshot_at TEXT,catalog_at TEXT,stage_revision TEXT,
+            matching_fingerprint TEXT,generation TEXT,requested_at TEXT,actor INTEGER,status TEXT,checked_at TEXT,
+            next_try_at TEXT,attempts INTEGER,error_code TEXT,progress_json TEXT,progress_hash TEXT);
+        CREATE TABLE naver_auto_product_link(possibility_id INTEGER PRIMARY KEY,store_key TEXT,stage_as_of TEXT);
+        CREATE TABLE naver_auto_prospect(possibility_id INTEGER PRIMARY KEY,present INTEGER,stage_conflict INTEGER,stage_synced_at TEXT);
+    ''')
+    for table in ('naver_auto_performance_job','naver_auto_structure_job','naver_auto_funnel_job','naver_auto_experiment_job'):
+        connection.execute('CREATE TABLE '+table+'(customer_id INTEGER,status TEXT,error_code TEXT,checked_at TEXT,next_try_at TEXT)')
+    for label,pid,cid in TEST_TARGETS:
+        connection.execute('INSERT INTO naver_auto_account VALUES(?,?,1)',(cid,ADNOS[label]))
+        connection.execute('INSERT INTO naver_auto_prospect VALUES(?,1,0,?)',(pid,NOW.isoformat()))
+    store=FakeStore(connection)
+    def saved_job(row):
+        job={key:row[key] for key in D.JOB_COLUMNS.split(',')[:12]}
+        job['snapshot_at']=datetime.fromisoformat(job['snapshot_at'])
+        if job['kind']=='manual': job.update(actor=row['actor'],requested_at=row['requested_at'])
+        return job
+    modules=dict(S=NS(_PerformanceSelectionSource=SelectionSource,_kst_text=lambda at,what:at.isoformat()),
+        MS=NS(snapshot=lambda st,now,stage_states=None:st.policies,_organization=lambda st:NS()),
+        I=NS(catalog_status=lambda st,now,header_only=False:({'generated_at':st.catalog_at},st.catalog_state)),
+        P=NS(COLLECTION_START=day_time(0,1),period_for=period,
+            is_due=lambda decision,day,started_cycle=None:day.weekday()==6 or started_cycle==period('weekly',day).cycle_day),
+        IS=NS(_binding=bind,_job=saved_job,_observed_times=lambda progress:[]),IR=NS(CheckpointInvalid=InvalidProgress),
+        IC=NS(CATALOG_KEY='inspection-catalog-proof:v1',_scope_matches=lambda row,job,pid:bool(row and row['possibility_id']==pid and row['stage_revision']==job['stage_revision'] and row['generation']==job['generation']),
+            last_attempt=lambda row,job,pid,now:row['checked_at'] if row and row['possibility_id']==pid and row['stage_revision']==job['stage_revision'] and row['generation']==job['generation'] else ''),
+        O=NS(allows_raising=lambda current:current),Y=NS(org_freshness=lambda st,now:st.org_allowed),
+        PE=NS(canonical_store=lambda value:value if value=='canonical-key' else None))
+    return store,modules
+
+
+def add_job(store,index=0,status='partial',error='REQUEST_CALL_CAP',next_try=None,**changes):
+    _,pid,cid=TEST_TARGETS[index]; row=store.policies[cid]; p=period('daily',NOW)
+    job=store._performance_job(cid,'daily',p.cycle_day,p.since,p.until,row,store.at,store.catalog_at,store.fingerprint)
+    job['job_key']='inspection:'+job['job_key']
+    job.update(possibility_id=pid,status=status,error_code=error,checked_at=NOW.isoformat(),
+        next_try_at=(next_try or NOW+timedelta(minutes=2)).isoformat(),attempts=1,requested_at=None,actor=None,
+        progress_json=None,progress_hash=None)
+    job['snapshot_at']=job['snapshot_at'].isoformat(); job.update(changes)
+    columns=list(job)
+    store._conn.execute('INSERT INTO naver_auto_inspection_job ('+','.join(columns)+') VALUES ('+','.join('?' for _ in columns)+')',
+        tuple(job[key] for key in columns))
+    return job
+
+
+def pinned_product_fixture(product_root):
+    """Explicit offline integration entry point; never part of remote execution.
+
+    Reproduce with this module on PYTHONPATH and an exact pinned checkout path.
+    All writer setup is confined to sqlite :memory:. The actual read projection
+    uses the same query-only authorizer and single transaction as the helper.
+    """
+    import sys
+    root=Path(product_root).resolve()
+    for relative,digest in D.CODE_PINS.items():
+        if hashlib.sha256((root/relative).read_bytes()).hexdigest()!=digest:
+            raise AssertionError('SYNTHETIC_PRODUCT_PIN')
+    sys.path[:0]=[str(root),str(root/'backend')]
+    from naver_engine import (store as S,management_store as MS,inventory as I,management as P,
+        inspection_store as IS,inspection_reads as IR,inspection_catalog as IC,sync as Y,product_evidence as PE,erp_read as E)
+    from app.naver_auto import org_snapshot as O,matching as M
+    from naver_engine.tests import test_alerts as TA,test_account_catalog as TC,test_morning as TM
+    summaries=[]
+    for scenario in ('partial_zero_delay','network_retry','timestamp_refresh','content_change','missing_catalog_proof','complete','confirmed_inflight'):
+        retry=scenario=='network_retry'
+        observed_at=NOW
+        with patch.object(socket.socket,'connect',side_effect=AssertionError('NETWORK_FORBIDDEN')):
+            st=S.Store(sqlite3.connect(':memory:',isolation_level=None),':memory:',None,True,lambda:NOW)
+            try:
+                st._migrate()
+                st.record_org(TA.org_body(NOW,owners=[TA.owner(pid,100) for _,pid,cid in TEST_TARGETS]),NOW)
+                kids=TM.kids(*(cid for _,_,cid in TEST_TARGETS),*(adno for _,_,adno in D.TARGETS))
+                for (label,pid,cid),(_,_,adno) in zip(TEST_TARGETS,D.TARGETS):
+                    kids.accounts[cid]['adAccountNo']=adno
+                    kids.accounts[adno]['adAccountNo']=adno+2*10**9
+                st.record_accounts(kids,NOW)
+                st.record_account_catalog(dict(generated_at=NOW.isoformat(),total=2,complete=True,
+                    items=[TC.company(pid,'진행중',company_name=f'계정{cid}') for _,pid,cid in TEST_TARGETS]),
+                    [E.NaverIdRow(pid,M.VENDOR_NAVER,ad_account_no_raw=str(adno)) for _,pid,adno in D.TARGETS],NOW)
+                initial=st.inspection_work(NOW)
+                assert {job['customer_id'] for job in initial}=={cid for _,_,cid in TEST_TARGETS}
+                job=next(job for job in initial if job['customer_id']==TEST_TARGETS[1][2])
+                st.begin_inspection_check(job,NOW)
+                progress=IR._initial([{'customerId':job['customer_id'],'nccCampaignId':'cmp-private','campaignTp':'WEB_SITE',
+                    'name':'PRIVATE_NAME','dailyBudget':30000,'useDailyBudget':True,'usePeriod':False}],job,NOW)
+                if scenario in ('complete','confirmed_inflight'):
+                    progress=IR._initial([],job,NOW);progress['confirmed']=True
+                st.record_inspection_progress(job,NOW,progress)
+                if scenario!='confirmed_inflight':
+                    st.record_inspection_check(job,NOW,{'status':'ok'} if scenario=='complete' else
+                        {'status':'retry' if retry else 'partial','error_code':'NETWORK' if retry else 'REQUEST_CALL_CAP','progressed':not retry})
+                if scenario in ('timestamp_refresh','content_change'):
+                    observed_at=NOW+timedelta(minutes=1)
+                    st.record_account_catalog(dict(generated_at=observed_at.isoformat(),total=2,complete=True,
+                        items=[TC.company(pid,'진행중',company_name=f'계정{cid}'+(' changed' if scenario=='content_change' else '')) for _,pid,cid in TEST_TARGETS]),
+                        [E.NaverIdRow(pid,M.VENDOR_NAVER,ad_account_no_raw=str(adno)) for _,pid,adno in D.TARGETS],observed_at)
+                if scenario=='missing_catalog_proof':
+                    st._conn.execute("UPDATE naver_auto_meta SET value='null' WHERE key=?",(IC.CATALOG_KEY,))
+                expected=st.inspection_work(observed_at)
+                st.writer=False;connection=st._conn;before=connection.total_changes
+                # The fixture writer's phase authorizer is removed only before
+                # applying the read-only boundary to this in-memory database.
+                connection.set_authorizer(None);connection.execute('PRAGMA query_only=ON')
+                connection.set_authorizer(D.readonly_authorizer);connection.execute('BEGIN')
+                try:
+                    result=D.collect(st,observed_at,time.monotonic()+20,dict(S=S,MS=MS,I=I,P=P,IS=IS,IR=IR,IC=IC,O=O,Y=Y,PE=PE))
+                    D.validate_result(result)
+                    assert connection.total_changes==before
+                    assert result['candidate_snapshot']['eligible_count']==len(expected)
+                    a,b=result['targets']['gomso'],result['targets']['foodin']
+                    assert a['current_expected_pair'] and b['current_expected_pair']
+                    assert a['snapshot_candidate_gate']=='ELIGIBLE'
+                    assert b['snapshot_candidate_gate']==('RETRY_NOT_DUE' if retry or scenario in ('complete','confirmed_inflight') else 'ELIGIBLE')
+                    assert b['latest_pair_binding']['account_snapshot_matches']
+                    if scenario=='complete':
+                        assert b['settings']['source_state']=='current_complete'
+                    else:
+                        assert b['settings']['source_state']==('current_partial' if scenario in ('partial_zero_delay','network_retry','confirmed_inflight') else 'stored_stale')
+                        if scenario!='confirmed_inflight':assert b['settings']['items'][0]['daily_budget']==30000
+                    assert b['settings']['complete']==(scenario=='complete')
+                    if scenario=='confirmed_inflight':
+                        assert b['latest_pair_job']['status']=='reading' and b['progress']['context_role']=='checkpoint'
+                        assert st.setup_observation(TEST_TARGETS[1][2],observed_at)['complete'] is False
+                    assert result['sources']['catalog_proof']['valid_current']==(scenario!='missing_catalog_proof')
+                    assert b['progress']['resumable_for_current_job']==(scenario in ('partial_zero_delay','network_retry','timestamp_refresh'))
+                    assert b['progress']['context_current']==(scenario not in ('content_change','missing_catalog_proof'))
+                    selected={x['customer_id'] for x in expected}
+                    for label,pid,cid in TEST_TARGETS:
+                        assert result['targets'][label]['snapshot_within_selected_24']==(cid in selected)
+                    payload=json.dumps(result,ensure_ascii=False,separators=(',',':'))
+                    assert all(str(cid) not in payload for _,_,cid in TEST_TARGETS)
+                    assert 'PRIVATE_NAME' not in payload and 'cmp-private' not in payload
+                    summaries.append({'scenario':scenario,
+                        'actual_selector_count':len(expected),'diagnostic_selector_count':result['candidate_snapshot']['eligible_count'],
+                        'gates':{label:row['snapshot_candidate_gate'] for label,row in result['targets'].items()},
+                        'distinct_identifier_and_decoy_verified':True,'current_pair_verified':True,
+                        'settings_state':b['settings']['source_state'],'settings_budget':b['settings']['items'][0]['daily_budget'] if b['settings']['items'] else None,
+                        'catalog_proof':result['sources']['catalog_proof'],'progress':b['progress'],
+                        'mutations':connection.total_changes-before,'output_bytes':len(payload.encode())})
+                finally:connection.execute('ROLLBACK')
+            finally:st.close()
+    return {'source_commit':D.SOURCE,'target_identifier_namespace':D.TARGET_NAMESPACE,
+        'code_files_verified':len(D.CODE_PINS),'scenarios':summaries}
+
+
+class ProjectionTests(unittest.TestCase):
+    def setUp(self):
+        self.network=patch.object(socket.socket,'connect',side_effect=AssertionError('NETWORK_FORBIDDEN'))
+        self.network.start();self.addCleanup(self.network.stop)
+        self.store,self.modules=fixture();self.addCleanup(self.store._conn.close)
+
+    def project(self,now=NOW):
+        if self.store._conn.execute('PRAGMA query_only').fetchone() != (1,):
+            self.store._conn.execute('PRAGMA query_only=ON')
+        self.store._conn.set_authorizer(D.readonly_authorizer)
+        baseline=self.store._conn.total_changes
+        self.store._conn.execute('BEGIN')
+        try:
+            result=D.collect(self.store,now,time.monotonic()+20,self.modules)
+            D.validate_result(result)
+            self.assertEqual(self.store._conn.total_changes,baseline)
+            return result
+        finally:self.store._conn.execute('ROLLBACK')
+
+    def test_no_job_and_scoped_partial_are_different_and_rank_is_snapshot_only(self):
+        add_job(self.store,index=1)
+        result=self.project();a=result['targets']['gomso'];b=result['targets']['foodin']
+        self.assertFalse(a['inspection_job_exists_for_account']);self.assertEqual(a['snapshot_candidate_gate'],'ELIGIBLE')
+        self.assertEqual(a['snapshot_candidate_rank'],1);self.assertEqual(b['latest_pair_job']['status'],'partial')
+        self.assertEqual(b['snapshot_candidate_gate'],'RETRY_NOT_DUE');self.assertTrue(b['latest_pair_binding']['current_valid'])
+        self.assertEqual(result['candidate_snapshot']['eligible_count'],1)
+        self.assertTrue(result['limits']['dispatch_order_not_proven'])
+
+    def test_ad_account_namespace_resolves_distinct_customer_id_not_same_number_decoy(self):
+        for label,pid,adno in D.TARGETS:
+            self.store._conn.execute('INSERT INTO naver_auto_account VALUES(?,?,1)',(adno,adno+2*10**9))
+        add_job(self.store,index=1)
+        result=self.project()
+        self.assertEqual(result['target_identifier_namespace'],'ad_account_no')
+        self.assertTrue(result['targets']['foodin']['current_expected_pair'])
+        self.assertTrue(result['targets']['foodin']['inspection_job_exists_for_expected_pair'])
+        self.assertTrue(result['targets']['gomso']['account_present'])
+        for _,_,cid in TEST_TARGETS:self.assertNotIn(str(cid),json.dumps(result))
+
+    def test_absent_same_ad_account_history_does_not_override_present_resolution(self):
+        label,pid,adno=D.TARGETS[0]
+        self.store._conn.execute('INSERT INTO naver_auto_account VALUES(?,?,0)',(adno+2*10**9,adno))
+        self.assertTrue(self.project()['targets'][label]['current_expected_pair'])
+
+    def test_missing_ad_account_never_falls_back_to_same_valued_customer_id(self):
+        label,pid,adno=D.TARGETS[0]
+        self.store._conn.execute('DELETE FROM naver_auto_account WHERE ad_account_no=?',(adno,))
+        self.store._conn.execute('INSERT INTO naver_auto_account VALUES(?,?,1)',(adno,adno+2*10**9))
+        with self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_TARGET_NOT_FOUND'):self.project()
+
+    def test_duplicate_present_ad_account_is_refused_instead_of_choosing_a_customer(self):
+        label,pid,adno=D.TARGETS[0]
+        self.store._conn.execute('INSERT INTO naver_auto_account VALUES(?,?,1)',(adno+2*10**9,adno))
+        with self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_TARGET_AMBIGUOUS'):self.project()
+
+    def test_pid_binding_is_checked_separately_after_ad_account_resolution(self):
+        self.store.policies[TEST_TARGETS[0][2]]['possibility_id']=999
+        row=self.project()['targets']['gomso']
+        self.assertTrue(row['account_present']);self.assertFalse(row['current_expected_pair'])
+        self.assertIsNone(row['current_stage']);self.assertIsNone(row['canonical_erp_product_link_present'])
+
+    def test_exact_second_due_and_snapshot_use_product_microsecond_text(self):
+        canonical=lambda at,what:at.astimezone(D.KST).isoformat(timespec='microseconds')
+        self.modules['S']._kst_text=canonical
+        self.modules['IS']._binding=lambda old,job,pid:bool(old
+            and all(old[key]==job[key] for key in ('stage_revision','generation','catalog_at','matching_fingerprint'))
+            and old['possibility_id']==pid and old['snapshot_at']==canonical(job['snapshot_at'],'계정 원천'))
+        add_job(self.store,checked_at=canonical(NOW,'현재'),next_try_at=canonical(NOW,'현재'),
+            snapshot_at=canonical(NOW,'계정 원천'))
+        row=self.project()['targets']['gomso']
+        self.assertEqual(row['snapshot_candidate_gate'],'ELIGIBLE')
+        self.assertTrue(row['latest_pair_binding']['account_snapshot_matches'])
+        self.assertTrue(row['current_job_binding_matches'])
+
+    def test_other_pair_job_does_not_become_current_pair(self):
+        add_job(self.store,possibility_id=999)
+        row=self.project()['targets']['gomso']
+        self.assertTrue(row['inspection_job_exists_for_account']);self.assertFalse(row['inspection_job_exists_for_expected_pair'])
+        self.assertTrue(row['inspection_job_exists_for_other_pair']);self.assertEqual(row['latest_account_job']['scope'],'other_pair')
+        self.assertNotIn('999',json.dumps(row))
+
+    def test_stale_source_keeps_saved_and_current_separate(self):
+        add_job(self.store)
+        self.store.catalog_state='stale'
+        self.store.policies[TEST_TARGETS[0][2]]['source_current']=False
+        self.store.policies[TEST_TARGETS[0][2]]['decision']=NS(cadence='blocked',reason='SOURCE_STALE')
+        row=self.project()['targets']['gomso']
+        self.assertTrue(row['inspection_job_exists_for_expected_pair']);self.assertFalse(row['latest_pair_binding']['current_valid'])
+        self.assertEqual(row['snapshot_candidate_gate'],'POLICY_BLOCKED')
+
+    def test_management_sync_pending_closes_rank_and_count(self):
+        self.store.policies[TEST_TARGETS[0][2]]['stage_revision']='pending-not-a-current-revision'
+        result=self.project()
+        self.assertFalse(result['candidate_snapshot']['rank_exact']);self.assertIsNone(result['candidate_snapshot']['eligible_count'])
+        self.assertIsNone(result['targets']['foodin']['snapshot_candidate_rank'])
+        self.assertEqual(result['targets']['gomso']['snapshot_candidate_gate'],'MANAGEMENT_SYNC_PENDING')
+
+    def test_backoff_is_separate_from_due(self):
+        self.store.ready[TEST_TARGETS[0][2]]=False
+        row=self.project()['targets']['gomso']
+        self.assertFalse(row['collection_account_ready']);self.assertEqual(row['snapshot_candidate_gate'],'ACCOUNT_BACKOFF')
+
+    def test_newer_manual_generation_does_not_borrow_saved_automatic_job(self):
+        add_job(self.store,status='ok',error=None)
+        _,pid,cid=TEST_TARGETS[0]
+        self.store._conn.execute('INSERT INTO naver_auto_manual_read VALUES(?,?,?,?,?,?,?)',
+            (cid,pid,(NOW-timedelta(minutes=1)).isoformat(),0,'manual',None,None))
+        row=self.project()['targets']['gomso']
+        self.assertTrue(row['manual_read']['valid_current_inspection_request'])
+        self.assertFalse(row['latest_pair_binding']['current_valid']);self.assertFalse(row['current_job_binding_matches'])
+        self.assertEqual(row['snapshot_candidate_gate'],'ELIGIBLE')
+
+    def test_prior_day_and_invalid_actor_manual_are_not_active(self):
+        _,pid,cid=TEST_TARGETS[0]
+        self.store._conn.execute('INSERT INTO naver_auto_manual_read VALUES(?,?,?,?,?,?,?)',
+            (cid,pid,(NOW-timedelta(days=1)).isoformat(),0,'manual',None,None))
+        row=self.project()['targets']['gomso']
+        self.assertFalse(row['manual_read']['requested_today']);self.assertFalse(row['manual_read']['valid_current_inspection_request'])
+
+    def test_weekly_gate_and_collection_start(self):
+        cid=TEST_TARGETS[0][2];self.store.policies[cid]['decision']=NS(cadence='weekly',reason='NONMANAGED_STAGE')
+        self.assertEqual(self.project()['targets']['gomso']['snapshot_candidate_gate'],'WEEKLY_NOT_DUE')
+        self.assertEqual(self.project(NOW.replace(hour=0,minute=0))['targets']['foodin']['snapshot_candidate_gate'],'BEFORE_START')
+
+    def test_changed_saved_binding_does_not_reuse_old_retry_gate(self):
+        add_job(self.store,matching_fingerprint='b'*64)
+        row=self.project()['targets']['gomso']
+        self.assertEqual(row['snapshot_candidate_gate'],'ELIGIBLE')
+        self.assertFalse(row['latest_pair_binding']['matching_revision_matches'])
+
+    def test_canonical_product_link_requires_current_erp_stage(self):
+        for index,stage in ((0,NOW.isoformat()),(1,(NOW-timedelta(days=1)).isoformat())):
+            self.store._conn.execute('INSERT INTO naver_auto_product_link VALUES(?,?,?)',(D.TARGETS[index][1],'canonical-key',stage))
+        result=self.project()['targets']
+        self.assertTrue(result['gomso']['canonical_erp_product_link_present'])
+        self.assertFalse(result['foodin']['canonical_erp_product_link_present'])
+        self.assertNotIn('canonical-key',json.dumps(result))
+
+    def settings(self,count=2):
+        entities={}
+        for index in range(count):
+            identifier='cmp-'+str(index)
+            entities[identifier]={'entity':'campaign','id':identifier,'campaign_id':identifier,'settings':{
+                'dailyBudget':0,'useDailyBudget':False,'usePeriod':True,'periodStartDt':'2026-10-01T00:00:00+09:00',
+                'periodEndDt':'2026-10-31','name':'PRIVATE_NAME','keyword':'PRIVATE_KEYWORD','bidAmt':None}}
+        return {'campaigns':[{'nccCampaignId':key} for key in entities], 'entities':entities,
+            'confirmed':False,'next_index':0,'queue':[1]}
+
+    def test_only_exact_settings_fields_and_missing_is_unknown_not_spend(self):
+        progress=self.settings();progress['entities']['grp-1']={'entity':'adgroup','id':'grp-1','campaign_id':'cmp-0',
+            'settings':{'bidAmt':123,'dailyBudget':1.5,'name':'PRIVATE_NAME','salesAmt':987654321}}
+        raw=json.dumps(progress);add_job(self.store,progress_json=raw,progress_hash=hashlib.sha256(raw.encode()).hexdigest())
+        row=self.project()['targets']['gomso']['settings']
+        self.assertEqual(row['source_state'],'current_partial');self.assertEqual(row['items'][0]['daily_budget'],0)
+        self.assertFalse(row['items'][0]['use_daily_budget']);self.assertEqual(row['items'][0]['period_start'],'2026-10-01')
+        self.assertEqual(row['items'][-1]['bid_amount'],123);self.assertIsNone(row['items'][-1]['daily_budget'])
+        for private in ('PRIVATE_NAME','PRIVATE_KEYWORD','salesAmt','987654321','cmp-0','grp-1'):
+            self.assertNotIn(private,json.dumps(row))
+
+    def test_settings_limit_and_stale_never_become_current(self):
+        progress=self.settings(21);raw=json.dumps(progress)
+        add_job(self.store,progress_json=raw,progress_hash=hashlib.sha256(raw.encode()).hexdigest(),matching_fingerprint='b'*64)
+        settings=self.project()['targets']['gomso']['settings']
+        self.assertEqual(len(settings['items']),20);self.assertTrue(settings['truncated'])
+        self.assertEqual(settings['source_state'],'stored_stale');self.assertFalse(settings['current_valid'])
+
+    def test_invalid_checkpoint_is_closed_without_raw_body(self):
+        add_job(self.store,progress_json='PRIVATE_RAW_BODY',progress_hash='0'*64)
+        settings=self.project()['targets']['gomso']['settings']
+        self.assertEqual(settings['source_state'],'invalid');self.assertEqual(settings['items'],[])
+
+    def test_schema_deadline_and_targets_fail_closed(self):
+        self.store._conn.execute("UPDATE naver_auto_meta SET value='11'")
+        with self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_SCHEMA'):
+            D.collect(self.store,NOW,time.monotonic()+20,self.modules)
+        with self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_TARGETS'):
+            D.collect(self.store,NOW,time.monotonic()+20,self.modules,targets=(('other',1,1),))
+        with self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_DEADLINE'):D.check_deadline(0)
+
+    def test_output_rejects_extra_fields_unknown_enum_and_bool_as_integer(self):
+        result=self.project()
+        for change in ('extra','enum','bool','limit','raw'):
+            value=deepcopy(result)
+            if change=='extra':value['extra']='PRIVATE'
+            elif change=='enum':value['targets']['gomso']['snapshot_candidate_gate']='PRIVATE'
+            elif change=='bool':value['candidate_snapshot']['eligible_count']=True
+            elif change=='limit':value['limits']['dispatch_order_not_proven']=False
+            else:value['targets']['gomso']['manual_read']['actor']=100
+            with self.subTest(change=change),self.assertRaises(ValueError):D.validate_result(value)
+
+    def test_old_or_wrong_identifier_namespace_output_is_rejected(self):
+        result=self.project()
+        old=deepcopy(result);old.pop('target_identifier_namespace')
+        wrong=deepcopy(result);wrong['target_identifier_namespace']='customer_id'
+        for value in (old,wrong):
+            with self.assertRaises(ValueError):D.validate_result(value)
+
+
+class BoundariesTests(unittest.TestCase):
+    def test_package_has_no_dynamic_account_query_or_source_escape(self):
+        package=dict(baseline=D.BASELINE,source_commit=D.SOURCE,source_tar_gz_sha256=D.ARCHIVE,mode=D.MODE)
+        D.validate_package(package)
+        for key,value in (('source_commit','70e6657ac789ce4d72a165dbf6a6e552d2b84043'),('mode','inspection-source-diagnostics-ad-account-v2'),('source_commit','f'*40),('source_tar_gz_sha256','0'*64),('targets',[]),('mode','arbitrary-query'),
+                ('mode','inspection-source-diagnostics-v1')):
+            with self.subTest(key=key),self.assertRaises(ValueError):D.validate_package(dict(package,**{key:value}))
+
+    def test_script_pins_before_database_and_never_calls_writer_or_network(self):
+        source=D.script().decode();ast.parse(source)
+        self.assertLess(source.index('SOURCE_DIAGNOSTICS_CODE_PIN'),source.index('connection=connect_reader'))
+        for required in ('writer=False',"connection.execute('BEGIN')","connection.execute('ROLLBACK')",'time.monotonic()+20',
+                'connection.total_changes!=0','socket.socket.connect=socket.socket.connect_ex=no_network','MS.snapshot'):
+            self.assertIn(required,source)
+        for forbidden in ('inspection_work(', '_performance_selection_source(', 'synchronize_management(', 'open_writer(',
+                'run_inspection(', 'run_performance(', 'request_collection(', 'SELECT payload_json', 'store 2.py'):
+            self.assertNotIn(forbidden,source)
+        self.assertEqual(D.SCHEMA,21);self.assertEqual(D.MAX_OUTPUT,16384)
+        self.assertEqual(len(D.CODE_PINS),12)
+
+    def test_readonly_connection_denies_mutation_attach_and_pragma_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=(Path(directory)/'fixture.db').resolve()
+            connection=sqlite3.connect(path);connection.execute('CREATE TABLE fixture(value INTEGER)');connection.commit();connection.close()
+            before=hashlib.sha256(path.read_bytes()).hexdigest()
+            reader=D.connect_reader(path)
+            try:
+                reader.execute('BEGIN');self.assertEqual(reader.execute('SELECT count(*) FROM fixture').fetchone(),(0,))
+                for sql in ('INSERT INTO fixture VALUES(1)','CREATE TABLE other(value)','PRAGMA query_only=OFF',
+                            "ATTACH DATABASE ':memory:' AS other",'DROP TABLE fixture'):
+                    with self.subTest(sql=sql),self.assertRaises(sqlite3.DatabaseError):reader.execute(sql)
+                reader.execute('ROLLBACK');self.assertEqual(reader.total_changes,0)
+            finally:reader.close()
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),before)
+            link=Path(directory)/'link.db';link.symlink_to(path)
+            with self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_DATABASE_PATH'):D.connect_reader(link)
+
+    def test_unexpanded_existing_wire_limits_fit(self):
+        bundle=dict(operation='preview-source-diagnostics',function='run',package=dict(baseline=D.BASELINE,
+            source_commit=D.SOURCE,source_tar_gz_sha256=D.ARCHIVE,mode=D.MODE),source=(TOOLS/'naver_current_inspection_diagnostics.py').read_text(),
+            release_source=(TOOLS/'naver_preview_release.py').read_text(),host_source=(TOOLS/'naver_erp_tunnel_service_install.py').read_text())
+        raw=json.dumps(bundle).encode();wire='code-gzip-v1:'+__import__('base64').b64encode(gzip.compress(raw,mtime=0)).decode()
+        self.assertLessEqual(len(raw),229376);self.assertLessEqual(len(wire),73728)
+
+
+class ControllerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name).resolve();self.path=self.root/'release';self.path.mkdir()
+        (self.path/'deploy').mkdir();receipts=self.root/'receipts';receipts.mkdir()
+        self.prepared=receipts/('preview-'+D.SOURCE+'.json')
+        self.started=receipts/('preview-start-'+D.SOURCE+'.json')
+        self.package=dict(baseline=D.BASELINE,source_commit=D.SOURCE,source_tar_gz_sha256=D.ARCHIVE,mode=D.MODE)
+        files={}
+        for relative in ('compose.naver-engine.yml','preview-engine.override.yml','deploy/naver-engine-backup.override.yml'):
+            path=self.path/relative;path.write_bytes(b'SYNTHETIC_COMPOSE')
+            files[str(path)]=hashlib.sha256(path.read_bytes()).hexdigest()
+        self.image='sha256:'+'a'*64;self.identity='b'*64
+        self.prepared.write_text(json.dumps(dict(ok=True,stage='prepared',source_commit=D.SOURCE,
+            package=dict(self.package,run_id=D.PREPARE_RUN),database_policy="preserve-in-place",database_opened_by_controller=False,runtime_environment_preserved=True,saved_export_companion_preserved=True,files=files,images={'engine':self.image},inventory_enabled=True,execution_enabled=False,runtime_flags_verified=True)))
+        self.started.write_text(json.dumps(dict(ok=True,stage='internal_ready',source_commit=D.SOURCE,
+            previous_commit=D.PREVIOUS_SOURCE,operation_id=D.APPLY_OPERATION,database_policy="preserve-in-place",database_opened_by_controller=False,source_warmup_performed=False,database_snapshot_verified=False,rollback_requires_matching_database=False,saved_export_companion_preserved=True,database_schema=21,execution_enabled=False,runtime_flags_verified=True)))
+        self.before=dict(id=self.identity,image=self.image,running=True,user='10001:10001',project='naver-engine',
+            service='naver-engine',started='2026-10-12T10:00:00Z',restarts=0,readonly=True,
+            data=[{'Type':'bind','Destination':'/var/lib/naver-engine','Source':'/var/lib/metainc/naver-engine'}])
+        store,modules=fixture()
+        try:self.result=D.collect(store,NOW,time.monotonic()+20,modules)
+        finally:store._conn.close()
+
+    def scenario(self,*,reader_failure=False,engine_drift=False,legacy_drift=False,post_exception=False,payload=None):
+        commands=[];inspects=[0]
+        def command(args,**kwargs):
+            commands.append(args)
+            if args[:3]==['docker','image','inspect']:
+                return json.dumps(dict(id=self.image,user='10001:10001',source=D.SOURCE)).encode()
+            if args[-3:]==['ps','--all','--quiet']:return self.identity.encode()
+            if args[:2]==['docker','inspect']:
+                inspects[0]+=1
+                if post_exception and inspects[0]>1:raise RuntimeError('PRIVATE_CONTAINER_RAW')
+                result=deepcopy(self.before)
+                if engine_drift and inspects[0]>1:result['restarts']=1
+                return json.dumps(result).encode()
+            if args[:3]==['docker','exec','-i']:
+                if reader_failure:raise RuntimeError('PRIVATE_READER_RAW')
+                return json.dumps(self.result if payload is None else payload,separators=(',',':')).encode()
+            raise AssertionError('UNEXPECTED_COMMAND')
+        release=NS(prepared_paths=lambda source:(self.path,self.prepared),trusted_private_file=Mock(),
+            unique=lambda values:dict(values),sha=lambda raw:hashlib.sha256(raw).hexdigest(),
+            command=command,compose=lambda path,service:['docker','compose','fixed'])
+        host=NS(baseline=Mock(side_effect=[D.BASELINE,'0'*64 if legacy_drift else D.BASELINE]))
+        with patch.object(D.os,'geteuid',return_value=0),patch.object(socket.socket,'connect',side_effect=AssertionError('NETWORK_FORBIDDEN')):
+            result=D.run(self.package,host,release)
+        return result,commands,host,inspects[0]
+
+    def test_success_is_closed_and_uses_only_fixed_source_read_process(self):
+        result,commands,host,inspects=self.scenario()
+        self.assertTrue(result['ok']);self.assertEqual(result['diagnostics'],self.result)
+        self.assertEqual(inspects,2);self.assertEqual(host.baseline.call_count,2)
+        self.assertFalse(result['collection_completion_verified']);self.assertEqual(result['mutations'],0)
+        self.assertTrue(any(args[:3]==['docker','exec','-i'] for args in commands))
+        for forbidden in ('logs','restart','stop','up','inspect-env'):
+            self.assertFalse(any(forbidden in args for args in commands))
+
+    def test_primary_and_two_postflight_failures_are_all_preserved(self):
+        result,commands,host,inspects=self.scenario(reader_failure=True,engine_drift=True,legacy_drift=True)
+        self.assertFalse(result['ok']);self.assertNotIn('diagnostics',result)
+        self.assertEqual(result['failure'],dict(primary_code='SOURCE_DIAGNOSTICS_READER_FAILED',
+            post_engine_code='POST_ENGINE_CHANGED',post_legacy_baseline_code='POST_LEGACY_BASELINE_CHANGED'))
+        self.assertEqual(inspects,2);self.assertEqual(host.baseline.call_count,2)
+        self.assertNotIn('PRIVATE',json.dumps(result))
+
+    def test_unknown_raw_reader_failure_and_postflight_exception_are_closed(self):
+        result,*_=self.scenario(payload={'failure':'PRIVATE_SECRET_RAW'},post_exception=True)
+        self.assertEqual(result['failure']['primary_code'],'SOURCE_DIAGNOSTICS_READ_FAILED')
+        self.assertEqual(result['failure']['post_engine_code'],'POST_ENGINE_UNVERIFIED')
+        self.assertNotIn('PRIVATE',json.dumps(result));self.assertNotIn('diagnostics',result)
+
+    def test_invalid_output_and_postflight_drift_do_not_return_partial_diagnostics(self):
+        result,*_=self.scenario(payload=dict(self.result,raw='PRIVATE_RESPONSE'),legacy_drift=True)
+        self.assertEqual(result['failure']['primary_code'],'SOURCE_DIAGNOSTICS_OUTPUT_FIELDS')
+        self.assertEqual(result['failure']['post_legacy_baseline_code'],'POST_LEGACY_BASELINE_CHANGED')
+        self.assertNotIn('diagnostics',result);self.assertNotIn('PRIVATE',json.dumps(result))
+
+
+    def test_current_prepare_apply_proof_drift_refuses_before_reader(self):
+        prepared=json.loads(self.prepared.read_text());started=json.loads(self.started.read_text())
+        cases=[('prepare','package',dict(prepared['package'],run_id='38232778371')),
+            ('prepare','database_opened_by_controller',True),('prepare','runtime_environment_preserved',False),
+            ('start','operation_id','0'*32),('start','previous_commit','0'*40),
+            ('start','database_schema',20),('start','source_warmup_performed',True),
+            ('start','database_snapshot_verified',True),('start','saved_export_companion_preserved',False)]
+        for target,key,value in cases:
+            self.prepared.write_text(json.dumps(prepared));self.started.write_text(json.dumps(started))
+            path=self.prepared if target=='prepare' else self.started
+            changed=json.loads(path.read_text());changed[key]=value;path.write_text(json.dumps(changed))
+            with self.subTest(target=target,key=key),self.assertRaises(ValueError):self.scenario()
+
+
+
+
+class CurrentContinuationTests(unittest.TestCase):
+    setUp=ProjectionTests.setUp
+    project=ProjectionTests.project
+    # Only new explicit cases are inherited here; inherited legacy methods are
+    # already collected through ProjectionTests above.
+    def test_current_mode_refuses_legacy_v2_package(self):
+        package=dict(baseline=D.BASELINE,source_commit=D.SOURCE,source_tar_gz_sha256=D.ARCHIVE,mode='inspection-source-diagnostics-ad-account-v2')
+        with self.assertRaises(ValueError):D.validate_package(package)
+
+    def test_current_selector_model_is_exact(self):
+        value=self.project();value['selector_model']='70e-legacy'
+        with self.assertRaises(ValueError):D.validate_result(value)
+
+    def test_catalog_missing_and_invalid_are_closed(self):
+        self.store.catalog_proof_current=False
+        self.assertEqual(self.project()['sources']['catalog_proof']['state'],'missing')
+        self.store._conn.set_authorizer(None);self.store._conn.execute('PRAGMA query_only=OFF')
+        self.store._conn.execute("INSERT INTO naver_auto_meta VALUES('inspection-catalog-proof:v1','PRIVATE_CORRUPT')")
+        result=self.project();self.assertEqual(result['sources']['catalog_proof']['state'],'invalid')
+        self.assertNotIn('PRIVATE_CORRUPT',json.dumps(result))
+
+    def test_current_context_role_does_not_expose_checkpoint_json(self):
+        add_job(self.store);result=self.project();progress=result['targets']['gomso']['progress']
+        self.assertTrue(progress['context_current']);self.assertEqual(progress['context_role'],'reading')
+        self.assertNotIn('progress_json',json.dumps(result))
+
+    def test_progress_invalid_and_unknown_remain_distinct(self):
+        add_job(self.store,progress_json='PRIVATE_INVALID',progress_hash='0'*64)
+        result=self.project();self.assertEqual(result['targets']['gomso']['progress']['checkpoint_state'],'invalid')
+        self.assertNotIn('PRIVATE_INVALID',json.dumps(result))
+
+    def test_progress_extra_field_is_rejected(self):
+        result=self.project();result['targets']['gomso']['progress']['private']='PRIVATE'
+        with self.assertRaises(ValueError):D.validate_result(result)
+
+    def test_progress_bounds_are_closed(self):
+        result=self.project();progress=result['targets']['gomso']['progress']
+        progress.update(checkpoint_state='valid',next_index=50001,queue_tasks=50000,confirmed=False)
+        with self.assertRaises(ValueError):D.validate_result(result)
+
+    def test_progress_resumption_requires_current_context_and_checkpoint(self):
+        result=self.project();progress=result['targets']['gomso']['progress']
+        progress.update(resumable_for_current_job=True)
+        with self.assertRaises(ValueError):D.validate_result(result)
+
+    def test_catalog_proof_contradiction_is_rejected(self):
+        result=self.project();result['sources']['catalog_proof']['valid_current']=False
+        with self.assertRaises(ValueError):D.validate_result(result)
+
+    def test_raw_progress_aggregate_limit_refuses_before_unbounded_read(self):
+        row=add_job(self.store,progress_json='x'*100,progress_hash='0'*64)
+        with self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_ROW_LIMIT'):
+            D.full_progress(self.store._conn,row,time.monotonic()+20,{},[D.MAX_PROGRESS_TOTAL-99])
+
+    def test_raw_progress_single_row_limit_is_closed(self):
+        row=add_job(self.store,progress_json='x'*100,progress_hash='0'*64)
+        with patch.object(D,'MAX_PROGRESS_BYTES',99),self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_ROW_LIMIT'):
+            D.full_progress(self.store._conn,row,time.monotonic()+20,{},[0])
+
+    def test_target_checkpoint_is_bounded_before_pinned_parser_reads_it(self):
+        add_job(self.store,progress_json='x'*100,progress_hash='0'*64)
+        with patch.object(D,'MAX_PROGRESS_BYTES',99),patch.object(self.store,'inspection_progress',side_effect=AssertionError('NO_PARSE')) as parse:
+            with self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_ROW_LIMIT'):self.project()
+        parse.assert_not_called()
+
+    def confirmed_checkpoint(self,status='reading'):
+        progress=ProjectionTests.settings(self);progress.update(confirmed=True,next_index=1)
+        raw=json.dumps(progress);add_job(self.store,status=status,progress_json=raw,progress_hash=hashlib.sha256(raw.encode()).hexdigest())
+        return self.project()['targets']['gomso']
+
+    def test_confirmed_inflight_checkpoint_is_not_current_complete(self):
+        row=self.confirmed_checkpoint();self.assertEqual(row['settings']['source_state'],'current_partial')
+        self.assertFalse(row['settings']['complete']);self.assertTrue(row['progress']['confirmed'])
+        self.assertEqual(row['progress']['context_role'],'checkpoint')
+
+    def test_completed_job_requires_current_catalog_proof(self):
+        self.store.catalog_proof_current=False;row=self.confirmed_checkpoint('ok')
+        self.assertEqual(row['settings']['source_state'],'stored_stale');self.assertFalse(row['settings']['complete'])
+
+    def test_completed_job_with_checkpoint_role_cannot_be_promoted(self):
+        with patch.object(self.store,'_inspection_context',return_value={'role':'checkpoint'}):row=self.confirmed_checkpoint('ok')
+        self.assertEqual(row['settings']['source_state'],'current_partial');self.assertFalse(row['settings']['complete'])
+
+    def test_current_complete_output_requires_success_and_complete_proof(self):
+        result=self.project();row=result['targets']['gomso']
+        row['settings'].update(source_state='current_complete',current_valid=True,complete=True)
+        with self.assertRaises(ValueError):D.validate_result(result)
+
+    def test_raw_progress_cache_counts_each_checkpoint_once(self):
+        row=add_job(self.store,progress_json='x'*100,progress_hash='0'*64);cache={};total=[0]
+        self.assertEqual(D.full_progress(self.store._conn,row,time.monotonic()+20,cache,total)['progress_json'],'x'*100)
+        D.full_progress(self.store._conn,row,time.monotonic()+20,cache,total)
+        self.assertEqual(total,[100])
+
+if __name__=='__main__':unittest.main()

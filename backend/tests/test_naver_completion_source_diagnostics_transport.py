@@ -142,6 +142,8 @@ class PinnedSourceTests(unittest.TestCase):
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
         # New P4 is checked by its dedicated suite; preserve every previous byte/hash here.
+        # New current-version diagnostic is independently checked; strip only its registration.
+        workflow=workflow.replace(section(workflow,'current-inspection-diagnostics'),'').replace(', preview-current-inspection-diagnostics','')
         continuity=section(workflow,'inspection-continuity-patch')
         prior=workflow.replace(continuity,'')
         for operation in ('prepare','apply','rollback'):
@@ -151,6 +153,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=prior.replace(section(prior,'completion-source-diagnostics'),'').replace(', preview-completion-source-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'cfe595e18bbb83cb2d4feccf2f12bf91169cd360f14a21d60b8cabec1726337e')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        current_start=native.index('      - name: 현재 15f 점검 진척·증명·읽기 전용 진단 검사\n')
+        current_end=native.index('      - name:',current_start+1)
+        native=native[:current_start]+native[current_end:]
         start=native.index('      - name: 고정 광고주 번호 v2·source 진단·읽기 전용 전송 경계 검사\n')
         end=native.index('      - name:',start+1)
         prior=native[:start]+native[end:]
