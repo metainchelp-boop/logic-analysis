@@ -211,11 +211,13 @@ def execute(bundle,*,incoming=False):
         _prepare_export_directories()
         release.trusted_dir(release.ROOT/'incoming'/package['run_id'],mode=0o700,new=True)
         return {'ok':True,'stage':'incoming_ready','source_commit':C.TARGET_COMMIT}
+    C.STAGE='saved_exports_binding'
     binding=m['exports_binding'].Binding(C,m['exports_helper'],release,bundle['sources']['exports_helper'].encode(),
         {'naver_product_export.py':bundle['sources']['product_exporter'].encode(),
          'naver_market_export.py':bundle['sources']['market_exporter'].encode()})
     if bundle['operation']=='preview-completion-prepare':
         try:
+            C.STAGE='saved_exports_prepare'
             wrapped=binding.prepare(bundle['package'])
             result=C.prepare(bundle['package'],host,wrapped,m['lifecycle'],m['upgrade'],approved_config_operation_id=bundle['approved_config_operation_id'],prepare_exports=binding.install)
             binding.save(bundle['package']);return {**result,'saved_export_companion_prepared':True,'export_jobs_started':True,'export_engine_verified':False}

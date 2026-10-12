@@ -69,6 +69,7 @@ FAILURE_OPERATIONS = frozenset('none package current_state target_manifest compa
 FAILURE_KINDS = frozenset('ValueError RuntimeError TimeoutError TimeoutExpired CalledProcessError OSError '
     'PermissionError FileNotFoundError BlockingIOError JSONDecodeError OperationalError IntegrityError '
     'TypeError KeyError AttributeError AssertionError ImportError ModuleNotFoundError ConfigError StoreRefused'.split())
+FAILURE_KINDS |= frozenset({'ExportInstallInvalid', 'FileExistsError'})
 SQL_ERRORS={n:'SQLITE_'+s for n,s in zip((1,5,6,8,10,11,14,15,26),'ERROR BUSY LOCKED READONLY IOERR CORRUPT CANTOPEN PROTOCOL NOTADB'.split())}
 FAILURE_CODES = frozenset(SQL_ERRORS.values()) | frozenset('CODE_TARGET_NOT_PINNED CODE_PACKAGE CODE_TARGET CODE_BASELINE CODE_APPLY_FIELDS '
     'CODE_OPERATION_ID CODE_ALREADY_ATTEMPTED CODE_POST_STATE CODE_TARGET_SOURCE_CHANGED CODE_FAILED_ROLLED_BACK_DB_PRESERVED '
@@ -88,6 +89,15 @@ FAILURE_CODES |= frozenset({'RUNTIME_SECRET_CHANGED', 'CONFIG_PRESERVE_NOT_APPRO
 FAILURE_STAGES |= frozenset({'code_prepare_runtime_config', 'code_prepare_runtime_postflight'})
 FAILURE_CODES |= frozenset({'EXECUTION_ENABLED', 'RUNTIME_CONFIG_PROOF', 'RUNTIME_CONFIG_DRIFT'})
 FAILURE_OPERATIONS |= frozenset({'runtime_config_preflight', 'runtime_old_config', 'runtime_stopped_config', 'runtime_target_config'})
+# Keep this reviewed set exact; an EXPORT_ prefix never makes an error public.
+EXPORT_FAILURE_CODES = frozenset('EXPORT_ALREADY_ATTEMPTED EXPORT_BUNDLE_INVALID EXPORT_BUNDLE_STALE '
+    'EXPORT_COMMAND_FAILED EXPORT_DATABASE_NAME EXPORT_DIRECTORY_POLICY EXPORT_FILE_CHANGED EXPORT_FILE_POLICY '
+    'EXPORT_IDENTITY EXPORT_IDENTITY_CHANGED EXPORT_INSTALLED_CHANGED EXPORT_INSTALL_CONFLICT EXPORT_JOURNAL '
+    'EXPORT_OPERATION EXPORT_OUTPUT_CONFLICT EXPORT_PATH EXPORT_PIN EXPORT_PREPARED_CHANGED EXPORT_PROFILE '
+    'EXPORT_PYTHON EXPORT_RECEIPT EXPORT_ROLLBACK_DRIFT EXPORT_ROOT_REQUIRED EXPORT_RUN_NOT_VERIFIED '
+    'EXPORT_SOURCE_CHANGED EXPORT_SOURCE_PATH EXPORT_SOURCE_SCOPE EXPORT_SOURCE_SYMLINK EXPORT_SYMLINK EXPORT_TIME'.split())
+FAILURE_CODES |= EXPORT_FAILURE_CODES
+FAILURE_STAGES |= frozenset({'saved_exports_binding', 'saved_exports_prepare', 'saved_exports_install'})
 
 CONFIG_SWITCHES = frozenset('sync links morning alerts metrics inventory execution backup web issue_alerts'.split())
 CHECK_CONFIG_FIELDS = frozenset('command configuration switches network_performed storage_opened credentials_verified web_available deployment_ready'.split())

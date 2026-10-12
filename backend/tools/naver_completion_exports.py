@@ -59,6 +59,7 @@ class Binding:
         return ReleaseProxy(self.r,self.h,self.receipt,self.c.TARGET_COMMIT)
     def install(self):
         if self.receipt is None:raise ValueError('COMPLETION_EXPORTS_RECEIPT')
+        self.c.STAGE='saved_exports_install'
         return self.h.install(self.receipt,command=self.r.command)
     def save(self,package):
         if self.receipt is None:raise ValueError('COMPLETION_EXPORTS_RECEIPT')

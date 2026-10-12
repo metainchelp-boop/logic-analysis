@@ -1,4 +1,5 @@
 """Completion release remains closed; synthetic paired DB/code recovery."""
+import ast
 import hashlib
 import importlib.util
 import io
@@ -38,6 +39,62 @@ def configuration(*, inventory=True, execution=False):
     return dict(command='check-config', configuration='valid', switches=switches,
         network_performed=False, storage_opened=False, credentials_verified=False,
         web_available=False, deployment_ready=False)
+
+
+class CompletionFailureDiagnosticsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.helper_path=Path(__file__).parents[1]/'tools/naver_saved_exports.py'
+        spec=importlib.util.spec_from_file_location('exports_diagnostics',cls.helper_path)
+        cls.exports=importlib.util.module_from_spec(spec);spec.loader.exec_module(cls.exports)
+
+    def test_every_fixed_export_failure_code_is_explicitly_reviewed_and_reported(self):
+        calls=[node for node in ast.walk(ast.parse(self.helper_path.read_text()))
+            if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='_fail']
+        self.assertTrue(calls)
+        codes=set()
+        for call in calls:
+            self.assertEqual(len(call.args),1);self.assertEqual(call.keywords,[])
+            self.assertIsInstance(call.args[0],ast.Constant)
+            self.assertIs(type(call.args[0].value),str)
+            codes.add(call.args[0].value)
+        self.assertEqual(C.EXPORT_FAILURE_CODES,codes)
+        for code in codes:
+            for stage in ('saved_exports_binding','saved_exports_prepare','saved_exports_install'):
+                with self.subTest(code=code,stage=stage),patch.object(C,'STAGE',stage):
+                    self.assertEqual(C.failure_report(self.exports.ExportInstallInvalid(code)),
+                        {'stage':stage,'error_kind':'ExportInstallInvalid','error_code':code})
+
+    def test_export_diagnostics_never_publish_opaque_messages_paths_or_prefixes(self):
+        private='/synthetic/private-value/runtime.env'
+        errors=[self.exports.ExportInstallInvalid(private),
+            self.exports.ExportInstallInvalid('EXPORT_UNREVIEWED_PRIVATE'),
+            self.exports.ExportInstallInvalid('EXPORT_PATH '+private),
+            self.exports.ExportInstallInvalid('EXPORT_PATH',private),
+            self.exports.ExportInstallInvalid({'EXPORT_PATH':private}),
+            FileExistsError(17,'opaque private-value',private)]
+        for error in errors:
+            error.failure_details={'failed_stage':'saved_exports_prepare',
+                'failed_error_kind':type(error).__name__,'failed_error_code':'EXPORT_UNREVIEWED_PRIVATE',
+                'cleanup_stage':private,'cleanup_error_code':private,'rollback_operation':private}
+            with self.subTest(kind=type(error).__name__),patch.object(C,'STAGE','saved_exports_prepare'):
+                result=C.failure_report(error)
+            self.assertEqual(result,{'stage':'saved_exports_prepare','error_kind':type(error).__name__,
+                'error_code':'UNRECOGNIZED','failed_stage':'saved_exports_prepare',
+                'failed_error_kind':type(error).__name__})
+            self.assertNotIn('private',json.dumps(result));self.assertNotIn('runtime.env',json.dumps(result))
+        with patch.object(C,'STAGE','saved_exports_private'):
+            self.assertEqual(C.failure_report(RuntimeError(private)),
+                {'stage':'unknown','error_kind':'RuntimeError','error_code':'UNRECOGNIZED'})
+
+    def test_capture_and_nested_failure_details_preserve_only_closed_export_labels(self):
+        with patch.object(C,'STAGE','saved_exports_install'),patch.object(C,'OPERATION','package'):
+            details=C._capture_failure(self.exports.ExportInstallInvalid('EXPORT_COMMAND_FAILED'))
+            error=RuntimeError('COMMAND_FAILED');error.failure_details=details
+            self.assertEqual(C.failure_report(error),{'stage':'saved_exports_install',
+                'error_kind':'RuntimeError','error_code':'COMMAND_FAILED',
+                'failed_stage':'saved_exports_install','failed_operation':'package',
+                'failed_error_kind':'ExportInstallInvalid','failed_error_code':'EXPORT_COMMAND_FAILED'})
 
 
 class CompletionRuntimeFlagsTests(unittest.TestCase):
