@@ -2624,7 +2624,7 @@ jobs:
           assert inputs.pop('ad_prepare')=='preview-completion-export-failure-inspect'
           assert inputs.pop('ad_expected_baseline')=='none' and all(v=='off' for v in inputs.values())
           source=pathlib.Path('backend/tools/naver_saved_exports_failure_inspect.py').read_bytes()
-          assert hashlib.sha256(source).hexdigest()=='2bf2e196dea9395e5ff3753bee9e7f15cfaf2cb5d2f7022e5167a44e71c94273'
+          assert hashlib.sha256(source).hexdigest()=='e26c87c54d34c1d2261782a75ee03341e32099f9b46ca34f062f2a638eb558a3'
           encoded=base64.b64encode(source).decode();assert len(encoded)<=32768
           with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('COMPLETION_EXPORT_INSPECT_B64='+encoded+'\n')
           PYCODE
@@ -2646,7 +2646,7 @@ jobs:
                 encoded=os.environ['COMPLETION_EXPORT_INSPECT_B64']
                 if len(encoded)>32768:raise ValueError('INSPECT_SIZE')
                 source=base64.b64decode(encoded,validate=True)
-                if hashlib.sha256(source).hexdigest()!='2bf2e196dea9395e5ff3753bee9e7f15cfaf2cb5d2f7022e5167a44e71c94273':raise ValueError('INSPECT_PIN')
+                if hashlib.sha256(source).hexdigest()!='e26c87c54d34c1d2261782a75ee03341e32099f9b46ca34f062f2a638eb558a3':raise ValueError('INSPECT_PIN')
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 module=types.ModuleType('approved_completion_export_failure_inspect');exec(source,module.__dict__)
                 result=module.inspect_host()

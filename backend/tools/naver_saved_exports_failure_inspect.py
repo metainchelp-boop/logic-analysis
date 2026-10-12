@@ -189,6 +189,24 @@ def _metadata(role, path, blocked=False):
         return result
 
 
+def _python_metadata():
+    result=[]
+    for role,path in (('configured','/usr/bin/python3'),('versioned_310','/usr/bin/python3.10'),
+                      ('versioned_311','/usr/bin/python3.11'),('versioned_312','/usr/bin/python3.12')):
+        row={'role':role,'exists':False,'symlink':None,'resolved_scope':'unknown',
+             'regular':None,'mode':None,'uid':None,'gid':None}
+        try:
+            link=os.lstat(path);target=os.path.realpath(path);info=os.stat(path)
+            scope='private_home' if target=='/root' or target.startswith(('/root/','/home/')) else (
+                  'system' if target.startswith(('/usr/bin/','/usr/local/bin/','/bin/')) else 'other')
+            row.update(exists=True,symlink=stat.S_ISLNK(link.st_mode),resolved_scope=scope,
+                       regular=stat.S_ISREG(info.st_mode),mode=format(stat.S_IMODE(info.st_mode),'04o'),
+                       uid=info.st_uid,gid=info.st_gid)
+        except OSError:pass
+        result.append(row)
+    return result
+
+
 def inspect_host():
     """No arguments, source/DB opens, identities, environment or service changes."""
     now_us = time.time_ns() // 1000
@@ -203,7 +221,7 @@ def inspect_host():
         value = _metadata(role, path, blocked)
         ancestry[path] = value['kind']; paths.append(value)
     return {'version': 1, 'diagnostic_only': True, 'journals': journals, 'paths': paths,
-            'source_writes': False, 'service_changes': False, 'network_calls': 0}
+            'source_writes': False, 'service_changes': False, 'network_calls': 0, 'runtime_executables': _python_metadata()}
 
 
 def main():
