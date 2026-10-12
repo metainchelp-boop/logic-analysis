@@ -45,6 +45,14 @@ class SavedExportInstallTests(unittest.TestCase):
         item=patch.object(M.grp,'getgrgid',return_value=SimpleNamespace(gr_gid=self.gid));item.start();self.addCleanup(item.stop)
         self.plan = M.build_plan(ops_commit='a'*40,source_directory=str(self.source),database_name='logic_data.db',
             exporter_user='synthetic-exporter',source_group=None,python_executable='/usr/bin/python3')
+        # The fixture copies a fake ELF, never reads the host interpreter. The
+        # systemctl stub below deliberately runs synthetic CLI tests using this
+        # process's Python, so it is not target-namespace/stdlib execution proof.
+        self.python = self.root / 'python3.10'
+        self.python.write_bytes(b'\x7fELF' + b'synthetic-interpreter\0' * 20)
+        self.python.chmod(0o700)
+        item=patch.object(M,'_python_target',return_value=self.python);item.start();self.addCleanup(item.stop)
+        self.python_target_patch=item
         self.scripts = {name:(SOURCE.parents[1]/name).read_bytes() for name in M.SCRIPTS}
         self.pins = {name:hashlib.sha256(body).hexdigest() for name,body in self.scripts.items()}
         self.calls = []
@@ -81,7 +89,8 @@ class SavedExportInstallTests(unittest.TestCase):
             source.assert_not_called()
 
     def test_companion_and_units_bind_only_dedicated_directories_readonly(self):
-        items=M.artifacts(self.plan,self.scripts,self.pins)
+        with patch.object(M,'_python_snapshot',side_effect=AssertionError('pure artifact rendering')):
+            items=M.artifacts(self.plan,self.scripts,self.pins)
         self.assertEqual(len(items),7)
         engine=json.loads(items[M.COMPANION])['services']['naver-engine']
         self.assertEqual(set(engine),{'environment','volumes'});self.assertEqual(len(engine['volumes']),2)
@@ -95,6 +104,11 @@ class SavedExportInstallTests(unittest.TestCase):
             self.assertIn('os.statvfs',unit);self.assertIn('os.ST_RDONLY',unit)
             self.assertNotIn('immutable=1',unit);self.assertNotIn('EnvironmentFile=',unit)
             self.assertIn('PrivateNetwork=true\n',unit);self.assertIn('CapabilityBoundingSet=\n',unit)
+            binary=self.install/self.plan['ops_commit']/M.INTERPRETER
+            self.assertIn(f'ExecStartPre={binary} -I -B -c ',unit)
+            self.assertIn(f'ExecStart={binary} -I -B ',unit)
+            self.assertIn('encodings,json,sqlite3,dataclasses,importlib,math',unit)
+            self.assertNotIn('ExecStart=/usr/bin/python3 ',unit)
 
     def test_prepare_is_non_operational_and_source_change_blocks_install(self):
         receipt=self.prepare();self.assertEqual(self.calls,[]);self.assertEqual(list(self.units.iterdir()),[])
@@ -203,6 +217,165 @@ class SavedExportInstallTests(unittest.TestCase):
             with self.assertRaises(OSError):M.install(receipt,command=self.command)
         M.rollback(receipt,command=self.command)
         self.assertFalse(any(args[0]=='systemctl' and args[1] in ('stop','disable') for args in self.calls))
+
+    def test_owner_only_system_binary_is_unchanged_and_copy_is_group_only(self):
+        before=(self.python.read_bytes(),M._file_identity(self.python.stat()))
+        receipt=self.prepare()
+        self.assertEqual(receipt['version'],2)
+        self.assertEqual(len(receipt['manifest']),8)
+        staged=self.staging/receipt['operation_id']/M.INTERPRETER
+        self.assertEqual(staged.stat().st_mode&0o777,0o600)
+        M.install(receipt,command=self.command)
+        binary=self.install/self.plan['ops_commit']/M.INTERPRETER
+        info=binary.stat()
+        self.assertEqual((info.st_uid,info.st_gid,info.st_mode&0o777),(M.ROOT_UID,self.gid,0o550))
+        self.assertEqual(binary.read_bytes(),before[0])
+        self.assertEqual(before,(self.python.read_bytes(),M._file_identity(self.python.stat())))
+        M.validate_rollback(receipt);M.rollback(receipt,command=self.command)
+        self.assertFalse(binary.exists())
+        self.assertEqual(before,(self.python.read_bytes(),M._file_identity(self.python.stat())))
+
+    def test_source_binary_drift_or_replacement_blocks_install_before_mutations(self):
+        receipt=self.prepare()
+        body=self.python.read_bytes()
+        self.python.write_bytes(body+b'changed')
+        with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_PREPARED_CHANGED'):
+            M.install(receipt,command=self.command)
+        self.assertEqual(self.calls,[]);self.assertEqual(list(self.install.iterdir()),[])
+
+    def test_identical_source_binary_new_inode_blocks_install(self):
+        receipt=self.prepare();body=self.python.read_bytes()
+        self.python.rename(self.root/'old-python')
+        self.python.write_bytes(body);self.python.chmod(0o700)
+        with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_PREPARED_CHANGED'):
+            M.install(receipt,command=self.command)
+        self.assertEqual(self.calls,[])
+
+    def test_staging_binary_replacement_even_identical_bytes_is_rejected(self):
+        receipt=self.prepare();path=self.staging/receipt['operation_id']/M.INTERPRETER
+        body=path.read_bytes();path.rename(path.with_name('foreign-old'))
+        path.write_bytes(body);path.chmod(0o600)
+        with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_PREPARED_CHANGED'):
+            M.install(receipt,command=self.command)
+        self.assertEqual(self.calls,[])
+
+    def test_staging_reopen_does_not_bless_a_new_creation_inode(self):
+        real=M._binary;staged=self.staging/('b'*32)/M.INTERPRETER
+        def replace_staged(path,**kwargs):
+            if path==staged:
+                body=path.read_bytes();path.rename(path.with_name('foreign-old'))
+                path.write_bytes(body);path.chmod(0o600)
+            return real(path,**kwargs)
+        with patch.object(M,'_binary',side_effect=replace_staged):
+            with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_PREPARED_CHANGED'):
+                self.prepare()
+        self.assertFalse((staged.parent/'prepared.json').exists())
+        self.assertEqual(self.calls,[])
+
+    def test_installed_binary_drift_and_new_inode_are_not_deleted(self):
+        receipt=self.prepare();M.install(receipt,command=self.command)
+        path=self.install/self.plan['ops_commit']/M.INTERPRETER
+        body=path.read_bytes();path.rename(path.with_name('foreign-old'))
+        path.write_bytes(body);path.chmod(0o550);os.chown(path,M.ROOT_UID,self.gid)
+        self.calls.clear()
+        with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_INSTALLED_CHANGED'):
+            M.verify(receipt,command=self.command)
+        with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_ROLLBACK_DRIFT'):
+            M.rollback(receipt,command=self.command)
+        self.assertEqual(self.calls,[]);self.assertTrue(path.exists())
+
+    def test_binary_size_policy_symlink_script_permissions_and_setuid_are_rejected(self):
+        original=self.python.read_bytes()
+        cases=('oversize','symlink','script','writable','setuid','hardlink')
+        for case in cases:
+            with self.subTest(case=case):
+                self.python.unlink();self.python.write_bytes(original);self.python.chmod(0o700)
+                if case=='oversize':
+                    with self.python.open('r+b') as stream:stream.truncate(M.MAX_INTERPRETER+1)
+                elif case=='symlink':
+                    self.python.unlink();self.python.symlink_to(self.database)
+                elif case=='script':self.python.write_bytes(b'#!/usr/bin/python3\nprint(1)\n')
+                elif case=='writable':self.python.chmod(0o720)
+                elif case=='setuid':self.python.chmod(0o4700)
+                elif case=='hardlink':os.link(self.python,self.root/'python-hardlink')
+                with self.assertRaises(M.ExportInstallInvalid):self.prepare()
+                self.assertFalse((self.staging/('b'*32)).exists())
+                if case=='hardlink':(self.root/'python-hardlink').unlink()
+        self.assertEqual(self.calls,[])
+
+    def test_binary_read_detects_fd_or_path_change(self):
+        original=os.read; changed=False
+        def change(fd,size):
+            nonlocal changed
+            chunk=original(fd,size)
+            if not changed:
+                changed=True
+                with self.python.open('ab') as stream:stream.write(b'drift')
+            return chunk
+        with patch.object(M.os,'read',side_effect=change):
+            with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_FILE_CHANGED'):
+                self.prepare()
+        self.assertFalse((self.staging/('b'*32)).exists())
+
+    def test_same_parent_single_system_alias_only_and_final_symlink_rejected(self):
+        # Exercise the real alias resolver against synthetic paths. Parent trust
+        # is separately enforced by production _directory, not global chmod.
+        self.python_target_patch.stop()
+        alias=self.root/'python3';alias.symlink_to('python3.10')
+        with patch.object(M,'_directory'):
+            self.assertEqual(M._python_target({**self.plan,'python_executable':str(alias)}),self.python)
+            alias.unlink();alias.symlink_to(self.database)
+            with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_SYMLINK'):
+                M._python_target({**self.plan,'python_executable':str(alias)})
+            alias.unlink();alias.symlink_to('python3.10')
+            self.python.unlink();self.python.symlink_to(self.database)
+            with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_SYMLINK'):
+                M._python_target({**self.plan,'python_executable':str(alias)})
+
+    def test_binary_reopen_failure_retains_creation_proof_and_exact_rollback(self):
+        receipt=self.prepare();real=M._binary
+        binary=self.install/self.plan['ops_commit']/M.INTERPRETER
+        def fail_installed(path,**kwargs):
+            if path==binary:raise OSError('synthetic post-write reopen failure')
+            return real(path,**kwargs)
+        with patch.object(M,'_binary',side_effect=fail_installed):
+            with self.assertRaisesRegex(OSError,'post-write reopen failure'):
+                M.install(receipt,command=self.command)
+        state=json.loads((self.staging/receipt['operation_id']/'installed.json').read_bytes())
+        self.assertEqual(state['interpreter_identity'],M._file_identity(binary.stat()))
+        self.assertEqual(self.calls,[])
+        M.validate_rollback(receipt);M.rollback(receipt,command=self.command)
+        self.assertFalse(binary.exists());self.assertEqual(self.calls,[])
+
+    def test_binary_reopen_cannot_replace_creation_inode_proof(self):
+        receipt=self.prepare();real=M._binary
+        binary=self.install/self.plan['ops_commit']/M.INTERPRETER
+        def replace_installed(path,**kwargs):
+            if path==binary:
+                body=path.read_bytes();path.rename(path.with_name('foreign-old'))
+                path.write_bytes(body);path.chmod(0o550);os.chown(path,M.ROOT_UID,self.gid)
+            return real(path,**kwargs)
+        with patch.object(M,'_binary',side_effect=replace_installed):
+            with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_INSTALLED_CHANGED'):
+                M.install(receipt,command=self.command)
+        with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_ROLLBACK_DRIFT'):
+            M.rollback(receipt,command=self.command)
+        self.assertTrue(binary.exists());self.assertEqual(self.calls,[])
+
+    def test_failed_write_cleans_only_its_creation_inode_and_preserves_first_error(self):
+        path=self.root/'new-copy';body=b'\x7fELFsynthetic'
+        with patch.object(M,'_fsync_directory',side_effect=OSError('first write failure')):
+            with self.assertRaisesRegex(OSError,'first write failure'):
+                M._write_new(path,body,0o550,self.gid)
+        self.assertFalse(path.exists())
+        def replace_then_fail(directory):
+            path.rename(self.root/'original-inode')
+            path.write_bytes(b'foreign replacement')
+            raise OSError('first write failure')
+        with patch.object(M,'_fsync_directory',side_effect=replace_then_fail):
+            with self.assertRaisesRegex(OSError,'first write failure'):
+                M._write_new(path,body,0o550,self.gid)
+        self.assertEqual(path.read_bytes(),b'foreign replacement')
 
 
 if __name__=='__main__':unittest.main()

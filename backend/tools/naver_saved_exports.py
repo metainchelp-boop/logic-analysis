@@ -30,9 +30,11 @@ OUTPUTS = {'product': Path('/var/lib/metainc/naver-product-source'),
 COMPANION = 'naver-saved-exports.override.yml'
 SOURCE_ALIAS = '/run/naver-saved-source'
 SCRIPTS = ('naver_product_export.py', 'naver_market_export.py')
+INTERPRETER = 'python-export'
 KINDS = ('product', 'market')
 MAX_BUNDLE = 5 * 1024 * 1024
 MAX_FILE = 256 * 1024
+MAX_INTERPRETER = 32 * 1024 * 1024
 ROOT_UID = 0
 READER_GID = 10001
 PROFILE_KEYS = frozenset({'ops_commit', 'source_directory', 'database_name',
@@ -111,12 +113,13 @@ def render_companion(plan):
 
 def _unit(plan, kind):
     code = INSTALL / plan['ops_commit'] / ('naver_' + kind + '_export.py')
+    python = INSTALL / plan['ops_commit'] / INTERPRETER
     group = ('SupplementaryGroups=' + plan['source_group'] + '\n') if plan['source_group'] else ''
     return (f'[Unit]\nDescription=Bounded saved {kind} export for Naver reports\nAfter=local-fs.target\n\n'
         f'[Service]\nType=oneshot\nUser={plan["exporter_user"]}\nGroup={READER_GID}\n{group}'
-        f'ExecStartPre={plan["python_executable"]} -I -c "import os,sys;sys.exit(0 if '
+        f'ExecStartPre={python} -I -B -c "import os,sys,encodings,json,sqlite3,dataclasses,importlib,math;sys.exit(0 if '
         f"os.statvfs('{SOURCE_ALIAS}').f_flag & os.ST_RDONLY else 1)\"\n"
-        f'WorkingDirectory=/\nExecStart={plan["python_executable"]} -I -B {code} '
+        f'WorkingDirectory=/\nExecStart={python} -I -B {code} '
         f'--database {SOURCE_ALIAS}/{plan["database_name"]} --output {OUTPUTS[kind]}/bundle.json\n'
         'UMask=0027\nTimeoutStartSec=45\nMemoryMax=256M\nTasksMax=16\n'
         'NoNewPrivileges=true\nCapabilityBoundingSet=\nPrivateNetwork=true\nPrivateTmp=true\n'
@@ -193,6 +196,82 @@ def _directory(path, *, owner=None, mode=None):
     return info
 
 
+def _file_identity(info):
+    return {'device': info.st_dev, 'inode': info.st_ino, 'size': info.st_size,
+            'mtime_ns': info.st_mtime_ns, 'ctime_ns': info.st_ctime_ns,
+            'uid': info.st_uid, 'gid': info.st_gid,
+            'mode': stat.S_IMODE(info.st_mode), 'links': info.st_nlink}
+
+
+def _valid_file_identity(value):
+    keys = {'device', 'inode', 'size', 'mtime_ns', 'ctime_ns', 'uid', 'gid', 'mode', 'links'}
+    return (isinstance(value, dict) and set(value) == keys and
+            all(type(item) is int and item >= 0 for item in value.values()) and
+            value['size'] <= MAX_INTERPRETER and value['mode'] <= 0o7777 and value['links'] == 1)
+
+
+def _python_target(plan):
+    """Permit the configured system alias, never an arbitrary symlink chain."""
+    alias = _path(plan['python_executable'])
+    for directory in (alias.parent, *alias.parent.parents):
+        _directory(directory)
+    info = alias.lstat()
+    if info.st_uid != ROOT_UID:
+        _fail('EXPORT_FILE_POLICY')
+    if stat.S_ISLNK(info.st_mode):
+        link = os.readlink(alias)
+        target = Path(link) if link.startswith('/') else alias.parent / link
+        if (target.parent != alias.parent or
+                re.fullmatch(r'python3\.[0-9]{1,2}', target.name) is None):
+            _fail('EXPORT_SYMLINK')
+    else:
+        target = alias
+    if target.resolve() != target or not stat.S_ISREG(target.lstat().st_mode):
+        _fail('EXPORT_SYMLINK')
+    return target
+
+
+def _binary(path, *, mode=None, group=None):
+    """Read only a trusted bounded ELF using one fd and pre/post inode checks."""
+    _directory(path.parent)
+    if path.resolve() != path:
+        _fail('EXPORT_SYMLINK')
+    before = _file_identity(path.lstat())
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        identity = _file_identity(info)
+        if (not stat.S_ISREG(info.st_mode) or identity != before or
+                info.st_uid != ROOT_UID or info.st_mode & 0o6022 or info.st_nlink != 1 or
+                not 4 <= info.st_size <= MAX_INTERPRETER or
+                mode is not None and stat.S_IMODE(info.st_mode) != mode or
+                group is not None and info.st_gid != group):
+            _fail('EXPORT_FILE_POLICY')
+        chunks = []; size = 0
+        while size <= MAX_INTERPRETER:
+            chunk = os.read(fd, min(65536, MAX_INTERPRETER + 1 - size))
+            if not chunk: break
+            chunks.append(chunk); size += len(chunk)
+        if (size > MAX_INTERPRETER or size != info.st_size or
+                identity != _file_identity(os.fstat(fd)) or identity != _file_identity(path.lstat())):
+            _fail('EXPORT_FILE_CHANGED')
+        body = b''.join(chunks)
+        if not body.startswith(b'\x7fELF'):
+            _fail('EXPORT_FILE_POLICY')
+        return body, identity
+    finally:
+        os.close(fd)
+
+
+def _python_snapshot(plan):
+    target = _python_target(plan)
+    body, identity = _binary(target)
+    # Alias retargeting during the read must not silently change provenance.
+    if _python_target(plan) != target:
+        _fail('EXPORT_FILE_CHANGED')
+    return body, {'source_path': str(target), 'source_identity': identity, 'sha256': _sha(body)}
+
+
 def _source_identity(plan):
     directory = _path(plan['source_directory'])
     if directory.resolve() != directory:
@@ -221,16 +300,32 @@ def _identity(plan):
     return {'exporter_uid': user.pw_uid, 'reader_gid': READER_GID, 'source_gid': source_gid}
 
 
-def _write_new(path, body, mode):
+def _write_new(path, body, mode, group=None):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    created = None
     try:
+        created = os.fstat(fd)
+        if group is not None:
+            os.fchown(fd, ROOT_UID, group)
         os.fchmod(fd,mode)
-        with os.fdopen(fd, 'wb') as stream:
+        with os.fdopen(fd, 'wb', closefd=False) as stream:
             stream.write(body); stream.flush(); os.fsync(stream.fileno())
+        identity = _file_identity(os.fstat(fd))
         _fsync_directory(path.parent)
+        return identity
     except BaseException:
-        path.unlink(missing_ok=True)
+        # A failed write owns only the inode created by this fd. Never remove a
+        # replacement at the same name, or mask the original failure with cleanup.
+        try:
+            current = path.lstat()
+            if (created is not None and stat.S_ISREG(current.st_mode) and
+                    (current.st_dev, current.st_ino) == (created.st_dev, created.st_ino)):
+                path.unlink()
+        except OSError:
+            pass
         raise
+    finally:
+        os.close(fd)
 
 
 def _fsync_directory(path):
@@ -247,34 +342,52 @@ def prepare(plan, *, scripts, pins, operation_id):
     if os.geteuid() != ROOT_UID:
         _fail('EXPORT_ROOT_REQUIRED')
     plan = _plan(plan); identity = _identity(plan); source = _source_identity(plan)
+    binary, interpreter = _python_snapshot(plan)
     _directory(STAGING, mode=0o700)
     folder = STAGING / operation_id
     folder.mkdir(mode=0o700)
     _fsync_directory(STAGING)
     for name, body in content.items():
         _write_new(folder / name, body, 0o644)
-    receipt = {'version': 1, 'operation_id': operation_id, 'plan': plan,
+    staged_identity = _write_new(folder / INTERPRETER, binary, 0o600)
+    staged_body, reopened_identity = _binary(folder / INTERPRETER, mode=0o600)
+    if staged_identity != reopened_identity or staged_body != binary:
+        _fail('EXPORT_PREPARED_CHANGED')
+    content[INTERPRETER] = binary
+    receipt = {'version': 2, 'operation_id': operation_id, 'plan': plan,
                'plan_sha256': _sha(_json(plan)), 'source_identity': source,
                'runtime_identity': identity,
                'manifest': {name: _sha(body) for name, body in sorted(content.items())},
-               'companion_sha256': _sha(content[COMPANION])}
+               'companion_sha256': _sha(content[COMPANION]),
+               'interpreter': {**interpreter, 'staged_identity': staged_identity}}
     _write_new(folder / 'prepared.json', _json(receipt), 0o600)
     return receipt
 
 
 def _prepared(receipt):
     if (not isinstance(receipt, dict) or set(receipt) != {'version', 'operation_id', 'plan', 'plan_sha256',
-            'source_identity', 'runtime_identity', 'manifest', 'companion_sha256'} or receipt['version'] != 1 or
+            'source_identity', 'runtime_identity', 'manifest', 'companion_sha256', 'interpreter'} or
+            type(receipt['version']) is not int or receipt['version'] != 2 or
             not isinstance(receipt['operation_id'], str) or re.fullmatch('[0-9a-f]{32}', receipt['operation_id']) is None):
         _fail('EXPORT_RECEIPT')
     plan = _plan(receipt['plan'])
     folder = STAGING / receipt['operation_id']; _directory(STAGING, mode=0o700); _directory(folder, mode=0o700)
     if _regular(folder / 'prepared.json', mode=0o600) != _json(receipt):
         _fail('EXPORT_RECEIPT')
-    names = set(SCRIPTS) | {COMPANION} | {f'naver-{kind}-export.{suffix}' for kind in KINDS for suffix in ('service', 'timer')}
+    names = set(SCRIPTS) | {COMPANION, INTERPRETER} | {f'naver-{kind}-export.{suffix}' for kind in KINDS for suffix in ('service', 'timer')}
     if not isinstance(receipt['manifest'], dict) or set(receipt['manifest']) != names:
         _fail('EXPORT_RECEIPT')
-    content = {name: _regular(folder / name, mode=0o644) for name in names}
+    interpreter = receipt['interpreter']
+    if (not isinstance(interpreter, dict) or set(interpreter) != {'source_path', 'source_identity', 'staged_identity', 'sha256'} or
+            not _valid_file_identity(interpreter['source_identity']) or not _valid_file_identity(interpreter['staged_identity']) or
+            not isinstance(interpreter['sha256'], str) or re.fullmatch('[0-9a-f]{64}', interpreter['sha256']) is None):
+        _fail('EXPORT_RECEIPT')
+    _path(interpreter['source_path'])
+    content = {name: _regular(folder / name, mode=0o644) for name in names if name != INTERPRETER}
+    binary, staged_identity = _binary(folder / INTERPRETER, mode=0o600)
+    content[INTERPRETER] = binary
+    if staged_identity != interpreter['staged_identity'] or _sha(binary) != interpreter['sha256']:
+        _fail('EXPORT_PREPARED_CHANGED')
     if ({name: _sha(body) for name, body in content.items()} != receipt['manifest'] or
             receipt['plan_sha256'] != _sha(_json(plan)) or
             receipt['companion_sha256'] != _sha(render_companion(plan)) or
@@ -317,6 +430,9 @@ def install(receipt, *, command):
     identity = _identity(plan)
     if identity != receipt['runtime_identity']:
         _fail('EXPORT_IDENTITY_CHANGED')
+    _, interpreter = _python_snapshot(plan)
+    if interpreter != {key: receipt['interpreter'][key] for key in ('source_path', 'source_identity', 'sha256')}:
+        _fail('EXPORT_PREPARED_CHANGED')
     uid = identity['exporter_uid']; _directory(UNITS); _directory(INSTALL)
     script_dir = INSTALL / plan['ops_commit']
     units = [name for name in content if name.endswith(('.service', '.timer'))]
@@ -332,11 +448,18 @@ def install(receipt, *, command):
                 _regular(path, maximum=MAX_BUNDLE, owner=uid, mode=0o640,group=READER_GID)
     state = {'version': 1, 'operation_id': receipt['operation_id'], 'state': 'installing',
              'created_files': [], 'created_directories': [], 'timers_enabled': False,
-             'engine_verified': False}
+             'engine_verified': False, 'interpreter_identity': None}
     _journal(folder, receipt, state)
     try:
         state['created_directories'].append(str(script_dir)); _journal(folder, receipt, state)
         script_dir.mkdir(mode=0o755);os.chmod(script_dir,0o755);_fsync_directory(INSTALL)
+        path = script_dir / INTERPRETER
+        state['created_files'].append(str(path)); _journal(folder, receipt, state)
+        state['interpreter_identity'] = _write_new(path, content[INTERPRETER], 0o550, READER_GID)
+        _journal(folder, receipt, state)
+        actual, installed_identity = _binary(path, mode=0o550, group=READER_GID)
+        if installed_identity != state['interpreter_identity'] or actual != content[INTERPRETER]:
+            _fail('EXPORT_INSTALLED_CHANGED')
         for name in SCRIPTS:
             path = script_dir / name
             state['created_files'].append(str(path)); _journal(folder, receipt, state)
@@ -369,11 +492,16 @@ def verify(receipt, *, command, require_timers=True, now=None):
     plan, folder, content = _prepared(receipt)
     if _source_identity(plan) != receipt['source_identity'] or _identity(plan) != receipt['runtime_identity']:
         _fail('EXPORT_SOURCE_CHANGED')
+    state = json.loads(_regular(folder / 'installed.json', mode=0o600))
     for name, body in content.items():
         if name == COMPANION:
             continue
-        path = INSTALL / plan['ops_commit'] / name if name in SCRIPTS else UNITS / name
-        if _regular(path, mode=0o644) != body:
+        path = INSTALL / plan['ops_commit'] / name if name in (*SCRIPTS, INTERPRETER) else UNITS / name
+        if name == INTERPRETER:
+            actual, identity = _binary(path, mode=0o550, group=READER_GID)
+            if identity != state.get('interpreter_identity') or actual != body:
+                _fail('EXPORT_INSTALLED_CHANGED')
+        elif _regular(path, mode=0o644) != body:
             _fail('EXPORT_INSTALLED_CHANGED')
     for kind in KINDS:
         result = _command(command, ['systemctl', 'show', f'naver-{kind}-export.service',
@@ -425,7 +553,7 @@ def _rollback_state(receipt):
         _fail('EXPORT_ROOT_REQUIRED')
     plan, folder, content = _prepared(receipt)
     state = json.loads(_regular(folder / 'installed.json', mode=0o600))
-    allowed = {str(INSTALL / plan['ops_commit'] / name): content[name] for name in SCRIPTS}
+    allowed = {str(INSTALL / plan['ops_commit'] / name): content[name] for name in (*SCRIPTS, INTERPRETER)}
     allowed.update({str(UNITS / name): body for name, body in content.items() if name.endswith(('.service', '.timer'))})
     if (state.get('operation_id') != receipt['operation_id'] or not isinstance(state.get('created_files'), list) or
             len(state['created_files']) != len(set(state['created_files'])) or any(path not in allowed for path in state['created_files'])):
@@ -434,7 +562,11 @@ def _rollback_state(receipt):
     for name in state['created_files']:
         path = Path(name)
         if path.exists() or path.is_symlink():
-            if _regular(path, mode=0o644) != allowed[name]:
+            if path.name == INTERPRETER:
+                actual, identity = _binary(path, mode=0o550, group=READER_GID)
+                if identity != state.get('interpreter_identity') or actual != allowed[name]:
+                    _fail('EXPORT_ROLLBACK_DRIFT')
+            elif _regular(path, mode=0o644) != allowed[name]:
                 _fail('EXPORT_ROLLBACK_DRIFT')
     return plan, folder, state
 
