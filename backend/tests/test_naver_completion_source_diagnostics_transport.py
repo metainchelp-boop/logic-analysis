@@ -141,12 +141,22 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
-        prior=workflow.replace(section(workflow,'completion-source-diagnostics'),'').replace(', preview-completion-source-diagnostics','')
+        # New P4 is checked by its dedicated suite; preserve every previous byte/hash here.
+        continuity=section(workflow,'inspection-continuity-patch')
+        prior=workflow.replace(continuity,'')
+        for operation in ('prepare','apply','rollback'):
+            option=', preview-inspection-continuity-patch-'+operation
+            self.assertEqual(prior.count(option),1)
+            prior=prior.replace(option,'')
+        prior=prior.replace(section(prior,'completion-source-diagnostics'),'').replace(', preview-completion-source-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'cfe595e18bbb83cb2d4feccf2f12bf91169cd360f14a21d60b8cabec1726337e')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
         start=native.index('      - name: 고정 광고주 번호 v2·source 진단·읽기 전용 전송 경계 검사\n')
         end=native.index('      - name:',start+1)
         prior=native[:start]+native[end:]
+        start=prior.index('      - name: 점검 연속 수집 코드 패치·70e 복구 경계 검사\n')
+        end=prior.index('      - name:',start+1)
+        prior=prior[:start]+prior[end:]
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'8417d4eedd1db2b8e052357e91db00d74cac71cd508fd8775360088dc2666a6c')
 
 
