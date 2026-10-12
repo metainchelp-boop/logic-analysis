@@ -375,29 +375,162 @@ class CompletionDatabaseTests(unittest.TestCase):
         original=C.os.fstat
         def virtual_owner(fd):
             row=original(fd)
-            return SimpleNamespace(st_mode=row.st_mode,st_nlink=row.st_nlink,st_uid=10001,st_gid=10001,st_dev=row.st_dev,st_ino=row.st_ino)
+            operating=any((p.stat().st_dev,p.stat().st_ino)==(row.st_dev,row.st_ino)
+                for p in data.rglob('*') if p.is_file())
+            owner=10001 if operating else 0
+            return SimpleNamespace(st_mode=row.st_mode,st_nlink=row.st_nlink,st_uid=owner,st_gid=owner,
+                st_dev=row.st_dev,st_ino=row.st_ino,st_size=row.st_size,st_mtime_ns=row.st_mtime_ns,st_ctime_ns=row.st_ctime_ns)
         return data,c,old_shape,release,upgrade,virtual_owner
     def test_actual_sqlite_backup_roundtrip_keeps_committed_wal_zero_null_and_quarantines_failed_db(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root)
-            c.execute('BEGIN');c.execute('INSERT INTO t VALUES(2,0,0)')
+            c.close()
+            # A stopped writer leaves committed WAL and an uncommitted txn.
+            # Unlike opening/closing read_bytes in this process, this fixture
+            # does not accidentally release a live SQLite lock on macOS.
+            script="import os,sqlite3,sys; c=sqlite3.connect(sys.argv[1],isolation_level=None); c.execute('PRAGMA journal_mode=WAL'); c.execute('UPDATE t SET owner=7'); c.execute('BEGIN'); c.execute('INSERT INTO t VALUES(2,0,0)'); os._exit(0)"
+            subprocess.run([sys.executable,'-I','-B','-c',script,str(data/'engine.db')],check=True,capture_output=True,timeout=10)
+            self.assertTrue((data/'engine.db-wal').exists());self.assertTrue((data/'engine.db-shm').exists())
             with patch.object(C,'DATA',data),patch.object(C,'SCHEMA_SHA256',{'old':shape,'target':'f'*64}),patch.object(C.os,'fstat',side_effect=owner):
                 snapshot=C.db_snapshot('a'*32,release,upgrade)
-                with closing(sqlite3.connect(snapshot[0])) as saved:self.assertEqual(saved.execute('SELECT * FROM t').fetchall(),[(1,0,None)])
+                with closing(sqlite3.connect(snapshot[0])) as saved:self.assertEqual(saved.execute('SELECT * FROM t').fetchall(),[(7,0,None)])
                 self.assertTrue(json.loads((root/'receipts'/('completion-snapshot-'+'a'*32+'.json')).read_text())['snapshot_restore_verified'])
-                c.rollback();c.execute('UPDATE t SET owner=9');c.execute("UPDATE naver_auto_meta SET value='21'");c.close()
+                with closing(sqlite3.connect(data/'engine.db',isolation_level=None)) as current:
+                    current.execute('UPDATE t SET owner=9');current.execute("UPDATE naver_auto_meta SET value='21'")
                 C.restore_db(snapshot,'a'*32,release,upgrade)
-                with closing(sqlite3.connect(data/'engine.db')) as restored:self.assertEqual(restored.execute('SELECT * FROM t').fetchall(),[(1,0,None)])
+                with closing(sqlite3.connect(data/'engine.db')) as restored:self.assertEqual(restored.execute('SELECT * FROM t').fetchall(),[(7,0,None)])
                 with closing(sqlite3.connect(data/('.completion-failed-db-'+'a'*32)/'engine.db')) as failed:self.assertEqual(failed.execute('SELECT owner FROM t').fetchall(),[(9,)])
     def test_snapshot_digest_drift_refuses_before_any_current_database_move(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root)
+            c.close()
             with patch.object(C,'DATA',data),patch.object(C,'SCHEMA_SHA256',{'old':shape,'target':'f'*64}),patch.object(C.os,'fstat',side_effect=owner):
-                snapshot=C.db_snapshot('b'*32,release,upgrade);c.close()
+                snapshot=C.db_snapshot('b'*32,release,upgrade)
                 original=(data/'engine.db').read_bytes();snapshot[0].write_bytes(b'corrupt')
                 with self.assertRaisesRegex(ValueError,'DB_SNAPSHOT_CHANGED'):C.restore_db(snapshot,'b'*32,release,upgrade)
                 self.assertEqual((data/'engine.db').read_bytes(),original)
                 self.assertFalse((data/('.completion-failed-db-'+'b'*32)).exists())
+
+    def test_two_gib_boundary_and_exact_file_policy_are_metadata_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp).resolve()/'database.sqlite';path.write_bytes(b'x');path.chmod(0o600)
+            original=os.fstat
+            def metadata(size):
+                def result(fd):
+                    row=original(fd)
+                    return SimpleNamespace(st_mode=row.st_mode,st_nlink=row.st_nlink,st_uid=0,st_gid=0,
+                        st_dev=row.st_dev,st_ino=row.st_ino,st_size=size,st_mtime_ns=row.st_mtime_ns,st_ctime_ns=row.st_ctime_ns)
+                return result
+            with patch.object(C.os,'read',side_effect=AssertionError('BODY_READ')):
+                with patch.object(C.os,'fstat',side_effect=metadata(2*1024**3)):
+                    with C._database_file(path):pass
+                for size in (0,2*1024**3+1):
+                    with patch.object(C.os,'fstat',side_effect=metadata(size)),self.assertRaisesRegex(ValueError,'^DB_IDENTITY$'):
+                        with C._database_file(path):pass
+                path.chmod(0o644)
+                with patch.object(C.os,'fstat',side_effect=metadata(1)),self.assertRaisesRegex(ValueError,'^DB_IDENTITY$'):
+                    with C._database_file(path):pass
+                path.chmod(0o600);os.link(path,path.with_name('hardlink'))
+                with patch.object(C.os,'fstat',side_effect=metadata(1)),self.assertRaisesRegex(ValueError,'^DB_IDENTITY$'):
+                    with C._database_file(path):pass
+                link=path.with_name('symlink');link.symlink_to(path)
+                with self.assertRaises(OSError):
+                    with C._database_file(link):pass
+
+    def test_sparse_over_one_gib_preflight_combines_disk_budget_before_any_body_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close()
+            size=1024**3+1
+            with (data/'engine.db').open('r+b') as output:output.truncate(size)
+            need=3*size+C.DATABASE_RESERVE_BYTES
+            with patch.object(C,'DATA',data),patch.object(C.os,'fstat',side_effect=owner),\
+                    patch.object(C.os,'read',side_effect=AssertionError('BODY_READ')):
+                with patch.object(C.os,'statvfs',return_value=SimpleNamespace(f_bavail=need,f_frsize=1)):
+                    C.database_preflight(release)
+                with patch.object(C.os,'statvfs',return_value=SimpleNamespace(f_bavail=need-1,f_frsize=1)),\
+                        self.assertRaisesRegex(ValueError,'^DB_SPACE$'):C.database_preflight(release)
+                with (data/'engine.db').open('r+b') as output:output.truncate(C.DATABASE_MAX_BYTES+1)
+                with self.assertRaisesRegex(ValueError,'^DB_IDENTITY$'):C.database_preflight(release)
+
+    def test_distinct_disk_budget_checks_receipts_and_data_independently(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close()
+            size=(data/'engine.db').stat().st_size;original=Path.stat
+            def named(path,*args,**kwargs):
+                info=original(path,*args,**kwargs)
+                if path==root/'receipts':return SimpleNamespace(st_dev=info.st_dev+1)
+                return info
+            limits={root/'receipts':2*size+C.DATABASE_RESERVE_BYTES,data:size+C.DATABASE_RESERVE_BYTES}
+            def capacity(path):return SimpleNamespace(f_bavail=limits[path],f_frsize=1)
+            with patch.object(C,'DATA',data),patch.object(C.os,'fstat',side_effect=owner),\
+                    patch.object(Path,'stat',new=named),patch.object(C.os,'statvfs',side_effect=capacity):
+                C.database_preflight(release)
+                for path in (data,root/'receipts'):
+                    limits[path]-=1
+                    with self.assertRaisesRegex(ValueError,'^DB_SPACE$'):C.database_preflight(release)
+                    limits[path]+=1
+
+    def test_live_metadata_preflight_does_not_require_unchanged_mtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close()
+            original=C._database_metadata;calls=[]
+            def metadata(path,fd,**kwargs):
+                result=original(path,fd,**kwargs);calls.append(1)
+                return (*result[:3],result[3]+len(calls),result[4])
+            with patch.object(C,'DATA',data),patch.object(C.os,'fstat',side_effect=owner),\
+                    patch.object(C,'_database_metadata',side_effect=metadata):C.database_preflight(release,space=False)
+            self.assertGreaterEqual(len(calls),2)
+
+    def test_private_restore_copy_and_digest_use_one_mib_reads_and_no_full_body_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close()
+            source=root/'receipts'/'source.sqlite';body=b'x'*(3*1024**2+17);source.write_bytes(body);source.chmod(0o600)
+            expected=hashlib.sha256(body).hexdigest();destination=data/'copy.sqlite';reads=[];original=os.read
+            def read(fd,size):reads.append(size);return original(fd,size)
+            with patch.object(C.os,'fstat',side_effect=owner),patch.object(C.os,'read',side_effect=read),\
+                    patch.object(Path,'read_bytes',side_effect=AssertionError('FULL_BODY_READ')):
+                self.assertEqual(C._database_digest(source),expected)
+                C._database_copy(source,destination,expected,release)
+                self.assertEqual(C._database_digest(destination,uid=10001,gid=10001),expected)
+            self.assertGreater(len(reads),3);self.assertEqual(set(reads),{1024**2})
+            self.assertEqual(destination.stat().st_mode&0o777,0o600)
+
+    def test_backup_restore_never_call_upgrade_full_file_reader_or_path_read_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root)
+            upgrade.read_file=Mock(side_effect=AssertionError('FULL_BODY_READ'))
+            c.close()
+            with patch.object(C,'DATA',data),patch.object(C,'SCHEMA_SHA256',{'old':shape,'target':'f'*64}),\
+                    patch.object(C.os,'fstat',side_effect=owner),patch.object(Path,'read_bytes',side_effect=AssertionError('FULL_BODY_READ')):
+                snapshot=C.db_snapshot('c'*32,release,upgrade)
+                with closing(sqlite3.connect(data/'engine.db')) as current:current.execute('UPDATE t SET owner=9');current.commit()
+                C.restore_db(snapshot,'c'*32,release,upgrade)
+                C.verify_database_schema(C.OLD_COMMIT,release,upgrade)
+            upgrade.read_file.assert_not_called()
+            with closing(sqlite3.connect(data/'engine.db')) as restored:self.assertEqual(restored.execute('SELECT * FROM t').fetchall(),[(1,0,None)])
+
+    def test_stopped_sidecar_free_wal_database_schema_uses_immutable_without_new_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close()
+            db=data/'engine.db';original=sqlite3.connect;uris=[]
+            def connect(filename,*args,**kwargs):uris.append(filename);return original(filename,*args,**kwargs)
+            with patch.object(C,'DATA',data),patch.object(C,'SCHEMA_SHA256',{'old':shape,'target':'f'*64}),\
+                    patch.object(C.os,'fstat',side_effect=owner),patch.object(C.sqlite3,'connect',side_effect=connect):
+                C.verify_database_schema(C.OLD_COMMIT,release,upgrade)
+            self.assertEqual(uris,[db.as_uri()+'?mode=ro&immutable=1'])
+            self.assertFalse(any(os.path.lexists(str(db)+suffix) for suffix in ('-wal','-shm','-journal')))
+
+    def test_held_inode_replacement_and_incomplete_wal_pair_refuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close();db=data/'engine.db'
+            with patch.object(C.os,'fstat',side_effect=owner):
+                with self.assertRaisesRegex(ValueError,'^DB_IDENTITY$'):
+                    with C._database_file(db,uid=10001,gid=10001):
+                        replacement=data/'replacement';replacement.write_bytes(b'x');replacement.chmod(0o600);os.replace(replacement,db)
+                (data/'engine.db-wal').write_bytes(b'');(data/'engine.db-wal').chmod(0o600)
+                with C._database_file(db,uid=10001,gid=10001) as (fd,_),patch.object(C.sqlite3,'connect',side_effect=AssertionError('SQLITE_OPEN')):
+                    with self.assertRaisesRegex(ValueError,'^DB_IDENTITY$'):
+                        with C._database_reader(db,fd,uid=10001,gid=10001):pass
 
 
 class CompletionMigrationScriptTests(unittest.TestCase):
@@ -530,6 +663,10 @@ class CompletionApplyTests(unittest.TestCase):
             if failure=='stopped-identity':raise ValueError('RUNTIME_CONFIG_DRIFT')
             return {'inventory_enabled':failure!='stopped-drift','execution_enabled':False},{'id':'c'*64}
         def db(source,*args):events.append(('db-schema',source));self.assertEqual(state['schema'],11 if source==C.OLD_COMMIT else 21)
+        def preflight(*args):
+            events.append(('db-preflight',))
+            if failure=='database-policy':raise ValueError('DB_IDENTITY')
+            if failure=='database-space':raise ValueError('DB_SPACE')
         host=Mock();host.baseline.return_value=C.EXPECTED_BASELINE
         package={'release':{'baseline':C.EXPECTED_BASELINE},'operation_id':'a'*32}
         patches={'TARGET_COMMIT':'f'*40}
@@ -539,7 +676,7 @@ class CompletionApplyTests(unittest.TestCase):
             patch.object(C,'db_snapshot',side_effect=snapshot),patch.object(C,'migrate_database',side_effect=migration),\
             patch.object(C,'verify_database_schema',side_effect=db),patch.object(C,'restore_db',side_effect=restore),patch.object(C,'verify_running',side_effect=verified),\
             patch.object(C,'target_runtime_flags',side_effect=target_flags),patch.object(C,'container_runtime_flags',side_effect=container_flags),\
-            patch.object(C,'stopped_container_runtime_flags',side_effect=stopped_flags):
+            patch.object(C,'stopped_container_runtime_flags',side_effect=stopped_flags),patch.object(C,'database_preflight',side_effect=preflight):
             try:result=C.apply(package,host,release,life,upgrade)
             except Exception as error:result=error
         return result,events,state
@@ -550,6 +687,7 @@ class CompletionApplyTests(unittest.TestCase):
         self.assertFalse(result['collection_completion_verified']);self.assertFalse(result['source_warmup_performed'])
         self.assertTrue(result['inventory_enabled']);self.assertFalse(result['execution_enabled']);self.assertTrue(result['runtime_flags_verified'])
         self.assertLess(events.index(('config','target-network-none')),events.index(('/usr/bin/systemctl','stop','relay.service')))
+        self.assertLess(events.index(('db-preflight',)),events.index(('/usr/bin/systemctl','stop','relay.service')))
         self.assertLess(events.index(('config','old-container')),events.index(('snapshot',)))
         self.assertLess(events.index(('compose','naver-'+'f'*40,'relay','up','--no-start','--no-build','--force-recreate')),events.index(('config','stopped-target-container')))
         self.assertLess(events.index(('config','stopped-target-container')),events.index(('/usr/bin/systemctl','start','engine.service')))
@@ -564,6 +702,12 @@ class CompletionApplyTests(unittest.TestCase):
                 result,events,state=self.scenario(kind)
                 self.assertEqual(str(result),code);self.assertEqual(state['schema'],11)
                 self.assertFalse(any(e[:2]==('/usr/bin/systemctl','stop') or e[:1] in (('snapshot',),('receipt',),('migrate',),('replace-unit',)) for e in events))
+    def test_database_policy_failure_refuses_before_stop_or_recovery_receipt(self):
+        for reason,code in (('database-policy','DB_IDENTITY'),('database-space','DB_SPACE')):
+            result,events,state=self.scenario(reason)
+            self.assertEqual(str(result),code);self.assertEqual(state['schema'],11)
+            self.assertIn(('db-preflight',),events)
+            self.assertFalse(any(e[:2]==('/usr/bin/systemctl','stop') or e[:1] in (('snapshot',),('receipt',),('migrate',),('replace-unit',)) for e in events))
     def test_enabled_malformed_or_drifted_actual_target_uses_paired_database_rollback(self):
         for kind in ('target-execution','target-malformed','target-drift'):
             with self.subTest(kind=kind):

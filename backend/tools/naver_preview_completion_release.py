@@ -4,7 +4,7 @@ Not routed or deployable until root pins the final source, both full manifests,
 CI receipt and UI assets. Existing V26 and its guards are untouched.
 """
 import ast
-from contextlib import closing
+from contextlib import closing, contextmanager
 import fcntl
 import hashlib
 import json
@@ -821,32 +821,138 @@ def database_contract(connection, source):
         raise ValueError('DB_TARGET_SCHEMA')
 
 
-def verify_database_schema(source, release, upgrade):
+DATABASE_MAX_BYTES = 2 * 1024**3
+DATABASE_CHUNK_BYTES = 1024**2
+DATABASE_RESERVE_BYTES = 64 * 1024**2
+FAILURE_CODES |= frozenset({'DB_SPACE'})
+
+
+def _database_metadata(path, fd, *, uid=0, gid=0, minimum=1):
+    """Validate a held no-follow file; never read its body for policy checks."""
+    info=os.fstat(fd);named=path.lstat()
+    if (path.resolve()!=path or not stat.S_ISREG(info.st_mode) or info.st_nlink!=1
+        or (info.st_uid,info.st_gid,stat.S_IMODE(info.st_mode))!=(uid,gid,0o600)
+        or not minimum<=info.st_size<=DATABASE_MAX_BYTES
+        or not stat.S_ISREG(named.st_mode) or (info.st_dev,info.st_ino)!=(named.st_dev,named.st_ino)):
+        raise ValueError('DB_IDENTITY')
+    return (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+
+
+@contextmanager
+def _database_file(path, *, uid=0, gid=0, minimum=1, writable=False, lockable=False, stable=True):
+    # Keep the original O_RDWR flock handle; it never writes. SQLite uses a
+    # separate mode=ro connection, and ordinary metadata handles are O_RDONLY.
+    fd=os.open(path,(os.O_RDWR if writable or lockable else os.O_RDONLY)|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        before=_database_metadata(path,fd,uid=uid,gid=gid,minimum=minimum)
+        yield fd,before
+        after=_database_metadata(path,fd,uid=uid,gid=gid,minimum=minimum)
+        if after[:2]!=before[:2] or (stable and not writable and after!=before):raise ValueError('DB_IDENTITY')
+    finally:os.close(fd)
+
+
+def database_preflight(release, *, space=True):
+    """Metadata-only while old services run; repeat after proving them stopped."""
     release.trusted_dir(DATA,uid=10001,gid=10001,mode=0o750)
-    db=DATA/'engine.db'
-    upgrade.read_file(db,uid=10001,gid=10001,mode=0o600,maximum=1024**3)
-    with closing(sqlite3.connect(db.as_uri()+'?mode=ro',uri=True)) as connection:
+    with _database_file(DATA/'engine.db',uid=10001,gid=10001,stable=False) as (_,identity):size=identity[2]
+    if space:
+        receipts=release.ROOT/'receipts';release.trusted_dir(receipts,mode=0o700)
+        same=DATA.stat().st_dev==receipts.stat().st_dev
+        required=[(receipts,3*size+DATABASE_RESERVE_BYTES)] if same else [
+            (receipts,2*size+DATABASE_RESERVE_BYTES),(DATA,size+DATABASE_RESERVE_BYTES)]
+        for path,need in required:
+            capacity=os.statvfs(path)
+            if capacity.f_bavail*capacity.f_frsize<need:raise ValueError('DB_SPACE')
+
+
+@contextmanager
+def _database_reader(path, fd, *, uid=0, gid=0):
+    # Callers have proved operating writers stopped (private backup files have
+    # no writers). Immutable is used only when every sidecar is absent. This
+    # prevents a root mode=ro reader from creating root-owned WAL/SHM files.
+    before=_database_metadata(path,fd,uid=uid,gid=gid)
+    present={suffix for suffix in ('-wal','-shm','-journal') if os.path.lexists(str(path)+suffix)}
+    if present and present!={'-wal','-shm'}:raise ValueError('DB_IDENTITY')
+    for suffix in present:
+        with _database_file(Path(str(path)+suffix),uid=uid,gid=gid,minimum=0):pass
+    uri=path.as_uri()+'?mode=ro'+('' if present else '&immutable=1')
+    with closing(sqlite3.connect(uri,uri=True,timeout=1)) as connection:
         connection.execute('PRAGMA query_only=ON');connection.execute('PRAGMA trusted_schema=OFF')
+        yield connection
+    if _database_metadata(path,fd,uid=uid,gid=gid)!=before:raise ValueError('DB_IDENTITY')
+    if not present and any(os.path.lexists(str(path)+s) for s in ('-wal','-shm','-journal')):
+        raise ValueError('DB_IDENTITY')
+
+
+def _database_digest(path, *, uid=0, gid=0):
+    with _database_file(path,uid=uid,gid=gid) as (fd,identity):
+        digest=hashlib.sha256();size=0
+        while True:
+            chunk=os.read(fd,DATABASE_CHUNK_BYTES)
+            if not chunk:break
+            size+=len(chunk)
+            if size>DATABASE_MAX_BYTES:raise ValueError('DB_IDENTITY')
+            digest.update(chunk)
+        if size!=identity[2]:raise ValueError('DB_IDENTITY')
+        return digest.hexdigest()
+
+
+def _database_copy(path, temporary, digest, release):
+    """Create an exact private restore copy in bounded chunks before quarantine."""
+    release.write_new(temporary,b'',uid=10001,gid=10001,mode=0o600)
+    with _database_file(path) as (source,identity), _database_file(
+            temporary,uid=10001,gid=10001,minimum=0,writable=True) as (target,_):
+        found=hashlib.sha256();size=0
+        while True:
+            chunk=os.read(source,DATABASE_CHUNK_BYTES)
+            if not chunk:break
+            size+=len(chunk)
+            if size>DATABASE_MAX_BYTES:raise ValueError('DB_IDENTITY')
+            found.update(chunk);view=memoryview(chunk)
+            while view:
+                written=os.write(target,view)
+                if written<=0:raise OSError('DB_COPY_FAILED')
+                view=view[written:]
+        os.fsync(target)
+        if size!=identity[2] or found.hexdigest()!=digest:raise ValueError('DB_SNAPSHOT_CHANGED')
+        copied=_database_metadata(temporary,target,uid=10001,gid=10001)
+    return copied
+
+
+def _database_move(source, destination, identity):
+    held=os.open(source,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        if _database_metadata(source,held,uid=10001,gid=10001,minimum=0)!=identity:raise ValueError('DB_IDENTITY')
+        if os.path.lexists(destination):raise ValueError('DB_IDENTITY')
+        os.replace(source,destination)
+        if _database_metadata(destination,held,uid=10001,gid=10001,minimum=0)[:4]!=identity[:4]:raise ValueError('DB_IDENTITY')
+    finally:os.close(held)
+
+
+def _database_fsync_directory(path):
+    fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:os.fsync(fd)
+    finally:os.close(fd)
+
+
+def verify_database_schema(source, release, upgrade):
+    database_preflight(release,space=False)
+    db=DATA/'engine.db'
+    with _database_file(db,uid=10001,gid=10001) as (fd,_), _database_reader(db,fd,uid=10001,gid=10001) as connection:
         database_contract(connection,source)
 
 
 def db_snapshot(identity, release, upgrade):
     global OPERATION
     OPERATION='snapshot_directory'
-    release.trusted_dir(DATA,uid=10001,gid=10001,mode=0o750)
+    database_preflight(release)
     db=DATA/'engine.db'
-    upgrade.read_file(db,uid=10001,gid=10001,mode=0o600,maximum=1024**3)
     destination=release.ROOT/'receipts'/('completion-db-'+identity+'.sqlite')
-    fd=os.open(db,os.O_RDWR|os.O_NOFOLLOW)
-    try:
-        info=os.fstat(fd)
-        if (not stat.S_ISREG(info.st_mode) or info.st_nlink!=1
-            or (info.st_uid,info.st_gid,stat.S_IMODE(info.st_mode))!=(10001,10001,0o600)
-            or (info.st_dev,info.st_ino)!=(db.stat().st_dev,db.stat().st_ino)):
-            raise ValueError('DB_IDENTITY')
+    release.trusted_dir(release.ROOT/'receipts',mode=0o700)
+    with _database_file(db,uid=10001,gid=10001,lockable=True) as (fd,_):
         OPERATION='snapshot_lock';fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
         release.write_new(destination,b'')
-        with closing(sqlite3.connect(db.as_uri()+'?mode=ro',uri=True)) as source, closing(sqlite3.connect(destination)) as target:
+        with _database_reader(db,fd,uid=10001,gid=10001) as source, closing(sqlite3.connect(destination)) as target:
             database_contract(source,OLD_COMMIT)
             source.backup(target,pages=256,sleep=0.01)
             if target.execute('PRAGMA integrity_check').fetchall()!=[('ok',)]:raise ValueError('DB_SNAPSHOT_INTEGRITY')
@@ -854,45 +960,44 @@ def db_snapshot(identity, release, upgrade):
         durable=os.open(destination,os.O_RDONLY|os.O_NOFOLLOW)
         try:os.fsync(durable)
         finally:os.close(durable)
-        raw=upgrade.read_file(destination,mode=0o600,maximum=1024**3)
-        digest=hashlib.sha256(raw).hexdigest()
+        digest=_database_digest(destination)
         # Roundtrip in a second server-local DB; no operating row leaves the server.
         verify=destination.with_suffix('.verify.sqlite');release.write_new(verify,b'')
-        with closing(sqlite3.connect(destination.as_uri()+'?mode=ro',uri=True)) as source,closing(sqlite3.connect(verify)) as target:
+        with _database_file(destination) as (saved,_), _database_reader(destination,saved) as source,closing(sqlite3.connect(verify)) as target:
             source.backup(target,pages=256,sleep=0.01)
             database_contract(target,OLD_COMMIT)
             if target.execute('PRAGMA integrity_check').fetchall()!=[('ok',)]:raise ValueError('DB_SNAPSHOT_INTEGRITY')
         # The verification copy stays private for audit, never used as authority for rollback.
+        _database_fsync_directory(destination.parent)
         release.write_new(release.ROOT/'receipts'/('completion-snapshot-'+identity+'.json'),json.dumps({
             'source_commit':OLD_COMMIT,'target_commit':TARGET_COMMIT,'operation_id':identity,
             'database_sha256':digest,'schema':OLD_SCHEMA,'snapshot_restore_verified':True},sort_keys=True).encode())
         return destination,digest
-    finally:os.close(fd)
 
 
 def restore_db(snapshot, identity, release, upgrade):
     path,digest=snapshot
     expected=release.ROOT/'receipts'/('completion-db-'+identity+'.sqlite')
     if path!=expected:raise ValueError('DB_SNAPSHOT_CHANGED')
-    raw=upgrade.read_file(path,mode=0o600,maximum=1024**3)
-    if hashlib.sha256(raw).hexdigest()!=digest:raise ValueError('DB_SNAPSHOT_CHANGED')
-    with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as source:
+    release.trusted_dir(release.ROOT/'receipts',mode=0o700)
+    if _database_digest(path)!=digest:raise ValueError('DB_SNAPSHOT_CHANGED')
+    with _database_file(path) as (fd,_), _database_reader(path,fd) as source:
         database_contract(source,OLD_COMMIT)
         if source.execute('PRAGMA integrity_check').fetchall()!=[('ok',)]:raise ValueError('DB_SNAPSHOT_INTEGRITY')
     release.trusted_dir(DATA,uid=10001,gid=10001,mode=0o750)
-    quarantine=DATA/('.completion-failed-db-'+identity)
-    release.trusted_dir(quarantine,mode=0o700,new=True)
+    temporary=DATA/('completion-restore-'+identity+'.sqlite')
+    copied=_database_copy(path,temporary,digest,release)
+    sources=[]
     for suffix in ('','-wal','-shm','-journal'):
         source=DATA/('engine.db'+suffix)
         if os.path.lexists(source):
-            upgrade.read_file(source,uid=10001,gid=10001,mode=0o600,maximum=1024**3,minimum=0)
-            os.replace(source,quarantine/source.name)
-    temporary=DATA/('completion-restore-'+identity+'.sqlite')
-    release.write_new(temporary,raw,uid=10001,gid=10001,mode=0o600)
-    os.replace(temporary,DATA/'engine.db')
-    fd=os.open(DATA,os.O_RDONLY|os.O_DIRECTORY)
-    try:os.fsync(fd)
-    finally:os.close(fd)
+            with _database_file(source,uid=10001,gid=10001,minimum=0) as (_,found):sources.append((source,found))
+    quarantine=DATA/('.completion-failed-db-'+identity)
+    release.trusted_dir(quarantine,mode=0o700,new=True)
+    for source,found in sources:
+        _database_move(source,quarantine/source.name,found)
+    _database_move(temporary,DATA/'engine.db',copied)
+    _database_fsync_directory(quarantine);_database_fsync_directory(DATA)
     verify_database_schema(OLD_COMMIT,release,upgrade)
 
 
@@ -1054,6 +1159,8 @@ def apply(package, host, release, lifecycle, upgrade):
     OPERATION = 'runtime_old_config'
     if container_runtime_flags(old_path, old_receipt, release, lifecycle) != flags:
         raise ValueError('RUNTIME_CONFIG_DRIFT')
+    OPERATION = 'database_preflight'
+    database_preflight(release)
     OPERATION = 'write_recovery_receipt'
     release.write_new(backup, json.dumps({'source_commit':OLD_COMMIT,'target_commit':TARGET_COMMIT,
         'images':old_receipt['images'],'units':{str(p):b.decode() for p,b in old_files.items() if p!=lifecycle.TMPFILES}}, sort_keys=True).encode())
@@ -1300,3 +1407,4 @@ FAILURE_STAGES |= frozenset({'completion_rollback_preflight','completion_rollbac
 FAILURE_CODES |= frozenset({'CODE_ROLLBACK_FIELDS','CODE_ROLLBACK_OPERATION_ID','CODE_ROLLBACK_SOURCE','CODE_ROLLBACK_UNIT',
     'CODE_ROLLBACK_RECOVERY','CODE_ROLLBACK_STARTED','CODE_ROLLBACK_ALREADY_ATTEMPTED','CODE_ROLLBACK_STATE','CODE_POST_ROLLBACK_FAILED'})
 FAILURE_OPERATIONS |= frozenset({'migration_start','migration_apply'})
+FAILURE_OPERATIONS |= frozenset({'database_preflight'})
