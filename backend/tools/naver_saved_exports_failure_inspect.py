@@ -32,7 +32,7 @@ METADATA_PATHS = (
 ERROR_PATTERNS = (
     ('permission_error', r'\bPermissionError\b'),
     ('permission_denied', r'\b(?:permission denied|access denied)\b'),
-    ('python_cannot_open', r"\bpython[0-9.]*: can't open file\b"),
+    ('python_cannot_open', r"\b(?:python[0-9.]*|python-export): can't open file\b"),
     ('statvfs', r'\bstatvfs\b'),
     ('namespace', r'failed at step namespace|failed to set up mount namespacing'),
     ('export_failed', r'\bEXPORT_FAILED\b'),
@@ -48,7 +48,22 @@ ERROR_PATTERNS = (
     ('capability_setup', r'failed at step capabilities|failed to apply capabilities'),
     ('seccomp_setup', r'failed at step seccomp|failed to apply syscall'),
     ('apparmor_setup', r'failed at step apparmor|failed to apply apparmor'),
-    ('cgroup_setup', r'failed to (?:attach to|create) cgroup'))
+    ('cgroup_setup', r'failed to (?:attach to|create) cgroup'),
+    ('python_module_missing', r'\bModuleNotFoundError\b|\bNo module named\b'),
+    ('python_import_error', r'\bImportError\b|\bcannot import name\b'),
+    ('python_fatal', r'\bFatal Python error:'),
+    ('python_stdlib_init', r'could not find platform (?:in)?dependent libraries|'
+        r'\b(?:init_fs_encoding|init_import_site|init_importlib):|failed to get the Python codec|'
+        r'failed to (?:import|initialize) (?:site|encodings)\b'),
+    ('dynamic_loader', r'error while loading shared libraries|cannot open shared object file|'
+        r'\bsymbol lookup error\b|\bundefined symbol:|\bbad ELF interpreter\b'),
+    ('binary_format', r'\bexec format error\b|cannot execute binary file|wrong ELF class|invalid ELF header'))
+EXPORTER_FAILURE_LABELS = {
+    'SOURCE_READ': 'export_source_read', 'SOURCE_PATH': 'export_source_path',
+    'SOURCE_LIMIT': 'export_source_limit', 'SOURCE_JSON': 'export_source_json',
+    'SOURCE_STATE': 'export_source_state', 'OUTPUT_WRITE': 'export_output_write',
+    'OUTPUT_PATH': 'export_output_path', 'EXPORT_INVALID': 'export_invalid',
+    'EXPORT_LIMIT': 'export_limit', 'EXPORT_FAILED': 'export_failed'}
 
 
 def _unique(pairs):
@@ -82,8 +97,21 @@ def _labels(message):
         for role, root in PATH_ROLES:
             if path == root or path.startswith(root+'/'):
                 roles.add(role)
-    return sorted(roles), [label for label, pattern in ERROR_PATTERNS
-                          if re.search(pattern, message, flags=re.IGNORECASE)]
+    errors = [label for label, pattern in ERROR_PATTERNS
+              if re.search(pattern, message, flags=re.IGNORECASE)]
+    # Only the exporters' exact closed CLI result may promote a source/output
+    # code. Exception prose, unknown codes, duplicate keys and extra data do not.
+    try:
+        value = json.loads(message, object_pairs_hook=_unique,
+                           parse_constant=lambda value: (_ for _ in ()).throw(ValueError('NUMBER')))
+        if (type(value) is dict and set(value) == {'status', 'code'} and
+                value['status'] == 'failed' and type(value['code']) is str):
+            label = EXPORTER_FAILURE_LABELS.get(value['code'])
+            if label and label not in errors:
+                errors.append(label)
+    except (ValueError, TypeError, RecursionError):
+        pass
+    return sorted(roles), errors
 
 
 def _project(raw, kind, now_us):

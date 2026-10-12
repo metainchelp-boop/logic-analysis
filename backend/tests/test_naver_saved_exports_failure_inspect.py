@@ -50,6 +50,68 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
         self.assertEqual(I._labels('Failed at step NAMESPACE: read-only file system unable to open database file'),
             ([],['namespace','readonly','sqlite_open']))
 
+    def test_exact_closed_exporter_failure_codes_without_raw_json_or_unknown_promotion(self):
+        self.assertEqual(set(I.EXPORTER_FAILURE_LABELS),{'SOURCE_READ','SOURCE_PATH','SOURCE_LIMIT',
+            'SOURCE_JSON','SOURCE_STATE','OUTPUT_WRITE','OUTPUT_PATH','EXPORT_INVALID','EXPORT_LIMIT','EXPORT_FAILED'})
+        for code,label in I.EXPORTER_FAILURE_LABELS.items():
+            with self.subTest(code=code):
+                message=json.dumps({'status':'failed','code':code})
+                self.assertEqual(I._labels(message),([],[label]))
+                result=I._project(row(message),'product',NOW)
+                self.assertEqual(result['events'][0]['error_labels'],[label])
+                self.assertNotIn(code,json.dumps(result))
+        for message in ('SOURCE_READ','Traceback: SOURCE_READ',
+                '{"status":"failed","code":"SOURCE_READ","private":"SECRET"}',
+                '{"status":"failed","code":"SOURCE_READ","code":"OUTPUT_WRITE"}',
+                '{"status":"ok","code":"SOURCE_READ"}',
+                '{"status":"failed","code":"SOURCE_READ_SECRET"}',
+                '{"status":"failed","code":["SOURCE_READ"]}'):
+            with self.subTest(message=message):
+                self.assertEqual(I._labels(message),([],[]))
+
+    def test_python_import_fatal_stdlib_and_loader_hints_are_closed_and_private(self):
+        samples=(
+            ("ModuleNotFoundError: No module named 'private_module_SECRET'",['python_module_missing']),
+            ("ImportError: cannot import name 'SECRET' from '/root/private.py'",['python_import_error']),
+            ('Fatal Python error: init_fs_encoding: failed to get the Python codec of the filesystem encoding',
+                ['python_fatal','python_stdlib_init']),
+            ('Could not find platform independent libraries <private_PREFIX>', ['python_stdlib_init']),
+            ('Could not find platform dependent libraries <private_EXEC_PREFIX>', ['python_stdlib_init']),
+            ('/opt/metainc/naver-saved-exports/'+'1'*40+'/python-export: error while loading shared libraries: '
+                'private_LIBRARY: cannot open shared object file', ['dynamic_loader']),
+            ('python-export: symbol lookup error: private_LIBRARY: undefined symbol: SECRET', ['dynamic_loader']),
+            ('python-export: cannot execute binary file: Exec format error', ['binary_format']))
+        for message,labels in samples:
+            with self.subTest(labels=labels):
+                result=I._project(row(message),'product',NOW)
+                self.assertEqual(result['events'][0]['error_labels'],labels)
+                output=json.dumps(result)
+                for private in ('SECRET','/root','private_LIBRARY','private_PREFIX','MESSAGE','python-export'):
+                    self.assertNotIn(private,output)
+        self.assertEqual(I._labels("/opt/metainc/naver-saved-exports/a/python-export: can't open file 'private'"),
+            (['code'],['python_cannot_open']))
+
+    def test_latest_closed_exporter_code_does_not_reuse_old_permission_failure(self):
+        raw=b'\n'.join([row('Permission denied',stamp=NOW-3000000),
+            row('{"status":"failed","code":"SOURCE_READ"}',invocation='b'*32,stamp=NOW-1000000)])
+        result=I._project(raw,'product',NOW)
+        self.assertEqual(result['events'],[{'timestamp_us':NOW-1000000,'path_roles':[],
+            'error_labels':['export_source_read']}])
+
+    def test_expanded_closed_label_projection_remains_below_workflow_output_bound(self):
+        message=' '.join(["PermissionError permission denied python-export: can't open file statvfs",
+            'Failed at step NAMESPACE EXPORT_FAILED read-only file system unable to open database file',
+            'No such file or directory failed at step NETWORK failed at step GROUP failed at step USER',
+            'failed at step STDOUT failed at step EXEC failed at step CHDIR failed at step CAPABILITIES',
+            'failed at step SECCOMP failed at step APPARMOR failed to create cgroup',
+            'ModuleNotFoundError ImportError Fatal Python error: init_fs_encoding:',
+            'error while loading shared libraries Exec format error',
+            *(path+'/private' for _,path in I.PATH_ROLES)])
+        raw=b'\n'.join(row(message,stamp=NOW-1000000-index) for index in range(32))
+        result=I._project(raw,'product',NOW)
+        self.assertEqual(len(result['events']),32)
+        self.assertLess(len(json.dumps(result).encode()),32768)
+
     def test_invalid_timestamp_id_message_and_duplicate_keys_never_fall_back(self):
         bad=[]
         for value in (True,1.0,'1e15','01791767400000000','-1',0,I.MAX_TIMESTAMP_US+1):
