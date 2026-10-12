@@ -141,6 +141,11 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
+        # Remove only the independent D4 registry-epoch registration.
+        workflow=workflow.replace(section(workflow,'daily-current-source-diagnostics-v4'),'')
+        d4_only_option=', preview-daily-current-source-diagnostics-v4'
+        self.assertEqual(workflow.count(d4_only_option),1)
+        workflow=workflow.replace(d4_only_option,'')
         # Remove only the independent P10 and fixed 4d D3 registrations.
         workflow=workflow.replace(section(workflow,'appeal-prefix-patch'),'')
         workflow=workflow.replace(section(workflow,'daily-current-source-diagnostics-v3'),'')
@@ -193,6 +198,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=prior.replace(section(prior,'completion-source-diagnostics'),'').replace(', preview-completion-source-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'cfe595e18bbb83cb2d4feccf2f12bf91169cd360f14a21d60b8cabec1726337e')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        d4_only_start=native.index('      - name: 현재 일일 점검 원천·4d companion 읽기 전용 경계 검사\n')
+        d4_only_end=native.index('      - name:',d4_only_start+1)
+        native=native[:d4_only_start]+native[d4_only_end:]
         p10_d3_start=native.index('      - name: 소구 가설 시작 형식 패치·4d 복구 경계 검사\n')
         p10_d3_end=native.index('      - name:',p10_d3_start+1)
         native=native[:p10_d3_start]+native[p10_d3_end:]
