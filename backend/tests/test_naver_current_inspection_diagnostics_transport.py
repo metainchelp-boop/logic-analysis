@@ -141,6 +141,11 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
+        # This independent source799 profile is removed only from prior projections.
+        workflow=workflow.replace(section(workflow,'observation-799-diagnostics'),'')
+        observation_option=', preview-observation-799-diagnostics'
+        self.assertEqual(workflow.count(observation_option),1)
+        workflow=workflow.replace(observation_option,'')
         # P6 has independent checks; remove only its registration from prior projections.
         workflow=workflow.replace(section(workflow,'learning-failure-patch'),'')
         for learning_operation in ('prepare','apply','rollback'):
@@ -158,6 +163,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=workflow.replace(section(workflow,'current-inspection-diagnostics'),'').replace(', preview-current-inspection-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'4c14d09d5398ee1ac61162c88ace81a2b4222e36ee01fa6fc39c509554619930')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        observation_start=native.index('      - name: 현재 799 관측 sidecar·identity·읽기 전용 진단 검사\n')
+        observation_end=native.index('      - name:',observation_start+1)
+        native=native[:observation_start]+native[observation_end:]
         learning_start=native.index('      - name: 학습 실패 관측 패치·dc168 복구 경계 검사\n')
         learning_end=native.index('      - name:',learning_start+1)
         native=native[:learning_start]+native[learning_end:]

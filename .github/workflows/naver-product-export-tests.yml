@@ -126,6 +126,14 @@ jobs:
             LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
             env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_learning_failure_patch test_naver_learning_failure_transport -v \
             2>&1 | tee "$RUNNER_TEMP/product-tests/learning-failure-patch-tests.txt"
+      - name: 현재 799 관측 sidecar·identity·읽기 전용 진단 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_observation_799_diagnostics test_naver_observation_799_transport test_observation_799_identity -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/observation-799-diagnostics-tests.txt"
       - name: 소스·합성 결과 보관 (운영 자료 없음)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
