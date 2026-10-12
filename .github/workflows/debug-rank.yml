@@ -4554,7 +4554,7 @@ jobs:
           PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_appeal_diagnostic_patch test_appeal_diagnostic_transport test_naver_completion_download test_naver_saved_exports test_naver_saved_exports_inspect test_naver_completion_export_diagnostics test_naver_completion_failed_apply_recovery -q
           python3 - <<'PYCODE'
           import base64,hashlib,json,os,pathlib,re,sys,types
-          expected_transport_sha='add318f44e22e7e21ddd2f7e8d88383b8a582c1838ff08b6568dd85e29732b89';expected_core_sha='112719b4c643c252b637523a50c20a1ba4093eeb4253067d1d4982deb2a94ff9'
+          expected_transport_sha='c6993255d7c9a71c2a4882f01937d51a41b8d1e0de7cc85385d1b11c4e61597b';expected_core_sha='77e9162979683b067a34d7ed9e9589030cebb0466e49dcdb65f9b28e57f85968'
           if any(re.fullmatch('[0-9a-f]{64}',value) is None for value in (expected_transport_sha,expected_core_sha)):
               raise ValueError('APPEAL_DIAGNOSTIC_PINS_PENDING')
           transport_path=pathlib.Path('backend/tools/naver_appeal_diagnostic_transport.py')
@@ -4637,7 +4637,7 @@ jobs:
                 wire=os.environ['APPEAL_DIAGNOSTIC_PATCH_B64'];source=os.environ['APPEAL_DIAGNOSTIC_PATCH_TRANSPORT_B64']
                 if len(source)>32768:raise ValueError('COMPLETION_TRANSPORT_SIZE')
                 raw=base64.b64decode(source,validate=True)
-                if hashlib.sha256(raw).hexdigest()!='add318f44e22e7e21ddd2f7e8d88383b8a582c1838ff08b6568dd85e29732b89':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+                if hashlib.sha256(raw).hexdigest()!='c6993255d7c9a71c2a4882f01937d51a41b8d1e0de7cc85385d1b11c4e61597b':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
                 transport=types.ModuleType('approved_completion_transport');exec(raw,transport.__dict__)
                 verified_transport_sha=hashlib.sha256(raw).hexdigest()
                 if transport.TRANSPORT_RAW_SHA256 is not None:raise ValueError('COMPLETION_TRANSPORT_PROFILE')
@@ -4696,7 +4696,7 @@ jobs:
                 wire=os.environ['APPEAL_DIAGNOSTIC_PATCH_B64'];source=os.environ['APPEAL_DIAGNOSTIC_PATCH_TRANSPORT_B64']
                 if len(source)>32768:raise ValueError('COMPLETION_TRANSPORT_SIZE')
                 raw=base64.b64decode(source,validate=True)
-                if hashlib.sha256(raw).hexdigest()!='add318f44e22e7e21ddd2f7e8d88383b8a582c1838ff08b6568dd85e29732b89':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+                if hashlib.sha256(raw).hexdigest()!='c6993255d7c9a71c2a4882f01937d51a41b8d1e0de7cc85385d1b11c4e61597b':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
                 transport=types.ModuleType('approved_completion_transport');exec(raw,transport.__dict__)
                 verified_transport_sha=hashlib.sha256(raw).hexdigest()
                 if transport.TRANSPORT_RAW_SHA256 is not None:raise ValueError('COMPLETION_TRANSPORT_PROFILE')

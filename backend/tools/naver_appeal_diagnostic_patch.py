@@ -665,7 +665,10 @@ def scheduled_reserve_contract(before,after):
         raise ValueError('CODE_SCOPE_CHANGED')
 
 
-NORMALIZE_AST_SHA256 = '42eb02610428e13976bf83275f2df7571814697954624c20dc6fd3aa950784c8'
+# Authenticate approved source bytes, then compare ASTs using this host's parser.
+# ast.dump omits empty fields differently across Python versions.
+NORMALIZE_REFERENCE_SOURCE = 'def normalize(value):\n    if (type(value) is not dict or set(value) not in (KEYS, KEYS | {"reason"}) or type(value["version"]) is not int\n            or value["version"] != 1 or type(value["field"]) is not str or value["field"] not in FIELDS\n            or type(value["rule"]) is not str or value["rule"] not in RULES\n            or any(type(value[key]) is not bool for key in FLAGS)\n            or value["field"] not in _SPECIFIC_FIELDS.get(value["rule"], FIELDS)\n            or ("reason" in value and (value["field"] != "appeal_points.message" or\n                value["rule"] != "appeal-hypothesis" or type(value["reason"]) is not str or\n                value["reason"] not in APPEAL_REASONS))):\n        raise ValueError("VALIDATION_SUMMARY_INVALID")\n    return dict(value)\n'
+NORMALIZE_REFERENCE_SHA256 = 'b620928726e9ef8a8c12d7bb813eeccd46bf171b5cac9a214f14d200c27a7703'
 
 
 def marketing_contract(before,after):
@@ -695,7 +698,13 @@ def validation_contract(before,after):
     trees=[ast.parse(body) for body in (before,after)]
     normalizers=[[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='normalize'] for tree in trees]
     if any(len(n)!=1 for n in normalizers):raise ValueError('CODE_SCOPE_CHANGED')
-    if hashlib.sha256(ast.dump(normalizers[1][0],include_attributes=False).encode()).hexdigest()!=NORMALIZE_AST_SHA256:raise ValueError('CODE_SCOPE_CHANGED')
+    if (type(NORMALIZE_REFERENCE_SOURCE) is not str or
+        hashlib.sha256(NORMALIZE_REFERENCE_SOURCE.encode()).hexdigest()!=NORMALIZE_REFERENCE_SHA256):
+        raise ValueError('CODE_SCOPE_CHANGED')
+    reference=ast.parse(NORMALIZE_REFERENCE_SOURCE).body
+    if (len(reference)!=1 or not isinstance(reference[0],ast.FunctionDef) or reference[0].name!='normalize'
+        or ast.dump(normalizers[1][0],include_attributes=False)!=ast.dump(reference[0],include_attributes=False)):
+        raise ValueError('CODE_SCOPE_CHANGED')
     constant=ast.parse('APPEAL_REASONS=frozenset(("TITLE","PREFIX","SUFFIX","LEXEME"))').body[0]
     additions=[n for n in trees[1].body if ast.dump(n,include_attributes=False)==ast.dump(constant,include_attributes=False)]
     if len(additions)!=1:raise ValueError('CODE_SCOPE_CHANGED')

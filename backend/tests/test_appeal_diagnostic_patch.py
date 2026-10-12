@@ -274,5 +274,42 @@ class AppealSourceContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'^CODE_SCOPE_CHANGED$'):p.validation_contract(before,bad)
 
 
+    def test_normalize_reference_is_authenticated_source_not_a_foreign_ast_digest(self):
+        p,_=pinned()
+        node=next(n for n in ast.parse(NEW_VALIDATION).body if isinstance(n,ast.FunctionDef) and n.name=='normalize')
+        approved=ast.get_source_segment(NEW_VALIDATION,node)+'\n'
+        self.assertEqual(p.NORMALIZE_REFERENCE_SOURCE,approved)
+        self.assertEqual(p.NORMALIZE_REFERENCE_SHA256,'b620928726e9ef8a8c12d7bb813eeccd46bf171b5cac9a214f14d200c27a7703')
+        self.assertEqual(hashlib.sha256(approved.encode()).hexdigest(),p.NORMALIZE_REFERENCE_SHA256)
+        for altered in (approved+'# changed reference bytes\n',approved.replace('return dict(value)','return value'),None,b'bytes are not source'):
+            with self.subTest(reference_type=type(altered).__name__),patch.object(p,'NORMALIZE_REFERENCE_SOURCE',altered),self.assertRaisesRegex(ValueError,'^CODE_SCOPE_CHANGED$'):
+                p.validation_contract(PRIOR_VALIDATION.encode(),NEW_VALIDATION.encode())
+
+    def test_same_host_ast_comparison_accepts_an_alternate_dump_format(self):
+        p,_=pinned();original_dump=ast.dump
+        def host_dump(node,*args,**kwargs):
+            return 'HOST_FORMAT_WITH_EMPTY_FIELDS:'+original_dump(node,*args,**kwargs)
+        node=next(n for n in ast.parse(NEW_VALIDATION).body if isinstance(n,ast.FunctionDef) and n.name=='normalize')
+        self.assertNotEqual(hashlib.sha256(host_dump(node,include_attributes=False).encode()).hexdigest(),'42eb02610428e13976bf83275f2df7571814697954624c20dc6fd3aa950784c8')
+        with patch.object(p.ast,'dump',side_effect=host_dump):
+            p.validation_contract(PRIOR_VALIDATION.encode(),NEW_VALIDATION.encode())
+
+    def test_alternate_dump_format_does_not_allow_changed_normalizer_or_other_nodes(self):
+        p,_=pinned();original_dump=ast.dump
+        def host_dump(node,*args,**kwargs):
+            return 'HOST_FORMAT_WITH_EMPTY_FIELDS:'+original_dump(node,*args,**kwargs)
+        before=PRIOR_VALIDATION.encode();after=NEW_VALIDATION.encode()
+        mutants=(after.replace(b'value["reason"] not in APPEAL_REASONS',b'False'),
+            after.replace(b'value["field"] != "appeal_points.message"',b'False'),
+            after.replace(b'return dict(value)',b'return value'),
+            after.replace(b'def normalize(value):',b'def normalize(value, extra=None):'),
+            after.replace(b'def failure(error):',b'def failure(error, bypass=False):'),
+            after+b'\ndef extra_authority(): return True\n')
+        with patch.object(p.ast,'dump',side_effect=host_dump):
+            p.validation_contract(before,after)
+            for bad in mutants:
+                with self.assertRaisesRegex(ValueError,'^CODE_SCOPE_CHANGED$'):p.validation_contract(before,bad)
+
+
 if __name__ == '__main__':
     unittest.main()
