@@ -19,6 +19,7 @@ UNITS = tuple('naver-'+kind+'-export'+tail for kind in ('product','market')
 ROOT = Path('/srv/metainc/ad-deploy-staging')
 STAGE = 'input'
 ISSUES = frozenset(('policy unit_fields unit_load unit_active unit_invocation unit_job unit_enabled unit_status daemon_reload helper_refused').split())
+STAGES = frozenset(('input receipt_preflight artifact_preflight unit_state_preflight rollback_unit_state rollback daemon_reload postflight').split())
 
 
 def is_root():
@@ -30,8 +31,9 @@ def refuse(issue='policy'):
 
 
 def failure_report(error):
-    issue=error.args[0] if type(error) is ValueError and error.args and error.args[0] in ISSUES else 'helper_refused'
-    return {'version':1,'state':'refused','stage':STAGE,'issue':issue}
+    issue=error.args[0] if type(error) is ValueError and error.args and type(error.args[0]) is str and error.args[0] in ISSUES else 'helper_refused'
+    stage=STAGE if type(STAGE) is str and STAGE in STAGES else 'input'
+    return {'version':1,'state':'refused','stage':stage,'issue':issue}
 
 
 def load_helper(source):

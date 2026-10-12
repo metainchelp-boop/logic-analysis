@@ -2685,7 +2685,7 @@ jobs:
           assert inputs.pop('ad_expected_baseline')=='none' and all(v=='off' for v in inputs.values())
           source=pathlib.Path('backend/tools/naver_saved_exports_failed_unit_recovery.py').read_bytes()
           old=subprocess.check_output(['git','show','535a2bf1bd40f479fb913158cae2b7a3d57041a0:backend/tools/naver_saved_exports.py'])
-          assert hashlib.sha256(source).hexdigest()=='f31268a48f00de6879f8a01976478e5da1845d81a8227ef509390ab7eddb7413'
+          assert hashlib.sha256(source).hexdigest()=='df220dfd543aff10863cc01162578ff6385311e70ca0e0a786f40a4abce61799'
           assert hashlib.sha256(old).hexdigest()=='2b47884242c1b1e7b67074383f070a79bbdd4f88471c0448a92116cf9b34c7a8'
           encoded=base64.b64encode(source).decode();previous=base64.b64encode(old).decode()
           assert len(encoded)+len(previous)<100000
@@ -2713,7 +2713,7 @@ jobs:
                 encoded=os.environ['COMPLETION_RECOVER_B64'];previous=os.environ['COMPLETION_OLD_EXPORT_HELPER_B64']
                 if len(encoded)+len(previous)>=100000:raise ValueError('RECOVERY_SIZE')
                 source=base64.b64decode(encoded,validate=True);old=base64.b64decode(previous,validate=True)
-                if hashlib.sha256(source).hexdigest()!='f31268a48f00de6879f8a01976478e5da1845d81a8227ef509390ab7eddb7413':raise ValueError('RECOVERY_PIN')
+                if hashlib.sha256(source).hexdigest()!='df220dfd543aff10863cc01162578ff6385311e70ca0e0a786f40a4abce61799':raise ValueError('RECOVERY_PIN')
                 if hashlib.sha256(old).hexdigest()!='2b47884242c1b1e7b67074383f070a79bbdd4f88471c0448a92116cf9b34c7a8':raise ValueError('RECOVERY_OLD_PIN')
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 module=types.ModuleType('approved_failed_unit_recovery');exec(source,module.__dict__)

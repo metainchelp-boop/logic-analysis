@@ -115,3 +115,9 @@ class FailedUnitRecoveryTests(unittest.TestCase):
             result=original(args);result.stdout+=b'Job=0\n';return result
         with self.assertRaises(ValueError):R.recover_with_helper(self.h,run=duplicate)
         self.assertEqual(len(list(self.h.UNITS.iterdir())),6)
+
+    def test_failure_projection_handles_non_string_errors_and_unknown_stage(self):
+        for issue in ([],{},None,123):
+            with patch.object(R,'STAGE',[]):
+                self.assertEqual(R.failure_report(ValueError(issue)),
+                    {'version':1,'state':'refused','stage':'input','issue':'helper_refused'})
