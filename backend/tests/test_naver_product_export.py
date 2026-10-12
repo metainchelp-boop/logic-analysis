@@ -341,6 +341,67 @@ class ProductExportTests(unittest.TestCase):
         self.assertEqual(json.loads(completed.stdout)['status'], 'ok')
         self.assertNotIn('PRIVATE', completed.stdout + completed.stderr)
 
+    def test_closed_sqlite_primary_extended_and_python310_fallback_classification(self):
+        self.assertEqual(M.SOURCE_ISSUES,{'readonly','sqlite_open','schema','authorized','locked','corrupt','unknown'})
+        for code,issue in ((3,'authorized'),(5,'locked'),(6,'locked'),(8,'readonly'),(11,'corrupt'),
+                           (14,'sqlite_open'),(17,'schema'),(23,'authorized'),(26,'corrupt'),(8+256*6,'readonly')):
+            error=sqlite3.DatabaseError('PRIVATE_SQL_PATH_AND_MESSAGE')
+            error.sqlite_errorcode=code
+            self.assertEqual(M._sqlite_issue(error),issue)
+        for message,issue in (('attempt to write a readonly database','readonly'),
+                ('unable to open database file /root/PRIVATE.db','sqlite_open'),
+                ('no such table: PRIVATE_TABLE','schema'),('no such column: PRIVATE_COLUMN','schema'),
+                ('not authorized PRIVATE','authorized'),('access to PRIVATE.column is prohibited','authorized'),
+                ('database is locked PRIVATE','locked'),('database table is locked: PRIVATE','locked'),
+                ('database disk image is malformed PRIVATE','corrupt'),('file is not a database PRIVATE','corrupt'),
+                ('PRIVATE unrecognized failure','unknown')):
+            with self.subTest(issue=issue):
+                error=sqlite3.DatabaseError(message)
+                self.assertFalse(hasattr(error,'sqlite_errorcode'))
+                self.assertEqual(M._sqlite_issue(error),issue)
+
+    def test_actual_missing_schema_and_corrupt_source_cli_only_exposes_closed_issue(self):
+        database,output=self.fixture();output.write_bytes(b'PREVIOUS_COMPLETE')
+        for body,issue in ((b'','schema'),(b'PRIVATE_NOT_A_DATABASE','corrupt')):
+            database.write_bytes(body)
+            before=(database.read_bytes(),database.stat().st_mtime_ns)
+            stream=io.StringIO()
+            with redirect_stdout(stream):
+                status=M.main(['--database',str(database),'--output',str(output)])
+            self.assertEqual(status,1)
+            self.assertEqual(json.loads(stream.getvalue()),
+                {'status':'failed','code':'SOURCE_READ','source_issue':issue})
+            self.assertEqual(output.read_bytes(),b'PREVIOUS_COMPLETE')
+            self.assertEqual(before,(database.read_bytes(),database.stat().st_mtime_ns))
+            self.assertNotIn('PRIVATE',stream.getvalue());self.assertNotIn(str(database),stream.getvalue())
+
+    def test_authorizer_failure_retains_issue_through_collect_and_export_wrapper(self):
+        database,output=self.fixture();output.write_bytes(b'PREVIOUS_COMPLETE')
+        before=database.read_bytes()
+        with patch.object(M,'_authorizer',return_value=sqlite3.SQLITE_DENY):
+            with self.assertRaises(M.ExportInvalid) as caught:M.export_database(database,output,now=NOW)
+        self.assertEqual((caught.exception.code,caught.exception.source_issue),('SOURCE_READ','authorized'))
+        self.assertEqual(output.read_bytes(),b'PREVIOUS_COMPLETE');self.assertEqual(database.read_bytes(),before)
+
+    def test_connect_failure_and_existing_hint_survive_outer_wrapper_without_raw_message(self):
+        database,output=self.fixture();output.write_bytes(b'PREVIOUS_COMPLETE')
+        error=sqlite3.OperationalError('unable to open database file /root/PRIVATE.db')
+        with patch.object(M.sqlite3,'connect',side_effect=error):
+            with self.assertRaises(M.ExportInvalid) as caught:M.export_database(database,output,now=NOW)
+        self.assertEqual(caught.exception.source_issue,'sqlite_open')
+        original=M.ExportInvalid('SOURCE_READ',source_issue='locked')
+        with patch.object(M,'collect',side_effect=original):
+            with self.assertRaises(M.ExportInvalid) as caught:M.export_database(database,output,now=NOW)
+        self.assertIs(caught.exception,original)
+        self.assertEqual(M._failure_result(caught.exception),
+            {'status':'failed','code':'SOURCE_READ','source_issue':'locked'})
+        self.assertEqual(output.read_bytes(),b'PREVIOUS_COMPLETE')
+        for issue in (None,'PRIVATE',[],{}):
+            result=M._failure_result(M.ExportInvalid('SOURCE_READ',source_issue=issue))
+            self.assertEqual(result,{'status':'failed','code':'SOURCE_READ','source_issue':'unknown'})
+        self.assertEqual(M._failure_result(M.ExportInvalid('SOURCE_LIMIT',source_issue='locked')),
+            {'status':'failed','code':'SOURCE_LIMIT'})
+
 
 if __name__ == '__main__':
     unittest.main()

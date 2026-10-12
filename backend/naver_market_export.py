@@ -327,9 +327,9 @@ def collect(conn, now=None, limits=None):
         P.encode(bundle, limits)
         budget.tick()
         return bundle
-    except sqlite3.DatabaseError:
+    except sqlite3.DatabaseError as error:
         budget.tick()
-        raise ExportInvalid('SOURCE_READ') from None
+        raise ExportInvalid('SOURCE_READ', source_issue=P._sqlite_issue(error)) from None
 
 
 def export_database(database, output, now=None, limits=None):
@@ -345,8 +345,8 @@ def export_database(database, output, now=None, limits=None):
         finally:
             conn.close()
         durable = P.write_atomic(output, content, source=source)
-    except sqlite3.DatabaseError:
-        raise ExportInvalid('SOURCE_READ') from None
+    except sqlite3.DatabaseError as error:
+        raise ExportInvalid('SOURCE_READ', source_issue=P._sqlite_issue(error)) from None
     result = {'status': 'ok', 'stores': len(bundle['stores']),
         'cohorts': sum(len(store['cohorts']) for store in bundle['stores']), 'bytes': len(content)}
     if not durable:
@@ -362,7 +362,7 @@ def main(argv=None):
     try:
         result = export_database(args.database, args.output)
     except (ExportInvalid, OSError, OverflowError, ValueError, TypeError, RecursionError, UnicodeError) as error:
-        print(json.dumps({'status': 'failed', 'code': error.code if isinstance(error, ExportInvalid) else 'EXPORT_FAILED'}))
+        print(json.dumps(P._failure_result(error)))
         return 1
     print(json.dumps(result))
     return 0

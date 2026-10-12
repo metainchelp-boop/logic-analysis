@@ -213,6 +213,22 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
             self.assertEqual(result,(None,'limited' if overflow else 'unavailable'))
             process.kill.assert_called_once();selector.close.assert_called_once()
 
+    def test_closed_sqlite_issue_accepts_only_exact_source_read_shape(self):
+        for issue, label in I.SQLITE_SOURCE_LABELS.items():
+            raw=json.dumps({'status':'failed','code':'SOURCE_READ','source_issue':issue})
+            roles,labels=I._labels(raw)
+            self.assertEqual(roles,[])
+            self.assertEqual(labels,['export_source_read',label])
+        for value in (
+            {'status':'failed','code':'SOURCE_READ','source_issue':'private message'},
+            {'status':'ok','code':'SOURCE_READ','source_issue':'schema'},
+            {'status':'failed','code':'OUTPUT_WRITE','source_issue':'schema'},
+            {'status':'failed','code':'SOURCE_READ','source_issue':'schema','sql':'private'},
+            {'status':'failed','code':'SOURCE_READ','source_issue':['schema']},
+        ):
+            self.assertEqual(I._labels(json.dumps(value)),([],[]))
+        self.assertEqual(I._labels('{"status":"failed","code":"SOURCE_READ","source_issue":"schema","source_issue":"locked"}'),([],[]))
+
     def test_cli_refuses_arguments_without_executing_diagnostics(self):
         with patch.object(I.sys,'argv',['inspect','--unit','private']),patch.object(I,'inspect_host') as inspect,\
              patch.object(builtins,'print') as output:

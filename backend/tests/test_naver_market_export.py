@@ -1,8 +1,10 @@
 """Synthetic SQLite/file regression only; no app, network, or real source data."""
 from copy import deepcopy
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -379,6 +381,34 @@ class MarketExportTests(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         self.assertEqual({'status': 'failed', 'code': 'SOURCE_PATH'}, json.loads(result.stdout))
         self.assertEqual('', result.stderr)
+
+    def test_sqlite_source_failure_issue_survives_collect_outer_and_cli(self):
+        database,output=self.fixture();output.write_text('PRIOR_COMPLETE')
+        before=database.read_bytes()
+        with patch.object(M,'_authorizer',return_value=sqlite3.SQLITE_DENY):
+            with self.assertRaises(M.ExportInvalid) as caught:
+                M.export_database(database,output,now=NOW)
+        self.assertEqual((caught.exception.code,caught.exception.source_issue),('SOURCE_READ','authorized'))
+        self.assertEqual(database.read_bytes(),before);self.assertEqual(output.read_text(),'PRIOR_COMPLETE')
+        hint=M.ExportInvalid('SOURCE_READ',source_issue='locked')
+        stream=io.StringIO()
+        with patch.object(M,'collect',side_effect=hint),redirect_stdout(stream):
+            status=M.main(['--database',str(database),'--output',str(output)])
+        self.assertEqual(status,1)
+        self.assertEqual(json.loads(stream.getvalue()),{'status':'failed','code':'SOURCE_READ','source_issue':'locked'})
+        self.assertNotIn(str(database),stream.getvalue())
+
+    def test_missing_schema_and_connect_failure_emit_only_closed_sqlite_issue(self):
+        database,output=self.fixture();output.write_text('PRIOR_COMPLETE')
+        database.write_bytes(b'')
+        stream=io.StringIO()
+        with redirect_stdout(stream):status=M.main(['--database',str(database),'--output',str(output)])
+        self.assertEqual(status,1)
+        self.assertEqual(json.loads(stream.getvalue()),{'status':'failed','code':'SOURCE_READ','source_issue':'schema'})
+        with patch.object(M.sqlite3,'connect',side_effect=sqlite3.OperationalError('unable to open database file PRIVATE')):
+            with self.assertRaises(M.ExportInvalid) as caught:M.export_database(database,output,now=NOW)
+        self.assertEqual(caught.exception.source_issue,'sqlite_open')
+        self.assertEqual(output.read_text(),'PRIOR_COMPLETE')
 
 
 if __name__ == '__main__':

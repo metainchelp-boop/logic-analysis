@@ -37,13 +37,53 @@ _READ_COLUMNS = {
     'client_analyses': frozenset({'id', 'ROWID', 'client_id', 'product_url',
                                 'updated_at', 'analysis_json', 'advertiser_json'}),
 }
+SOURCE_ISSUES = frozenset({'readonly', 'sqlite_open', 'schema', 'authorized',
+                           'locked', 'corrupt', 'unknown'})
 
 
 class ExportInvalid(ValueError):
     """Only fixed, non-sensitive failure codes may reach CLI output."""
-    def __init__(self, code):
+    def __init__(self, code, *, source_issue=None):
         self.code = code
+        self.source_issue = (source_issue if code == 'SOURCE_READ' and
+            type(source_issue) is str and source_issue in SOURCE_ISSUES else None)
         super().__init__(code)
+
+
+def _sqlite_issue(error):
+    """Closed hint only; SQLite text/SQL/path never leaves this function."""
+    code = getattr(error, 'sqlite_errorcode', None)
+    if type(code) is int and 0 <= code <= 2147483647:
+        issue = {3: 'authorized', 5: 'locked', 6: 'locked', 8: 'readonly',
+                 11: 'corrupt', 14: 'sqlite_open', 17: 'schema',
+                 23: 'authorized', 26: 'corrupt'}.get(code & 255)
+        if issue is not None:
+            return issue
+    # sqlite_errorcode was added in Python 3.11. Older hosts need bounded,
+    # in-memory classification; unmatched text stays explicitly unknown.
+    text = str(error)[:4096].lower()
+    patterns = (
+        ('readonly', ('attempt to write a readonly database', 'read-only database', 'read only database')),
+        ('sqlite_open', ('unable to open database file', 'cannot open database file')),
+        ('authorized', ('not authorized', 'authorization denied')),
+        ('locked', ('database is locked', 'database table is locked', 'database schema is locked')),
+        ('corrupt', ('database disk image is malformed', 'file is not a database', 'database corruption')),
+        ('schema', ('no such table:', 'no such column:', 'database schema has changed', 'malformed database schema')))
+    for issue, tokens in patterns:
+        if any(token in text for token in tokens):
+            return issue
+    if 'access to ' in text and ' is prohibited' in text:
+        return 'authorized'
+    return 'unknown'
+
+
+def _failure_result(error):
+    code = error.code if isinstance(error, ExportInvalid) else 'EXPORT_FAILED'
+    result = {'status': 'failed', 'code': code}
+    if code == 'SOURCE_READ':
+        issue = error.source_issue if isinstance(error, ExportInvalid) else None
+        result['source_issue'] = issue if type(issue) is str and issue in SOURCE_ISSUES else 'unknown'
+    return result
 
 
 @dataclass(frozen=True)
@@ -316,12 +356,12 @@ def collect(conn, now=None, limits=None):
         encode(bundle, limits)
         budget.tick()
         return bundle
-    except sqlite3.DatabaseError:
+    except sqlite3.DatabaseError as error:
         try:
             budget.tick()
         except ExportInvalid:
             raise
-        raise ExportInvalid('SOURCE_READ') from None
+        raise ExportInvalid('SOURCE_READ', source_issue=_sqlite_issue(error)) from None
 
 
 def encode(bundle, limits=None):
@@ -393,8 +433,8 @@ def export_database(database, output, now=None, limits=None):
         finally:
             conn.close()
         durable = write_atomic(output, content, source=source)
-    except sqlite3.DatabaseError:
-        raise ExportInvalid('SOURCE_READ') from None
+    except sqlite3.DatabaseError as error:
+        raise ExportInvalid('SOURCE_READ', source_issue=_sqlite_issue(error)) from None
     result = {'status': 'ok', 'stores': len(bundle['stores']),
               'products': sum(len(store['products']) for store in bundle['stores']), 'bytes': len(content)}
     if not durable:
@@ -410,7 +450,7 @@ def main(argv=None):
     try:
         result = export_database(args.database, args.output)
     except (ExportInvalid, OSError, OverflowError) as error:
-        print(json.dumps({'status': 'failed', 'code': error.code if isinstance(error, ExportInvalid) else 'EXPORT_FAILED'}))
+        print(json.dumps(_failure_result(error)))
         return 1
     print(json.dumps(result))
     return 0

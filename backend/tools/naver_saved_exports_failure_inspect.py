@@ -64,6 +64,10 @@ EXPORTER_FAILURE_LABELS = {
     'SOURCE_STATE': 'export_source_state', 'OUTPUT_WRITE': 'export_output_write',
     'OUTPUT_PATH': 'export_output_path', 'EXPORT_INVALID': 'export_invalid',
     'EXPORT_LIMIT': 'export_limit', 'EXPORT_FAILED': 'export_failed'}
+SQLITE_SOURCE_LABELS = {
+    'readonly': 'sqlite_readonly', 'sqlite_open': 'sqlite_open',
+    'schema': 'sqlite_schema', 'authorized': 'sqlite_authorization',
+    'locked': 'sqlite_locked', 'corrupt': 'sqlite_corrupt', 'unknown': 'sqlite_unknown'}
 
 
 def _unique(pairs):
@@ -109,6 +113,11 @@ def _labels(message):
             label = EXPORTER_FAILURE_LABELS.get(value['code'])
             if label and label not in errors:
                 errors.append(label)
+        elif (type(value) is dict and set(value) == {'status', 'code', 'source_issue'} and
+                value['status'] == 'failed' and value['code'] == 'SOURCE_READ' and
+                type(value['source_issue']) is str and value['source_issue'] in SQLITE_SOURCE_LABELS):
+            errors.extend(label for label in ('export_source_read', SQLITE_SOURCE_LABELS[value['source_issue']])
+                          if label not in errors)
     except (ValueError, TypeError, RecursionError):
         pass
     return sorted(roles), errors
