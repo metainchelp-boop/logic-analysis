@@ -78,7 +78,7 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
         def metadata(path):
             seen.append(path)
             return SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0,st_gid=0)
-        with patch.object(I,'_journal',return_value=(row('Permission denied'),None)) as command,\
+        with patch.object(I,'_python_metadata',return_value=[]) as runtime,patch.object(I,'_journal',return_value=(row('Permission denied'),None)) as command,\
              patch.object(I.time,'time_ns',return_value=NOW*1000),patch.object(I.os,'lstat',side_effect=metadata),\
              patch.object(builtins,'open',side_effect=AssertionError('body')),\
              patch.object(I.os,'open',side_effect=AssertionError('body')),\
@@ -92,6 +92,24 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
         self.assertFalse(result['source_writes']);self.assertFalse(result['service_changes'])
         self.assertEqual(result['network_calls'],0)
         self.assertNotIn('MESSAGE',json.dumps(result));self.assertNotIn('Invocation',json.dumps(result))
+
+    def test_fixed_interpreter_targets_only_expose_scope_and_mode(self):
+        def target(path):return '/root/private/runtime/bin/python' if path=='/usr/bin/python3' else path
+        with patch.object(I.os,'lstat',return_value=SimpleNamespace(st_mode=stat.S_IFLNK|0o777,st_uid=0,st_gid=0)) as ls,\
+             patch.object(I.os.path,'realpath',side_effect=target),\
+             patch.object(I.os,'stat',return_value=SimpleNamespace(st_mode=stat.S_IFREG|0o755,st_uid=0,st_gid=0)),\
+             patch.object(builtins,'open',side_effect=AssertionError('no bodies')):
+            rows=I._python_metadata()
+        self.assertEqual([c.args[0] for c in ls.call_args_list],['/usr/bin/python3','/usr/bin/python3.10','/usr/bin/python3.11','/usr/bin/python3.12'])
+        self.assertEqual(rows[0]['resolved_scope'],'private_home');self.assertEqual(rows[1]['resolved_scope'],'system')
+        self.assertTrue(all(r['regular'] and r['mode']=='0755' for r in rows))
+        self.assertNotIn('private/runtime',json.dumps(rows));self.assertNotIn('/root',json.dumps(rows))
+
+    def test_missing_interpreters_expose_no_error_text(self):
+        with patch.object(I.os,'lstat',side_effect=PermissionError('private error')):
+            rows=I._python_metadata()
+        self.assertTrue(all(not r['exists'] and r['resolved_scope']=='unknown' for r in rows))
+        self.assertNotIn('private error',json.dumps(rows))
 
     def test_missing_unit_and_symlink_ancestor_are_labels_without_following_children(self):
         seen=[]
