@@ -199,6 +199,68 @@ class FailedDatabaseArchiveTests(unittest.TestCase):
         self.assertEqual((self.snapshot.stat().st_dev,self.snapshot.stat().st_ino),inode)
         self.assertEqual(A.execute('restore_canonical_snapshot')['status'],'already_restored')
 
+    def interrupted_quarantine_restore(self):
+        A.execute('archive_quarantine')
+        with patch.object(A,'_finish_restore',side_effect=KeyboardInterrupt),self.assertRaises(KeyboardInterrupt):
+            A.execute('restore_quarantine')
+        folder=self.receipts/('completion-failed-archive-'+A.OPERATION_ID)
+        temporary=self.quarantine/('engine.db.restore-'+A.OPERATION_ID+'.part')
+        return temporary,folder/'quarantine_database.restore-intent.json'
+
+    def test_quarantine_restore_resumes_verified_temporary_before_publish(self):
+        temporary,_=self.interrupted_quarantine_restore()
+        identity=(temporary.stat().st_dev,temporary.stat().st_ino)
+        self.assertFalse((self.quarantine/'engine.db').exists())
+        with self.assertRaisesRegex(A.ArchiveInvalid,'ARCHIVE_POLICY'):A.execute('archive_quarantine')
+        self.assertEqual(A.execute('restore_quarantine')['status'],'restored')
+        restored=self.quarantine/'engine.db'
+        self.assertEqual((restored.stat().st_dev,restored.stat().st_ino),identity)
+        self.assertEqual(restored.read_bytes(),self.body+b'failed migration')
+        self.assertFalse(temporary.exists())
+
+    def test_quarantine_restore_resumes_own_two_links_after_publish(self):
+        A.execute('archive_quarantine');remove=A._created_unlink
+        def interrupted(path,fd,identity):
+            if path.name.endswith('.part'):raise KeyboardInterrupt()
+            return remove(path,fd,identity)
+        with patch.object(A,'_created_unlink',side_effect=interrupted),self.assertRaises(KeyboardInterrupt):
+            A.execute('restore_quarantine')
+        restored=self.quarantine/'engine.db'
+        self.assertEqual(restored.stat().st_nlink,2)
+        identity=(restored.stat().st_dev,restored.stat().st_ino)
+        self.assertEqual(A.execute('restore_quarantine')['status'],'restored')
+        self.assertEqual((restored.stat().st_dev,restored.stat().st_ino),identity)
+        self.assertEqual(restored.stat().st_nlink,1)
+
+    def test_quarantine_restore_rejects_temporary_without_intent_and_arbitrary_role(self):
+        temporary,intent=self.interrupted_quarantine_restore();body=intent.read_bytes();intent.unlink()
+        with self.assertRaises(A.ArchiveInvalid):A.execute('restore_quarantine')
+        self.assertTrue(temporary.exists());self.assertFalse((self.quarantine/'engine.db').exists())
+        intent.write_bytes(body);intent.chmod(0o600)
+        foreign=self.quarantine/('unapproved.restore-'+A.OPERATION_ID+'.part')
+        foreign.write_bytes(b'foreign');foreign.chmod(0o600)
+        with self.assertRaisesRegex(A.ArchiveInvalid,'ARCHIVE_POLICY'):A.execute('restore_quarantine')
+        self.assertEqual(foreign.read_bytes(),b'foreign');self.assertTrue(temporary.exists())
+
+    def test_quarantine_restore_rejects_changed_sealed_identity_fields(self):
+        temporary,intent=self.interrupted_quarantine_restore();original=json.loads(intent.read_text())
+        for field in ('device','inode','size','mtime_ns','ctime_ns','uid','gid','mode'):
+            changed=json.loads(json.dumps(original));changed['identity'][field]+=1
+            intent.write_text(json.dumps(changed))
+            with self.subTest(field=field),self.assertRaises(A.ArchiveInvalid):A.execute('restore_quarantine')
+            self.assertTrue(temporary.exists());self.assertFalse((self.quarantine/'engine.db').exists())
+        intent.write_text(json.dumps(original));temporary.chmod(0o640)
+        with self.assertRaises(A.ArchiveInvalid):A.execute('restore_quarantine')
+        self.assertTrue(temporary.exists())
+
+    def test_quarantine_restore_rejects_changed_temporary_bytes_even_with_updated_identity(self):
+        temporary,intent=self.interrupted_quarantine_restore();value=json.loads(intent.read_text())
+        modified=bytearray(temporary.read_bytes());modified[-1]^=1;temporary.write_bytes(modified)
+        stamp=value['identity']['mtime_ns'];os.utime(temporary,ns=(stamp,stamp))
+        value['identity']=A._identity(temporary.stat());intent.write_text(json.dumps(value))
+        with self.assertRaisesRegex(A.ArchiveInvalid,'ARCHIVE_VERIFY'):A.execute('restore_quarantine')
+        self.assertTrue(temporary.exists());self.assertFalse((self.quarantine/'engine.db').exists())
+
     def test_restore_never_overwrites_foreign_existing_file_even_with_identical_content(self):
         A.execute('archive_canonical_snapshot')
         self.snapshot.write_bytes(self.body);self.snapshot.chmod(0o600)

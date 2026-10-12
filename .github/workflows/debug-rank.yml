@@ -2750,11 +2750,11 @@ jobs:
           actions={'preview-completion-migration-inspect':'inspect','preview-completion-archive-quarantine':'archive_quarantine','preview-completion-archive-snapshot':'archive_canonical_snapshot','preview-completion-restore-quarantine':'restore_quarantine','preview-completion-restore-snapshot':'restore_canonical_snapshot'}
           inputs=json.loads(os.environ['INPUTS_JSON']);operation=inputs.pop('ad_prepare')
           assert operation in actions and inputs.pop('ad_expected_baseline')=='none' and all(v=='off' for v in inputs.values())
-          pins={'controller': ('naver_preview_completion_release.py', 'cab8e07f8b4f86cd0263bf021d83437ba2eef8f86ba7f9f144e2c79ff0c10143'), 'release': ('naver_preview_release.py', '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'), 'upgrade': ('naver_preview_upgrade.py', '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28'), 'inspector': ('naver_completion_migration_inspect.py', 'a06868c4fea10cc48acf648acb671bf4aa3b2e04c6acffccf28c4f9d5b806f87'), 'archive': ('naver_completion_failed_database_archive.py', '15cb6e83eb1e169830316acbc1c22aede7395b9323e3c3233e3b8572a9127846')}
+          pins={'controller': ('naver_preview_completion_release.py', 'cab8e07f8b4f86cd0263bf021d83437ba2eef8f86ba7f9f144e2c79ff0c10143'), 'release': ('naver_preview_release.py', '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'), 'upgrade': ('naver_preview_upgrade.py', '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28'), 'inspector': ('naver_completion_migration_inspect.py', 'a06868c4fea10cc48acf648acb671bf4aa3b2e04c6acffccf28c4f9d5b806f87'), 'archive': ('naver_completion_failed_database_archive.py', 'd0f7a8f7475809fd200bf3a0e5efc44731736e46848e7f8726aa2ff7ee2f5e4f')}
           sources={name:pathlib.Path('backend/tools',filename).read_text() for name,(filename,digest) in pins.items()}
           assert all(hashlib.sha256(sources[name].encode()).hexdigest()==digest for name,(_,digest) in pins.items())
           raw=json.dumps(sources,sort_keys=True,separators=(',',':')).encode()
-          assert len(raw)<=786432 and hashlib.sha256(raw).hexdigest()=='b422de2451f0fbc6ff05a02b924ad27b5aabb1962cf60abecf063febb9e66b3f'
+          assert len(raw)<=786432 and hashlib.sha256(raw).hexdigest()=='f7cbabe36e72b749197a40f75be8a55fd5584d96fd1e6057f72bc67c0565edd8'
           wire=base64.b64encode(lzma.compress(raw,preset=6)).decode();assert len(wire)<=98304
           with open(os.environ['GITHUB_ENV'],'a') as stream:
               stream.write('COMPLETION_MAINTENANCE_B64='+wire+'\n');stream.write('COMPLETION_MAINTENANCE_ACTION='+actions[operation]+'\n')
@@ -2780,7 +2780,7 @@ jobs:
                 if action not in {'inspect','archive_quarantine','archive_canonical_snapshot','restore_quarantine','restore_canonical_snapshot'} or len(wire)>98304:raise ValueError('MAINTENANCE_INPUT')
                 packed=base64.b64decode(wire,validate=True);decoder=lzma.LZMADecompressor(memlimit=64*1024*1024)
                 raw=decoder.decompress(packed,max_length=786433)
-                if len(raw)>786432 or not decoder.eof or decoder.unused_data or hashlib.sha256(raw).hexdigest()!='b422de2451f0fbc6ff05a02b924ad27b5aabb1962cf60abecf063febb9e66b3f':raise ValueError('MAINTENANCE_PIN')
+                if len(raw)>786432 or not decoder.eof or decoder.unused_data or hashlib.sha256(raw).hexdigest()!='f7cbabe36e72b749197a40f75be8a55fd5584d96fd1e6057f72bc67c0565edd8':raise ValueError('MAINTENANCE_PIN')
                 sources=json.loads(raw)
                 if type(sources) is not dict or set(sources)!={'controller','release','upgrade','inspector','archive'}:raise ValueError('MAINTENANCE_FIELDS')
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')

@@ -377,12 +377,41 @@ def _archive_one(role,folder,proof,expected_identity=None):
         os.close(fd)
 
 
-def _quarantine_roles(folder,proof):
+def _verified_restore_temporary(path,folder,role,proof,source_identity):
+    row=_manifest(folder,role,proof)
+    if row['source_identity']!=source_identity:_fail('ARCHIVE_RECEIPT')
+    intent=folder/(role+'.restore-intent.json')
+    if not os.path.lexists(intent):_fail('ARCHIVE_RECEIPT')
+    wanted=_restore_record(intent,role,row)
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        info=os.fstat(fd);named=os.lstat(path);found=_identity(info)
+        stable=('device','inode','size','mtime_ns','uid','gid','mode')
+        if (not stat.S_ISREG(info.st_mode) or not stat.S_ISREG(named.st_mode)
+            or _identity(named)!=found or any(found[k]!=wanted[k] for k in stable)):
+            _fail('ARCHIVE_SOURCE_CHANGED')
+        original=_paths()[role]
+        if found['nlink']==1:
+            if os.path.lexists(original) or found!=wanted:_fail('ARCHIVE_SOURCE_CHANGED')
+        elif found['nlink']==2:
+            linked=os.lstat(original)
+            if (not stat.S_ISREG(linked.st_mode) or _identity(linked)!=found):_fail('ARCHIVE_SOURCE_CHANGED')
+        else:_fail('ARCHIVE_SOURCE_CHANGED')
+        operating=os.lstat(DATA/'engine.db')
+        if (found['device'],found['inode'])==(operating.st_dev,operating.st_ino):_fail('ARCHIVE_POLICY')
+        if _digest_fd(fd,MAX_FILE)!=(wanted['size'],row['source_sha256']):_fail('ARCHIVE_VERIFY')
+        if _identity(os.fstat(fd))!=found or _identity(os.lstat(path))!=found:_fail('ARCHIVE_SOURCE_CHANGED')
+    finally:os.close(fd)
+
+
+def _quarantine_roles(folder,proof,*,restore=False):
     _stage('inventory');q=DATA/('.completion-failed-db-'+OPERATION_ID)
     directory_identity=_directory(q,CONTROL_UID,CONTROL_GID,0o700)
     names={'engine.db':ROLES[1],'engine.db-wal':ROLES[2],'engine.db-shm':ROLES[3],'engine.db-journal':ROLES[4]}
     present=set(os.listdir(q))
-    if present-set(names):_fail('ARCHIVE_POLICY')
+    temporary={name+'.restore-'+OPERATION_ID+'.part':role for name,role in names.items()}
+    extra=present-set(names)
+    if extra and (not restore or extra-set(temporary)):_fail('ARCHIVE_POLICY')
     inventory=folder/'quarantine-set.json'
     if os.path.lexists(inventory):
         row=_json_read(inventory)
@@ -394,7 +423,12 @@ def _quarantine_roles(folder,proof):
             or any(r not in row['roles'] for n,r in names.items() if n in present)
             or type(row['identities']) is not dict or set(row['identities'])!=set(row['roles'])):_fail('ARCHIVE_RECEIPT')
         for value in row['identities'].values():_validate_identity(value)
+        for name in sorted(extra):
+            role=temporary[name]
+            if role not in row['roles']:_fail('ARCHIVE_RECEIPT')
+            _verified_restore_temporary(q/name,folder,role,proof,row['identities'][role])
         return row['roles'],row['identities']
+    if extra:_fail('ARCHIVE_RECEIPT')
     if 'engine.db' not in present:_fail('ARCHIVE_POLICY')
     roles=[role for name,role in names.items() if name in present]
     identities={}
@@ -413,15 +447,16 @@ def _restore_record(path, role, row):
         or type(value['version']) is not int or value['version']!=1 or value['operation_id']!=OPERATION_ID
         or value['role']!=role or value['source_sha256']!=row['source_sha256']):_fail('ARCHIVE_RECEIPT')
     found=_validate_identity(value['identity'])
-    if (found['uid'],found['gid'])!=_owner(role) or found['size']!=row['source_identity']['size']:_fail('ARCHIVE_RECEIPT')
+    if ((found['uid'],found['gid'])!=_owner(role) or found['size']!=row['source_identity']['size']
+        or found['mtime_ns']!=row['source_identity']['mtime_ns']):_fail('ARCHIVE_RECEIPT')
     return found
 
 
 def _finish_restore(path, temporary, fd, identity, role, folder, row):
     _stage('restore_publish')
     info=os.fstat(fd);found=_identity(info)
-    if ((found['device'],found['inode'],found['size'],found['uid'],found['gid'],found['mode'])!=
-        (identity['device'],identity['inode'],identity['size'],*_owner(role),0o600)
+    if ((found['device'],found['inode'],found['size'],found['mtime_ns'],found['uid'],found['gid'],found['mode'])!=
+        (identity['device'],identity['inode'],identity['size'],identity['mtime_ns'],*_owner(role),0o600)
         or found['nlink'] not in (1,2)
         or _digest_fd(fd,MAX_FILE)!=(identity['size'],row['source_sha256'])):_fail('ARCHIVE_SOURCE_CHANGED')
     if not os.path.lexists(path):
@@ -513,8 +548,8 @@ def execute(action):
     if action=='inspect':return inspect_host()
     _stage('policy');_base_directories();proof=_snapshot_proof();folder=_folder()
     with _operation_lock(folder):
-        roles,identities=_quarantine_roles(folder,proof) if action.endswith('quarantine') else (['canonical_snapshot'],{})
         restore=action.startswith('restore_')
+        roles,identities=_quarantine_roles(folder,proof,restore=restore) if action.endswith('quarantine') else (['canonical_snapshot'],{})
         operation=_restore_one if restore else _archive_one
         changed=sum(operation(role,folder,proof,identities.get(role)) for role in roles)
     _stage('complete')
