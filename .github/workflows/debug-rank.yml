@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-migration-inspect, preview-completion-archive-quarantine, preview-completion-archive-snapshot, preview-completion-restore-quarantine, preview-completion-restore-snapshot, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-export-reinstall, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, preview-completion-recover-failed-apply, preview-completion-patch-prepare, preview-completion-patch-apply, preview-completion-patch-rollback, preview-claude-quality-patch-prepare, preview-claude-quality-patch-apply, preview-claude-quality-patch-rollback, preview-strategy-validation-patch-prepare, preview-strategy-validation-patch-apply, preview-strategy-validation-patch-rollback, preview-inspection-continuity-patch-prepare, preview-inspection-continuity-patch-apply, preview-inspection-continuity-patch-rollback, preview-completion-source-diagnostics, preview-current-inspection-diagnostics, preview-budget-draft-patch-prepare, preview-budget-draft-patch-apply, preview-budget-draft-patch-rollback, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-migration-inspect, preview-completion-archive-quarantine, preview-completion-archive-snapshot, preview-completion-restore-quarantine, preview-completion-restore-snapshot, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-export-reinstall, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, preview-completion-recover-failed-apply, preview-completion-patch-prepare, preview-completion-patch-apply, preview-completion-patch-rollback, preview-claude-quality-patch-prepare, preview-claude-quality-patch-apply, preview-claude-quality-patch-rollback, preview-strategy-validation-patch-prepare, preview-strategy-validation-patch-apply, preview-strategy-validation-patch-rollback, preview-inspection-continuity-patch-prepare, preview-inspection-continuity-patch-apply, preview-inspection-continuity-patch-rollback, preview-completion-source-diagnostics, preview-current-inspection-diagnostics, preview-setup-stale-diagnostics, preview-budget-draft-patch-prepare, preview-budget-draft-patch-apply, preview-budget-draft-patch-rollback, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -3196,6 +3196,99 @@ jobs:
             except Exception:
                 result={'ok':False,'mode':'current-inspection-diagnostics-ad-account-v1','source_commit':'15f3a23c2255de98cba3670fce3b489309698e1f','mutations':0,'collection_completion_verified':False,'stage':'bootstrap','error_code':'SOURCE_DIAGNOSTICS_BOOTSTRAP_REFUSED'}
             print('NAVER_CURRENT_INSPECTION_DIAGNOSTICS_AD_ACCOUNT_V1='+json.dumps(result,sort_keys=True,allow_nan=False));sys.exit(0 if result.get('ok') else 1)
+            PYCODE
+
+  setup-stale-diagnostics:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-setup-stale-diagnostics'
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Current dc168 setup policy, scope and proof read-only diagnostic checks
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_setup_stale_diagnostics test_naver_setup_stale_diagnostics_transport -q
+          python3 - <<'PYCODE'
+          import base64,json,os,pathlib,sys
+          sys.path.insert(0,'backend/tools')
+          import naver_setup_stale_diagnostics_transport as T
+          def setup_stale_ssh_scripts(workflow):
+              lines=workflow.splitlines(keepends=True)
+              starts=[i for i,line in enumerate(lines) if line.rstrip('\r\n')=='  setup-stale-diagnostics:']
+              if len(starts)!=1:raise ValueError('SOURCE_DIAGNOSTICS_SSH_WORKFLOW')
+              start=starts[0]+1;end=len(lines)
+              for i in range(start,len(lines)):
+                  if lines[i].startswith('  ') and not lines[i].startswith('   ') and lines[i].strip().endswith(':'):
+                      end=i;break
+              section=lines[start:end];scripts=[]
+              if sum(line.strip().startswith('uses: appleboy/ssh-action@') for line in section)!=1:
+                  raise ValueError('SOURCE_DIAGNOSTICS_SSH_WORKFLOW')
+              for i,line in enumerate(section):
+                  if line.rstrip('\r\n')!='          script: |':continue
+                  body=[]
+                  for item in section[i+1:]:
+                      if item.startswith('            '):body.append(item[12:])
+                      elif not item.strip():body.append(item)
+                      else:break
+                  if not body:raise ValueError('SOURCE_DIAGNOSTICS_SSH_WORKFLOW')
+                  scripts.append(''.join(body))
+              if len(scripts)!=1:raise ValueError('SOURCE_DIAGNOSTICS_SSH_WORKFLOW')
+              return scripts
+          def require_setup_stale_ssh_pressure(wire,transport,workflow):
+              if any(type(value) is not str or not value.isascii() or any(char in value for char in "'\r\n\x00") for value in (wire,transport)):
+                  raise ValueError('SOURCE_DIAGNOSTICS_SSH_ENV')
+              exports="export SETUP_STALE_DIAGNOSTICS_B64='"+wire+"'; export SETUP_STALE_DIAGNOSTICS_TRANSPORT_B64='"+transport+"';\n"
+              sizes=[len((exports+script).encode('utf-8')) for script in setup_stale_ssh_scripts(workflow)]
+              if any(size>=131072 for size in sizes):raise ValueError('SOURCE_DIAGNOSTICS_SSH_SIZE')
+              return sizes
+          T.require_pins()
+          inputs=json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text(),object_pairs_hook=T.unique)['inputs']
+          package=T.validate_dispatch_inputs(inputs)
+          wire=T.encode(T.bundle(package,pathlib.Path('backend/tools')))
+          transport=base64.b64encode(pathlib.Path('backend/tools/naver_setup_stale_diagnostics_transport.py').read_bytes()).decode()
+          if len(transport)>T.MAX_TRANSPORT_BASE64:raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SIZE')
+          require_setup_stale_ssh_pressure(wire,transport,pathlib.Path('.github/workflows/debug-rank.yml').read_text(encoding='utf-8'))
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('SETUP_STALE_DIAGNOSTICS_B64='+wire+'\n')
+              stream.write('SETUP_STALE_DIAGNOSTICS_TRANSPORT_B64='+transport+'\n')
+          PYCODE
+      - name: Read fixed dc168 setup validity only; no collector or ad changes
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          SETUP_STALE_DIAGNOSTICS_B64: ${{ env.SETUP_STALE_DIAGNOSTICS_B64 }}
+          SETUP_STALE_DIAGNOSTICS_TRANSPORT_B64: ${{ env.SETUP_STALE_DIAGNOSTICS_TRANSPORT_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: SETUP_STALE_DIAGNOSTICS_B64,SETUP_STALE_DIAGNOSTICS_TRANSPORT_B64
+          command_timeout: 2m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PYCODE'
+            import base64,hashlib,json,os,sys,types
+            try:
+                wire=os.environ['SETUP_STALE_DIAGNOSTICS_B64'];source=os.environ['SETUP_STALE_DIAGNOSTICS_TRANSPORT_B64']
+                if len(source)>32768:raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SIZE')
+                raw=base64.b64decode(source,validate=True)
+                if hashlib.sha256(raw).hexdigest()!='cec7f1af051657a1e39e9e79fb4a66c58fd752b93cf4d354e9a853a6b775b823':raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SOURCE')
+                transport=types.ModuleType('approved_setup_stale_diagnostics_transport');exec(raw,transport.__dict__)
+                bundle=transport.decode(wire)
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                result=transport.execute(bundle)
+            except Exception:
+                result={'ok':False,'mode':'setup-stale-diagnostics-ad-account-dc168-v1','source_commit':'dc168ff8cf8dac519ea38597305a0d9dd6f6c843','mutations':0,'collection_completion_verified':False,'stage':'bootstrap','error_code':'SOURCE_DIAGNOSTICS_BOOTSTRAP_REFUSED'}
+            print('NAVER_SETUP_STALE_DIAGNOSTICS_DC168_V1='+json.dumps(result,sort_keys=True,allow_nan=False));sys.exit(0 if result.get('ok') else 1)
             PYCODE
 
   completion-release:

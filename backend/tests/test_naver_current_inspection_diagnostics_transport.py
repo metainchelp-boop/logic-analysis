@@ -141,6 +141,8 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
+        # Strip only the independently tested exact-dc168 diagnostic registration.
+        workflow=workflow.replace(section(workflow,'setup-stale-diagnostics'),'').replace(', preview-setup-stale-diagnostics','')
         # P5 has independent checks; remove only its registration from prior projections.
         workflow=workflow.replace(section(workflow,'budget-draft-patch'),'')
         for budget_operation in ('prepare','apply','rollback'):
@@ -150,6 +152,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=workflow.replace(section(workflow,'current-inspection-diagnostics'),'').replace(', preview-current-inspection-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'4c14d09d5398ee1ac61162c88ace81a2b4222e36ee01fa6fc39c509554619930')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        setup_start=native.index('      - name: 현재 dc168 설정 원천·scope·읽기 전용 진단 검사\n')
+        setup_end=native.index('      - name:',setup_start+1)
+        native=native[:setup_start]+native[setup_end:]
         budget_start=native.index('      - name: 기존 예산 초안·상품 가설 패치·15f 복구 경계 검사\n')
         budget_end=native.index('      - name:',budget_start+1)
         native=native[:budget_start]+native[budget_end:]
