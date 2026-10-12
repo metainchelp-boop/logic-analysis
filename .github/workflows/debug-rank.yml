@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-migration-inspect, preview-completion-archive-quarantine, preview-completion-archive-snapshot, preview-completion-restore-quarantine, preview-completion-restore-snapshot, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, preview-completion-recover-failed-apply, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-migration-inspect, preview-completion-archive-quarantine, preview-completion-archive-snapshot, preview-completion-restore-quarantine, preview-completion-restore-snapshot, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-export-reinstall, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, preview-completion-recover-failed-apply, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -2543,6 +2543,162 @@ jobs:
                 result={'ok':False,'stage':'preflight','error_code':'COMPLETION_FAILED'}
                 if controller is not None:result={'ok':False,**controller.failure_report(error)}
             print('NAVER_COMPLETION_RELEASE='+json.dumps(result,sort_keys=True));sys.exit(0 if result.get('ok') else 1)
+            PYCODE
+
+  completion-export-reinstall:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-completion-export-reinstall'
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Fixed export reinstall tests and pinned source packet only
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_completion_exports_reinstall test_naver_completion_transport -q
+          python3 - <<'PYCODE'
+          import base64,hashlib,json,lzma,os,pathlib,re,sys,types
+          TRANSPORT_PIN='834b7be0b38ac9db6ab7126e8a77b763633a1acaf2724ef9544f3c32b444eed6'
+          HELPER_PIN='ad5483b8b760156e077c3463ce8ab92b0bdec2f28fc044e4b332f248cd5290c4'
+          PACKET_PIN='08dc905aa61cc78fbf70f2a6bac7fa337daeeb59e3d46950030811a76302df79'
+          def unique(pairs):
+              out={}
+              for key,value in pairs:
+                  if key in out:raise ValueError('REINSTALL_DUPLICATE')
+                  out[key]=value
+              return out
+          def input_operation(raw,repository,run_id):
+              inputs=json.loads(raw,object_pairs_hook=unique)
+              if (type(inputs) is not dict or inputs.pop('ad_prepare',None)!='preview-completion-export-reinstall'
+                  or inputs.pop('ad_expected_baseline',None)!='none' or any(value!='off' for value in inputs.values())
+                  or repository!='metainchelp-boop/logic-analysis' or type(run_id) is not str
+                  or re.fullmatch('[1-9][0-9]{0,19}',run_id) is None):raise ValueError('REINSTALL_INPUT')
+              return hashlib.sha256((repository+'completion-export-reinstall'+run_id).encode()).hexdigest()[:32]
+          def source(path,digest,maximum):
+              if type(digest) is not str or re.fullmatch('[0-9a-f]{64}',digest) is None:raise ValueError('REINSTALL_UNPINNED')
+              raw=path.read_bytes()
+              if not 0<len(raw)<=maximum or hashlib.sha256(raw).hexdigest()!=digest:raise ValueError('REINSTALL_PIN')
+              return raw.decode('utf-8')
+          def ssh_script(workflow):
+              lines=workflow.splitlines(keepends=True);starts=[i for i,line in enumerate(lines) if line.rstrip('\r\n')=='  completion-export-reinstall:']
+              if len(starts)!=1:raise ValueError('REINSTALL_SSH_WORKFLOW')
+              end=next((i for i in range(starts[0]+1,len(lines)) if lines[i].startswith('  ') and not lines[i].startswith('   ') and lines[i].strip().endswith(':')),len(lines))
+              section=lines[starts[0]+1:end]
+              if sum(line.strip().startswith('uses: appleboy/ssh-action@') for line in section)!=1:raise ValueError('REINSTALL_SSH_WORKFLOW')
+              offsets=[i for i,line in enumerate(section) if line.rstrip('\r\n')=='          script: |']
+              if len(offsets)!=1:raise ValueError('REINSTALL_SSH_WORKFLOW')
+              body=[]
+              for line in section[offsets[0]+1:]:
+                  if line.startswith('            '):body.append(line[12:])
+                  elif not line.strip():body.append(line)
+                  else:break
+              if not body:raise ValueError('REINSTALL_SSH_WORKFLOW')
+              return ''.join(body)
+          operation_id=input_operation(os.environ['INPUTS_JSON'],os.environ['REPOSITORY'],os.environ['RUN_ID'])
+          if type(PACKET_PIN) is not str or re.fullmatch('[0-9a-f]{64}',PACKET_PIN) is None:raise ValueError('REINSTALL_UNPINNED')
+          tools=pathlib.Path('backend/tools');transport_source=source(tools/'naver_completion_transport.py',TRANSPORT_PIN,24576)
+          reinstall_source=source(tools/'naver_completion_exports_reinstall.py',HELPER_PIN,160000)
+          sys.path.insert(0,str(tools));transport=types.ModuleType('approved_reinstall_transport');exec(transport_source,transport.__dict__)
+          if transport.MAX_JSON!=393216 or transport.MAX_WIRE!=98304:raise ValueError('REINSTALL_LIMITS')
+          bundle=transport.decode(transport.encode(transport.bundle('preview-completion-apply',{},tools)))
+          packet={'version':1,'transport_source':transport_source,'completion_bundle':bundle,'reinstall_source':reinstall_source}
+          raw=json.dumps(packet,sort_keys=True,separators=(',',':')).encode()
+          if len(raw)>393216 or hashlib.sha256(raw).hexdigest()!=PACKET_PIN:raise ValueError('REINSTALL_PACKET')
+          wire=base64.b64encode(lzma.compress(raw,format=lzma.FORMAT_XZ,check=lzma.CHECK_CRC64,preset=6)).decode()
+          if len(wire)>98304:raise ValueError('REINSTALL_WIRE_SIZE')
+          exported="export COMPLETION_EXPORT_REINSTALL_B64='"+wire+"'; export COMPLETION_EXPORT_REINSTALL_OPERATION_ID='"+operation_id+"';\n"
+          command_size=len((exported+ssh_script(pathlib.Path('.github/workflows/debug-rank.yml').read_text())).encode())
+          if command_size>=131072:raise ValueError('REINSTALL_SSH_SIZE')
+          head=os.environ['SOURCE_SHA']
+          if re.fullmatch('[0-9a-f]{40}',head) is None:raise ValueError('REINSTALL_INPUT')
+          receipt={'version':1,'run_id':os.environ['RUN_ID'],'head_sha':head,'operation_id':operation_id,
+              'transport_sha256':TRANSPORT_PIN,'helper_sha256':HELPER_PIN,'packet_sha256':PACKET_PIN,
+              'packet_bytes':len(raw),'wire_bytes':len(wire),'ssh_command_bytes':command_size,'invocation_started':False}
+          folder=pathlib.Path(os.environ['RUNNER_TEMP'])/'completion-export-reinstall-inputs';folder.mkdir(mode=0o700)
+          fd=os.open(folder/'receipt.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+          with os.fdopen(fd,'w') as stream:json.dump(receipt,stream,sort_keys=True,separators=(',',':'));stream.write('\n')
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('COMPLETION_EXPORT_REINSTALL_B64='+wire+'\n')
+              stream.write('COMPLETION_EXPORT_REINSTALL_OPERATION_ID='+operation_id+'\n')
+          PYCODE
+      - name: Preserve same-run operation receipt before reinstall attempt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: completion-export-reinstall-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/completion-export-reinstall-inputs/receipt.json
+          retention-days: 7
+          if-no-files-found: error
+      - name: Reinstall only the pinned saved exports; no application APPLY
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          COMPLETION_EXPORT_REINSTALL_B64: ${{ env.COMPLETION_EXPORT_REINSTALL_B64 }}
+          COMPLETION_EXPORT_REINSTALL_OPERATION_ID: ${{ env.COMPLETION_EXPORT_REINSTALL_OPERATION_ID }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: COMPLETION_EXPORT_REINSTALL_B64,COMPLETION_EXPORT_REINSTALL_OPERATION_ID
+          command_timeout: 15m
+          script: |
+            set -eu
+            timeout 840s /usr/bin/python3 -I -B - <<'PYCODE'
+            import base64,hashlib,json,lzma,os,re,sys,types
+            module=None
+            try:
+                wire=os.environ['COMPLETION_EXPORT_REINSTALL_B64'];operation_id=os.environ['COMPLETION_EXPORT_REINSTALL_OPERATION_ID']
+                if len(wire)>98304 or re.fullmatch('[0-9a-f]{32}',operation_id) is None:raise ValueError('REINSTALL_INPUT')
+                packed=base64.b64decode(wire,validate=True);decoder=lzma.LZMADecompressor(format=lzma.FORMAT_XZ,memlimit=32*1024*1024)
+                raw=decoder.decompress(packed,max_length=393217)
+                if len(raw)>393216 or not decoder.eof or decoder.unused_data or hashlib.sha256(raw).hexdigest()!='08dc905aa61cc78fbf70f2a6bac7fa337daeeb59e3d46950030811a76302df79':raise ValueError('REINSTALL_PACKET')
+                def unique(pairs):
+                    out={}
+                    for key,value in pairs:
+                        if key in out:raise ValueError('REINSTALL_DUPLICATE')
+                        out[key]=value
+                    return out
+                packet=json.loads(raw,object_pairs_hook=unique)
+                if type(packet) is not dict or set(packet)!={'version','transport_source','completion_bundle','reinstall_source'} or type(packet['version']) is not int or packet['version']!=1:raise ValueError('REINSTALL_FIELDS')
+                transport_source=packet['transport_source'];reinstall_source=packet['reinstall_source']
+                if (type(transport_source) is not str or not 0<len(transport_source.encode())<=24576
+                    or hashlib.sha256(transport_source.encode()).hexdigest()!='834b7be0b38ac9db6ab7126e8a77b763633a1acaf2724ef9544f3c32b444eed6'
+                    or type(reinstall_source) is not str or not 0<len(reinstall_source.encode())<=160000
+                    or hashlib.sha256(reinstall_source.encode()).hexdigest()!='ad5483b8b760156e077c3463ce8ab92b0bdec2f28fc044e4b332f248cd5290c4'):raise ValueError('REINSTALL_PIN')
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                transport=types.ModuleType('approved_export_reinstall_transport');exec(transport_source,transport.__dict__)
+                if transport.MAX_JSON!=393216 or transport.MAX_WIRE!=98304:raise ValueError('REINSTALL_LIMITS')
+                bundle=transport.decode(transport.encode(packet['completion_bundle']))
+                if bundle['operation']!='preview-completion-apply' or bundle['package']!={} or bundle['approved_config_operation_id'] is not None:raise ValueError('REINSTALL_OPERATION')
+                modules=transport.modules(bundle)
+                module=types.ModuleType('approved_export_reinstall');exec(reinstall_source,module.__dict__)
+                result=module.reinstall(modules['controller'],modules['exports_binding'],modules['exports_helper'],
+                    modules['release'],modules['host'].NativeHost(),modules['lifecycle'],modules['upgrade'],
+                    helper_source=bundle['sources']['exports_helper'].encode(),scripts={
+                        'naver_product_export.py':bundle['sources']['product_exporter'].encode(),
+                        'naver_market_export.py':bundle['sources']['market_exporter'].encode()},operation_id=operation_id)
+                output=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
+                if len(output.encode())>32768:raise ValueError('REINSTALL_OUTPUT')
+            except Exception as error:
+                result=module.failure_report(error) if module is not None else {'ok':False,'stage':'input','code':'REINSTALL_INPUT',
+                    'error_kind':'OtherError','missing_role':'none','cleanup':'not_attempted','database_writes':False,'engine_changed':False}
+                output=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
+                if len(output.encode())>32768:
+                    result={'ok':False,'stage':'input','code':'REINSTALL_FAILED','error_kind':'OtherError',
+                        'missing_role':'none','cleanup':'not_attempted','database_writes':False,'engine_changed':False}
+                    output=json.dumps(result,separators=(',',':'))
+            print('NAVER_COMPLETION_EXPORT_REINSTALL='+output);sys.exit(0 if result.get('ok') else 1)
             PYCODE
 
   completion-export-inspect:

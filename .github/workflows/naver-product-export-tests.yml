@@ -52,7 +52,7 @@ jobs:
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
             LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
-            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_preview_completion_release test_naver_completion_transport test_naver_completion_failed_apply_recovery test_naver_completion_migration_inspect test_naver_completion_failed_database_archive -v \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_preview_completion_release test_naver_completion_transport test_naver_completion_failed_apply_recovery test_naver_completion_migration_inspect test_naver_completion_failed_database_archive test_naver_completion_exports_reinstall -v \
             2>&1 | tee "$RUNNER_TEMP/product-tests/completion-database-tests.txt"
       - name: 소스·합성 결과 보관 (운영 자료 없음)
         if: always()
