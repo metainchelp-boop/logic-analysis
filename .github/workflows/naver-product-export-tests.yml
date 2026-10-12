@@ -78,6 +78,14 @@ jobs:
             LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
             env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_strategy_validation_transport -v \
             2>&1 | tee "$RUNNER_TEMP/product-tests/strategy-validation-patch-tests.txt"
+      - name: 고정 두 광고주 source 진단·읽기 전용 전송 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_completion_source_diagnostics test_naver_completion_source_diagnostics_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/completion-source-diagnostics-tests.txt"
       - name: 소스·합성 결과 보관 (운영 자료 없음)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
