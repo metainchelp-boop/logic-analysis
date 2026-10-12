@@ -29,6 +29,11 @@ METADATA_PATHS = (
     ('market_output', '/var/lib/metainc/naver-market-source')) + tuple(
         (kind+'_'+suffix, '/etc/systemd/system/naver-'+kind+'-export.'+suffix)
         for kind in ('product', 'market') for suffix in ('service', 'timer'))
+SOURCE_PATHS = (
+    ('source_directory', '/root/logic-analysis-deploy/data'),
+    ('source_database', '/root/logic-analysis-deploy/data/logic_data.db'),
+    ('source_wal', '/root/logic-analysis-deploy/data/logic_data.db-wal'),
+    ('source_shm', '/root/logic-analysis-deploy/data/logic_data.db-shm'))
 ERROR_PATTERNS = (
     ('permission_error', r'\bPermissionError\b'),
     ('permission_denied', r'\b(?:permission denied|access denied)\b'),
@@ -244,6 +249,23 @@ def _python_metadata():
     return result
 
 
+def _source_metadata():
+    # lstat(fullpath) follows intermediate links, so inspect fixed ancestors
+    # first. Their paths/metadata are not returned; an unsafe ancestor blocks all
+    # descendants. No resolve, stat, DB open, content/hash or permission change.
+    blocked = False
+    for parent in ('/root', '/root/logic-analysis-deploy'):
+        value = _metadata('source_ancestor', parent, blocked)
+        blocked = value['kind'] != 'directory'
+    result = []
+    for role, path in SOURCE_PATHS:
+        value = _metadata(role, path, blocked)
+        result.append(value)
+        if role == 'source_directory':
+            blocked = value['kind'] != 'directory'
+    return result
+
+
 def inspect_host():
     """No arguments, source/DB opens, identities, environment or service changes."""
     now_us = time.time_ns() // 1000
@@ -258,7 +280,8 @@ def inspect_host():
         value = _metadata(role, path, blocked)
         ancestry[path] = value['kind']; paths.append(value)
     return {'version': 1, 'diagnostic_only': True, 'journals': journals, 'paths': paths,
-            'source_writes': False, 'service_changes': False, 'network_calls': 0, 'runtime_executables': _python_metadata()}
+            'source_writes': False, 'service_changes': False, 'network_calls': 0,
+            'runtime_executables': _python_metadata(), 'source_files': _source_metadata()}
 
 
 def main():

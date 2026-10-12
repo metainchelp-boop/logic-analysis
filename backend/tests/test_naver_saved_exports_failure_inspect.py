@@ -140,7 +140,8 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
         def metadata(path):
             seen.append(path)
             return SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0,st_gid=0)
-        with patch.object(I,'_python_metadata',return_value=[]) as runtime,patch.object(I,'_journal',return_value=(row('Permission denied'),None)) as command,\
+        with patch.object(I,'_python_metadata',return_value=[]) as runtime,patch.object(I,'_source_metadata',return_value=[]) as source,\
+             patch.object(I,'_journal',return_value=(row('Permission denied'),None)) as command,\
              patch.object(I.time,'time_ns',return_value=NOW*1000),patch.object(I.os,'lstat',side_effect=metadata),\
              patch.object(builtins,'open',side_effect=AssertionError('body')),\
              patch.object(I.os,'open',side_effect=AssertionError('body')),\
@@ -154,6 +155,59 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
         self.assertFalse(result['source_writes']);self.assertFalse(result['service_changes'])
         self.assertEqual(result['network_calls'],0)
         self.assertNotIn('MESSAGE',json.dumps(result));self.assertNotIn('Invocation',json.dumps(result))
+
+    def test_fixed_source_directory_db_wal_shm_lstat_only_closed_metadata(self):
+        seen=[]
+        def metadata(path):
+            seen.append(path)
+            if path.endswith('-wal'):raise FileNotFoundError('PRIVATE missing WAL')
+            directory=path in ('/root','/root/logic-analysis-deploy',I.SOURCE_PATHS[0][1])
+            return SimpleNamespace(st_mode=(stat.S_IFDIR if directory else stat.S_IFREG)|0o640,
+                st_uid=1234,st_gid=10001)
+        with patch.object(I.os,'lstat',side_effect=metadata),\
+             patch.object(I.os,'stat',side_effect=AssertionError('follow')),\
+             patch.object(I.os.path,'realpath',side_effect=AssertionError('resolve')),\
+             patch.object(builtins,'open',side_effect=AssertionError('body')),\
+             patch.object(I.os,'open',side_effect=AssertionError('body')),\
+             patch.object(I.os,'getenv',side_effect=AssertionError('env')),\
+             patch.object(sqlite3,'connect',side_effect=AssertionError('DB')),\
+             patch.object(socket,'socket',side_effect=AssertionError('network')):
+            result=I._source_metadata()
+        self.assertEqual(seen,['/root','/root/logic-analysis-deploy',*(p for _,p in I.SOURCE_PATHS)])
+        self.assertEqual([value['role'] for value in result],['source_directory','source_database','source_wal','source_shm'])
+        self.assertTrue(all(set(value)=={'role','exists','kind','mode','uid','gid'} for value in result))
+        self.assertEqual(result[1],{'role':'source_database','exists':True,'kind':'regular','mode':'0640','uid':1234,'gid':10001})
+        self.assertEqual(result[2],{'role':'source_wal','exists':False,'kind':'missing','mode':None,'uid':None,'gid':None})
+        self.assertNotIn('/root',json.dumps(result));self.assertNotIn('PRIVATE',json.dumps(result))
+        self.assertNotIn('logic_data',json.dumps(result))
+
+    def test_source_symlink_or_unavailable_ancestor_never_follows_descendants(self):
+        for bad in ('/root','/root/logic-analysis-deploy',I.SOURCE_PATHS[0][1]):
+            for failure in ('symlink','missing','permission'):
+                seen=[]
+                def metadata(path):
+                    seen.append(path)
+                    if path==bad:
+                        if failure=='missing':raise FileNotFoundError('PRIVATE')
+                        if failure=='permission':raise PermissionError('PRIVATE')
+                        return SimpleNamespace(st_mode=stat.S_IFLNK|0o777,st_uid=0,st_gid=0)
+                    return SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0,st_gid=0)
+                with self.subTest(bad=bad,failure=failure),patch.object(I.os,'lstat',side_effect=metadata):
+                    result=I._source_metadata()
+                    self.assertTrue(all(item['kind']=='blocked' for item in result[1:]))
+                    self.assertFalse(any(path in seen for _,path in I.SOURCE_PATHS[1:]))
+                    self.assertNotIn('PRIVATE',json.dumps(result))
+
+    def test_source_database_symlink_is_reported_without_dereferencing(self):
+        def metadata(path):
+            mode=stat.S_IFLNK|0o777 if path==I.SOURCE_PATHS[1][1] else stat.S_IFDIR|0o755
+            return SimpleNamespace(st_mode=mode,st_uid=0,st_gid=0)
+        with patch.object(I.os,'lstat',side_effect=metadata),\
+             patch.object(I.os,'stat',side_effect=AssertionError('follow')),\
+             patch.object(I.os.path,'realpath',side_effect=AssertionError('resolve')):
+            result=I._source_metadata()
+        self.assertEqual(result[1]['kind'],'symlink')
+        self.assertEqual(result[1]['mode'],'0777')
 
     def test_fixed_interpreter_targets_only_expose_scope_and_mode(self):
         def target(path):return '/root/private/runtime/bin/python' if path=='/usr/bin/python3' else path
