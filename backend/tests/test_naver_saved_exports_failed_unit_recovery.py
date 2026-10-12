@@ -64,7 +64,7 @@ class FailedUnitRecoveryTests(unittest.TestCase):
         active=self.active_after is not None and len(self.calls)>=self.active_after
         value={'LoadState':'not-found' if self.reloaded else 'bad-setting','ActiveState':'active' if active else ('failed' if self.cached_failed else 'inactive'),
                'SubState':'running' if active else ('failed' if self.cached_failed else 'dead'),
-               'InvocationID':'a'*32 if self.cached_failed else '', 'Job':'1' if self.job_pending else '0','UnitFileState':'',
+               'InvocationID':'a'*32 if self.cached_failed else '', 'Job':'1' if self.job_pending else '','UnitFileState':'',
                'MainPID':'1234' if self.live_pid else '0','ControlPID':'0',
                'ControlGroup':'/system.slice/'+args[2] if self.residual_tasks else '',
                'TasksCurrent':'1' if self.residual_tasks else '[not set]'}

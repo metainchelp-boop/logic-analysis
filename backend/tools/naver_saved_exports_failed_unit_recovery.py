@@ -83,7 +83,9 @@ def unit_state(unit,run):
         if value['ControlGroup']!='' and (value['ControlGroup']!='/system.slice/'+unit or value['TasksCurrent']!='0'):
             refuse('unit_active')
     if value['InvocationID']!='' and re.fullmatch('[0-9a-f]{32}',value['InvocationID']) is None:refuse('unit_invocation')
-    if value['Job']!='0':refuse('unit_job')
+    # systemd v249 systemctl-show.c prints Job= for the D-Bus zero job ID.
+    # Keep the explicit numeric zero form for other supported versions.
+    if value['Job'] not in ('','0'):refuse('unit_job')
     if value['UnitFileState'] not in ('','disabled','static','bad','not-found'):refuse('unit_enabled')
     if result.returncode==1 and value['LoadState']!='not-found':refuse('unit_status')
     return value
