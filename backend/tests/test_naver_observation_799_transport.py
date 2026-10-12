@@ -147,6 +147,11 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(OPS/'.github/workflows/debug-rank.yml').read_text()
+        # This independent source799 v2 profile is removed only from prior projections.
+        workflow=workflow.replace(section(workflow,'observation-799-diagnostics-v2'),'')
+        observation_option=', preview-observation-799-diagnostics-v2'
+        self.assertEqual(workflow.count(observation_option),1)
+        workflow=workflow.replace(observation_option,'')
         # Remove only this new independent profile before preserving every previous projection.
         if '  observation-799-diagnostics:\n' in workflow:
             workflow=workflow.replace(section(workflow,'observation-799-diagnostics'),'').replace(', preview-observation-799-diagnostics','')
@@ -160,6 +165,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=workflow.replace(section(workflow,'setup-stale-diagnostics'),'').replace(', preview-setup-stale-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),DEBUG_OLD_SHA)
         native=(OPS/'.github/workflows/naver-product-export-tests.yml').read_text()
+        observation_start=native.index('      - name: 현재 799 관측 사유 v2·읽기 전용 진단 검사\n')
+        observation_end=native.index('      - name:',observation_start+1)
+        native=native[:observation_start]+native[observation_end:]
         if '      - name: 현재 799 관측 sidecar·identity·읽기 전용 진단 검사\n' in native:
             at=native.index('      - name: 현재 799 관측 sidecar·identity·읽기 전용 진단 검사\n');end=native.index('      - name:',at+1);native=native[:at]+native[end:]
         learning_start=native.index('      - name: 학습 실패 관측 패치·dc168 복구 경계 검사\n')
