@@ -147,6 +147,12 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(OPS/'.github/workflows/debug-rank.yml').read_text()
+        # Remove only the independent P10 and fixed 4d D3 registrations.
+        workflow=workflow.replace(section(workflow,'appeal-prefix-patch'),'')
+        workflow=workflow.replace(section(workflow,'daily-current-source-diagnostics-v3'),'')
+        prefix_daily_options=', preview-appeal-prefix-patch-prepare, preview-appeal-prefix-patch-apply, preview-appeal-prefix-patch-rollback, preview-daily-current-source-diagnostics-v3'
+        self.assertEqual(workflow.count(prefix_daily_options),1)
+        workflow=workflow.replace(prefix_daily_options,'')
         # Remove only this independent P9 registration from historical byte projections.
         workflow=workflow.replace(section(workflow,'appeal-diagnostic-patch'),'')
         appeal_diagnostic_options=', preview-appeal-diagnostic-patch-prepare, preview-appeal-diagnostic-patch-apply, preview-appeal-diagnostic-patch-rollback'
@@ -175,6 +181,12 @@ class PinnedSourceTests(unittest.TestCase):
         prior=workflow.replace(section(workflow,'setup-stale-diagnostics'),'').replace(', preview-setup-stale-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),DEBUG_OLD_SHA)
         native=(OPS/'.github/workflows/naver-product-export-tests.yml').read_text()
+        p10_d3_start=native.index('      - name: 소구 가설 시작 형식 패치·4d 복구 경계 검사\n')
+        p10_d3_end=native.index('      - name:',p10_d3_start+1)
+        native=native[:p10_d3_start]+native[p10_d3_end:]
+        p10_d3_start=native.index('      - name: 현재 일일 점검 원천·4d 읽기 전용 경계 검사\n')
+        p10_d3_end=native.index('      - name:',p10_d3_start+1)
+        native=native[:p10_d3_start]+native[p10_d3_end:]
         appeal_diagnostic_start=native.index('      - name: 소구 가설 진단 코드 패치·328 복구 경계 검사\n')
         appeal_diagnostic_end=native.index('      - name:',appeal_diagnostic_start+1)
         native=native[:appeal_diagnostic_start]+native[appeal_diagnostic_end:]

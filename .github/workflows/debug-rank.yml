@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-migration-inspect, preview-completion-archive-quarantine, preview-completion-archive-snapshot, preview-completion-restore-quarantine, preview-completion-restore-snapshot, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-export-reinstall, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, preview-completion-recover-failed-apply, preview-completion-patch-prepare, preview-completion-patch-apply, preview-completion-patch-rollback, preview-claude-quality-patch-prepare, preview-claude-quality-patch-apply, preview-claude-quality-patch-rollback, preview-strategy-validation-patch-prepare, preview-strategy-validation-patch-apply, preview-strategy-validation-patch-rollback, preview-inspection-continuity-patch-prepare, preview-inspection-continuity-patch-apply, preview-inspection-continuity-patch-rollback, preview-completion-source-diagnostics, preview-current-inspection-diagnostics, preview-appeal-diagnostic-patch-prepare, preview-appeal-diagnostic-patch-apply, preview-appeal-diagnostic-patch-rollback, preview-observation-binding-patch-prepare, preview-observation-binding-patch-apply, preview-observation-binding-patch-rollback, preview-observation-799-diagnostics-v2, preview-observation-799-diagnostics, preview-learning-failure-patch-prepare, preview-learning-failure-patch-apply, preview-learning-failure-patch-rollback, preview-setup-stale-diagnostics, preview-budget-draft-patch-prepare, preview-budget-draft-patch-apply, preview-budget-draft-patch-rollback, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-migration-inspect, preview-completion-archive-quarantine, preview-completion-archive-snapshot, preview-completion-restore-quarantine, preview-completion-restore-snapshot, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-export-reinstall, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, preview-completion-recover-failed-apply, preview-completion-patch-prepare, preview-completion-patch-apply, preview-completion-patch-rollback, preview-claude-quality-patch-prepare, preview-claude-quality-patch-apply, preview-claude-quality-patch-rollback, preview-strategy-validation-patch-prepare, preview-strategy-validation-patch-apply, preview-strategy-validation-patch-rollback, preview-inspection-continuity-patch-prepare, preview-inspection-continuity-patch-apply, preview-inspection-continuity-patch-rollback, preview-completion-source-diagnostics, preview-current-inspection-diagnostics, preview-appeal-prefix-patch-prepare, preview-appeal-prefix-patch-apply, preview-appeal-prefix-patch-rollback, preview-daily-current-source-diagnostics-v3, preview-appeal-diagnostic-patch-prepare, preview-appeal-diagnostic-patch-apply, preview-appeal-diagnostic-patch-rollback, preview-observation-binding-patch-prepare, preview-observation-binding-patch-apply, preview-observation-binding-patch-rollback, preview-observation-799-diagnostics-v2, preview-observation-799-diagnostics, preview-learning-failure-patch-prepare, preview-learning-failure-patch-apply, preview-learning-failure-patch-rollback, preview-setup-stale-diagnostics, preview-budget-draft-patch-prepare, preview-budget-draft-patch-apply, preview-budget-draft-patch-rollback, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -4710,4 +4710,355 @@ jobs:
                 result={'ok':False,'stage':'preflight','error_code':'COMPLETION_FAILED'}
                 if controller is not None:result={'ok':False,**controller.failure_report(error)}
             print('NAVER_APPEAL_DIAGNOSTIC_PATCH_RELEASE='+json.dumps(result,sort_keys=True));sys.exit(0 if result.get('ok') else 1)
+            PYCODE
+  appeal-prefix-patch:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-appeal-prefix-patch-prepare' || inputs.ad_prepare == 'preview-appeal-prefix-patch-apply' || inputs.ad_prepare == 'preview-appeal-prefix-patch-rollback')
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Existing preview regressions and exact schema 21 code patch bundle
+        env:
+          RUN_ID: ${{ github.run_id }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          PYTHONPATH=backend/tools:backend/tests python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
+          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_appeal_prefix_patch test_appeal_prefix_transport test_naver_completion_download test_naver_saved_exports test_naver_saved_exports_inspect test_naver_completion_export_diagnostics test_naver_completion_failed_apply_recovery -q
+          python3 - <<'PYCODE'
+          import base64,hashlib,json,os,pathlib,re,sys,types
+          expected_transport_sha='8da1a56dc473e61214aee9600040b41526c874b4f0810e057a4b157b800ee3f9';expected_core_sha='dbfb7aad6d2ce02c4311d5cb8232b4205d2a3d7014cbff2f7467d214e285a1eb'
+          if any(re.fullmatch('[0-9a-f]{64}',value) is None for value in (expected_transport_sha,expected_core_sha)):
+              raise ValueError('APPEAL_PREFIX_PINS_PENDING')
+          transport_path=pathlib.Path('backend/tools/naver_appeal_prefix_transport.py')
+          core_path=pathlib.Path('backend/tools/naver_appeal_prefix_patch.py')
+          if transport_path.is_symlink() or not transport_path.is_file() or not 0<transport_path.stat().st_size<=24576:
+              raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+          transport_raw=transport_path.read_bytes();verified_transport_sha=hashlib.sha256(transport_raw).hexdigest()
+          if verified_transport_sha!=expected_transport_sha:raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+          if core_path.is_symlink() or not core_path.is_file() or not 0<core_path.stat().st_size<=160000:
+              raise ValueError('COMPLETION_PATCH_SOURCE')
+          core_raw=core_path.read_bytes();verified_core_sha=hashlib.sha256(core_raw).hexdigest()
+          if verified_core_sha!=expected_core_sha:raise ValueError('COMPLETION_PATCH_SOURCE')
+          T=types.ModuleType('naver_appeal_prefix_transport');T.__file__=str(transport_path)
+          exec(transport_raw,T.__dict__)
+          if T.TRANSPORT_RAW_SHA256 is not None or T.SOURCE_SHA256['patch']!=verified_core_sha:
+              raise ValueError('COMPLETION_TRANSPORT_PROFILE')
+          T.TRANSPORT_RAW_SHA256=verified_transport_sha;T.require_pins()
+          P=types.ModuleType('naver_appeal_prefix_patch');P.__file__=str(core_path)
+          exec(core_raw,P.__dict__);P.require_pins()
+          sys.path.insert(0,'backend/tools');sys.modules[P.__name__]=P
+          def appeal_prefix_ssh_scripts(workflow):
+              lines=workflow.splitlines(keepends=True)
+              starts=[i for i,line in enumerate(lines) if line.rstrip('\r\n')=='  appeal-prefix-patch:']
+              if len(starts)!=1:raise ValueError('COMPLETION_SSH_WORKFLOW')
+              start=starts[0]+1;end=len(lines)
+              for i in range(start,len(lines)):
+                  if lines[i].startswith('  ') and not lines[i].startswith('   ') and lines[i].strip().endswith(':'):
+                      end=i;break
+              section=lines[start:end];scripts=[]
+              if sum(line.strip().startswith('uses: appleboy/ssh-action@') for line in section)!=2:
+                  raise ValueError('COMPLETION_SSH_WORKFLOW')
+              for i,line in enumerate(section):
+                  if line.rstrip('\r\n')!='          script: |':continue
+                  body=[]
+                  for item in section[i+1:]:
+                      if item.startswith('            '):body.append(item[12:])
+                      elif not item.strip():body.append(item)
+                      else:break
+                  if not body:raise ValueError('COMPLETION_SSH_WORKFLOW')
+                  scripts.append(''.join(body))
+              if len(scripts)!=2:raise ValueError('COMPLETION_SSH_WORKFLOW')
+              return scripts
+          def require_appeal_prefix_ssh_pressure(wire,transport,workflow):
+              if any(type(value) is not str or not value.isascii() or any(char in value for char in "'\r\n\x00") for value in (wire,transport)):
+                  raise ValueError('COMPLETION_SSH_ENV')
+              exports="export APPEAL_PREFIX_PATCH_B64='"+wire+"'; export APPEAL_PREFIX_PATCH_TRANSPORT_B64='"+transport+"';\n"
+              sizes=[len((exports+script).encode('utf-8')) for script in appeal_prefix_ssh_scripts(workflow)]
+              if any(size>=131072 for size in sizes):raise ValueError('COMPLETION_SSH_SIZE')
+              return sizes
+          P.require_pins()
+          inputs=json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())['inputs'];operation=inputs.pop('ad_prepare');package=json.loads(inputs.pop('ad_expected_baseline'))
+          assert operation in T.FUNCTIONS and all(v=='off' for v in inputs.values())
+          if operation=='preview-appeal-prefix-patch-prepare':
+              from naver_completion_download import download
+              fields=download(package,'preview-payload');fields.update(run_id=os.environ['RUN_ID'],operation='code-prepare');package=fields
+          wire=T.encode(T.bundle(operation,package,pathlib.Path('backend/tools')))
+          transport=T.bootstrap(transport_raw)
+          assert len(transport)<=32768
+          require_appeal_prefix_ssh_pressure(wire,transport,pathlib.Path('.github/workflows/debug-rank.yml').read_text(encoding='utf-8'))
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('APPEAL_PREFIX_PATCH_B64='+wire+'\n');stream.write('APPEAL_PREFIX_PATCH_TRANSPORT_B64='+transport+'\n')
+          PYCODE
+      - name: Prepare same-run incoming directory only
+        if: inputs.ad_prepare == 'preview-appeal-prefix-patch-prepare'
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          APPEAL_PREFIX_PATCH_B64: ${{ env.APPEAL_PREFIX_PATCH_B64 }}
+          APPEAL_PREFIX_PATCH_TRANSPORT_B64: ${{ env.APPEAL_PREFIX_PATCH_TRANSPORT_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: APPEAL_PREFIX_PATCH_B64,APPEAL_PREFIX_PATCH_TRANSPORT_B64
+          command_timeout: 2m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PYCODE'
+            import base64,hashlib,json,os,sys,types
+            try:
+                wire=os.environ['APPEAL_PREFIX_PATCH_B64'];source=os.environ['APPEAL_PREFIX_PATCH_TRANSPORT_B64']
+                if len(source)>32768:raise ValueError('COMPLETION_TRANSPORT_SIZE')
+                raw=base64.b64decode(source,validate=True)
+                if hashlib.sha256(raw).hexdigest()!='8da1a56dc473e61214aee9600040b41526c874b4f0810e057a4b157b800ee3f9':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+                transport=types.ModuleType('approved_completion_transport');exec(raw,transport.__dict__)
+                verified_transport_sha=hashlib.sha256(raw).hexdigest()
+                if transport.TRANSPORT_RAW_SHA256 is not None:raise ValueError('COMPLETION_TRANSPORT_PROFILE')
+                transport.TRANSPORT_RAW_SHA256=verified_transport_sha
+                bundle=transport.decode(wire)
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                resolved=transport.modules(bundle)
+                result=transport.execute(bundle,incoming=True)
+            except Exception:
+                result={'ok':False,'stage':'incoming','error_code':'COMPLETION_INCOMING_REFUSED'}
+            print('NAVER_APPEAL_PREFIX_PATCH_INCOMING='+json.dumps(result,sort_keys=True));sys.exit(0 if result.get('ok') else 1)
+            PYCODE
+      - name: Align encrypted transfer ownership with private modes unchanged
+        if: inputs.ad_prepare == 'preview-appeal-prefix-patch-prepare'
+        run: |
+          set -eu
+          sudo /usr/bin/python3 -I -B - <<'PYCODE'
+          import os,pathlib,stat
+          folder=pathlib.Path.cwd()/'preview-payload';path=folder/'runtime-secrets.cms'
+          assert folder.resolve()==folder and path.resolve()==path
+          assert sorted(p.name for p in folder.iterdir())==['runtime-secrets.cms']
+          parent=folder.lstat();item=path.lstat()
+          assert stat.S_ISDIR(parent.st_mode) and stat.S_IMODE(parent.st_mode)==0o700
+          assert stat.S_ISREG(item.st_mode) and item.st_nlink==1 and stat.S_IMODE(item.st_mode)==0o600
+          assert 0<item.st_size<=3*1024*1024 and parent.st_uid==item.st_uid==int(os.environ['SUDO_UID'])
+          os.chown(path,1000,1000);os.chown(folder,1000,1000)
+          PYCODE
+      - name: Encrypted payload only
+        if: inputs.ad_prepare == 'preview-appeal-prefix-patch-prepare'
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: preview-payload/runtime-secrets.cms
+          target: /srv/metainc/ad-deploy-staging/incoming/${{ github.run_id }}
+          strip_components: 1
+          overwrite: false
+      - name: Exact 4d schema 21 appeal prefix prepare, apply, or rollback
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          APPEAL_PREFIX_PATCH_B64: ${{ env.APPEAL_PREFIX_PATCH_B64 }}
+          APPEAL_PREFIX_PATCH_TRANSPORT_B64: ${{ env.APPEAL_PREFIX_PATCH_TRANSPORT_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: APPEAL_PREFIX_PATCH_B64,APPEAL_PREFIX_PATCH_TRANSPORT_B64
+          command_timeout: 60m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PYCODE'
+            import base64,hashlib,json,os,sys,types
+            controller=None
+            try:
+                wire=os.environ['APPEAL_PREFIX_PATCH_B64'];source=os.environ['APPEAL_PREFIX_PATCH_TRANSPORT_B64']
+                if len(source)>32768:raise ValueError('COMPLETION_TRANSPORT_SIZE')
+                raw=base64.b64decode(source,validate=True)
+                if hashlib.sha256(raw).hexdigest()!='8da1a56dc473e61214aee9600040b41526c874b4f0810e057a4b157b800ee3f9':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+                transport=types.ModuleType('approved_completion_transport');exec(raw,transport.__dict__)
+                verified_transport_sha=hashlib.sha256(raw).hexdigest()
+                if transport.TRANSPORT_RAW_SHA256 is not None:raise ValueError('COMPLETION_TRANSPORT_PROFILE')
+                transport.TRANSPORT_RAW_SHA256=verified_transport_sha
+                bundle=transport.decode(wire)
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                resolved=transport.modules(bundle)
+                controller=resolved['patch']
+                result=transport.execute(bundle)
+            except Exception as error:
+                result={'ok':False,'stage':'preflight','error_code':'COMPLETION_FAILED'}
+                if controller is not None:result={'ok':False,**controller.failure_report(error)}
+            print('NAVER_APPEAL_PREFIX_PATCH_RELEASE='+json.dumps(result,sort_keys=True));sys.exit(0 if result.get('ok') else 1)
+            PYCODE
+  daily-current-source-diagnostics-v3:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-daily-current-source-diagnostics-v3'
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fixed 4d read-only regressions and authenticated native authorization
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/daily-home"
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/daily-home" "TMPDIR=$RUNNER_TEMP/daily-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            python3 -I -B -m unittest discover -s backend/tests -p 'test_daily_current_*.py' -q
+          python3 - <<'PYCODE'
+          import base64,hashlib,io,json,os,pathlib,re,stat,subprocess,types,zipfile
+          D3_NATIVE_COUNTS={'budget-draft-patch-tests.txt': 29, 'claude-quality-patch-tests.txt': 35, 'completion-database-tests.txt': 168, 'completion-patch-tests.txt': 32, 'completion-source-diagnostics-tests.txt': 55, 'current-inspection-diagnostics-tests.txt': 76, 'export-tests.txt': 22, 'inspection-continuity-patch-tests.txt': 40, 'learning-failure-patch-tests.txt': 42, 'observation-799-diagnostics-tests.txt': 98, 'observation-799-diagnostics-v2-tests.txt': 49, 'saved-export-tests.txt': 52, 'setup-stale-diagnostics-tests.txt': 74, 'strategy-validation-patch-tests.txt': 38, 'observation-binding-patch-tests.txt': 61, 'appeal-diagnostic-patch-tests.txt': 59, 'appeal-prefix-patch-tests.txt': 58, 'daily-current-source-diagnostics-v3-tests.txt': 90}
+          D3_NATIVE_STEPS=frozenset(('AI 검증 진단 코드 패치·faa0 복구 경계 검사', 'Claude 문안 코드 패치·현재판 복구 경계 검사', 'Python 3.12', '개발 소스 받기 (배포 자격 없음)', '고정 광고주 번호 v2·source 진단·읽기 전용 전송 경계 검사', '관측 저장 연결 코드 패치·799 복구 경계 검사', '기존 예산 초안·상품 가설 패치·15f 복구 경계 검사', '소구 가설 시작 형식 패치·4d 복구 경계 검사', '소구 가설 진단 코드 패치·328 복구 경계 검사', '소스·합성 결과 보관 (운영 자료 없음)', '스키마 유지 코드 패치·롤백·전송 경계 검사', '실제 Linux 서비스 문법·격리된 설치 회귀 검사', '점검 연속 수집 코드 패치·70e 복구 경계 검사', '큰 DB 배포·정확한 실패 복구 Linux 검사', '학습 실패 관측 패치·dc168 복구 경계 검사', '합성 SQLite·파일 검사 (외부망 차단)', '현재 15f 점검 진척·증명·읽기 전용 진단 검사', '현재 799 관측 sidecar·identity·읽기 전용 진단 검사', '현재 799 관측 사유 v2·읽기 전용 진단 검사', '현재 dc168 설정 원천·scope·읽기 전용 진단 검사', '현재 일일 점검 원천·4d 읽기 전용 경계 검사'))
+          D3_MAX_ARTIFACT=4*1024*1024
+
+          def daily_check(value):
+              if not value:raise ValueError('D3_NATIVE_VERIFICATION_REFUSED')
+
+          def daily_unique(pairs):
+              value={}
+              for key,item in pairs:
+                  daily_check(key not in value);value[key]=item
+              return value
+
+          def daily_gh(endpoint,archive=False):
+              daily_check(type(endpoint)is str and re.fullmatch(r'actions/(runs/[0-9]+(?:/(?:jobs|artifacts)\?per_page=100)?|artifacts/[0-9]+/zip)',endpoint)is not None)
+              result=subprocess.run(['gh','api','repos/metainchelp-boop/logic-analysis/'+endpoint],capture_output=True,timeout=60)
+              daily_check(result.returncode==0 and type(result.stdout)is bytes and 0<len(result.stdout)<D3_MAX_ARTIFACT)
+              return result.stdout if archive else json.loads(result.stdout,object_pairs_hook=daily_unique)
+
+          def verify_daily_native_authorization(auth,head):
+              daily_check(type(auth)is dict and set(auth)=={'head','run_id','receipt_sha256'}
+                  and type(head)is str and re.fullmatch('[0-9a-f]{40}',head)is not None and auth['head']==head
+                  and type(auth['run_id'])is int and auth['run_id']>0 and type(auth['receipt_sha256'])is str
+                  and re.fullmatch('[0-9a-f]{64}',auth['receipt_sha256'])is not None)
+              run=auth['run_id'];row=daily_gh('actions/runs/'+str(run))
+              daily_check(type(row)is dict and type(row.get('id'))is int and row['id']==run and row.get('head_sha')==head
+                  and row.get('head_branch')=='codex/naver-claude-reference-ops-20261011'
+                  and row.get('path')=='.github/workflows/naver-product-export-tests.yml' and row.get('event')=='push'
+                  and type(row.get('run_attempt'))is int and row['run_attempt']==1
+                  and row.get('status')=='completed' and row.get('conclusion')=='success'
+                  and row.get('repository',{}).get('full_name')=='metainchelp-boop/logic-analysis')
+              data=daily_gh('actions/runs/'+str(run)+'/jobs?per_page=100')
+              daily_check(type(data)is dict and type(data.get('total_count'))is int and data['total_count']==1 and type(data.get('jobs'))is list and len(data['jobs'])==1)
+              job=data['jobs'][0]
+              daily_check(type(job)is dict and job.get('name')=='synthetic-export' and type(job.get('id'))is int and job['id']>0
+                  and type(job.get('run_id'))is int and job['run_id']==run and job.get('head_sha')==head
+                  and type(job.get('run_attempt'))is int and job['run_attempt']==1 and job.get('status')=='completed' and job.get('conclusion')=='success')
+              items=job.get('steps');daily_check(type(items)is list and bool(items)
+                  and all(type(x)is dict and x.get('conclusion')=='success' for x in items))
+              names=[x.get('name')for x in items];daily_check(all(names.count(name)==1 for name in D3_NATIVE_STEPS))
+              data=daily_gh('actions/runs/'+str(run)+'/artifacts?per_page=100')
+              daily_check(type(data)is dict and type(data.get('total_count'))is int and data['total_count']==1 and type(data.get('artifacts'))is list and len(data['artifacts'])==1)
+              item=data['artifacts'][0]
+              daily_check(type(item)is dict and item.get('name')=='naver-product-export-tests-'+str(run) and item.get('expired')is False
+                  and type(item.get('id'))is int and item['id']>0 and type(item.get('size_in_bytes'))is int and 0<item['size_in_bytes']<D3_MAX_ARTIFACT
+                  and item.get('digest')=='sha256:'+auth['receipt_sha256'])
+              origin=item.get('workflow_run');daily_check(type(origin)is dict and type(origin.get('id'))is int and origin['id']==run
+                  and origin.get('head_sha')==head and origin.get('head_branch')=='codex/naver-claude-reference-ops-20261011')
+              packed=daily_gh('actions/artifacts/'+str(item['id'])+'/zip',archive=True)
+              daily_check(len(packed)==item['size_in_bytes'] and hashlib.sha256(packed).hexdigest()==auth['receipt_sha256'])
+              with zipfile.ZipFile(io.BytesIO(packed))as archive:
+                  entries=archive.infolist();expected=set(D3_NATIVE_COUNTS)|{'source-sha.txt'}
+                  daily_check(len(entries)==len(expected)==19 and {x.filename for x in entries}==expected
+                      and all(not x.is_dir()and 0<x.file_size<=2*1024*1024 and stat.S_IFMT(x.external_attr>>16)in(0,stat.S_IFREG)
+                              and not x.flag_bits&1 for x in entries)and sum(x.file_size for x in entries)<D3_MAX_ARTIFACT)
+                  daily_check(archive.getinfo('source-sha.txt').file_size<=128 and archive.read('source-sha.txt').decode('ascii').strip()==head)
+                  total=0
+                  for name,count in D3_NATIVE_COUNTS.items():
+                      text=archive.read(name).decode('utf-8')
+                      runs=list(re.finditer(r'(?m)^Ran ([0-9]+) tests? in [^\r\n]+$',text))
+                      ends=list(re.finditer(r'(?m)^OK(?: \(skipped=(0)\))?\s*$',text))
+                      daily_check(len(runs)==len(ends)==1 and runs[0].end()<ends[0].start() and int(runs[0][1])==count
+                          and not re.search(r'(?m)^(FAILED|ERROR:|FAIL:)',text));total+=count
+              daily_check(total==1078)
+              return dict(auth)
+
+          expected_transport_sha='4dc50d5eb316c30c2dcfc681e8f0739bbce61c5ecd142ca444bad0e62173162b';expected_controller_sha='d07d439014fc6642ad045c71f597ad6887ae07147af5e595fc347cce58889ed7'
+          daily_check(all(re.fullmatch('[0-9a-f]{64}',v)is not None for v in(expected_transport_sha,expected_controller_sha)))
+          daily_check(os.environ.get('GITHUB_REPOSITORY')=='metainchelp-boop/logic-analysis' and os.environ.get('GITHUB_REF')=='refs/heads/codex/ad-deploy-prep-20261001')
+          transport_path=pathlib.Path('backend/tools/naver_daily_current_transport_v3.py');controller_path=pathlib.Path('backend/tools/naver_daily_current_diagnostics_v3.py')
+          verified_sources={}
+          for path,expected,limit in((transport_path,expected_transport_sha,24576),(controller_path,expected_controller_sha,98304)):
+              daily_check(not path.is_symlink()and path.is_file()and 0<path.stat().st_size<=limit)
+              raw=path.read_bytes();daily_check(0<len(raw)<=limit and hashlib.sha256(raw).hexdigest()==expected)
+              verified_sources[path]=raw
+          transport_raw=verified_sources[transport_path]
+          inputs=json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text(),object_pairs_hook=daily_unique)['inputs']
+          package=json.loads(inputs['ad_expected_baseline'],object_pairs_hook=daily_unique)
+          auth=verify_daily_native_authorization(package.get('diagnostic_native'),os.environ.get('GITHUB_SHA'))
+          T=types.ModuleType('approved_daily_transport_runner');exec(compile(transport_raw,str(transport_path),'exec'),T.__dict__)
+          daily_check(T.VERIFIED_TRANSPORT_IDENTITY is None and T.VERIFIED_NATIVE_AUTHORIZATION is None and T.SOURCE_SHA256['controller']==expected_controller_sha)
+          T.__verified_self_sha__=expected_transport_sha;T.authorize(expected_transport_sha,auth)
+          T.validate_dispatch_inputs(inputs)
+          wire=T.encode(T.bundle(package,pathlib.Path('backend/tools')));transport=base64.b64encode(transport_raw).decode()
+          daily_check(len(transport)<=32768)
+          # The tested fixed builder embeds only authenticated literals; no fixture is in wire.
+          T.bootstrap(wire,transport,expected_transport_sha,auth)
+          auth_b64=base64.b64encode(json.dumps(auth,sort_keys=True,separators=(',',':')).encode()).decode()
+          workflow=pathlib.Path('.github/workflows/debug-rank.yml').read_text();lines=workflow.splitlines(keepends=True)
+          starts=[i for i,line in enumerate(lines)if line.rstrip('\r\n')=='  daily-current-source-diagnostics-v3:'];daily_check(len(starts)==1)
+          section=lines[starts[0]+1:]
+          for i,line in enumerate(section):
+              if line.startswith('  ')and not line.startswith('   ')and line.strip().endswith(':'):section=section[:i];break
+          scripts=[]
+          for i,line in enumerate(section):
+              if line.rstrip('\r\n')!='          script: |':continue
+              body=[]
+              for part in section[i+1:]:
+                  if part.startswith('            '):body.append(part[12:])
+                  elif not part.strip():body.append(part)
+                  else:break
+              scripts.append(''.join(body))
+          daily_check(len(scripts)==1 and all(type(v)is str and v.isascii()and not any(c in v for c in "'\r\n\x00")for v in(wire,transport,auth_b64)))
+          exports="export DAILY_CURRENT_V3_WIRE='"+wire+"'; export DAILY_CURRENT_V3_TRANSPORT_B64='"+transport+"'; export DAILY_CURRENT_V3_NATIVE_B64='"+auth_b64+"';\n"
+          daily_check(len((exports+scripts[0]).encode())<131072)
+          with open(os.environ['GITHUB_ENV'],'a')as stream:
+              stream.write('DAILY_CURRENT_V3_WIRE='+wire+'\nDAILY_CURRENT_V3_TRANSPORT_B64='+transport+'\nDAILY_CURRENT_V3_NATIVE_B64='+auth_b64+'\n')
+          PYCODE
+      - name: Read only current source4d daily inspection and fixed report event
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          DAILY_CURRENT_V3_WIRE: ${{ env.DAILY_CURRENT_V3_WIRE }}
+          DAILY_CURRENT_V3_TRANSPORT_B64: ${{ env.DAILY_CURRENT_V3_TRANSPORT_B64 }}
+          DAILY_CURRENT_V3_NATIVE_B64: ${{ env.DAILY_CURRENT_V3_NATIVE_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: DAILY_CURRENT_V3_WIRE,DAILY_CURRENT_V3_TRANSPORT_B64,DAILY_CURRENT_V3_NATIVE_B64
+          command_timeout: 2m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PYCODE'
+            import base64,hashlib,json,os,sys,types
+            result=None
+            try:
+                wire=os.environ['DAILY_CURRENT_V3_WIRE'];source=os.environ['DAILY_CURRENT_V3_TRANSPORT_B64'];native=os.environ['DAILY_CURRENT_V3_NATIVE_B64']
+                if len(source)>32768 or len(wire)>65536 or len(native)>2048:raise ValueError('D3_TRANSPORT_SIZE')
+                raw=base64.b64decode(source,validate=True)
+                expected='4dc50d5eb316c30c2dcfc681e8f0739bbce61c5ecd142ca444bad0e62173162b'
+                if hashlib.sha256(raw).hexdigest()!=expected:raise ValueError('D3_TRANSPORT_SOURCE')
+                auth=json.loads(base64.b64decode(native,validate=True))
+                T=types.ModuleType('approved_daily_transport');exec(compile(raw,'<approved-daily-transport>','exec'),T.__dict__)
+                if T.VERIFIED_TRANSPORT_IDENTITY is not None or T.VERIFIED_NATIVE_AUTHORIZATION is not None:raise ValueError('D3_TRANSPORT_PROFILE')
+                T.__verified_self_sha__=expected;T.authorize(expected,auth)
+                value=T.decode(wire)
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                result=T.execute(value)
+            except Exception:
+                result={'ok':False,'mode':'daily-current-source-4d-v3-fixed-0710','source_commit':'4d5802360c1ba23aa801b1145ca8483db3edd35f','mutations':0,'database_opened_by_controller':False,'collection_completion_verified':False,'failure':{'primary_code':'D3_TRANSPORT_REJECTED','post_engine_code':None,'post_legacy_code':None,'post_proof_code':None}}
+            print('NAVER_DAILY_CURRENT_DIAGNOSTICS_V3='+json.dumps(result,sort_keys=True,allow_nan=False,separators=(',',':')));sys.exit(0 if result.get('ok') else 1)
             PYCODE
