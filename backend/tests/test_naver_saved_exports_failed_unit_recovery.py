@@ -46,7 +46,7 @@ class FailedUnitRecoveryTests(unittest.TestCase):
         def synthetic_directory(path,**kwargs):
             # Temp ancestors belong to the OS rather than this fixture's UID.
             # Keep policy checks inside the synthetic root exact.
-            if path in self.root.parents:kwargs['owner']=path.lstat().st_uid
+            if path in self.root.parents:return path.lstat()
             return original(path,**kwargs)
         self.h._directory=synthetic_directory
 
