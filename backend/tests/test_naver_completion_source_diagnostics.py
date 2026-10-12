@@ -21,6 +21,9 @@ SPEC=importlib.util.spec_from_file_location('source_diagnostics',TOOLS/'naver_co
 D=importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(D)
 NOW=datetime(2026,10,12,19,tzinfo=D.KST)
+# Deliberately keep the UI account number in a different identifier namespace.
+TEST_TARGETS=tuple((label,pid,adno+10**9) for label,pid,adno in D.TARGETS)
+ADNOS={label:adno for label,pid,adno in D.TARGETS}
 
 
 @dataclass(frozen=True)
@@ -67,7 +70,7 @@ class FakeStore:
         self.ready={}
         self.states={}
         self.policies={}
-        for _,pid,cid in D.TARGETS:
+        for _,pid,cid in TEST_TARGETS:
             self.states[cid]={'possibility_id':pid,'stage_key':'진행중','stage_revision':'r'+str(cid)}
             self.policies[cid]={'possibility_id':pid,'stage_key':'진행중','stage_revision':'r'+str(cid),
                 'matched':True,'source_current':True,'decision':NS(cadence='daily',reason='MANAGED_STAGE')}
@@ -124,7 +127,7 @@ def fixture():
     connection.executescript('''
         CREATE TABLE naver_auto_meta(key TEXT PRIMARY KEY,value TEXT);
         INSERT INTO naver_auto_meta VALUES('schema_version','21');
-        CREATE TABLE naver_auto_account(customer_id INTEGER PRIMARY KEY,present INTEGER);
+        CREATE TABLE naver_auto_account(customer_id INTEGER PRIMARY KEY,ad_account_no INTEGER,present INTEGER);
         CREATE TABLE naver_auto_manual_read(customer_id INTEGER PRIMARY KEY,possibility_id INTEGER,requested_at TEXT,
             actor INTEGER,request_kind TEXT,period_start TEXT,period_end TEXT);
         CREATE TABLE naver_auto_inspection_job(job_key TEXT PRIMARY KEY,customer_id INTEGER,possibility_id INTEGER,kind TEXT,
@@ -136,8 +139,8 @@ def fixture():
     ''')
     for table in ('naver_auto_performance_job','naver_auto_structure_job','naver_auto_funnel_job','naver_auto_experiment_job'):
         connection.execute('CREATE TABLE '+table+'(customer_id INTEGER,status TEXT,error_code TEXT,checked_at TEXT,next_try_at TEXT)')
-    for _,pid,cid in D.TARGETS:
-        connection.execute('INSERT INTO naver_auto_account VALUES(?,1)',(cid,))
+    for label,pid,cid in TEST_TARGETS:
+        connection.execute('INSERT INTO naver_auto_account VALUES(?,?,1)',(cid,ADNOS[label]))
         connection.execute('INSERT INTO naver_auto_prospect VALUES(?,1,0,?)',(pid,NOW.isoformat()))
     store=FakeStore(connection)
     def saved_job(row):
@@ -157,7 +160,7 @@ def fixture():
 
 
 def add_job(store,index=0,status='partial',error='REQUEST_CALL_CAP',next_try=None,**changes):
-    _,pid,cid=D.TARGETS[index]; row=store.policies[cid]; p=period('daily',NOW)
+    _,pid,cid=TEST_TARGETS[index]; row=store.policies[cid]; p=period('daily',NOW)
     job=store._performance_job(cid,'daily',p.cycle_day,p.since,p.until,row,store.at,store.catalog_at,store.fingerprint)
     job['job_key']='inspection:'+job['job_key']
     job.update(possibility_id=pid,status=status,error_code=error,checked_at=NOW.isoformat(),
@@ -168,6 +171,80 @@ def add_job(store,index=0,status='partial',error='REQUEST_CALL_CAP',next_try=Non
     store._conn.execute('INSERT INTO naver_auto_inspection_job ('+','.join(columns)+') VALUES ('+','.join('?' for _ in columns)+')',
         tuple(job[key] for key in columns))
     return job
+
+
+def pinned_product_fixture(product_root):
+    """Explicit offline integration entry point; never part of remote execution.
+
+    Reproduce with this module on PYTHONPATH and an exact pinned checkout path.
+    All writer setup is confined to sqlite :memory:. The actual read projection
+    uses the same query-only authorizer and single transaction as the helper.
+    """
+    import sys
+    root=Path(product_root).resolve()
+    for relative,digest in D.CODE_PINS.items():
+        if hashlib.sha256((root/relative).read_bytes()).hexdigest()!=digest:
+            raise AssertionError('SYNTHETIC_PRODUCT_PIN')
+    sys.path[:0]=[str(root),str(root/'backend')]
+    from naver_engine import (store as S,management_store as MS,inventory as I,management as P,
+        inspection_store as IS,inspection_reads as IR,sync as Y,product_evidence as PE,erp_read as E)
+    from app.naver_auto import org_snapshot as O,matching as M
+    from naver_engine.tests import test_alerts as TA,test_account_catalog as TC,test_morning as TM
+    summaries=[]
+    for retry in (False,True):
+        with patch.object(socket.socket,'connect',side_effect=AssertionError('NETWORK_FORBIDDEN')):
+            st=S.Store(sqlite3.connect(':memory:',isolation_level=None),':memory:',None,True,lambda:NOW)
+            try:
+                st._migrate()
+                st.record_org(TA.org_body(NOW,owners=[TA.owner(pid,100) for _,pid,cid in TEST_TARGETS]),NOW)
+                kids=TM.kids(*(cid for _,_,cid in TEST_TARGETS),*(adno for _,_,adno in D.TARGETS))
+                for (label,pid,cid),(_,_,adno) in zip(TEST_TARGETS,D.TARGETS):
+                    kids.accounts[cid]['adAccountNo']=adno
+                    kids.accounts[adno]['adAccountNo']=adno+2*10**9
+                st.record_accounts(kids,NOW)
+                st.record_account_catalog(dict(generated_at=NOW.isoformat(),total=2,complete=True,
+                    items=[TC.company(pid,'진행중',company_name=f'계정{cid}') for _,pid,cid in TEST_TARGETS]),
+                    [E.NaverIdRow(pid,M.VENDOR_NAVER,ad_account_no_raw=str(adno)) for _,pid,adno in D.TARGETS],NOW)
+                initial=st.inspection_work(NOW)
+                assert {job['customer_id'] for job in initial}=={cid for _,_,cid in TEST_TARGETS}
+                job=next(job for job in initial if job['customer_id']==TEST_TARGETS[1][2])
+                st.begin_inspection_check(job,NOW)
+                progress=IR._initial([{'customerId':job['customer_id'],'nccCampaignId':'cmp-private','campaignTp':'WEB_SITE',
+                    'name':'PRIVATE_NAME','dailyBudget':30000,'useDailyBudget':True,'usePeriod':False}],job,NOW)
+                st.record_inspection_progress(job,NOW,progress)
+                st.record_inspection_check(job,NOW,{'status':'retry' if retry else 'partial',
+                    'error_code':'NETWORK' if retry else 'REQUEST_CALL_CAP','progressed':not retry})
+                expected=st.inspection_work(NOW)
+                st.writer=False;connection=st._conn;before=connection.total_changes
+                # The fixture writer's phase authorizer is removed only before
+                # applying the read-only boundary to this in-memory database.
+                connection.set_authorizer(None);connection.execute('PRAGMA query_only=ON')
+                connection.set_authorizer(D.readonly_authorizer);connection.execute('BEGIN')
+                try:
+                    result=D.collect(st,NOW,time.monotonic()+20,dict(S=S,MS=MS,I=I,P=P,IS=IS,IR=IR,O=O,Y=Y,PE=PE))
+                    D.validate_result(result)
+                    assert connection.total_changes==before
+                    assert result['candidate_snapshot']['eligible_count']==len(expected)
+                    a,b=result['targets']['gomso'],result['targets']['foodin']
+                    assert a['current_expected_pair'] and b['current_expected_pair']
+                    assert a['snapshot_candidate_gate']=='ELIGIBLE'
+                    assert b['snapshot_candidate_gate']==('RETRY_NOT_DUE' if retry else 'ELIGIBLE')
+                    assert b['latest_pair_binding']['account_snapshot_matches']
+                    assert b['settings']['source_state']=='current_partial'
+                    assert b['settings']['items'][0]['daily_budget']==30000
+                    payload=json.dumps(result,ensure_ascii=False,separators=(',',':'))
+                    assert all(str(cid) not in payload for _,_,cid in TEST_TARGETS)
+                    assert 'PRIVATE_NAME' not in payload and 'cmp-private' not in payload
+                    summaries.append({'scenario':'network_retry' if retry else 'partial_zero_delay',
+                        'actual_selector_count':len(expected),'diagnostic_selector_count':result['candidate_snapshot']['eligible_count'],
+                        'gates':{label:row['snapshot_candidate_gate'] for label,row in result['targets'].items()},
+                        'distinct_identifier_and_decoy_verified':True,'current_pair_verified':True,
+                        'settings_state':b['settings']['source_state'],'settings_budget':b['settings']['items'][0]['daily_budget'],
+                        'mutations':connection.total_changes-before,'output_bytes':len(payload.encode())})
+                finally:connection.execute('ROLLBACK')
+            finally:st.close()
+    return {'source_commit':D.SOURCE,'target_identifier_namespace':D.TARGET_NAMESPACE,
+        'code_files_verified':len(D.CODE_PINS),'scenarios':summaries}
 
 
 class ProjectionTests(unittest.TestCase):
@@ -198,6 +275,39 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(result['candidate_snapshot']['eligible_count'],1)
         self.assertTrue(result['limits']['dispatch_order_not_proven'])
 
+    def test_ad_account_namespace_resolves_distinct_customer_id_not_same_number_decoy(self):
+        for label,pid,adno in D.TARGETS:
+            self.store._conn.execute('INSERT INTO naver_auto_account VALUES(?,?,1)',(adno,adno+2*10**9))
+        add_job(self.store,index=1)
+        result=self.project()
+        self.assertEqual(result['target_identifier_namespace'],'ad_account_no')
+        self.assertTrue(result['targets']['foodin']['current_expected_pair'])
+        self.assertTrue(result['targets']['foodin']['inspection_job_exists_for_expected_pair'])
+        self.assertTrue(result['targets']['gomso']['account_present'])
+        for _,_,cid in TEST_TARGETS:self.assertNotIn(str(cid),json.dumps(result))
+
+    def test_absent_same_ad_account_history_does_not_override_present_resolution(self):
+        label,pid,adno=D.TARGETS[0]
+        self.store._conn.execute('INSERT INTO naver_auto_account VALUES(?,?,0)',(adno+2*10**9,adno))
+        self.assertTrue(self.project()['targets'][label]['current_expected_pair'])
+
+    def test_missing_ad_account_never_falls_back_to_same_valued_customer_id(self):
+        label,pid,adno=D.TARGETS[0]
+        self.store._conn.execute('DELETE FROM naver_auto_account WHERE ad_account_no=?',(adno,))
+        self.store._conn.execute('INSERT INTO naver_auto_account VALUES(?,?,1)',(adno,adno+2*10**9))
+        with self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_TARGET_NOT_FOUND'):self.project()
+
+    def test_duplicate_present_ad_account_is_refused_instead_of_choosing_a_customer(self):
+        label,pid,adno=D.TARGETS[0]
+        self.store._conn.execute('INSERT INTO naver_auto_account VALUES(?,?,1)',(adno+2*10**9,adno))
+        with self.assertRaisesRegex(ValueError,'SOURCE_DIAGNOSTICS_TARGET_AMBIGUOUS'):self.project()
+
+    def test_pid_binding_is_checked_separately_after_ad_account_resolution(self):
+        self.store.policies[TEST_TARGETS[0][2]]['possibility_id']=999
+        row=self.project()['targets']['gomso']
+        self.assertTrue(row['account_present']);self.assertFalse(row['current_expected_pair'])
+        self.assertIsNone(row['current_stage']);self.assertIsNone(row['canonical_erp_product_link_present'])
+
     def test_exact_second_due_and_snapshot_use_product_microsecond_text(self):
         canonical=lambda at,what:at.astimezone(D.KST).isoformat(timespec='microseconds')
         self.modules['S']._kst_text=canonical
@@ -221,27 +331,27 @@ class ProjectionTests(unittest.TestCase):
     def test_stale_source_keeps_saved_and_current_separate(self):
         add_job(self.store)
         self.store.catalog_state='stale'
-        self.store.policies[D.TARGETS[0][2]]['source_current']=False
-        self.store.policies[D.TARGETS[0][2]]['decision']=NS(cadence='blocked',reason='SOURCE_STALE')
+        self.store.policies[TEST_TARGETS[0][2]]['source_current']=False
+        self.store.policies[TEST_TARGETS[0][2]]['decision']=NS(cadence='blocked',reason='SOURCE_STALE')
         row=self.project()['targets']['gomso']
         self.assertTrue(row['inspection_job_exists_for_expected_pair']);self.assertFalse(row['latest_pair_binding']['current_valid'])
         self.assertEqual(row['snapshot_candidate_gate'],'POLICY_BLOCKED')
 
     def test_management_sync_pending_closes_rank_and_count(self):
-        self.store.policies[D.TARGETS[0][2]]['stage_revision']='pending-not-a-current-revision'
+        self.store.policies[TEST_TARGETS[0][2]]['stage_revision']='pending-not-a-current-revision'
         result=self.project()
         self.assertFalse(result['candidate_snapshot']['rank_exact']);self.assertIsNone(result['candidate_snapshot']['eligible_count'])
         self.assertIsNone(result['targets']['foodin']['snapshot_candidate_rank'])
         self.assertEqual(result['targets']['gomso']['snapshot_candidate_gate'],'MANAGEMENT_SYNC_PENDING')
 
     def test_backoff_is_separate_from_due(self):
-        self.store.ready[D.TARGETS[0][2]]=False
+        self.store.ready[TEST_TARGETS[0][2]]=False
         row=self.project()['targets']['gomso']
         self.assertFalse(row['collection_account_ready']);self.assertEqual(row['snapshot_candidate_gate'],'ACCOUNT_BACKOFF')
 
     def test_newer_manual_generation_does_not_borrow_saved_automatic_job(self):
         add_job(self.store,status='ok',error=None)
-        _,pid,cid=D.TARGETS[0]
+        _,pid,cid=TEST_TARGETS[0]
         self.store._conn.execute('INSERT INTO naver_auto_manual_read VALUES(?,?,?,?,?,?,?)',
             (cid,pid,(NOW-timedelta(minutes=1)).isoformat(),0,'manual',None,None))
         row=self.project()['targets']['gomso']
@@ -250,14 +360,14 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(row['snapshot_candidate_gate'],'ELIGIBLE')
 
     def test_prior_day_and_invalid_actor_manual_are_not_active(self):
-        _,pid,cid=D.TARGETS[0]
+        _,pid,cid=TEST_TARGETS[0]
         self.store._conn.execute('INSERT INTO naver_auto_manual_read VALUES(?,?,?,?,?,?,?)',
             (cid,pid,(NOW-timedelta(days=1)).isoformat(),0,'manual',None,None))
         row=self.project()['targets']['gomso']
         self.assertFalse(row['manual_read']['requested_today']);self.assertFalse(row['manual_read']['valid_current_inspection_request'])
 
     def test_weekly_gate_and_collection_start(self):
-        cid=D.TARGETS[0][2];self.store.policies[cid]['decision']=NS(cadence='weekly',reason='NONMANAGED_STAGE')
+        cid=TEST_TARGETS[0][2];self.store.policies[cid]['decision']=NS(cadence='weekly',reason='NONMANAGED_STAGE')
         self.assertEqual(self.project()['targets']['gomso']['snapshot_candidate_gate'],'WEEKLY_NOT_DUE')
         self.assertEqual(self.project(NOW.replace(hour=0,minute=0))['targets']['foodin']['snapshot_candidate_gate'],'BEFORE_START')
 
@@ -327,12 +437,20 @@ class ProjectionTests(unittest.TestCase):
             else:value['targets']['gomso']['manual_read']['actor']=100
             with self.subTest(change=change),self.assertRaises(ValueError):D.validate_result(value)
 
+    def test_old_or_wrong_identifier_namespace_output_is_rejected(self):
+        result=self.project()
+        old=deepcopy(result);old.pop('target_identifier_namespace')
+        wrong=deepcopy(result);wrong['target_identifier_namespace']='customer_id'
+        for value in (old,wrong):
+            with self.assertRaises(ValueError):D.validate_result(value)
+
 
 class BoundariesTests(unittest.TestCase):
     def test_package_has_no_dynamic_account_query_or_source_escape(self):
         package=dict(baseline=D.BASELINE,source_commit=D.SOURCE,source_tar_gz_sha256=D.ARCHIVE,mode=D.MODE)
         D.validate_package(package)
-        for key,value in (('source_commit','f'*40),('source_tar_gz_sha256','0'*64),('targets',[]),('mode','arbitrary-query')):
+        for key,value in (('source_commit','f'*40),('source_tar_gz_sha256','0'*64),('targets',[]),('mode','arbitrary-query'),
+                ('mode','inspection-source-diagnostics-v1')):
             with self.subTest(key=key),self.assertRaises(ValueError):D.validate_package(dict(package,**{key:value}))
 
     def test_script_pins_before_database_and_never_calls_writer_or_network(self):

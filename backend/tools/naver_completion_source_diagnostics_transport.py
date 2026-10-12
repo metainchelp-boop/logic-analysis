@@ -11,11 +11,12 @@ import tokenize
 import types
 
 OPERATION='preview-completion-source-diagnostics'
-PREFIX='completion-source-diagnostics-xz-v1:'
+PREFIX='completion-source-diagnostics-ad-account-xz-v2:'
 SOURCE='70e6657ac789ce4d72a165dbf6a6e552d2b84043'
 ARCHIVE='499d3ad004e93ecbcd7fcebd2e6f0aae1cd1b127be219d09c3763800b115de4c'
 BASELINE='5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-MODE='inspection-source-diagnostics-v1'
+MODE='inspection-source-diagnostics-ad-account-v2'
+IDENTIFIER_NAMESPACE='ad_account_no'
 PACKAGE={'baseline':BASELINE,'source_commit':SOURCE,'source_tar_gz_sha256':ARCHIVE,'mode':MODE}
 TARGETS=(('gomso',74789,2488728),('foodin',51952,1030001))
 MAX_JSON=196608
@@ -25,8 +26,8 @@ MAX_RESULT=20480
 MAX_TRANSPORT_BASE64=32768
 SOURCE_FILES={'diagnostic':'naver_completion_source_diagnostics.py',
     'host':'naver_erp_tunnel_service_install.py','release':'naver_preview_release.py'}
-SOURCE_SHA256={'diagnostic': 'af3f7e8a4361bbf4894d91f5674b8ee88073596ef3424a34d9fca4846ee07413', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'}
-COMPACT_SHA256={'diagnostic': '4a36b8af84657d4ba6a98ea158d306402bcbd120acf43268ec1bc08e07cb8c2f', 'host': 'cd6daeb55fe3ed1fd2553404c012d16f46b05bb9a1d651bd929b9787aa758840', 'release': '9681437257dd92309eb0ab2ad33c7c5c3c1e2abed334f1fa1c253fad2288c64a'}
+SOURCE_SHA256={'diagnostic': '0ec9f8dcd7478bf59121045077b178cdc411ff2cc4828910a2c8cee1f965391b', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'}
+COMPACT_SHA256={'diagnostic': 'c3fa20cb88fdd0ec809e1347f43ad0d121bc485693a35cf9aa14b2108ffba364', 'host': 'cd6daeb55fe3ed1fd2553404c012d16f46b05bb9a1d651bd929b9787aa758840', 'release': '9681437257dd92309eb0ab2ad33c7c5c3c1e2abed334f1fa1c253fad2288c64a'}
 DEFAULTS={name:'off' for name in ('collector','rank_link','capacity','structure','expired','queue','urlshape','use_branch_code')}
 STAGES=frozenset(('input','bootstrap','preflight','read_only_source_diagnostics','postflight'))
 PREFLIGHT_CODES=frozenset(('SOURCE_DIAGNOSTICS_NOT_PINNED SOURCE_DIAGNOSTICS_SOURCE SOURCE_DIAGNOSTICS_BUNDLE '
@@ -73,7 +74,7 @@ def validate_dispatch_inputs(inputs):
 def validate(value):
     require_pins()
     if (type(value) is not dict or set(value)!={'version','operation','package','sources'}
-            or type(value['version']) is not int or value['version']!=1 or value['operation']!=OPERATION
+            or type(value['version']) is not int or value['version']!=2 or value['operation']!=OPERATION
             or type(value['sources']) is not dict or set(value['sources'])!=set(SOURCE_FILES)):
         raise ValueError('SOURCE_DIAGNOSTICS_BUNDLE')
     validate_package(value['package'])
@@ -137,7 +138,7 @@ def bundle(package,root):
         if not 0<len(raw)<=MAX_SOURCE or hashlib.sha256(raw).hexdigest()!=SOURCE_SHA256[name]:
             raise ValueError('SOURCE_DIAGNOSTICS_SOURCE')
         sources[name]=compact(raw.decode())
-    return validate({'version':1,'operation':OPERATION,'package':package,'sources':sources})
+    return validate({'version':2,'operation':OPERATION,'package':package,'sources':sources})
 
 
 def modules(value):
@@ -145,7 +146,8 @@ def modules(value):
     diagnostic=types.ModuleType('approved_completion_source_diagnostic')
     exec(value['sources']['diagnostic'],diagnostic.__dict__)
     if (diagnostic.SOURCE!=SOURCE or diagnostic.ARCHIVE!=ARCHIVE or diagnostic.BASELINE!=BASELINE
-            or diagnostic.SCHEMA!=21 or diagnostic.MODE!=MODE or diagnostic.TARGETS!=TARGETS):
+            or diagnostic.SCHEMA!=21 or diagnostic.MODE!=MODE or diagnostic.TARGETS!=TARGETS
+            or getattr(diagnostic,'TARGET_NAMESPACE',None)!=IDENTIFIER_NAMESPACE):
         raise ValueError('SOURCE_DIAGNOSTICS_MODULE')
     diagnostic.validate_package(value['package'])
     result={'diagnostic':diagnostic}
@@ -166,6 +168,8 @@ def project_result(value,diagnostic):
             raise ValueError('SOURCE_DIAGNOSTICS_RESULT')
         if (value['reader_mode']!='sqlite-mode-ro-query-only-authorizer' or value['database_opened_by_controller'] is not False
                 or value['existing_app_baseline_unchanged'] is not True):raise ValueError('SOURCE_DIAGNOSTICS_RESULT')
+        if type(value['diagnostics']) is not dict or value['diagnostics'].get('target_identifier_namespace')!=IDENTIFIER_NAMESPACE:
+            raise ValueError('SOURCE_DIAGNOSTICS_RESULT')
         diagnostic.validate_result(value['diagnostics'])
     elif 'failure' in value:
         if set(value)!={'ok',*common,'failure'} or type(value['failure']) is not dict or set(value['failure'])!={'primary_code','post_engine_code','post_legacy_baseline_code'}:

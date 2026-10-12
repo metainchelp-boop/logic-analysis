@@ -1,4 +1,4 @@
-"""Fixed two-account, schema21 source diagnosis. Prepared locally; not registered.
+"""Fixed two-advertising-account, schema21 read-only source diagnosis v2.
 
 No writer, scheduler tick, collector, provider, environment or raw log reads.
 The candidate order is a stored-snapshot projection, never a dispatch promise.
@@ -14,7 +14,9 @@ SOURCE = '70e6657ac789ce4d72a165dbf6a6e552d2b84043'
 ARCHIVE = '499d3ad004e93ecbcd7fcebd2e6f0aae1cd1b127be219d09c3763800b115de4c'
 BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 SCHEMA = 21
-MODE = 'inspection-source-diagnostics-v1'
+MODE = 'inspection-source-diagnostics-ad-account-v2'
+TARGET_NAMESPACE = 'ad_account_no'
+# These are UI advertising-account numbers, never internal customer IDs.
 TARGETS = (('gomso', 74789, 2488728), ('foodin', 51952, 1030001))
 MAX_OUTPUT = 16384
 CODE_PINS = {
@@ -33,6 +35,7 @@ CODE_PINS = {
 READ_FAILURE_CODES = frozenset(('SOURCE_DIAGNOSTICS_READER_FAILED SOURCE_DIAGNOSTICS_READ_FAILED '
     'SOURCE_DIAGNOSTICS_DEADLINE SOURCE_DIAGNOSTICS_TIME SOURCE_DIAGNOSTICS_ROW_LIMIT '
     'SOURCE_DIAGNOSTICS_DATABASE_PATH SOURCE_DIAGNOSTICS_READER_MODE SOURCE_DIAGNOSTICS_TARGETS '
+    'SOURCE_DIAGNOSTICS_TARGET_NOT_FOUND SOURCE_DIAGNOSTICS_TARGET_AMBIGUOUS '
     'SOURCE_DIAGNOSTICS_SCHEMA SOURCE_DIAGNOSTICS_ACCOUNT_LIMIT SOURCE_DIAGNOSTICS_DUPLICATE '
     'SOURCE_DIAGNOSTICS_IDENTITY SOURCE_DIAGNOSTICS_NETWORK_FORBIDDEN SOURCE_DIAGNOSTICS_CODE_PIN '
     'SOURCE_DIAGNOSTICS_MUTATION SOURCE_DIAGNOSTICS_OUTPUT_LIMIT SOURCE_DIAGNOSTICS_OUTPUT_FIELDS '
@@ -278,6 +281,22 @@ def collect(store, now, deadline, modules, targets=TARGETS):
         raise ValueError('SOURCE_DIAGNOSTICS_SCHEMA')
     if connection.execute('SELECT COUNT(*) FROM naver_auto_account').fetchone()[0] > MAX_ACCOUNTS:
         raise ValueError('SOURCE_DIAGNOSTICS_ACCOUNT_LIMIT')
+    # Resolve only the two compiled UI account numbers. Never infer identity
+    # from a same-valued customer ID or silently choose among duplicate numbers.
+    accounts=rows(connection,'SELECT customer_id,ad_account_no,present FROM naver_auto_account',
+        (),MAX_ACCOUNTS,deadline)
+    resolved=[]
+    for label,pid,adno in targets:
+        matching=[account for account in accounts if account['present']==1
+            and type(account['ad_account_no']) is int and account['ad_account_no']==adno]
+        if not matching:
+            raise ValueError('SOURCE_DIAGNOSTICS_TARGET_NOT_FOUND')
+        if len(matching)!=1:
+            raise ValueError('SOURCE_DIAGNOSTICS_TARGET_AMBIGUOUS')
+        cid=matching[0]['customer_id']
+        if type(cid) is not int or not 0<cid<10**15:
+            raise ValueError('SOURCE_DIAGNOSTICS_IDENTITY')
+        resolved.append((label,pid,cid))
     states = store.management_states()
     policies = MS.snapshot(store, now, stage_states=states)
     if len(policies) > MAX_ACCOUNTS:
@@ -296,7 +315,7 @@ def collect(store, now, deadline, modules, targets=TARGETS):
         raise ValueError('SOURCE_DIAGNOSTICS_DUPLICATE')
     candidates = candidate_projection(store, now, policies, source, prior, deadline, modules)
     result = {}
-    for label, pid, cid in targets:
+    for label, pid, cid in resolved:
         check_deadline(deadline)
         policy = policies.get(cid)
         expected_pair = policy is not None and policy['possibility_id'] == pid and policy['matched'] is True
@@ -358,7 +377,7 @@ def collect(store, now, deadline, modules, targets=TARGETS):
             'canonical_erp_product_link_present': product_link if expected_pair else None,
             'settings':settings_projection(store,latest_pair if expected_pair else None,latest_valid,modules,now),
         }
-    return {'schema_version':21,'observed_at':now.isoformat(),'targets':result,
+    return {'schema_version':21,'target_identifier_namespace':TARGET_NAMESPACE,'observed_at':now.isoformat(),'targets':result,
         'sources':{'account_snapshot_current':source.snapshot is not None,'catalog_state':closed(source.catalog_state,
             frozenset(('missing','failed','stale','accepted'))),'organization_current':source.org_allowed},
         'candidate_snapshot': {'rank_exact':candidates['rank_exact'],
@@ -373,7 +392,7 @@ def collect(store, now, deadline, modules, targets=TARGETS):
 '''
 
 _HEADER = ('import json,re,sqlite3,time\nfrom datetime import date,datetime,timedelta,timezone\n'
-           + 'TARGETS='+repr(TARGETS)+'\n')
+           + 'TARGETS='+repr(TARGETS)+'\nTARGET_NAMESPACE='+repr(TARGET_NAMESPACE)+'\n')
 exec(compile(_HEADER+PROJECTION_SOURCE, '<completion-source-diagnostics>', 'exec'))
 
 
@@ -385,7 +404,8 @@ def validate_package(package):
 
 def script():
     prefix = ('import hashlib,json,os,re,socket,sqlite3,sys,time\nfrom pathlib import Path\n'
-              'from datetime import date,datetime,timedelta,timezone\nTARGETS='+repr(TARGETS)+'\n')
+              'from datetime import date,datetime,timedelta,timezone\nTARGETS='+repr(TARGETS)
+              +'\nTARGET_NAMESPACE='+repr(TARGET_NAMESPACE)+'\n')
     body = r'''
 try:
     if os.geteuid()!=10001:
@@ -431,8 +451,10 @@ except Exception as error:
 
 def validate_result(value):
     """Reconstruct the complete closed result; never return unknown nested fields."""
-    if type(value) is not dict or set(value) != {'schema_version','observed_at','targets','sources','candidate_snapshot','limits','mutations'}:
+    if type(value) is not dict or set(value) != {'schema_version','target_identifier_namespace','observed_at','targets','sources','candidate_snapshot','limits','mutations'}:
         raise ValueError('SOURCE_DIAGNOSTICS_OUTPUT_FIELDS')
+    if value['target_identifier_namespace']!=TARGET_NAMESPACE:
+        raise ValueError('SOURCE_DIAGNOSTICS_OUTPUT_TARGETS')
     if type(value['schema_version']) is not int or value['schema_version'] != SCHEMA or value['mutations'] != 0 or type(value['mutations']) is not int:
         raise ValueError('SOURCE_DIAGNOSTICS_OUTPUT_SCHEMA')
     stamp(value['observed_at'])

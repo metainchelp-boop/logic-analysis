@@ -23,7 +23,7 @@ def load():
 def fixture():
     t=load();sources={name:'value='+repr(name)+'\n' for name in t.SOURCE_FILES}
     t.SOURCE_SHA256=t.COMPACT_SHA256={name:hashlib.sha256(body.encode()).hexdigest() for name,body in sources.items()}
-    return t,dict(version=1,operation=t.OPERATION,package=dict(t.PACKAGE),sources=sources)
+    return t,dict(version=2,operation=t.OPERATION,package=dict(t.PACKAGE),sources=sources)
 
 
 def section(text,name):
@@ -86,7 +86,7 @@ class PinsAndCodecTests(unittest.TestCase):
 
     def test_truncated_trailing_duplicate_and_oversize_encoding_reject(self):
         t,v=fixture();wire=t.encode(v)
-        duplicate=json.dumps(v).replace('"version": 1','"version": 1, "version": 1').encode()
+        duplicate=json.dumps(v).replace('"version": 2','"version": 2, "version": 2').encode()
         bad=t.PREFIX+base64.b64encode(lzma.compress(duplicate)).decode()
         for value in (wire[:-5],wire+'AAAA',bad,wire+'A'*t.MAX_WIRE):
             with self.assertRaises(ValueError):t.decode(value)
@@ -98,8 +98,8 @@ class PinsAndCodecTests(unittest.TestCase):
         self.assertFalse(result['ok']);module.assert_not_called()
 
     def test_wrong_compiled_source_or_targets_refuses_before_host_module(self):
-        for expression in ("SOURCE='0'*40","TARGETS=(('other',1,2),)","SCHEMA=11"):
-            t,v=fixture();diagnostic='\n'.join(('SOURCE='+repr(t.SOURCE),'ARCHIVE='+repr(t.ARCHIVE),'BASELINE='+repr(t.BASELINE),'SCHEMA=21','MODE='+repr(t.MODE),'TARGETS='+repr(t.TARGETS),'def validate_package(value): pass',expression))+'\n'
+        for expression in ("SOURCE='0'*40","TARGETS=(('other',1,2),)","SCHEMA=11","TARGET_NAMESPACE=\'customer_id\'","MODE=\'inspection-source-diagnostics-v1\'"):
+            t,v=fixture();diagnostic='\n'.join(('SOURCE='+repr(t.SOURCE),'ARCHIVE='+repr(t.ARCHIVE),'BASELINE='+repr(t.BASELINE),'SCHEMA=21','MODE='+repr(t.MODE),'TARGET_NAMESPACE='+repr(t.IDENTIFIER_NAMESPACE),'TARGETS='+repr(t.TARGETS),'def validate_package(value): pass',expression))+'\n'
             v['sources']['diagnostic']=diagnostic;t.COMPACT_SHA256['diagnostic']=hashlib.sha256(diagnostic.encode()).hexdigest()
             v['sources']['host']='raise AssertionError("HOST MODULE MUST NOT LOAD")\n';t.COMPACT_SHA256['host']=hashlib.sha256(v['sources']['host'].encode()).hexdigest()
             with self.subTest(expression=expression),self.assertRaisesRegex(ValueError,'^SOURCE_DIAGNOSTICS_MODULE$'):t.modules(v)
@@ -144,7 +144,7 @@ class PinnedSourceTests(unittest.TestCase):
         prior=workflow.replace(section(workflow,'completion-source-diagnostics'),'').replace(', preview-completion-source-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'cfe595e18bbb83cb2d4feccf2f12bf91169cd360f14a21d60b8cabec1726337e')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
-        start=native.index('      - name: 고정 두 광고주 source 진단·읽기 전용 전송 경계 검사\n')
+        start=native.index('      - name: 고정 광고주 번호 v2·source 진단·읽기 전용 전송 경계 검사\n')
         end=native.index('      - name:',start+1)
         prior=native[:start]+native[end:]
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'8417d4eedd1db2b8e052357e91db00d74cac71cd508fd8775360088dc2666a6c')
@@ -152,7 +152,7 @@ class PinnedSourceTests(unittest.TestCase):
 
 class ProjectionTests(unittest.TestCase):
     def diagnostic(self):
-        return SimpleNamespace(READ_FAILURE_CODES=frozenset({'SOURCE_DIAGNOSTICS_READ_FAILED'}),validate_result=Mock())
+        return SimpleNamespace(READ_FAILURE_CODES=frozenset({'SOURCE_DIAGNOSTICS_READ_FAILED','SOURCE_DIAGNOSTICS_TARGET_NOT_FOUND','SOURCE_DIAGNOSTICS_TARGET_AMBIGUOUS'}),validate_result=Mock())
 
     def test_reader_and_postflight_failures_are_preserved_together(self):
         t=load();d=self.diagnostic();value=failure_value(t);value['failure'].update(post_engine_code='POST_ENGINE_CHANGED',post_legacy_baseline_code='POST_LEGACY_BASELINE_UNVERIFIED')
@@ -170,12 +170,41 @@ class ProjectionTests(unittest.TestCase):
             with self.subTest(kind=kind),self.assertRaises(ValueError):t.project_result(value,d)
 
     def test_success_requires_exact_outer_contract_and_delegates_nested_validation(self):
-        t=load();d=self.diagnostic();value=dict(ok=True,mode=t.MODE,source_commit=t.SOURCE,mutations=0,collection_completion_verified=False,reader_mode='sqlite-mode-ro-query-only-authorizer',database_opened_by_controller=False,existing_app_baseline_unchanged=True,diagnostics={'closed':'fixture'})
+        t=load();d=self.diagnostic();value=dict(ok=True,mode=t.MODE,source_commit=t.SOURCE,mutations=0,collection_completion_verified=False,reader_mode='sqlite-mode-ro-query-only-authorizer',database_opened_by_controller=False,existing_app_baseline_unchanged=True,diagnostics={'closed':'fixture','target_identifier_namespace':'ad_account_no'})
         self.assertEqual(t.project_result(value,d),value);d.validate_result.assert_called_once_with(value['diagnostics'])
         for key,wrong in (('database_opened_by_controller',True),('existing_app_baseline_unchanged',False),('source_commit','0'*40),('raw','secret')):
             with self.subTest(key=key),self.assertRaises(ValueError):t.project_result(dict(value,**{key:wrong}),d)
         d.validate_result.side_effect=ValueError('SOURCE_DIAGNOSTICS_OUTPUT_FIELDS')
         with self.assertRaises(ValueError):t.project_result(value,d)
+
+    def test_old_customer_id_profile_or_ambiguous_namespace_cannot_be_accepted(self):
+        t,v=fixture()
+        for kind in ('mode','version','prefix'):
+            changed=copy.deepcopy(v)
+            if kind=='mode':changed['package']['mode']='inspection-source-diagnostics-v1'
+            if kind=='version':changed['version']=1
+            with self.subTest(kind=kind):
+                if kind=='prefix':
+                    with self.assertRaises(ValueError):t.decode('completion-source-diagnostics-xz-v1:'+t.encode(v).split(':',1)[1])
+                else:
+                    with self.assertRaises(ValueError):t.encode(changed)
+
+    def test_target_resolution_failures_are_closed_and_no_internal_ids_are_output(self):
+        t=load();d=self.diagnostic()
+        for code in ('SOURCE_DIAGNOSTICS_TARGET_NOT_FOUND','SOURCE_DIAGNOSTICS_TARGET_AMBIGUOUS'):
+            value=failure_value(t);value['failure']['primary_code']=code
+            self.assertEqual(t.project_result(value,d),value)
+            with self.assertRaises(ValueError):t.project_result(dict(value,customer_id=1),d)
+
+    def test_result_namespace_is_explicit_even_if_nested_validator_is_accidentally_loose(self):
+        t=load();d=self.diagnostic();value=dict(ok=True,mode=t.MODE,source_commit=t.SOURCE,mutations=0,
+            collection_completion_verified=False,reader_mode='sqlite-mode-ro-query-only-authorizer',
+            database_opened_by_controller=False,existing_app_baseline_unchanged=True,
+            diagnostics={'target_identifier_namespace':'ad_account_no'})
+        self.assertEqual(t.project_result(value,d),value)
+        for namespace in (None,'customer_id',123):
+            value['diagnostics']['target_identifier_namespace']=namespace
+            with self.subTest(namespace=namespace),self.assertRaises(ValueError):t.project_result(value,d)
 
     def test_untrusted_exception_text_never_leaks(self):
         t=load()
@@ -224,7 +253,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(sum(line.strip().startswith('uses: appleboy/ssh-action@') for line in part.splitlines()),1)
         for forbidden in ('scp-action','naver_completion_transport','preview-conversion-diagnostics','nginx','systemctl','--log','debug_context'):
             self.assertNotIn(forbidden,part)
-        self.assertIn('NAVER_COMPLETION_SOURCE_DIAGNOSTICS=',part)
+        self.assertIn('NAVER_COMPLETION_SOURCE_DIAGNOSTICS_AD_ACCOUNT_V2=',part)
 
     def test_ssh_size_and_environment_bounds_use_actual_script(self):
         text,check=pressure();size=max(check('wire','transport',text));value='wire'+'A'*(131071-size)

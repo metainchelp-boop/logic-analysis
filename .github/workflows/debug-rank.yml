@@ -2870,7 +2870,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Fixed two-account read-only diagnostic and closed transport checks
+      - name: Fixed advertiser-number v2 resolution and closed read-only diagnostic checks
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
@@ -2920,7 +2920,7 @@ jobs:
               stream.write('COMPLETION_SOURCE_DIAGNOSTICS_B64='+wire+'\n')
               stream.write('COMPLETION_SOURCE_DIAGNOSTICS_TRANSPORT_B64='+transport+'\n')
           PYCODE
-      - name: Read fixed source snapshot only; no collector or ad changes
+      - name: Read fixed advertiser-number snapshot only; no collector or ad changes
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
         env:
           COMPLETION_SOURCE_DIAGNOSTICS_B64: ${{ env.COMPLETION_SOURCE_DIAGNOSTICS_B64 }}
@@ -2939,14 +2939,14 @@ jobs:
                 wire=os.environ['COMPLETION_SOURCE_DIAGNOSTICS_B64'];source=os.environ['COMPLETION_SOURCE_DIAGNOSTICS_TRANSPORT_B64']
                 if len(source)>32768:raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SIZE')
                 raw=base64.b64decode(source,validate=True)
-                if hashlib.sha256(raw).hexdigest()!='8885546a273449f081837adf522223215a10c6f4332ce43e2c5663aea3f3e2c3':raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SOURCE')
+                if hashlib.sha256(raw).hexdigest()!='eaf98fc340e3e9c85b59769e05d8d473ffca61caba5f9b2664233deeaa91efb9':raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SOURCE')
                 transport=types.ModuleType('approved_completion_source_diagnostics_transport');exec(raw,transport.__dict__)
                 bundle=transport.decode(wire)
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 result=transport.execute(bundle)
             except Exception:
-                result={'ok':False,'mode':'inspection-source-diagnostics-v1','source_commit':'70e6657ac789ce4d72a165dbf6a6e552d2b84043','mutations':0,'collection_completion_verified':False,'stage':'bootstrap','error_code':'SOURCE_DIAGNOSTICS_BOOTSTRAP_REFUSED'}
-            print('NAVER_COMPLETION_SOURCE_DIAGNOSTICS='+json.dumps(result,sort_keys=True,allow_nan=False));sys.exit(0 if result.get('ok') else 1)
+                result={'ok':False,'mode':'inspection-source-diagnostics-ad-account-v2','source_commit':'70e6657ac789ce4d72a165dbf6a6e552d2b84043','mutations':0,'collection_completion_verified':False,'stage':'bootstrap','error_code':'SOURCE_DIAGNOSTICS_BOOTSTRAP_REFUSED'}
+            print('NAVER_COMPLETION_SOURCE_DIAGNOSTICS_AD_ACCOUNT_V2='+json.dumps(result,sort_keys=True,allow_nan=False));sys.exit(0 if result.get('ok') else 1)
             PYCODE
 
   completion-release:
