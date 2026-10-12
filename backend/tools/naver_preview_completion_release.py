@@ -87,6 +87,8 @@ FAILURE_CODES = frozenset(SQL_ERRORS.values()) | frozenset('CODE_TARGET_NOT_PINN
 FAILURE_CODES |= frozenset({'CODE_ONLY_REQUIRED', 'PROBE_RESPONSE_SIZE'})
 FAILURE_CODES |= frozenset({'RUNTIME_SECRET_CHANGED', 'CONFIG_PRESERVE_NOT_APPROVED', 'CONFIG_PRESERVE_PROOF', 'CONFIG_PRESERVE_DRIFT'})
 FAILURE_STAGES |= frozenset({'code_prepare_runtime_config', 'code_prepare_runtime_postflight'})
+FAILURE_STAGES |= frozenset({'code_prepare_preflight', 'code_build_engine', 'code_build_relay',
+    'code_config_engine', 'code_config_relay', 'code_check_config', 'code_prepare_postflight'})
 FAILURE_CODES |= frozenset({'EXECUTION_ENABLED', 'RUNTIME_CONFIG_PROOF', 'RUNTIME_CONFIG_DRIFT'})
 FAILURE_OPERATIONS |= frozenset({'runtime_config_preflight', 'runtime_old_config', 'runtime_stopped_config', 'runtime_target_config'})
 # Keep this reviewed set exact; an EXPORT_ prefix never makes an error public.
@@ -98,6 +100,11 @@ EXPORT_FAILURE_CODES = frozenset('EXPORT_ALREADY_ATTEMPTED EXPORT_BUNDLE_INVALID
     'EXPORT_SOURCE_CHANGED EXPORT_SOURCE_PATH EXPORT_SOURCE_SCOPE EXPORT_SOURCE_SYMLINK EXPORT_SYMLINK EXPORT_TIME'.split())
 FAILURE_CODES |= EXPORT_FAILURE_CODES
 FAILURE_STAGES |= frozenset({'saved_exports_binding', 'saved_exports_prepare', 'saved_exports_install'})
+EXPORT_COMMAND_STAGES = frozenset('unit_verify daemon_reload product_start market_start product_enable '
+    'market_enable product_show market_show product_enabled market_enabled product_active market_active '
+    'product_disable market_disable product_stop market_stop unknown'.split())
+EXPORT_COMMAND_ISSUES = frozenset('permission_denied missing_file disk_full unit_syntax namespace readonly '
+    'sqlite_open python_import command_timeout command_failed unknown'.split())
 
 CONFIG_SWITCHES = frozenset('sync links morning alerts metrics inventory execution backup web issue_alerts'.split())
 CHECK_CONFIG_FIELDS = frozenset('command configuration switches network_performed storage_opened credentials_verified web_available deployment_ready'.split())
@@ -413,6 +420,14 @@ def failure_report(error):
                 value = details.get(key)
                 if isinstance(value, str) and value in allowed:
                     result[key] = value
+        for key, allowed in (('export_command_stage', EXPORT_COMMAND_STAGES),
+                             ('export_command_issue', EXPORT_COMMAND_ISSUES)):
+            value = details.get(key)
+            if isinstance(value, str) and value in allowed:
+                result[key] = value
+        status = details.get('export_command_status')
+        if type(status) is int and 0 <= status <= 255:
+            result['export_command_status'] = status
     return result
 def require_pins():
     if (type(TARGET_COMMIT) is not str or re.fullmatch('[0-9a-f]{40}', TARGET_COMMIT) is None

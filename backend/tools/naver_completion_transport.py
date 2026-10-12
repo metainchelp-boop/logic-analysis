@@ -201,6 +201,28 @@ def modules(bundle):
     return result
 
 
+def _remember_failure(controller, error, *, primary=None):
+    """Carry only closed diagnostics across independently loaded controllers."""
+    def details(value):
+        return {key:item for key,item in controller.failure_report(value).items()
+                if key not in ('stage', 'error_kind', 'error_code')}
+    saved=details(error)
+    if primary is not None:
+        # The original failure and its already captured recovery facts win.
+        saved.update(details(primary))
+    for key,value in controller._capture_failure(error, 'cleanup' if primary is not None else 'failed').items():
+        saved.setdefault(key,value)
+    error.failure_details=saved
+
+
+def _cleanup_failure(controller, binding, error):
+    _remember_failure(controller,error)
+    try:binding.rollback()
+    except Exception as cleanup:
+        _remember_failure(controller,cleanup,primary=error)
+        raise
+
+
 def execute(bundle,*,incoming=False):
     validate(bundle);m=modules(bundle);C=m['controller'];release=m['release'];host=m['host'].NativeHost()
     if incoming:
@@ -211,27 +233,32 @@ def execute(bundle,*,incoming=False):
         _prepare_export_directories()
         release.trusted_dir(release.ROOT/'incoming'/package['run_id'],mode=0o700,new=True)
         return {'ok':True,'stage':'incoming_ready','source_commit':C.TARGET_COMMIT}
-    C.STAGE='saved_exports_binding'
-    binding=m['exports_binding'].Binding(C,m['exports_helper'],release,bundle['sources']['exports_helper'].encode(),
-        {'naver_product_export.py':bundle['sources']['product_exporter'].encode(),
-         'naver_market_export.py':bundle['sources']['market_exporter'].encode()})
-    if bundle['operation']=='preview-completion-prepare':
-        try:
-            C.STAGE='saved_exports_prepare'
-            wrapped=binding.prepare(bundle['package'])
-            result=C.prepare(bundle['package'],host,wrapped,m['lifecycle'],m['upgrade'],approved_config_operation_id=bundle['approved_config_operation_id'],prepare_exports=binding.install)
-            binding.save(bundle['package']);return {**result,'saved_export_companion_prepared':True,'export_jobs_started':True,'export_engine_verified':False}
-        except Exception:
-            binding.rollback();raise
-    package=bundle['package']
-    wrapped=binding.load(package['release'],verify=bundle['operation']!='preview-completion-rollback')
-    if bundle['operation']=='preview-completion-rollback':binding.preflight_rollback()
-    try:result=getattr(C,FUNCTIONS[bundle['operation']])(package,host,wrapped,m['lifecycle'],m['upgrade'])
+    try:
+        C.STAGE='saved_exports_binding'
+        binding=m['exports_binding'].Binding(C,m['exports_helper'],release,bundle['sources']['exports_helper'].encode(),
+            {'naver_product_export.py':bundle['sources']['product_exporter'].encode(),
+             'naver_market_export.py':bundle['sources']['market_exporter'].encode()})
+        if bundle['operation']=='preview-completion-prepare':
+            try:
+                C.STAGE='saved_exports_prepare'
+                wrapped=binding.prepare(bundle['package'])
+                result=C.prepare(bundle['package'],host,wrapped,m['lifecycle'],m['upgrade'],approved_config_operation_id=bundle['approved_config_operation_id'],prepare_exports=binding.install)
+                binding.save(bundle['package']);return {**result,'saved_export_companion_prepared':True,'export_jobs_started':True,'export_engine_verified':False}
+            except Exception as error:
+                _cleanup_failure(C,binding,error)
+                raise
+        package=bundle['package']
+        wrapped=binding.load(package['release'],verify=bundle['operation']!='preview-completion-rollback')
+        if bundle['operation']=='preview-completion-rollback':binding.preflight_rollback()
+        try:result=getattr(C,FUNCTIONS[bundle['operation']])(package,host,wrapped,m['lifecycle'],m['upgrade'])
+        except Exception as error:
+            # A rejected/replayed request must not remove exports from a live target.
+            # Only the controller's verified paired rollback authorizes cleanup.
+            if bundle['operation']=='preview-completion-apply' and type(error) is RuntimeError and error.args==('CODE_FAILED_ROLLED_BACK_DB_PRESERVED',):
+                _cleanup_failure(C,binding,error)
+            raise
+        if bundle['operation']=='preview-completion-rollback':binding.rollback()
+        return result
     except Exception as error:
-        # A rejected/replayed request must not remove exports from a live target.
-        # Only the controller's verified paired rollback authorizes cleanup.
-        if bundle['operation']=='preview-completion-apply' and type(error) is RuntimeError and error.args==('CODE_FAILED_ROLLED_BACK_DB_PRESERVED',):
-            binding.rollback()
+        _remember_failure(C,error)
         raise
-    if bundle['operation']=='preview-completion-rollback':binding.rollback()
-    return result

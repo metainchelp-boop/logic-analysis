@@ -96,6 +96,36 @@ class CompletionFailureDiagnosticsTests(unittest.TestCase):
                 'failed_stage':'saved_exports_install','failed_operation':'package',
                 'failed_error_kind':'ExportInstallInvalid','failed_error_code':'EXPORT_COMMAND_FAILED'})
 
+    def test_static_prepare_stages_are_public_but_unreviewed_dynamic_names_are_not(self):
+        stages={'code_prepare_preflight','code_build_engine','code_build_relay',
+            'code_config_engine','code_config_relay','code_check_config','code_prepare_postflight'}
+        for stage in stages:
+            with self.subTest(stage=stage),patch.object(C,'STAGE',stage):
+                self.assertEqual(C._capture_failure(ValueError('COMMAND_FAILED'))['failed_stage'],stage)
+        for stage in ('code_build_private','code_config_other','code_prepare_private'):
+            with self.subTest(stage=stage),patch.object(C,'STAGE',stage):
+                self.assertEqual(C._capture_failure(ValueError('COMMAND_FAILED'))['failed_stage'],'unknown')
+
+    def test_export_command_details_accept_only_closed_enums_and_strict_exit_status(self):
+        for stage in C.EXPORT_COMMAND_STAGES:
+            error=ValueError('EXPORT_COMMAND_FAILED');error.failure_details={'export_command_stage':stage}
+            self.assertEqual(C.failure_report(error)['export_command_stage'],stage)
+        for issue in C.EXPORT_COMMAND_ISSUES:
+            error=ValueError('EXPORT_COMMAND_FAILED');error.failure_details={'export_command_issue':issue}
+            self.assertEqual(C.failure_report(error)['export_command_issue'],issue)
+        for status in (0,1,255):
+            error=ValueError('EXPORT_COMMAND_FAILED');error.failure_details={'export_command_status':status}
+            self.assertEqual(C.failure_report(error)['export_command_status'],status)
+        for status in (True,False,-1,256,1.0,'1',None,[],{}):
+            error=ValueError('EXPORT_COMMAND_FAILED');error.failure_details={'export_command_status':status}
+            self.assertNotIn('export_command_status',C.failure_report(error))
+        for value in ('private/runtime.env','product_start private-value','EXPORT_NEW',None,[],{}):
+            error=ValueError('EXPORT_COMMAND_FAILED')
+            error.failure_details={'export_command_stage':value,'export_command_issue':value,'raw':'private-value'}
+            report=C.failure_report(error)
+            self.assertNotIn('export_command_stage',report);self.assertNotIn('export_command_issue',report)
+            self.assertNotIn('private',json.dumps(report))
+
 
 class CompletionRuntimeFlagsTests(unittest.TestCase):
     def test_closed_config_preserves_actual_inventory_and_rejects_enabled_execution(self):

@@ -2414,7 +2414,7 @@ jobs:
         run: |
           set -eu
           PYTHONPATH=backend/tools:backend/tests python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
-          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_completion_transport test_naver_completion_download test_naver_saved_exports test_naver_saved_exports_inspect -q
+          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_completion_transport test_naver_completion_download test_naver_saved_exports test_naver_saved_exports_inspect test_naver_completion_export_diagnostics -q
           python3 - <<'PYCODE'
           import base64,json,os,pathlib,sys
           sys.path.insert(0,'backend/tools')

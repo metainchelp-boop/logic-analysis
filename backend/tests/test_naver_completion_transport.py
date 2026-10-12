@@ -5,6 +5,7 @@ import copy
 from contextlib import contextmanager
 import hashlib
 import gzip
+import importlib.util
 import json
 import lzma
 import os
@@ -23,6 +24,15 @@ def sample():
     return {'version':1,'operation':'preview-completion-prepare','package':{},
         'sources':{k:'value = 1\n' for k in T.SOURCE_FILES},
         'approved_config_operation_id':'74c912dddf824fae99012849bc4c19a5'}
+
+
+def controller_fixture(**values):
+    # The workflow reporter and execute() load distinct copies of this module.
+    path=Path(__file__).resolve().parents[1]/'tools/naver_preview_completion_release.py'
+    spec=importlib.util.spec_from_file_location('completion_diagnostics_fixture',path)
+    controller=importlib.util.module_from_spec(spec);spec.loader.exec_module(controller)
+    for key,value in values.items():setattr(controller,key,value)
+    return controller
 
 
 def packed(raw):return T.PREFIX+base64.b64encode(lzma.compress(raw,preset=6)).decode()
@@ -334,7 +344,7 @@ class CodecTests(unittest.TestCase):
         value=sample();calls=[]
         binding=Mock();binding.prepare.side_effect=lambda p:calls.append('stage') or 'wrapped'
         binding.install.side_effect=lambda:calls.append('install');binding.save.side_effect=lambda p:calls.append('save')
-        C=SimpleNamespace(TARGET_COMMIT='f'*40)
+        C=controller_fixture(TARGET_COMMIT='f'*40)
         def prepare(*args,**kwargs):
             calls.append('preflight');kwargs['prepare_exports']();calls.append('build');return {'ok':True,'services_started':False}
         C.prepare=prepare
@@ -347,7 +357,7 @@ class CodecTests(unittest.TestCase):
         for operation,code in (('preview-completion-apply','CODE_ALREADY_ATTEMPTED'),('preview-completion-rollback','CODE_ROLLBACK_OPERATION_ID'),
                 ('preview-completion-apply','CODE_ROLLBACK_FAILED')):
             value=sample();value.update(operation=operation,approved_config_operation_id=None,package={'release':{}})
-            binding=Mock();C=SimpleNamespace(TARGET_COMMIT='f'*40)
+            binding=Mock();C=controller_fixture(TARGET_COMMIT='f'*40)
             setattr(C,T.FUNCTIONS[operation],Mock(side_effect=RuntimeError(code)))
             m={'controller':C,'release':Mock(),'host':SimpleNamespace(NativeHost=Mock()),'exports_binding':SimpleNamespace(Binding=Mock(return_value=binding)),
                 'exports_helper':Mock(),'lifecycle':Mock(),'upgrade':Mock()}
@@ -356,7 +366,7 @@ class CodecTests(unittest.TestCase):
     def test_only_verified_old_recovery_or_successful_explicit_rollback_removes_exports(self):
         for operation in ('preview-completion-apply','preview-completion-rollback'):
             value=sample();value.update(operation=operation,approved_config_operation_id=None,package={'release':{}})
-            binding=Mock();C=SimpleNamespace(TARGET_COMMIT='f'*40)
+            binding=Mock();C=controller_fixture(TARGET_COMMIT='f'*40)
             setattr(C,T.FUNCTIONS[operation],Mock(side_effect=RuntimeError('CODE_FAILED_ROLLED_BACK_DB_PRESERVED')) if operation.endswith('apply') else Mock(return_value={'ok':True}))
             m={'controller':C,'release':Mock(),'host':SimpleNamespace(NativeHost=Mock()),'exports_binding':SimpleNamespace(Binding=Mock(return_value=binding)),
                 'exports_helper':Mock(),'lifecycle':Mock(),'upgrade':Mock()}
@@ -367,11 +377,101 @@ class CodecTests(unittest.TestCase):
             binding.rollback.assert_called_once()
 
     def test_failed_prepare_does_not_publish_binding_and_cleanup_is_attempted(self):
-        value=sample();binding=Mock();C=SimpleNamespace(prepare=Mock(side_effect=ValueError('SYNTHETIC')),TARGET_COMMIT='f'*40)
+        value=sample();binding=Mock();C=controller_fixture(prepare=Mock(side_effect=ValueError('SYNTHETIC')),TARGET_COMMIT='f'*40)
         m={'controller':C,'release':Mock(),'host':SimpleNamespace(NativeHost=Mock()),'exports_binding':SimpleNamespace(Binding=Mock(return_value=binding)),
             'exports_helper':Mock(),'lifecycle':Mock(),'upgrade':Mock()}
         with patch.object(T,'modules',return_value=m),self.assertRaisesRegex(ValueError,'SYNTHETIC'):T.execute(value)
         binding.save.assert_not_called();binding.rollback.assert_called_once()
+
+
+class CompletionFailurePropagationTests(unittest.TestCase):
+    def setUp(self):
+        self.actual=controller_fixture(TARGET_COMMIT='f'*40)
+        self.reporter=controller_fixture(TARGET_COMMIT='f'*40)
+        self.binding=Mock()
+        self.factory=Mock(return_value=self.binding)
+        self.modules={'controller':self.actual,'release':Mock(),
+            'host':SimpleNamespace(NativeHost=Mock()),
+            'exports_binding':SimpleNamespace(Binding=self.factory),
+            'exports_helper':Mock(),'lifecycle':Mock(),'upgrade':Mock()}
+
+    def run_failure(self,error,*,operation='preview-completion-prepare'):
+        value=sample()
+        if operation!='preview-completion-prepare':
+            value.update(operation=operation,approved_config_operation_id=None,package={'release':{}})
+        with patch.object(T,'modules',return_value=self.modules),self.assertRaises(type(error)) as caught:
+            T.execute(value)
+        self.assertIs(caught.exception,error)
+        self.assertEqual(self.reporter.STAGE,'input')
+        return self.reporter.failure_report(error)
+
+    def test_distinct_reporter_preserves_actual_prepare_stage_before_cleanup_changes_it(self):
+        stages=('code_prepare_preflight','code_build_engine','code_build_relay',
+            'code_config_engine','code_config_relay','code_check_config','code_prepare_postflight')
+        for stage in stages:
+            with self.subTest(stage=stage):
+                error=ValueError('COMMAND_FAILED')
+                def prepare(*args,**kwargs):
+                    self.actual.STAGE=stage;self.actual.OPERATION='package'
+                    raise error
+                self.actual.prepare=prepare
+                self.binding.rollback.side_effect=lambda:setattr(self.actual,'STAGE','code_rollback')
+                report=self.run_failure(error)
+                self.assertEqual(report,{'stage':'input','error_kind':'ValueError','error_code':'COMMAND_FAILED',
+                    'failed_stage':stage,'failed_operation':'package',
+                    'failed_error_kind':'ValueError','failed_error_code':'COMMAND_FAILED'})
+                self.binding.save.assert_not_called()
+
+    def test_binding_constructor_and_staging_failures_preserve_distinct_actual_phases(self):
+        for phase in ('saved_exports_binding','saved_exports_prepare'):
+            with self.subTest(phase=phase):
+                self.factory.reset_mock(side_effect=True);self.binding.reset_mock(side_effect=True)
+                self.factory.return_value=self.binding
+                error=ValueError('EXPORT_PIN')
+                if phase=='saved_exports_binding':self.factory.side_effect=error
+                else:self.binding.prepare.side_effect=error
+                report=self.run_failure(error)
+                self.assertEqual(report['failed_stage'],phase)
+                self.assertEqual(report['failed_error_code'],'EXPORT_PIN')
+                if phase=='saved_exports_binding':self.binding.rollback.assert_not_called()
+                else:self.binding.rollback.assert_called_once()
+
+    def test_cleanup_error_carries_original_closed_details_and_its_own_failure(self):
+        original=ValueError('EXPORT_COMMAND_FAILED')
+        original.failure_details={'export_command_stage':'product_start',
+            'export_command_issue':'namespace','export_command_status':1,
+            'raw':'must-never-be-published'}
+        cleanup=ValueError('EXPORT_ROLLBACK_DRIFT')
+        cleanup.failure_details={'export_command_stage':'market_stop','export_command_issue':'command_failed',
+            'export_command_status':2,'raw':'also-private'}
+        def prepare(*args,**kwargs):
+            self.actual.STAGE='saved_exports_install'
+            raise original
+        def rollback():
+            self.actual.STAGE='code_rollback';self.actual.OPERATION='restore_database'
+            raise cleanup
+        self.actual.prepare=prepare;self.binding.rollback.side_effect=rollback
+        report=self.run_failure(cleanup)
+        self.assertEqual(report,{'stage':'input','error_kind':'ValueError','error_code':'EXPORT_ROLLBACK_DRIFT',
+            'failed_stage':'saved_exports_install','failed_operation':'none',
+            'failed_error_kind':'ValueError','failed_error_code':'EXPORT_COMMAND_FAILED',
+            'cleanup_stage':'code_rollback','cleanup_operation':'restore_database',
+            'cleanup_error_kind':'ValueError','cleanup_error_code':'EXPORT_ROLLBACK_DRIFT',
+            'export_command_stage':'product_start','export_command_issue':'namespace','export_command_status':1})
+        self.assertNotIn('raw',cleanup.failure_details)
+        self.binding.save.assert_not_called()
+
+    def test_existing_original_and_rollback_details_are_not_replaced_by_transport_stage(self):
+        original=RuntimeError('CODE_FAILED_ROLLED_BACK_DB_PRESERVED')
+        original.failure_details={'failed_stage':'account_sources_warm','failed_operation':'warm_result',
+            'failed_error_kind':'ValueError','failed_error_code':'SOURCE_WARM_FAILED',
+            'rollback_stage':'code_rollback','rollback_operation':'restore_database',
+            'rollback_error_kind':'ValueError','rollback_error_code':'DB_SNAPSHOT_CHANGED'}
+        self.actual.apply=Mock(side_effect=original)
+        report=self.run_failure(original,operation='preview-completion-apply')
+        for key,value in original.failure_details.items():self.assertEqual(report[key],value)
+        self.assertEqual(report['failed_stage'],'account_sources_warm')
+        self.assertEqual(report['rollback_error_code'],'DB_SNAPSHOT_CHANGED')
 
 
 if __name__=='__main__':unittest.main()
