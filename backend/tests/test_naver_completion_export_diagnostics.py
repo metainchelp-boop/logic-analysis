@@ -10,6 +10,8 @@ class CompletionExportDiagnosticTests(unittest.TestCase):
     def test_every_generated_command_has_closed_stage(self):
         units=['/etc/systemd/system/naver-'+kind+'-export.'+suffix for kind in ('market','product') for suffix in ('service','timer')]
         self.assertEqual(E.command_stage(['systemd-analyze','verify',*units]),'unit_verify')
+        reader_units=['/etc/systemd/system/naver-'+kind+'-export-reader.service' for kind in ('market','product')]
+        self.assertEqual(E.command_stage(['systemd-analyze','verify',*sorted(units+reader_units)]),'unit_verify')
         self.assertEqual(E.command_stage(['systemctl','daemon-reload']),'daemon_reload')
         for kind in ('product','market'):
             service='naver-'+kind+'-export.service';timer='naver-'+kind+'-export.timer'
@@ -18,6 +20,9 @@ class CompletionExportDiagnosticTests(unittest.TestCase):
                 ('is-enabled',[timer],'enabled'),('is-active',[timer],'active'),
                 ('disable',['--now',timer],'disable'),('stop',[service],'stop')]:
                 self.assertEqual(E.command_stage(['systemctl',action,*tail]),kind+'_'+stage)
+            reader='naver-'+kind+'-export-reader.service'
+            self.assertEqual(E.command_stage(['systemctl','show',reader,'--property=Result','--property=ExecMainStatus']),kind+'_reader_show')
+            self.assertEqual(E.command_stage(['systemctl','stop',reader]),kind+'_reader_stop')
         for args in (None,(),['systemctl','start','foreign.service'],['journalctl'],['systemd-analyze','verify','/private/secret']):
             self.assertEqual(E.command_stage(args),'unknown')
 

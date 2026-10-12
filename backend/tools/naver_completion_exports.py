@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 
-PINS = {'plan': {'ops_commit': '19586caf7fe5579e7da70d4a2d4205c3ed603996', 'source_directory': '/root/logic-analysis-deploy/data', 'database_name': 'logic_data.db', 'exporter_user': 'nobody', 'source_group': None, 'python_executable': '/usr/bin/python3'}, 'helper_sha256': 'd1f68c2ba19fe2b8550e44ddd76dc8a16393bcad6323c7a1206b37f0550ca9d5', 'scripts': {'naver_product_export.py': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'naver_market_export.py': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}, 'companion_sha256': '4569587ade5f0c6575e7c2504790dbb0efb300b3091d834c2d1471913c499c95'}
+PINS = {'plan': {'ops_commit': '19586caf7fe5579e7da70d4a2d4205c3ed603996', 'source_directory': '/root/logic-analysis-deploy/data', 'database_name': 'logic_data.db', 'exporter_user': 'nobody', 'source_group': None, 'python_executable': '/usr/bin/python3'}, 'helper_sha256': '2b47884242c1b1e7b67074383f070a79bbdd4f88471c0448a92116cf9b34c7a8', 'scripts': {'naver_product_export.py': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'naver_market_export.py': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}, 'companion_sha256': '4569587ade5f0c6575e7c2504790dbb0efb300b3091d834c2d1471913c499c95'}
 
 
 def canonical(value):
@@ -28,13 +28,15 @@ def require_pins():
 
 COMMAND_STAGES = frozenset(('unit_verify daemon_reload product_start market_start '
     'product_enable market_enable product_show market_show product_enabled market_enabled '
-    'product_active market_active product_disable market_disable product_stop market_stop unknown').split())
+    'product_active market_active product_disable market_disable product_stop market_stop '
+    'product_reader_show market_reader_show product_reader_stop market_reader_stop unknown').split())
 
 def command_stage(args):
     if type(args) is not list or any(type(item) is not str for item in args): return 'unknown'
     units = ['/etc/systemd/system/naver-'+kind+'-export.'+suffix
              for kind in ('market','product') for suffix in ('service','timer')]
-    if args == ['systemd-analyze','verify',*units]: return 'unit_verify'
+    reader_units=['/etc/systemd/system/naver-'+kind+'-export-reader.service' for kind in ('market','product')]
+    if args in (['systemd-analyze','verify',*units],['systemd-analyze','verify',*sorted(units+reader_units)]): return 'unit_verify'
     if args == ['systemctl','daemon-reload']: return 'daemon_reload'
     for kind in ('product','market'):
         service='naver-'+kind+'-export.service'; timer='naver-'+kind+'-export.timer'
@@ -44,6 +46,9 @@ def command_stage(args):
             ('is-enabled',[timer],'enabled'), ('is-active',[timer],'active'),
             ('disable',['--now',timer],'disable'), ('stop',[service],'stop')):
             if args == ['systemctl',action,*tail]: return kind+'_'+stage
+        reader='naver-'+kind+'-export-reader.service'
+        if args == ['systemctl','show',reader,'--property=Result','--property=ExecMainStatus']:return kind+'_reader_show'
+        if args == ['systemctl','stop',reader]:return kind+'_reader_stop'
     return 'unknown'
 
 def command_diagnostic(args, error):

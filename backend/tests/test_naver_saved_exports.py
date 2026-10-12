@@ -4,6 +4,8 @@ import hashlib
 import importlib.util
 import json
 import os
+from contextlib import redirect_stdout
+import io
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -60,6 +62,179 @@ class SavedExportInstallTests(unittest.TestCase):
     def prepare(self):
         return M.prepare(self.plan,scripts=self.scripts,pins=self.pins,operation_id='b'*32)
 
+    def coordinator(self):
+        namespace={'__name__':'coordinator_synthetic_test'}
+        exec(M._coordinator_source(self.plan,'product'),namespace)
+        return namespace
+
+    def test_coordinator_pins_wal_read_transaction_without_database_writes(self):
+        writer=sqlite3.connect(self.database)
+        writer.execute('PRAGMA journal_mode=WAL')
+        writer.execute("INSERT INTO clients VALUES(1,NULL,NULL,NULL,NULL)")
+        writer.commit();writer.close()
+        self.assertFalse(Path(str(self.database)+'-wal').exists())
+        before=(self.database.read_bytes(),self.database.stat().st_mode)
+        namespace=self.coordinator();connections=[];calls=[]
+        def connect(*args,**kwargs):
+            connection=sqlite3.connect(*args,**kwargs);connections.append(connection)
+            return connection
+        def run(args,**kwargs):
+            calls.append((args,kwargs))
+            self.assertTrue(Path(str(self.database)+'-wal').exists())
+            self.assertTrue(Path(str(self.database)+'-shm').exists())
+            with self.assertRaises(sqlite3.DatabaseError):
+                connections[0].execute('INSERT INTO clients VALUES(2,NULL,NULL,NULL,NULL)')
+            reader=sqlite3.connect(self.database.as_uri()+'?mode=ro',uri=True)
+            try:
+                self.assertEqual(reader.execute('SELECT COUNT(*) FROM clients').fetchone()[0],1)
+            finally:reader.close()
+            return SimpleNamespace(returncode=0)
+        # This synthetic test proves the SQLite transaction behavior; the kernel
+        # nested mount is separately checked by the coordinator and host one-shot.
+        with patch.object(namespace['os'],'statvfs',side_effect=lambda path:SimpleNamespace(
+                f_flag=os.ST_RDONLY if path==str(self.database) else 0)):
+            self.assertEqual(namespace['coordinate'](str(self.database),'naver-product-export-reader.service',
+                                                    connect=connect,run=run),0)
+        self.assertEqual(before,(self.database.read_bytes(),self.database.stat().st_mode))
+        self.assertEqual(len(calls),1)
+        self.assertEqual(calls[0][0],['/usr/bin/systemctl','start','naver-product-export-reader.service'])
+        self.assertEqual(calls[0][1]['timeout'],50)
+        self.assertIs(calls[0][1]['stdout'],subprocess.DEVNULL)
+        self.assertIs(calls[0][1]['stderr'],subprocess.DEVNULL)
+        with self.assertRaises(sqlite3.ProgrammingError):connections[0].execute('SELECT 1')
+
+    def test_coordinator_timeout_stops_reader_before_releasing_source_transaction(self):
+        namespace=self.coordinator();calls=[];closed=[]
+        class Connection:
+            def execute(self,sql):
+                calls.append(('sql',sql));return self
+            def fetchone(self):return (1,)
+            def set_authorizer(self,callback):self.authorize=callback
+            def close(self):closed.append(True)
+        connection=Connection()
+        def run(args,**kwargs):
+            self.assertEqual(closed,[])
+            calls.append((args,kwargs))
+            if args[1]=='start':raise subprocess.TimeoutExpired(args,50,output=b'private source detail')
+            self.assertEqual(kwargs['timeout'],8)
+            return SimpleNamespace(returncode=0)
+        output=io.StringIO()
+        with patch.object(namespace['os'],'statvfs',side_effect=lambda path:SimpleNamespace(
+                f_flag=os.ST_RDONLY if path==str(self.database) else 0)),redirect_stdout(output):
+            result=namespace['coordinate'](str(self.database),'naver-product-export-reader.service',
+                connect=lambda *args,**kwargs:connection,run=run)
+        self.assertEqual(result,1);self.assertEqual(closed,[True])
+        self.assertEqual(json.loads(output.getvalue()),{'status':'failed','code':'COORDINATION_TIMEOUT'})
+        self.assertEqual([entry[0] for entry in calls if isinstance(entry[0],list)],
+                         [['/usr/bin/systemctl','start','naver-product-export-reader.service'],
+                          ['/usr/bin/systemctl','stop','naver-product-export-reader.service']])
+        self.assertEqual(connection.authorize(sqlite3.SQLITE_PRAGMA,'schema_version',None,None,None),sqlite3.SQLITE_OK)
+        for action,a,b in [(sqlite3.SQLITE_INSERT,'clients',None),(sqlite3.SQLITE_READ,'clients','id'),
+                            (sqlite3.SQLITE_PRAGMA,'schema_version','1'),(sqlite3.SQLITE_PRAGMA,'journal_mode',None),
+                            (sqlite3.SQLITE_TRANSACTION,'COMMIT',None)]:
+            self.assertEqual(connection.authorize(action,a,b,None,None),sqlite3.SQLITE_DENY)
+        self.assertNotIn('private',output.getvalue());self.assertNotIn(str(self.database),output.getvalue())
+
+    def test_coordinator_rejects_missing_kernel_readonly_or_unreadable_sidecars_before_open(self):
+        namespace=self.coordinator()
+        for main_readonly,directory_readonly in ((False,False),(True,True)):
+            opened=[];output=io.StringIO()
+            with patch.object(namespace['os'],'statvfs',side_effect=lambda path:SimpleNamespace(
+                    f_flag=os.ST_RDONLY if (main_readonly if path==str(self.database) else directory_readonly) else 0)),redirect_stdout(output):
+                result=namespace['coordinate'](str(self.database),'naver-product-export-reader.service',
+                    connect=lambda *a,**k:opened.append(True),run=lambda *a,**k:self.fail('must not start child'))
+            self.assertEqual(result,1);self.assertEqual(opened,[])
+            self.assertEqual(json.loads(output.getvalue())['code'],'COORDINATION_INVALID')
+        wal=Path(str(self.database)+'-wal');wal.write_bytes(b'private sidecar');wal.chmod(0o600)
+        opened=[];output=io.StringIO()
+        with patch.object(namespace['os'],'statvfs',side_effect=lambda path:SimpleNamespace(
+                f_flag=os.ST_RDONLY if path==str(self.database) else 0)),\
+                patch.object(namespace['pwd'],'getpwnam',return_value=SimpleNamespace(pw_uid=self.uid+1)),redirect_stdout(output):
+            result=namespace['coordinate'](str(self.database),'naver-product-export-reader.service',
+                connect=lambda *a,**k:opened.append(True),run=lambda *a,**k:self.fail('must not start child'))
+        self.assertEqual(result,1);self.assertEqual(opened,[])
+        self.assertEqual(json.loads(output.getvalue())['code'],'COORDINATION_INVALID')
+        self.assertEqual(wal.read_bytes(),b'private sidecar');self.assertEqual(wal.stat().st_mode&0o777,0o600)
+
+    def test_coordinator_reader_failure_and_stop_failure_keep_closed_first_cause(self):
+        namespace=self.coordinator();closed=[]
+        connection=SimpleNamespace(execute=lambda sql:SimpleNamespace(fetchone=lambda:(1,)),
+            set_authorizer=lambda callback:None,close=lambda:closed.append(True))
+        output=io.StringIO()
+        def run(args,**kwargs):
+            if args[1]=='stop':raise OSError('private absolute path and credential')
+            return SimpleNamespace(returncode=3)
+        with patch.object(namespace['os'],'statvfs',side_effect=lambda path:SimpleNamespace(
+                f_flag=os.ST_RDONLY if path==str(self.database) else 0)),redirect_stdout(output):
+            result=namespace['coordinate'](str(self.database),'naver-product-export-reader.service',
+                connect=lambda *a,**k:connection,run=run)
+        self.assertEqual(result,1);self.assertEqual(closed,[True])
+        self.assertEqual([json.loads(line) for line in output.getvalue().splitlines()],
+            [{'status':'failed','code':'COORDINATION_READER_STOP_FAILED'},
+             {'status':'failed','code':'COORDINATION_READER_FAILED'}])
+        self.assertNotIn('private',output.getvalue())
+
+    def test_coordinator_source_open_failure_is_closed_and_does_not_start_reader(self):
+        namespace=self.coordinator();closed=[];output=io.StringIO()
+        def execute(sql):raise sqlite3.OperationalError('unable to open private source database')
+        connection=SimpleNamespace(execute=execute,close=lambda:closed.append(True))
+        with patch.object(namespace['os'],'statvfs',side_effect=lambda path:SimpleNamespace(
+                f_flag=os.ST_RDONLY if path==str(self.database) else 0)),redirect_stdout(output):
+            result=namespace['coordinate'](str(self.database),'naver-product-export-reader.service',
+                connect=lambda *a,**k:connection,run=lambda *a,**k:self.fail('must not start reader'))
+        self.assertEqual(result,1);self.assertEqual(closed,[True])
+        self.assertEqual(json.loads(output.getvalue()),{'status':'failed','code':'COORDINATION_SOURCE_OPEN'})
+        self.assertNotIn('private',output.getvalue())
+
+    def test_coordinator_inode_replacement_after_sqlite_open_blocks_reader(self):
+        namespace=self.coordinator();closed=[];output=io.StringIO()
+        before=self.database.read_bytes()
+        def execute(sql):
+            if sql=='PRAGMA schema_version':
+                self.database.rename(self.source/'prior.db')
+                self.database.write_bytes(before)
+            return SimpleNamespace(fetchone=lambda:(1,))
+        connection=SimpleNamespace(execute=execute,set_authorizer=lambda callback:None,
+                                   close=lambda:closed.append(True))
+        with patch.object(namespace['os'],'statvfs',side_effect=lambda path:SimpleNamespace(
+                f_flag=os.ST_RDONLY if path==str(self.database) else 0)),redirect_stdout(output):
+            result=namespace['coordinate'](str(self.database),'naver-product-export-reader.service',
+                connect=lambda *a,**k:connection,run=lambda *a,**k:self.fail('must not start reader'))
+        self.assertEqual(result,1);self.assertEqual(closed,[True])
+        self.assertEqual(json.loads(output.getvalue())['code'],'COORDINATION_SOURCE_OPEN')
+
+    def test_coordinator_created_unreadable_sidecar_is_not_repaired(self):
+        namespace=self.coordinator();closed=[];output=io.StringIO()
+        shm=Path(str(self.database)+'-shm')
+        def execute(sql):
+            if sql=='PRAGMA schema_version':
+                shm.write_bytes(b'coordination fixture');shm.chmod(0o600)
+            return SimpleNamespace(fetchone=lambda:(1,))
+        connection=SimpleNamespace(execute=execute,set_authorizer=lambda callback:None,
+                                   close=lambda:closed.append(True))
+        with patch.object(namespace['os'],'statvfs',side_effect=lambda path:SimpleNamespace(
+                f_flag=os.ST_RDONLY if path==str(self.database) else 0)),\
+                patch.object(namespace['pwd'],'getpwnam',return_value=SimpleNamespace(pw_uid=self.uid+1)),redirect_stdout(output):
+            result=namespace['coordinate'](str(self.database),'naver-product-export-reader.service',
+                connect=lambda *a,**k:connection,run=lambda *a,**k:self.fail('must not start reader'))
+        self.assertEqual(result,1);self.assertEqual(closed,[True])
+        self.assertEqual(json.loads(output.getvalue())['code'],'COORDINATION_SOURCE_OPEN')
+        self.assertEqual(shm.read_bytes(),b'coordination fixture');self.assertEqual(shm.stat().st_mode&0o777,0o600)
+
+    def test_reader_failed_result_prevents_enable_and_rollback_stops_all_own_services(self):
+        receipt=self.prepare()
+        def command(args):
+            if args[:3]==['systemctl','show','naver-product-export-reader.service']:
+                self.calls.append(list(args));return b'Result=exit-code\nExecMainStatus=1\n'
+            return self.command(args)
+        with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_RUN_NOT_VERIFIED'):
+            M.install(receipt,command=command)
+        self.assertFalse(any(args[:2]==['systemctl','enable'] for args in self.calls))
+        self.calls.clear();M.rollback(receipt,command=self.command)
+        stopped={args[2] for args in self.calls if args[:2]==['systemctl','stop']}
+        self.assertEqual(stopped,{f'naver-{kind}-export{suffix}.service' for kind in M.KINDS for suffix in ('','-reader')})
+        self.assertEqual(list(self.units.iterdir()),[])
+
     def command(self,args):
         self.calls.append(list(args))
         if args[:2]==['systemctl','start']:
@@ -91,14 +266,14 @@ class SavedExportInstallTests(unittest.TestCase):
     def test_companion_and_units_bind_only_dedicated_directories_readonly(self):
         with patch.object(M,'_python_snapshot',side_effect=AssertionError('pure artifact rendering')):
             items=M.artifacts(self.plan,self.scripts,self.pins)
-        self.assertEqual(len(items),7)
+        self.assertEqual(len(items),9)
         engine=json.loads(items[M.COMPANION])['services']['naver-engine']
         self.assertEqual(set(engine),{'environment','volumes'});self.assertEqual(len(engine['volumes']),2)
         for row in engine['volumes']:
             self.assertIs(row['read_only'],True);self.assertIs(row['bind']['create_host_path'],False)
             self.assertNotIn(str(self.source),row['source'])
         for kind in M.KINDS:
-            unit=items[f'naver-{kind}-export.service'].decode()
+            unit=items[f'naver-{kind}-export-reader.service'].decode()
             self.assertIn('ProtectHome=tmpfs\n',unit)
             self.assertIn(f'BindReadOnlyPaths={self.source}:/run/naver-saved-source:norbind\n',unit)
             self.assertIn('os.statvfs',unit);self.assertIn('os.ST_RDONLY',unit)
@@ -109,6 +284,29 @@ class SavedExportInstallTests(unittest.TestCase):
             self.assertIn(f'ExecStart={binary} -I -B ',unit)
             self.assertIn('encodings,json,sqlite3,dataclasses,importlib,math',unit)
             self.assertNotIn('ExecStart=/usr/bin/python3 ',unit)
+            self.assertIn(f'PartOf=naver-{kind}-export.service\n',unit)
+            self.assertNotIn('After=naver-',unit)
+            self.assertIn('TimeoutStartSec=45\n',unit)
+            self.assertIn('TimeoutStopSec=5\n',unit)
+            self.assertIn('KillMode=control-group\n',unit)
+            self.assertIn('UMask=0027\n',unit)
+            coordinator=items[f'naver-{kind}-export.service'].decode()
+            self.assertIn('User=root\n',coordinator)
+            self.assertIn('Group='+str(self.gid)+'\n',coordinator)
+            self.assertIn(f'BindPaths={self.source}:/run/naver-saved-source:norbind\n',coordinator)
+            self.assertIn('ReadWritePaths=/run/naver-saved-source\n',coordinator)
+            self.assertIn('ReadOnlyPaths=/run/naver-saved-source/logic_data.db ',coordinator)
+            self.assertIn('TimeoutStartSec=65\n',coordinator)
+            self.assertIn('UMask=0022\n',coordinator)
+            for guard in ('NoNewPrivileges=true','CapabilityBoundingSet=','PrivateNetwork=true',
+                          'ProtectHome=tmpfs','ProtectSystem=strict','RestrictAddressFamilies=AF_UNIX'):
+                self.assertIn(guard+'\n',coordinator)
+            encoded=next(line for line in coordinator.splitlines() if line.startswith('ExecStart=')).split(' -c ',1)[1]
+            source=json.loads(encoded)
+            self.assertEqual(source,M._coordinator_source(self.plan,kind))
+            compile(source,'embedded-coordinator','exec')
+            self.assertNotIn('%',source);self.assertNotIn('$',source)
+            self.assertNotIn('naver_'+kind+'_export.py',coordinator)
 
     def test_prepare_is_non_operational_and_source_change_blocks_install(self):
         receipt=self.prepare();self.assertEqual(self.calls,[]);self.assertEqual(list(self.units.iterdir()),[])
@@ -126,6 +324,8 @@ class SavedExportInstallTests(unittest.TestCase):
         enable=[i for i,args in enumerate(self.calls) if args[:2]==['systemctl','enable']]
         self.assertEqual(len(start),2);self.assertEqual(len(enable),2);self.assertLess(max(start),min(enable))
         summary=M.verify(receipt,command=self.command);self.assertEqual(summary['sources']['product']['products'],0)
+        self.assertIs(summary['source_writes'],True);self.assertIs(summary['database_writes'],False)
+        self.assertIs(summary['coordination_files_may_change'],True)
         output=json.dumps(summary);self.assertNotIn(str(self.database),output);self.assertNotIn('synthetic-exporter',output)
         with self.assertRaisesRegex(M.ExportInstallInvalid,'EXPORT_ALREADY_ATTEMPTED'):
             M.install(receipt,command=self.command)
@@ -221,8 +421,8 @@ class SavedExportInstallTests(unittest.TestCase):
     def test_owner_only_system_binary_is_unchanged_and_copy_is_group_only(self):
         before=(self.python.read_bytes(),M._file_identity(self.python.stat()))
         receipt=self.prepare()
-        self.assertEqual(receipt['version'],2)
-        self.assertEqual(len(receipt['manifest']),8)
+        self.assertEqual(receipt['version'],3)
+        self.assertEqual(len(receipt['manifest']),10)
         staged=self.staging/receipt['operation_id']/M.INTERPRETER
         self.assertEqual(staged.stat().st_mode&0o777,0o600)
         M.install(receipt,command=self.command)

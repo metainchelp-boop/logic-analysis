@@ -5,10 +5,12 @@ Preparing artifacts does not start jobs. Only install() changes system units, an
 only the release controller may call it after approval. No env, keys or DB rows
 are returned. The engine receives dedicated sanitized directories, not SQLite.
 
-Namespace contract: systemd.exec ProtectHome=tmpfs with BindReadOnlyPaths exposes
-only the chosen source directory at /run/naver-saved-source. The whole directory
-is needed for the live SQLite WAL/SHM pair; immutable=1 and source writes are not
-used. See https://www.freedesktop.org/software/systemd/man/systemd.exec.html and
+Namespace contract: the unprivileged reader sees the whole source directory RO.
+A separate bounded root coordinator sees that directory RW, but the main DB is
+a nested read-only mount. SQLite mode=ro/query_only may create/update its WAL/SHM
+coordination files while a read transaction holds them for the reader. No source
+SQL rows, main DB bytes or permissions are written. Immutable/nolock are not used.
+See https://www.freedesktop.org/software/systemd/man/systemd.exec.html and
 https://www.sqlite.org/wal.html#read_only_databases . Actual namespace support and
 WAL permissions must pass the one-shot runs on the target host.
 """
@@ -39,6 +41,105 @@ ROOT_UID = 0
 READER_GID = 10001
 PROFILE_KEYS = frozenset({'ops_commit', 'source_directory', 'database_name',
                          'exporter_user', 'source_group', 'python_executable'})
+
+# This is embedded as one systemd-quoted argv, not a shell command or third script.
+# The main DB must be a kernel-RO mount while only SQLite's coordination directory
+# is writable. Source application data never passes through this process.
+COORDINATOR_SOURCE = '''import grp,json,os,pwd,sqlite3,stat,subprocess,sys
+
+def emit(code):
+    print(json.dumps({'status':'failed','code':code},sort_keys=True,separators=(',',':')),flush=True)
+
+def coordinate(database=DATABASE,reader=READER,*,connect=sqlite3.connect,run=subprocess.run):
+    connection=None
+    code=None
+    started=False
+    try:
+        directory=os.path.dirname(database)
+        initial=os.lstat(database)
+        if (reader not in ('naver-product-export-reader.service','naver-market-export-reader.service') or
+                not stat.S_ISDIR(os.lstat(directory).st_mode) or
+                not stat.S_ISREG(os.lstat(database).st_mode) or
+                not os.statvfs(database).f_flag & os.ST_RDONLY or
+                os.statvfs(directory).f_flag & os.ST_RDONLY):
+            raise ValueError()
+        uid=pwd.getpwnam(EXPORTER_USER).pw_uid
+        groups={READER_GID}
+        if SOURCE_GROUP is not None:
+            groups.add(grp.getgrnam(SOURCE_GROUP).gr_gid)
+        if uid==0 or 0 in groups:
+            raise ValueError()
+        def readable_sidecars():
+            for suffix in ('-wal','-shm'):
+                try:
+                    info=os.lstat(database+suffix)
+                except FileNotFoundError:
+                    continue
+                if (not stat.S_ISREG(info.st_mode) or not (
+                        info.st_mode & stat.S_IROTH or
+                        info.st_uid==uid and info.st_mode & stat.S_IRUSR or
+                        info.st_gid in groups and info.st_mode & stat.S_IRGRP)):
+                    raise ValueError()
+        readable_sidecars()
+    except Exception:
+        emit('COORDINATION_INVALID')
+        return 1
+    try:
+        connection=connect('file:'+database+'?mode=ro',uri=True,timeout=1,isolation_level=None)
+        connection.execute('PRAGMA query_only=ON')
+        connection.execute('PRAGMA busy_timeout=1000')
+        def authorize(action,arg1,arg2,db,trigger):
+            if action==sqlite3.SQLITE_PRAGMA and arg1=='schema_version' and arg2 is None:
+                return sqlite3.SQLITE_OK
+            if action==sqlite3.SQLITE_TRANSACTION and arg1 in ('BEGIN','ROLLBACK'):
+                return sqlite3.SQLITE_OK
+            return sqlite3.SQLITE_DENY
+        connection.set_authorizer(authorize)
+        connection.execute('BEGIN')
+        connection.execute('PRAGMA schema_version').fetchone()
+        readable_sidecars()
+        current=os.lstat(database)
+        if (not stat.S_ISREG(current.st_mode) or
+                (current.st_dev,current.st_ino)!=(initial.st_dev,initial.st_ino)):
+            raise ValueError()
+    except Exception:
+        code='COORDINATION_SOURCE_OPEN'
+    if code is None:
+        try:
+            current=os.lstat(database)
+            if (not stat.S_ISREG(current.st_mode) or
+                    (current.st_dev,current.st_ino)!=(initial.st_dev,initial.st_ino)):
+                raise ValueError()
+            started=True
+            result=run(['/usr/bin/systemctl','start',reader],stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=50,check=False)
+            if result.returncode!=0:
+                code='COORDINATION_READER_FAILED'
+        except subprocess.TimeoutExpired:
+            code='COORDINATION_TIMEOUT'
+        except Exception:
+            code='COORDINATION_READER_FAILED'
+    if code is not None and started:
+        try:
+            result=run(['/usr/bin/systemctl','stop',reader],stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=8,check=False)
+            if result.returncode!=0:
+                emit('COORDINATION_READER_STOP_FAILED')
+        except Exception:
+            emit('COORDINATION_READER_STOP_FAILED')
+    if connection is not None:
+        try:
+            connection.close()
+        except Exception:
+            code=code or 'COORDINATION_SOURCE_OPEN'
+    if code is not None:
+        emit(code)
+        return 1
+    return 0
+
+if __name__=='__main__':
+    sys.exit(coordinate())
+'''
 
 
 class ExportInstallInvalid(ValueError):
@@ -111,17 +212,49 @@ def render_companion(plan):
                      'bind': {'create_host_path': False}} for kind in KINDS]}}}) + b'\n'
 
 
+def _coordinator_source(plan, kind):
+    plan = _plan(plan)
+    if kind not in KINDS:
+        _fail('EXPORT_PROFILE')
+    constants = {'DATABASE': SOURCE_ALIAS + '/' + plan['database_name'],
+                 'READER': f'naver-{kind}-export-reader.service',
+                 'EXPORTER_USER': plan['exporter_user'], 'SOURCE_GROUP': plan['source_group'],
+                 'READER_GID': READER_GID}
+    source = ''.join(name + '=' + repr(value) + '\n' for name, value in constants.items()) + COORDINATOR_SOURCE
+    if '%' in source or '$' in source or '\x00' in source or '\r' in source or not source.isascii():
+        _fail('EXPORT_PATH')
+    return source
+
+
 def _unit(plan, kind):
+    python = INSTALL / plan['ops_commit'] / INTERPRETER
+    argument = json.dumps(_coordinator_source(plan, kind), ensure_ascii=True)
+    return (f'[Unit]\nDescription=Bounded SQLite coordination for saved {kind} export\nAfter=local-fs.target\n\n'
+        f'[Service]\nType=oneshot\nUser=root\nGroup={READER_GID}\n'
+        f'WorkingDirectory=/\nExecStart={python} -I -B -c {argument}\n'
+        'UMask=0022\nTimeoutStartSec=65\nMemoryMax=64M\nTasksMax=16\n'
+        'NoNewPrivileges=true\nCapabilityBoundingSet=\nPrivateNetwork=true\nPrivateTmp=true\n'
+        'PrivateDevices=true\nProtectSystem=strict\nProtectHome=tmpfs\n'
+        'ProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\n'
+        'RestrictAddressFamilies=AF_UNIX\n'
+        f'BindPaths={plan["source_directory"]}:{SOURCE_ALIAS}:norbind\n'
+        f'ReadWritePaths={SOURCE_ALIAS}\n'
+        f'ReadOnlyPaths={SOURCE_ALIAS}/{plan["database_name"]} {INSTALL / plan["ops_commit"]}\n'
+        'StandardOutput=journal\nStandardError=journal\n').encode()
+
+
+def _reader_unit(plan, kind):
     code = INSTALL / plan['ops_commit'] / ('naver_' + kind + '_export.py')
     python = INSTALL / plan['ops_commit'] / INTERPRETER
     group = ('SupplementaryGroups=' + plan['source_group'] + '\n') if plan['source_group'] else ''
-    return (f'[Unit]\nDescription=Bounded saved {kind} export for Naver reports\nAfter=local-fs.target\n\n'
+    return (f'[Unit]\nDescription=Bounded saved {kind} export for Naver reports\nAfter=local-fs.target\n'
+        f'PartOf=naver-{kind}-export.service\n\n'
         f'[Service]\nType=oneshot\nUser={plan["exporter_user"]}\nGroup={READER_GID}\n{group}'
         f'ExecStartPre={python} -I -B -c "import os,sys,encodings,json,sqlite3,dataclasses,importlib,math;sys.exit(0 if '
         f"os.statvfs('{SOURCE_ALIAS}').f_flag & os.ST_RDONLY else 1)\"\n"
         f'WorkingDirectory=/\nExecStart={python} -I -B {code} '
         f'--database {SOURCE_ALIAS}/{plan["database_name"]} --output {OUTPUTS[kind]}/bundle.json\n'
-        'UMask=0027\nTimeoutStartSec=45\nMemoryMax=256M\nTasksMax=16\n'
+        'UMask=0027\nTimeoutStartSec=45\nTimeoutStopSec=5\nKillMode=control-group\nMemoryMax=256M\nTasksMax=16\n'
         'NoNewPrivileges=true\nCapabilityBoundingSet=\nPrivateNetwork=true\nPrivateTmp=true\n'
         'PrivateDevices=true\nProtectSystem=strict\nProtectHome=tmpfs\n'
         'ProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\n'
@@ -156,6 +289,7 @@ def artifacts(plan, scripts, pins):
     result[COMPANION] = render_companion(plan)
     for kind in KINDS:
         result[f'naver-{kind}-export.service'] = _unit(plan, kind)
+        result[f'naver-{kind}-export-reader.service'] = _reader_unit(plan, kind)
         result[f'naver-{kind}-export.timer'] = _timer(kind)
     return result
 
@@ -354,7 +488,7 @@ def prepare(plan, *, scripts, pins, operation_id):
     if staged_identity != reopened_identity or staged_body != binary:
         _fail('EXPORT_PREPARED_CHANGED')
     content[INTERPRETER] = binary
-    receipt = {'version': 2, 'operation_id': operation_id, 'plan': plan,
+    receipt = {'version': 3, 'operation_id': operation_id, 'plan': plan,
                'plan_sha256': _sha(_json(plan)), 'source_identity': source,
                'runtime_identity': identity,
                'manifest': {name: _sha(body) for name, body in sorted(content.items())},
@@ -367,7 +501,7 @@ def prepare(plan, *, scripts, pins, operation_id):
 def _prepared(receipt):
     if (not isinstance(receipt, dict) or set(receipt) != {'version', 'operation_id', 'plan', 'plan_sha256',
             'source_identity', 'runtime_identity', 'manifest', 'companion_sha256', 'interpreter'} or
-            type(receipt['version']) is not int or receipt['version'] != 2 or
+            type(receipt['version']) is not int or receipt['version'] != 3 or
             not isinstance(receipt['operation_id'], str) or re.fullmatch('[0-9a-f]{32}', receipt['operation_id']) is None):
         _fail('EXPORT_RECEIPT')
     plan = _plan(receipt['plan'])
@@ -375,6 +509,7 @@ def _prepared(receipt):
     if _regular(folder / 'prepared.json', mode=0o600) != _json(receipt):
         _fail('EXPORT_RECEIPT')
     names = set(SCRIPTS) | {COMPANION, INTERPRETER} | {f'naver-{kind}-export.{suffix}' for kind in KINDS for suffix in ('service', 'timer')}
+    names.update(f'naver-{kind}-export-reader.service' for kind in KINDS)
     if not isinstance(receipt['manifest'], dict) or set(receipt['manifest']) != names:
         _fail('EXPORT_RECEIPT')
     interpreter = receipt['interpreter']
@@ -393,6 +528,7 @@ def _prepared(receipt):
             receipt['companion_sha256'] != _sha(render_companion(plan)) or
             content[COMPANION] != render_companion(plan) or
             any(content[f'naver-{kind}-export.service'] != _unit(plan, kind) or
+                content[f'naver-{kind}-export-reader.service'] != _reader_unit(plan, kind) or
                 content[f'naver-{kind}-export.timer'] != _timer(kind) for kind in KINDS)):
         _fail('EXPORT_PREPARED_CHANGED')
     return plan, folder, content
@@ -419,7 +555,7 @@ def _journal(folder, receipt, state):
 
 
 def install(receipt, *, command):
-    """Explicit root-only apply; source stays RO. Timers start only after both runs."""
+    """Apply coordinator+RO reader; timers start only after both export runs."""
     if os.geteuid() != ROOT_UID:
         _fail('EXPORT_ROOT_REQUIRED')
     plan, folder, content = _prepared(receipt)
@@ -504,11 +640,12 @@ def verify(receipt, *, command, require_timers=True, now=None):
         elif _regular(path, mode=0o644) != body:
             _fail('EXPORT_INSTALLED_CHANGED')
     for kind in KINDS:
-        result = _command(command, ['systemctl', 'show', f'naver-{kind}-export.service',
-                                   '--property=Result', '--property=ExecMainStatus'])
-        if isinstance(result, bytes): result = result.decode('ascii')
-        if set(str(result).splitlines()) != {'Result=success', 'ExecMainStatus=0'}:
-            _fail('EXPORT_RUN_NOT_VERIFIED')
+        for unit in (f'naver-{kind}-export.service', f'naver-{kind}-export-reader.service'):
+            result = _command(command, ['systemctl', 'show', unit,
+                                       '--property=Result', '--property=ExecMainStatus'])
+            if isinstance(result, bytes): result = result.decode('ascii')
+            if set(str(result).splitlines()) != {'Result=success', 'ExecMainStatus=0'}:
+                _fail('EXPORT_RUN_NOT_VERIFIED')
         if require_timers:
             _command(command, ['systemctl', 'is-enabled', f'naver-{kind}-export.timer'])
             _command(command, ['systemctl', 'is-active', f'naver-{kind}-export.timer'])
@@ -519,7 +656,8 @@ def verify(receipt, *, command, require_timers=True, now=None):
     sources = {kind: _bundle_summary_for_user(kind, now, plan['exporter_user']) for kind in KINDS}
     return {'version': 1, 'operation_id': receipt['operation_id'], 'state': 'verified',
             'sources': sources, 'timers_enabled': bool(require_timers),
-            'engine_verified': False, 'source_writes': False, 'network_calls': 0}
+            'engine_verified': False, 'source_writes': True, 'database_writes': False,
+            'coordination_files_may_change': True, 'network_calls': 0}
 
 
 def _bundle_summary_for_user(kind, now, user):
@@ -584,6 +722,8 @@ def rollback(receipt, *, command):
             _command(command, ['systemctl', 'disable', '--now', f'naver-{kind}-export.timer'])
         if str(UNITS / f'naver-{kind}-export.service') in state['created_files'] and (UNITS / f'naver-{kind}-export.service').exists():
             _command(command, ['systemctl', 'stop', f'naver-{kind}-export.service'])
+        if str(UNITS / f'naver-{kind}-export-reader.service') in state['created_files'] and (UNITS / f'naver-{kind}-export-reader.service').exists():
+            _command(command, ['systemctl', 'stop', f'naver-{kind}-export-reader.service'])
     for name in reversed(state['created_files']):
         Path(name).unlink(missing_ok=True)
     script_dir = INSTALL / plan['ops_commit']
@@ -594,4 +734,5 @@ def rollback(receipt, *, command):
     state['state'] = 'rolled_back'; state['timers_enabled'] = False
     _journal(folder, receipt, state)
     return {'version': 1, 'operation_id': receipt['operation_id'], 'state': 'rolled_back',
-            'source_untouched': True, 'export_bundles_preserved': True}
+            'source_untouched': False, 'database_writes': False,
+            'coordination_files_may_change': True, 'export_bundles_preserved': True}

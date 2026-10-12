@@ -12,10 +12,14 @@ import time
 MAX_RAW = 256 * 1024
 MAX_LINE = 32768
 MAX_RECORDS = 32
+MAX_JOURNAL_OUTPUT = 4096
+MAX_OUTPUT = 32768
 TIMEOUT = 8
 MIN_TIMESTAMP_US = 946684800000000
 MAX_TIMESTAMP_US = 4102444800000000
-UNITS = {'product': 'naver-product-export.service', 'market': 'naver-market-export.service'}
+UNITS = {'product': 'naver-product-export.service', 'market': 'naver-market-export.service',
+         'product_reader': 'naver-product-export-reader.service',
+         'market_reader': 'naver-market-export-reader.service'}
 PATH_ROLES = (
     ('code', '/opt/metainc/naver-saved-exports'),
     ('source_alias', '/run/naver-saved-source'),
@@ -28,7 +32,9 @@ METADATA_PATHS = (
     ('product_output', '/var/lib/metainc/naver-product-source'),
     ('market_output', '/var/lib/metainc/naver-market-source')) + tuple(
         (kind+'_'+suffix, '/etc/systemd/system/naver-'+kind+'-export.'+suffix)
-        for kind in ('product', 'market') for suffix in ('service', 'timer'))
+        for kind in ('product', 'market') for suffix in ('service', 'timer')) + tuple(
+        (kind+'_reader_service', '/etc/systemd/system/naver-'+kind+'-export-reader.service')
+        for kind in ('product', 'market'))
 SOURCE_PATHS = (
     ('source_directory', '/root/logic-analysis-deploy/data'),
     ('source_database', '/root/logic-analysis-deploy/data/logic_data.db'),
@@ -73,6 +79,12 @@ SQLITE_SOURCE_LABELS = {
     'readonly': 'sqlite_readonly', 'sqlite_open': 'sqlite_open',
     'schema': 'sqlite_schema', 'authorized': 'sqlite_authorization',
     'locked': 'sqlite_locked', 'corrupt': 'sqlite_corrupt', 'unknown': 'sqlite_unknown'}
+COORDINATION_FAILURE_LABELS = {
+    'COORDINATION_SOURCE_OPEN': 'coordination_source_open',
+    'COORDINATION_READER_FAILED': 'coordination_reader_failed',
+    'COORDINATION_TIMEOUT': 'coordination_timeout',
+    'COORDINATION_INVALID': 'coordination_invalid',
+    'COORDINATION_READER_STOP_FAILED': 'coordination_reader_stop_failed'}
 
 
 def _unique(pairs):
@@ -115,7 +127,8 @@ def _labels(message):
                            parse_constant=lambda value: (_ for _ in ()).throw(ValueError('NUMBER')))
         if (type(value) is dict and set(value) == {'status', 'code'} and
                 value['status'] == 'failed' and type(value['code']) is str):
-            label = EXPORTER_FAILURE_LABELS.get(value['code'])
+            label = (EXPORTER_FAILURE_LABELS.get(value['code']) or
+                     COORDINATION_FAILURE_LABELS.get(value['code']))
             if label and label not in errors:
                 errors.append(label)
         elif (type(value) is dict and set(value) == {'status', 'code', 'source_issue'} and
@@ -171,8 +184,30 @@ def _project(raw, kind, now_us):
         return _empty(kind, 'invalid')
 
 
-def _journal(kind):
+def _limit_journal(value):
+    """Keep the invocation span and newest closed events within a fixed budget."""
+    def size(item):
+        return len(json.dumps(item, sort_keys=True, separators=(',', ':'), allow_nan=False).encode())
+    if size(value) <= MAX_JOURNAL_OUTPUT:
+        return value
+    result = {**value, 'status': 'limited', 'events': list(value['events'])}
+    while result['events'] and size(result) > MAX_JOURNAL_OUTPUT:
+        result['events'].pop(0)
+    if size(result) > MAX_JOURNAL_OUTPUT:
+        raise ValueError('INSPECT_RESULT_SIZE')
+    return result
+
+
+def _journal(kind, *, deadline=None):
     """Bound the pipe before buffering; stderr and raw text never leave memory."""
+    if type(kind) is not str or kind not in UNITS:
+        return None, 'unavailable'
+    started = time.monotonic()
+    if deadline is not None and (type(deadline) not in (int, float) or not 0 < deadline < float('inf')):
+        return None, 'unavailable'
+    deadline = started + TIMEOUT if deadline is None else min(deadline, started + TIMEOUT)
+    if started >= deadline:
+        return None, 'unavailable'
     process = None
     selector = selectors.DefaultSelector()
     try:
@@ -182,7 +217,6 @@ def _journal(kind):
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, close_fds=True,
             env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'})
         selector.register(process.stdout, selectors.EVENT_READ)
-        deadline = time.monotonic() + TIMEOUT
         chunks = []; size = 0
         while True:
             remaining = deadline - time.monotonic()
@@ -270,18 +304,22 @@ def inspect_host():
     """No arguments, source/DB opens, identities, environment or service changes."""
     now_us = time.time_ns() // 1000
     journals = []
+    deadline = time.monotonic() + TIMEOUT
     for kind in UNITS:
-        raw, error = _journal(kind)
-        journals.append(_empty(kind, error) if error else _project(raw, kind, now_us))
+        raw, error = _journal(kind, deadline=deadline)
+        journals.append(_limit_journal(_empty(kind, error) if error else _project(raw, kind, now_us)))
     paths = []; ancestry = {}
     for role, path in METADATA_PATHS:
         parent = str(PurePosixPath(path).parent)
         blocked = parent in ancestry and ancestry[parent] != 'directory'
         value = _metadata(role, path, blocked)
         ancestry[path] = value['kind']; paths.append(value)
-    return {'version': 1, 'diagnostic_only': True, 'journals': journals, 'paths': paths,
+    result = {'version': 1, 'diagnostic_only': True, 'journals': journals, 'paths': paths,
             'source_writes': False, 'service_changes': False, 'network_calls': 0,
             'runtime_executables': _python_metadata(), 'source_files': _source_metadata()}
+    if len(json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()) > MAX_OUTPUT:
+        raise ValueError('INSPECT_RESULT_SIZE')
+    return result
 
 
 def main():

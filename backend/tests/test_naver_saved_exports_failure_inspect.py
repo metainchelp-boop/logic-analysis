@@ -1,6 +1,8 @@
 """Synthetic journal bytes and stat only; never execute systemd or read a source DB."""
 import builtins
 import json
+import hashlib
+from pathlib import Path
 import socket
 import sqlite3
 import stat
@@ -69,6 +71,46 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertEqual(I._labels(message),([],[]))
 
+    def test_coordinator_codes_require_exact_closed_two_key_json_without_raw_promotion(self):
+        self.assertEqual(I.COORDINATION_FAILURE_LABELS,{
+            'COORDINATION_SOURCE_OPEN':'coordination_source_open',
+            'COORDINATION_READER_FAILED':'coordination_reader_failed',
+            'COORDINATION_TIMEOUT':'coordination_timeout',
+            'COORDINATION_INVALID':'coordination_invalid',
+            'COORDINATION_READER_STOP_FAILED':'coordination_reader_stop_failed'})
+        for code,label in I.COORDINATION_FAILURE_LABELS.items():
+            message=json.dumps({'status':'failed','code':code})
+            with self.subTest(code=code):
+                self.assertEqual(I._labels(message),([],[label]))
+                result=I._project(row(message),'product',NOW)
+                self.assertEqual(result['events'][0]['error_labels'],[label])
+                self.assertNotIn(code,json.dumps(result))
+            for value in ({'status':'ok','code':code},{'status':False,'code':code},
+                {'status':'failed','code':code,'private':'SECRET'},
+                {'status':'failed','code':code,'source_issue':'sqlite_open'},
+                {'status':'failed','code':code+'_PRIVATE'}):
+                self.assertEqual(I._labels(json.dumps(value)),([],[]))
+            for value in (code,'Traceback '+code,
+                '{"status":"failed","code":"'+code+'","code":"'+code+'"}'):
+                self.assertEqual(I._labels(value),([],[]))
+
+    def test_fixed_four_journals_keep_coordinator_and_reader_invocations_separate(self):
+        self.assertEqual(I.UNITS,{'product':'naver-product-export.service','market':'naver-market-export.service',
+            'product_reader':'naver-product-export-reader.service','market_reader':'naver-market-export-reader.service'})
+        raw=b'\n'.join([
+            row('{"status":"failed","code":"COORDINATION_READER_FAILED"}',kind='product'),
+            row('{"status":"failed","code":"SOURCE_READ","source_issue":"sqlite_open"}',kind='product_reader'),
+            row('PermissionError SECRET',kind='market_reader'),
+            row('private unrelated failure',_SYSTEMD_UNIT='unrelated-private.service')])
+        coordinator=I._project(raw,'product',NOW)
+        reader=I._project(raw,'product_reader',NOW)
+        self.assertEqual(coordinator['events'][0]['error_labels'],['coordination_reader_failed'])
+        self.assertEqual(reader['events'][0]['error_labels'],['export_source_read','sqlite_open'])
+        for result in (coordinator,reader):
+            self.assertNotIn('SECRET',json.dumps(result));self.assertNotIn('private',json.dumps(result))
+            self.assertNotIn('MESSAGE',json.dumps(result));self.assertNotIn('.service',json.dumps(result))
+        self.assertEqual(I._project(row('PermissionError',kind='product'),'product_reader',NOW)['status'],'no_invocation')
+
     def test_python_import_fatal_stdlib_and_loader_hints_are_closed_and_private(self):
         samples=(
             ("ModuleNotFoundError: No module named 'private_module_SECRET'",['python_module_missing']),
@@ -112,6 +154,54 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
         self.assertEqual(len(result['events']),32)
         self.assertLess(len(json.dumps(result).encode()),32768)
 
+    def test_all_four_maximal_closed_journals_fit_full_output_budget_and_keep_latest_events(self):
+        message=' '.join(["PermissionError permission denied python-export: can't open file statvfs",
+            'Failed at step NAMESPACE EXPORT_FAILED read-only file system unable to open database file',
+            'No such file or directory failed at step NETWORK failed at step GROUP failed at step USER',
+            'failed at step STDOUT failed at step EXEC failed at step CHDIR failed at step CAPABILITIES',
+            'failed at step SECCOMP failed at step APPARMOR failed to create cgroup',
+            'ModuleNotFoundError ImportError Fatal Python error: init_fs_encoding:',
+            'error while loading shared libraries Exec format error SECRET',
+            *(path+'/private' for _,path in I.PATH_ROLES)])
+        def journal(kind, *, deadline):
+            return b'\n'.join(row(message,kind=kind,stamp=NOW-1000000-index) for index in range(32)),None
+        info=SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0,st_gid=0)
+        with patch.object(I,'_journal',side_effect=journal),patch.object(I.time,'time_ns',return_value=NOW*1000),\
+            patch.object(I.os,'lstat',return_value=info),patch.object(I.os,'stat',return_value=info),\
+            patch.object(I.os.path,'realpath',side_effect=lambda path:path):
+            result=I.inspect_host()
+        output=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
+        self.assertEqual(set(result),{'version','diagnostic_only','journals','paths','source_writes',
+            'service_changes','network_calls','runtime_executables','source_files'})
+        self.assertLessEqual(len(output.encode()),32768)
+        self.assertEqual(len(result['journals']),4);self.assertEqual(len(result['paths']),14)
+        for value in result['journals']:
+            self.assertEqual(set(value),{'kind','status','first_timestamp_us','last_timestamp_us','events'})
+            self.assertEqual(value['status'],'limited')
+            self.assertLessEqual(len(json.dumps(value,sort_keys=True,separators=(',',':')).encode()),4096)
+            self.assertEqual(value['first_timestamp_us'],NOW-1000031)
+            self.assertEqual(value['last_timestamp_us'],NOW-1000000)
+            self.assertGreater(len(value['events']),0);self.assertLess(len(value['events']),32)
+            self.assertEqual(value['events'][-1]['timestamp_us'],NOW-1000000)
+            self.assertEqual([event['timestamp_us'] for event in value['events']],
+                list(range(NOW-1000000-len(value['events'])+1,NOW-1000000+1)))
+        for private in ('SECRET','private','MESSAGE','/opt','/run','_SYSTEMD_INVOCATION_ID'):
+            self.assertNotIn(private,output)
+
+    def test_small_journal_is_preserved_and_limiting_never_mutates_invocation_projection(self):
+        value=I._project(row('{"status":"failed","code":"COORDINATION_READER_FAILED"}'),'product',NOW)
+        before=json.dumps(value,sort_keys=True)
+        self.assertIs(I._limit_journal(value),value)
+        self.assertEqual(json.dumps(value,sort_keys=True),before)
+        large=I._project(b'\n'.join(row('PermissionError',stamp=NOW-1000000-index) for index in range(32)),'product',NOW)
+        before=json.dumps(large,sort_keys=True)
+        with patch.object(I,'MAX_JOURNAL_OUTPUT',512):limited=I._limit_journal(large)
+        self.assertEqual(limited['status'],'limited')
+        self.assertEqual(json.dumps(large,sort_keys=True),before)
+        self.assertEqual(limited['first_timestamp_us'],large['first_timestamp_us'])
+        self.assertEqual(limited['last_timestamp_us'],large['last_timestamp_us'])
+        self.assertEqual(limited['events'][-1],large['events'][-1])
+
     def test_invalid_timestamp_id_message_and_duplicate_keys_never_fall_back(self):
         bad=[]
         for value in (True,1.0,'1e15','01791767400000000','-1',0,I.MAX_TIMESTAMP_US+1):
@@ -142,7 +232,8 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
             return SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0,st_gid=0)
         with patch.object(I,'_python_metadata',return_value=[]) as runtime,patch.object(I,'_source_metadata',return_value=[]) as source,\
              patch.object(I,'_journal',return_value=(row('Permission denied'),None)) as command,\
-             patch.object(I.time,'time_ns',return_value=NOW*1000),patch.object(I.os,'lstat',side_effect=metadata),\
+             patch.object(I.time,'time_ns',return_value=NOW*1000),patch.object(I.time,'monotonic',return_value=100),\
+             patch.object(I.os,'lstat',side_effect=metadata),\
              patch.object(builtins,'open',side_effect=AssertionError('body')),\
              patch.object(I.os,'open',side_effect=AssertionError('body')),\
              patch.object(I.os,'getenv',side_effect=AssertionError('environment')),\
@@ -150,8 +241,14 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
              patch.object(socket,'socket',side_effect=AssertionError('network')):
             result=I.inspect_host()
         self.assertEqual(seen,[path for _,path in I.METADATA_PATHS])
-        self.assertEqual([call.args for call in command.call_args_list],[('product',),('market',)])
-        self.assertEqual(len(result['paths']),12)
+        self.assertEqual([call.args for call in command.call_args_list],
+            [('product',),('market',),('product_reader',),('market_reader',)])
+        self.assertEqual([call.kwargs for call in command.call_args_list],[{'deadline':108}]*4)
+        self.assertEqual(len(result['paths']),14)
+        self.assertEqual([value['kind'] for value in result['journals']],list(I.UNITS))
+        self.assertEqual(I.METADATA_PATHS[-2:],(
+            ('product_reader_service','/etc/systemd/system/naver-product-export-reader.service'),
+            ('market_reader_service','/etc/systemd/system/naver-market-export-reader.service')))
         self.assertFalse(result['source_writes']);self.assertFalse(result['service_changes'])
         self.assertEqual(result['network_calls'],0)
         self.assertNotIn('MESSAGE',json.dumps(result));self.assertNotIn('Invocation',json.dumps(result))
@@ -255,6 +352,41 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
         self.assertEqual(start.call_args.kwargs['env'],{'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C','LC_ALL':'C'})
         self.assertEqual(start.call_args.kwargs['stderr'],I.subprocess.DEVNULL)
         selector.close.assert_called_once();process.stdout.close.assert_called_once();process.kill.assert_not_called()
+
+    def test_reader_journal_commands_are_fixed_and_foreign_units_cannot_start_processes(self):
+        self.assertEqual((I.TIMEOUT,I.MAX_RECORDS,I.MAX_RAW,I.MAX_LINE),(8,32,256*1024,32768))
+        for kind in ('product_reader','market_reader'):
+            process=Mock();process.stdout.fileno.return_value=7;process.wait.return_value=0;process.poll.return_value=0
+            selector=Mock();selector.select.return_value=[object()]
+            raw=row('{"status":"failed","code":"SOURCE_READ"}',kind=kind)
+            with self.subTest(kind=kind),patch.object(I.subprocess,'Popen',return_value=process) as start,\
+                patch.object(I.selectors,'DefaultSelector',return_value=selector),\
+                patch.object(I.os,'read',side_effect=[raw,b'']):
+                self.assertEqual(I._journal(kind),(raw,None))
+                self.assertEqual(start.call_args.args[0],['/usr/bin/journalctl','--output=json','--no-pager',
+                    '-n','32','-u',I.UNITS[kind],'--since','-15min'])
+                self.assertEqual(start.call_args.kwargs['stderr'],I.subprocess.DEVNULL)
+        for kind in ('private.service','product_reader.service','product\nmarket','',None,[],{}):
+            with self.subTest(kind=kind),patch.object(I.subprocess,'Popen') as start,\
+                patch.object(I.selectors,'DefaultSelector') as selector:
+                self.assertEqual(I._journal(kind),(None,'unavailable'))
+                start.assert_not_called();selector.assert_not_called()
+
+    def test_expired_or_invalid_shared_deadline_starts_no_journal_process(self):
+        for deadline in (99,100,True,'108',[],float('inf'),float('nan')):
+            with self.subTest(deadline=deadline),patch.object(I.time,'monotonic',return_value=100),\
+                patch.object(I.subprocess,'Popen') as start,patch.object(I.selectors,'DefaultSelector') as selector:
+                self.assertEqual(I._journal('product_reader',deadline=deadline),(None,'unavailable'))
+                start.assert_not_called();selector.assert_not_called()
+
+    def test_failure_inspection_workflow_pins_current_source_twice_and_preserves_result_bound(self):
+        root=Path(__file__).resolve().parents[2]
+        source=root.joinpath('backend/tools/naver_saved_exports_failure_inspect.py').read_bytes()
+        section=root.joinpath('.github/workflows/debug-rank.yml').read_text().split('  completion-export-failure-inspect:',1)[1].split('\n  completion-release:',1)[0]
+        self.assertEqual(section.count(hashlib.sha256(source).hexdigest()),2)
+        self.assertIn('if len(raw.encode())>32768:',section)
+        self.assertIn("assert len(encoded)<=32768",section)
+        self.assertLessEqual(len(__import__('base64').b64encode(source)),32768)
 
     def test_pipe_overflow_and_timeout_kill_child_without_returning_raw_data(self):
         for overflow in (True,False):
