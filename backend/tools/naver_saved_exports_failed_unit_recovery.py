@@ -6,6 +6,7 @@ from pathlib import Path
 import stat
 import subprocess
 import types
+import re
 
 OLD_HELPER_SHA256 = '2b47884242c1b1e7b67074383f070a79bbdd4f88471c0448a92116cf9b34c7a8'
 FAILED_OPERATION = '90bde9d376f05f4ae24c99e0cccdea5e'
@@ -45,8 +46,10 @@ def load_helper(source):
 
 
 def run_fixed(args):
-    if args!=['/usr/bin/systemctl','daemon-reload'] and args not in [
-            ['/usr/bin/systemctl','show',unit,*['--property='+key for key in FIELDS]] for unit in UNITS]:
+    reset=(type(args) is list and args[:2]==['/usr/bin/systemctl','reset-failed'] and
+           0<len(args[2:])<=len(UNITS) and args[2:]==[unit for unit in UNITS if unit in args[2:]])
+    if not reset and args!=['/usr/bin/systemctl','daemon-reload'] and args not in [
+            ['/usr/bin/systemctl','show',unit,*['--property='+key for key in unit_fields(unit)]] for unit in UNITS]:
         refuse()
     result=subprocess.run(args,stdin=subprocess.DEVNULL,capture_output=True,timeout=8,
                           env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C'})
@@ -56,20 +59,30 @@ def run_fixed(args):
     return result
 
 
+def unit_fields(unit):
+    return FIELDS+(('MainPID','ControlPID','ControlGroup','TasksCurrent') if unit.endswith('.service') else ())
+
+
 def unit_state(unit,run):
-    result=run(['/usr/bin/systemctl','show',unit,*['--property='+key for key in FIELDS]])
+    fields=unit_fields(unit)
+    result=run(['/usr/bin/systemctl','show',unit,*['--property='+key for key in fields]])
     if result.returncode not in (0,1):refuse()
     try:
         lines=result.stdout.decode('ascii').splitlines()
         pairs=[line.split('=',1) for line in lines]
-        if any(len(pair)!=2 for pair in pairs) or len(pairs)!=len(FIELDS):refuse('unit_fields')
+        if any(len(pair)!=2 for pair in pairs):refuse('unit_fields')
         value=dict(pairs)
-        if set(value)!=set(FIELDS) or len(value)!=len(pairs):refuse('unit_fields')
+        if (len(value)!=len(pairs) or (set(value)!=set(fields) and
+                not (set(value)==set(FIELDS) and value.get('LoadState')=='not-found'))):refuse('unit_fields')
     except (UnicodeError,TypeError,ValueError):
         refuse()
     if value['LoadState'] not in ('loaded','not-found','bad-setting','error'):refuse('unit_load')
-    if value['ActiveState']!='inactive' or value['SubState']!='dead':refuse('unit_active')
-    if value['InvocationID'] not in ('','0'*32):refuse('unit_invocation')
+    if (value['ActiveState'],value['SubState']) not in (('inactive','dead'),('failed','failed')):refuse('unit_active')
+    if unit.endswith('.service') and set(value)==set(fields):
+        if value['MainPID']!='0' or value['ControlPID']!='0':refuse('unit_active')
+        if value['ControlGroup']!='' and (value['ControlGroup']!='/system.slice/'+unit or value['TasksCurrent']!='0'):
+            refuse('unit_active')
+    if value['InvocationID']!='' and re.fullmatch('[0-9a-f]{32}',value['InvocationID']) is None:refuse('unit_invocation')
     if value['Job']!='0':refuse('unit_job')
     if value['UnitFileState'] not in ('','disabled','static','bad','not-found'):refuse('unit_enabled')
     if result.returncode==1 and value['LoadState']!='not-found':refuse('unit_status')
@@ -78,7 +91,7 @@ def unit_state(unit,run):
 
 def inactive_units(run,*,removed=False):
     values=[unit_state(unit,run) for unit in UNITS]
-    if removed and any(value['LoadState']!='not-found' for value in values):refuse()
+    if removed and any(value['LoadState']!='not-found' or value['ActiveState']!='inactive' for value in values):refuse()
     return values
 
 
@@ -122,8 +135,9 @@ def recover_with_helper(helper,*,run=run_fixed):
         info=Path(name).lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:refuse()
     STAGE='unit_state_preflight';inactive_units(run)
-    # The malformed units never started or gained timers. Recheck all six on
-    # every skip; do not reinterpret a failed stop as proof of inactivity.
+    # Older cached failures may remain. Require current service PIDs/jobs zero
+    # and an empty control group or an explicitly observed zero task count.
+    # Recheck all six on every skip, never reinterpret failed stop as inactivity.
     def command(args):
         global STAGE
         allowed=[['systemctl','disable','--now','naver-'+kind+'-export.timer'] for kind in ('product','market')]
@@ -137,6 +151,11 @@ def recover_with_helper(helper,*,run=run_fixed):
             STAGE='daemon_reload'
             checked=run(['/usr/bin/systemctl','daemon-reload'])
             if checked.returncode!=0:refuse('daemon_reload')
+            # Only removed, inactive exact units may have their cached failed
+            # state cleared. This cannot start a unit or alter its definition.
+            states=inactive_units(run)
+            failed=[unit for unit,value in zip(UNITS,states) if value['ActiveState']=='failed']
+            if failed:run(['/usr/bin/systemctl','reset-failed',*failed])
             return b''
         refuse()
     STAGE='rollback';helper.rollback(receipt,command=command)

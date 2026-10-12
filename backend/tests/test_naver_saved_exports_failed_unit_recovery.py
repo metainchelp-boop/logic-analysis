@@ -24,6 +24,8 @@ class FailedUnitRecoveryTests(unittest.TestCase):
         tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
         self.root=Path(tmp.name).resolve();self.h=R.load_helper(self.old_source)
         self.calls=[];self.reloaded=False;self.fail_reload=False;self.active_after=None
+        self.cached_failed=False;self.live_pid=False;self.job_pending=False
+        self.residual_tasks=False;self.notfound_omits_service_fields=False
         for key,value in {'ROOT_UID':os.getuid(),'READER_GID':os.getgid(),
                 'STAGING':self.root/'staging','INSTALL':self.root/'code','UNITS':self.root/'units',
                 'OUTPUTS':{kind:self.root/('output-'+kind) for kind in ('product','market')}}.items():
@@ -55,12 +57,20 @@ class FailedUnitRecoveryTests(unittest.TestCase):
         if args==['/usr/bin/systemctl','daemon-reload']:
             if self.fail_reload:return types.SimpleNamespace(returncode=1,stdout=b'',stderr=b'private failure')
             self.reloaded=True;return types.SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
+        if args[:2]==['/usr/bin/systemctl','reset-failed']:
+            self.assertTrue(args[2:]);self.assertTrue(set(args[2:])<=set(R.UNITS))
+            self.cached_failed=False;return types.SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
         self.assertIn(args[2],R.UNITS)
         active=self.active_after is not None and len(self.calls)>=self.active_after
-        value={'LoadState':'not-found' if self.reloaded else 'bad-setting','ActiveState':'active' if active else 'inactive',
-               'SubState':'running' if active else 'dead','InvocationID':'','Job':'0','UnitFileState':''}
+        value={'LoadState':'not-found' if self.reloaded else 'bad-setting','ActiveState':'active' if active else ('failed' if self.cached_failed else 'inactive'),
+               'SubState':'running' if active else ('failed' if self.cached_failed else 'dead'),
+               'InvocationID':'a'*32 if self.cached_failed else '', 'Job':'1' if self.job_pending else '0','UnitFileState':'',
+               'MainPID':'1234' if self.live_pid else '0','ControlPID':'0',
+               'ControlGroup':'/system.slice/'+args[2] if self.residual_tasks else '',
+               'TasksCurrent':'1' if self.residual_tasks else '[not set]'}
+        fields=R.FIELDS if self.reloaded and self.notfound_omits_service_fields else R.unit_fields(args[2])
         return types.SimpleNamespace(returncode=1 if self.reloaded else 0,
-            stdout=''.join(k+'='+value[k]+'\n' for k in R.FIELDS).encode(),stderr=b'')
+            stdout=''.join(k+'='+value[k]+'\n' for k in fields).encode(),stderr=b'')
 
     def recover(self):return R.recover_with_helper(self.h,run=self.run_fixed)
 
@@ -70,7 +80,7 @@ class FailedUnitRecoveryTests(unittest.TestCase):
         self.assertEqual(result['units_started'],0)
         self.assertFalse(list(self.h.UNITS.iterdir()))
         self.assertEqual(json.loads((self.folder/'installed.json').read_text())['state'],'rolled_back')
-        self.assertTrue(all(args[1] in ('show','daemon-reload') for args in self.calls))
+        self.assertTrue(all(args[1] in ('show','daemon-reload','reset-failed') for args in self.calls))
 
     def test_changed_helper_bytes_rejected(self):
         with self.assertRaises(ValueError):R.recover(self.old_source+b'\n',run=self.run_fixed)
@@ -121,3 +131,36 @@ class FailedUnitRecoveryTests(unittest.TestCase):
             with patch.object(R,'STAGE',[]):
                 self.assertEqual(R.failure_report(ValueError(issue)),
                     {'version':1,'state':'refused','stage':'input','issue':'helper_refused'})
+
+    def test_cached_failed_terminated_units_recover_without_starting(self):
+        self.cached_failed=True
+        self.assertEqual(self.recover()['state'],'recovered')
+        self.assertFalse(self.cached_failed)
+
+    def test_cached_failed_unit_with_live_pid_cannot_be_removed(self):
+        self.cached_failed=True;self.live_pid=True
+        with self.assertRaises(ValueError):self.recover()
+        self.assertEqual(len(list(self.h.UNITS.iterdir())),6)
+
+    def test_pending_job_cannot_be_removed(self):
+        self.job_pending=True
+        with self.assertRaises(ValueError):self.recover()
+        self.assertEqual(len(list(self.h.UNITS.iterdir())),6)
+
+    def test_residual_cgroup_tasks_block_removal_even_with_zero_main_pid(self):
+        self.residual_tasks=True
+        with self.assertRaises(ValueError):self.recover()
+        self.assertEqual(len(list(self.h.UNITS.iterdir())),6)
+
+    def test_notfound_may_omit_all_service_only_properties(self):
+        self.notfound_omits_service_fields=True
+        self.assertEqual(self.recover()['state'],'recovered')
+
+    def test_loaded_unit_missing_service_properties_is_not_assumed_stopped(self):
+        original=self.run_fixed
+        def missing(args):
+            result=original(args)
+            result.stdout=b'\n'.join(line for line in result.stdout.splitlines() if not line.startswith(b'MainPID='))+b'\n'
+            return result
+        with self.assertRaises(ValueError):R.recover_with_helper(self.h,run=missing)
+        self.assertEqual(len(list(self.h.UNITS.iterdir())),6)
