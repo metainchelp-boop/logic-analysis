@@ -8,6 +8,7 @@ from contextlib import redirect_stdout
 import io
 from pathlib import Path
 import sqlite3
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -307,6 +308,43 @@ class SavedExportInstallTests(unittest.TestCase):
             compile(source,'embedded-coordinator','exec')
             self.assertNotIn('%',source);self.assertNotIn('$',source)
             self.assertNotIn('naver_'+kind+'_export.py',coordinator)
+
+    @unittest.skipIf(sys.platform=='darwin','Real systemd parser runs in native Linux CI, not macOS')
+    def test_real_systemd_parser_accepts_generated_units_and_rejects_broken_quoting(self):
+        analyzer=shutil.which('systemd-analyze')
+        self.assertIsNotNone(analyzer,'native Linux CI must provide the real systemd-analyze parser')
+        user=M.pwd.getpwuid(os.getuid()).pw_name
+        if user=='root':user=next(row.pw_name for row in M.pwd.getpwall() if row.pw_name=='nobody')
+        plan={**self.plan,'exporter_user':user}
+        items=M.artifacts(plan,self.scripts,self.pins)
+        binary=str(self.install/self.plan['ops_commit']/M.INTERPRETER)
+        executable=str(Path(sys.executable).resolve())
+        self.assertTrue(os.access(executable,os.X_OK))
+        paths=[]
+        for name,body in items.items():
+            if not name.endswith(('.service','.timer')):continue
+            path=self.units/name
+            # The production interpreter is a staged fake ELF in this fixture.
+            # Change only the executable token to a real local interpreter;
+            # all generated systemd escaping, dependencies and paths stay exact.
+            body=body.replace(('ExecStart='+binary+' ').encode(),('ExecStart='+executable+' ').encode())
+            body=body.replace(('ExecStartPre='+binary+' ').encode(),('ExecStartPre='+executable+' ').encode())
+            path.write_bytes(body);paths.append(str(path))
+        environment={'PATH':'/usr/bin:/bin','LANG':'C','SYSTEMD_LOG_LEVEL':'warning',
+                     'SYSTEMD_UNIT_PATH':str(self.units)+':/usr/lib/systemd/system:/lib/systemd/system'}
+        result=subprocess.run([analyzer,'verify',*paths],stdin=subprocess.DEVNULL,
+            capture_output=True,env=environment,timeout=15,check=False)
+        self.assertEqual(result.returncode,0,result.stderr.decode('utf-8','replace')[:4000])
+        parent=self.units/'naver-product-export.service'
+        text=parent.read_text()
+        lines=text.splitlines()
+        for index,line in enumerate(lines):
+            if line.startswith('ExecStart='):
+                self.assertTrue(line.endswith('"'));lines[index]=line[:-1];break
+        parent.write_text('\n'.join(lines)+'\n')
+        broken=subprocess.run([analyzer,'verify',*paths],stdin=subprocess.DEVNULL,
+            capture_output=True,env=environment,timeout=15,check=False)
+        self.assertNotEqual(broken.returncode,0,'real parser must reject the deliberately unbalanced command quote')
 
     def test_prepare_is_non_operational_and_source_change_blocks_install(self):
         receipt=self.prepare();self.assertEqual(self.calls,[]);self.assertEqual(list(self.units.iterdir()),[])
