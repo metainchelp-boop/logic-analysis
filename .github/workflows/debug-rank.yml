@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, preview-completion-recover-failed-apply, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -2393,7 +2393,7 @@ jobs:
             PY
 
   completion-release:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-completion-prepare' || inputs.ad_prepare == 'preview-completion-apply' || inputs.ad_prepare == 'preview-completion-rollback')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-completion-prepare' || inputs.ad_prepare == 'preview-completion-apply' || inputs.ad_prepare == 'preview-completion-rollback' || inputs.ad_prepare == 'preview-completion-recover-failed-apply')
     permissions:
       contents: read
     concurrency:
@@ -2414,7 +2414,7 @@ jobs:
         run: |
           set -eu
           PYTHONPATH=backend/tools:backend/tests python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
-          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_completion_transport test_naver_completion_download test_naver_saved_exports test_naver_saved_exports_inspect test_naver_completion_export_diagnostics -q
+          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_completion_transport test_naver_completion_download test_naver_saved_exports test_naver_saved_exports_inspect test_naver_completion_export_diagnostics test_naver_completion_failed_apply_recovery -q
           python3 - <<'PYCODE'
           import base64,json,os,pathlib,sys
           sys.path.insert(0,'backend/tools')

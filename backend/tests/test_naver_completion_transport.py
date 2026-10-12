@@ -376,6 +376,24 @@ class CodecTests(unittest.TestCase):
                 else:self.assertEqual(T.execute(value),{'ok':True})
             binding.rollback.assert_called_once()
 
+    def test_failed_apply_recovery_is_separate_from_apply_and_export_install(self):
+        value=sample();value.update(operation='preview-completion-recover-failed-apply',
+            approved_config_operation_id=None,package={'release':{},'operation_id':'a'*32})
+        recovery=Mock(return_value={'ok':True,'stage':'old_services_recovered'})
+        C=controller_fixture();C.apply=Mock();C.rollback=Mock()
+        exports=SimpleNamespace(Binding=Mock())
+        m={'controller':C,'release':Mock(),'host':SimpleNamespace(NativeHost=Mock()),
+            'exports_binding':exports,'exports_helper':Mock(),'lifecycle':Mock(),'upgrade':Mock(),
+            'failed_apply_recovery':SimpleNamespace(recover=recovery)}
+        with patch.object(T,'modules',return_value=m):
+            self.assertEqual(T.execute(value),{'ok':True,'stage':'old_services_recovered'})
+            recovery.assert_called_once_with(value['package'],m['host'].NativeHost.return_value,
+                m['release'],m['lifecycle'],m['upgrade'],C)
+            C.apply.assert_not_called();C.rollback.assert_not_called();exports.Binding.assert_not_called()
+            recovery.reset_mock()
+            with self.assertRaisesRegex(ValueError,'COMPLETION_OPERATION'):T.execute(value,incoming=True)
+            recovery.assert_not_called()
+
     def test_failed_prepare_does_not_publish_binding_and_cleanup_is_attempted(self):
         value=sample();binding=Mock();C=controller_fixture(prepare=Mock(side_effect=ValueError('SYNTHETIC')),TARGET_COMMIT='f'*40)
         m={'controller':C,'release':Mock(),'host':SimpleNamespace(NativeHost=Mock()),'exports_binding':SimpleNamespace(Binding=Mock(return_value=binding)),

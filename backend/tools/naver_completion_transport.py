@@ -18,11 +18,13 @@ MAX_WIRE=98304
 MAX_SOURCE_GZIP=3*1024*1024
 MAX_CIPHERTEXT=3*1024*1024
 MAX_PAYLOAD=4*1024*1024
-FUNCTIONS={'preview-completion-prepare':'prepare','preview-completion-apply':'apply','preview-completion-rollback':'rollback'}
+FUNCTIONS={'preview-completion-prepare':'prepare','preview-completion-apply':'apply','preview-completion-rollback':'rollback',
+    'preview-completion-recover-failed-apply':'recover_failed_apply'}
 SOURCE_FILES={'controller':'naver_preview_completion_release.py','host':'naver_erp_tunnel_service_install.py',
     'release':'naver_preview_release.py','lifecycle':'naver_preview_lifecycle.py','upgrade':'naver_preview_upgrade.py',
     'exports_binding':'naver_completion_exports.py','exports_helper':'naver_saved_exports.py',
-    'product_exporter':'../naver_product_export.py','market_exporter':'../naver_market_export.py'}
+    'product_exporter':'../naver_product_export.py','market_exporter':'../naver_market_export.py',
+    'failed_apply_recovery':'naver_completion_failed_apply_recovery.py'}
 EXPORT_DIRECTORIES={
     Path('/srv/metainc/ad-deploy-staging/saved-exports'):0o700,
     Path('/opt/metainc'):0o755,
@@ -194,7 +196,7 @@ def bundle(operation,package,root):
 def modules(bundle):
     validate(bundle);result={}
     # Controller pin refusal precedes host/release execution and all external effects.
-    for name in ('controller','host','release','lifecycle','upgrade','exports_binding','exports_helper'):
+    for name in ('controller','host','release','lifecycle','upgrade','exports_binding','exports_helper','failed_apply_recovery'):
         module=types.ModuleType('approved_completion_'+name);exec(bundle['sources'][name],module.__dict__);result[name]=module
         if name in ('controller','exports_binding'):module.require_pins()
     result['release']=CompletionRelease(result['release'])
@@ -225,6 +227,9 @@ def _cleanup_failure(controller, binding, error):
 
 def execute(bundle,*,incoming=False):
     validate(bundle);m=modules(bundle);C=m['controller'];release=m['release'];host=m['host'].NativeHost()
+    if bundle['operation']=='preview-completion-recover-failed-apply':
+        if incoming:raise ValueError('COMPLETION_OPERATION')
+        return m['failed_apply_recovery'].recover(bundle['package'],host,release,m['lifecycle'],m['upgrade'],C)
     if incoming:
         if bundle['operation']!='preview-completion-prepare':raise ValueError('COMPLETION_OPERATION')
         package=C.validate_package(bundle['package'],release)
