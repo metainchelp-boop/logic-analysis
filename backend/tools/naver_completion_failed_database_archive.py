@@ -15,7 +15,7 @@ import stat
 import sys
 from contextlib import contextmanager
 
-OPERATION_ID = '91725d2c8b9249258b894e6e965af68a'
+OPERATION_ID = '18b90ffdc05e4b5b8f50299884ef3f13'
 OLD_COMMIT = '737a65952f2ddbc05a235cf2b139a4a11f4e7673'
 TARGET_COMMIT = 'e7649acfc71c25d7ae9c981a6ba036b77d97897b'
 DATA = Path('/var/lib/metainc/naver-engine')

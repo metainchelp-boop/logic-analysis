@@ -1127,7 +1127,7 @@ def migrate_database(path, release):
         if not re.fullmatch('[0-9a-f]{64}', identity):
             raise ValueError('WARM_CONTAINER_ID')
         OPERATION = 'warm_wait'
-        status = release.command(['docker', 'wait', identity], timeout=180).strip()
+        status = release.command(['docker', 'wait', identity], timeout=600).strip()
         OPERATION = 'warm_logs'
         raw=release.command(['docker','logs',identity],timeout=30)
         if len(raw)>4096:raise ValueError('SOURCE_WARM_FAILED')

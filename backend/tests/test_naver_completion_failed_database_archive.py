@@ -50,6 +50,28 @@ class FailedDatabaseArchiveTests(unittest.TestCase):
         self.assertNotIn(str(self.temp.name),json.dumps(result))
         self.assertEqual((self.data/'engine.db').read_bytes(),before)
 
+    def test_fixed_rollover_preserves_previous_operation_archives_receipts_and_sources(self):
+        self.assertEqual(A.OPERATION_ID,'18b90ffdc05e4b5b8f50299884ef3f13')
+        old='91725d2c8b9249258b894e6e965af68a'
+        archived=self.receipts/('completion-failed-archive-'+old);archived.mkdir(mode=0o700)
+        old_quarantine=self.data/('.completion-failed-db-'+old);old_quarantine.mkdir(mode=0o700)
+        paths=[archived/'canonical_snapshot.gz',archived/'canonical_snapshot.json',
+            self.receipts/('completion-snapshot-'+old+'.json'),
+            self.receipts/('completion-db-'+old+'.sqlite'),old_quarantine/'engine.db']
+        for index,path in enumerate(paths):
+            path.write_bytes(('previous-operation-'+str(index)).encode());path.chmod(0o600)
+        before={path:(path.read_bytes(),A._identity(path.stat())) for path in paths}
+        self.assertTrue(all(A.OPERATION_ID in str(path) and old not in str(path)
+                            for path in A._paths().values()))
+        self.assertEqual(A.execute('archive_quarantine')['files_changed'],1)
+        self.assertEqual(A.execute('archive_canonical_snapshot')['files_changed'],1)
+        current=self.receipts/('completion-failed-archive-'+A.OPERATION_ID)
+        for role in ('canonical_snapshot','quarantine_database'):
+            self.assertEqual(json.loads((current/(role+'.json')).read_bytes())['operation_id'],A.OPERATION_ID)
+        for path,(body,identity) in before.items():
+            self.assertEqual(path.read_bytes(),body)
+            self.assertEqual(A._identity(path.stat()),identity)
+
     def test_canonical_archive_is_separate_reversible_bytes_and_repeat_is_verified_noop(self):
         before=(self.data/'engine.db').read_bytes()
         self.assertEqual(A.execute('archive_canonical_snapshot')['status'],'archived')
@@ -98,7 +120,8 @@ class FailedDatabaseArchiveTests(unittest.TestCase):
 
     def test_snapshot_proof_exact_keys_hash_and_target_started_absence_are_required(self):
         for mutant in ({**self.proof,'schema':True},{**self.proof,'unexpected':'private'},
-                       {**self.proof,'operation_id':'a'*32},{**self.proof,'database_sha256':'0'*64}):
+                       {**self.proof,'operation_id':'91725d2c8b9249258b894e6e965af68a'},
+                       {**self.proof,'database_sha256':'0'*64}):
             self.proof_path.write_text(json.dumps(mutant))
             with self.assertRaises(A.ArchiveInvalid):A.execute('archive_canonical_snapshot')
             self.assertEqual(self.snapshot.read_bytes(),self.body)

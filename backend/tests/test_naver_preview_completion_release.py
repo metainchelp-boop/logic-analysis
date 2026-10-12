@@ -729,6 +729,66 @@ class CompletionMigrationScriptTests(unittest.TestCase):
 
 
 class CompletionMigrationControllerTests(unittest.TestCase):
+    def test_success_uses_fixed_ten_minute_wait_without_extending_other_commands(self):
+        valid={'ok':True,'schema':21,'old_schema':11,'old_tables':2,'old_rows':1,
+            'preserved_rows':True,'migration_repeatable':True,'network_calls':0,
+            'randomized_tables':sorted(C.RANDOMIZED_TABLES),'randomized_tables_empty':True}
+        release=Mock();release.ROOT=Path('/synthetic');release.compose.return_value=['compose']
+        calls=[]
+        def command(args,**kwargs):
+            calls.append((list(args),kwargs))
+            if args[0]=='compose':
+                self.assertEqual(kwargs,{'timeout':60});return b'a'*64
+            if args[:2]==['docker','wait']:
+                self.assertEqual(args,['docker','wait','a'*64])
+                self.assertEqual(kwargs,{'timeout':600});return b'0'
+            if args[:2]==['docker','logs']:
+                self.assertEqual(kwargs,{'timeout':30});return json.dumps(valid).encode()
+            if args[:2]==['docker','ps']:
+                self.assertEqual(kwargs,{'timeout':30});return b''
+            raise AssertionError('UNEXPECTED_LOCAL_COMMAND')
+        release.command.side_effect=command
+        self.assertEqual(C.migrate_database(Path('/synthetic/target'),release),valid)
+        self.assertEqual(sum(args[:2]==['docker','wait'] for args,_ in calls),1)
+        self.assertEqual(sum(args[:2]==['docker','ps'] for args,_ in calls),2)
+
+    def test_wait_timeout_removes_exact_warm_container_and_preserves_first_failure(self):
+        for cleanup_failed in (False,True):
+            with self.subTest(cleanup_failed=cleanup_failed):
+                release=Mock();release.ROOT=Path('/synthetic');release.compose.return_value=['compose']
+                calls=[];found=iter((b'a'*64,b''))
+                def command(args,**kwargs):
+                    calls.append((list(args),kwargs))
+                    if args[0]=='compose':return b'a'*64
+                    if args[:2]==['docker','wait']:
+                        self.assertEqual(kwargs,{'timeout':600})
+                        raise subprocess.TimeoutExpired('/private/command-must-not-leave-memory',600)
+                    if args[:2]==['docker','ps']:
+                        self.assertEqual(kwargs,{'timeout':30});return next(found)
+                    if args[:2]==['docker','inspect']:
+                        self.assertEqual(args[-1],'a'*64)
+                        return json.dumps({'source':C.TARGET_COMMIT,'project':'naver-engine','user':'10001:10001'}).encode()
+                    if args[:2]==['docker','rm']:
+                        self.assertEqual(args,['docker','rm','--force','a'*64])
+                        self.assertEqual(kwargs,{'timeout':45})
+                        if cleanup_failed:raise RuntimeError('COMMAND_FAILED')
+                        return b''
+                    raise AssertionError('UNEXPECTED_LOCAL_COMMAND')
+                release.command.side_effect=command
+                kind=RuntimeError if cleanup_failed else subprocess.TimeoutExpired
+                with self.assertRaises(kind) as caught:C.migrate_database(Path('/synthetic/target'),release)
+                report=C.failure_report(caught.exception)
+                self.assertEqual(report['failed_operation'],'warm_wait')
+                self.assertEqual(report['failed_error_kind'],'TimeoutExpired')
+                self.assertTrue(any(args==['docker','rm','--force','a'*64] for args,_ in calls))
+                self.assertFalse(any(args[:2]==['docker','logs'] for args,_ in calls))
+                if cleanup_failed:
+                    self.assertEqual(str(caught.exception),'WARM_CLEANUP_FAILED')
+                    self.assertEqual(report['cleanup_operation'],'warm_cleanup_remove')
+                    self.assertEqual(sum(args[:2]==['docker','ps'] for args,_ in calls),1)
+                else:self.assertEqual(sum(args[:2]==['docker','ps'] for args,_ in calls),2)
+                self.assertNotIn('private',json.dumps(report))
+
     def failure_scene(self,result):
         release=Mock();release.ROOT=Path('/synthetic');release.compose.return_value=['compose']
         def command(args,**kwargs):
@@ -848,6 +908,7 @@ class CompletionApplyTests(unittest.TestCase):
         def migration(*args):
             state['schema']=21;events.append(('migrate','done'))
             if failure in ('migration','rollback-writer'):raise ValueError('DB_ROWS_CHANGED')
+            if failure=='migration-timeout':raise subprocess.TimeoutExpired('/private/warm-command',600)
             return {'ok':True,'schema':21,'preserved_rows':True}
         def restore(*args):
             events.append(('restore-db',))
@@ -945,6 +1006,17 @@ class CompletionApplyTests(unittest.TestCase):
             self.assertLess(events.index(('restore-db',)),events.index(('db-schema',C.OLD_COMMIT)))
             oldstart=events.index(('/usr/bin/systemctl','start','engine.service'),events.index(('restore-db',)))
             self.assertLess(events.index(('db-schema',C.OLD_COMMIT)),oldstart)
+    def test_wait_timeout_still_restores_matching_database_before_old_code_start(self):
+        result,events,state=self.scenario('migration-timeout')
+        self.assertEqual(str(result),'CODE_FAILED_ROLLED_BACK_DB_PRESERVED')
+        self.assertEqual(state['schema'],11)
+        restored=events.index(('restore-db',))
+        self.assertFalse(any(e[:2]==('/usr/bin/systemctl','start') for e in events[:restored]))
+        oldstart=events.index(('/usr/bin/systemctl','start','engine.service'),restored)
+        self.assertLess(restored,events.index(('db-schema',C.OLD_COMMIT)))
+        self.assertLess(events.index(('db-schema',C.OLD_COMMIT)),oldstart)
+        self.assertEqual(C.failure_report(result)['failed_error_kind'],'TimeoutExpired')
+        self.assertNotIn('private',json.dumps(C.failure_report(result)))
     def test_unproven_writer_or_restore_failure_stays_stopped(self):
         for kind in ('rollback-writer','restore'):
             result,events,state=self.scenario(kind)
