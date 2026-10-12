@@ -165,7 +165,8 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
             *(path+'/private' for _,path in I.PATH_ROLES)])
         def journal(kind, *, deadline):
             return b'\n'.join(row(message,kind=kind,stamp=NOW-1000000-index) for index in range(32)),None
-        info=SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0,st_gid=0)
+        info=SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0,st_gid=0,
+            st_nlink=2147483647,st_size=1024**4)
         with patch.object(I,'_journal',side_effect=journal),patch.object(I.time,'time_ns',return_value=NOW*1000),\
             patch.object(I.os,'lstat',return_value=info),patch.object(I.os,'stat',return_value=info),\
             patch.object(I.os.path,'realpath',side_effect=lambda path:path),\
@@ -174,7 +175,7 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
             result=I.inspect_host()
         output=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
         self.assertEqual(set(result),{'version','diagnostic_only','journals','paths','source_writes',
-            'service_changes','network_calls','runtime_executables','source_files','unit_parser'})
+            'service_changes','network_calls','runtime_executables','source_files','unit_parser','engine_files'})
         self.assertLessEqual(len(output.encode()),32768)
         self.assertEqual(len(result['journals']),4);self.assertEqual(len(result['paths']),14)
         for value in result['journals']:
@@ -233,6 +234,7 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
             seen.append(path)
             return SimpleNamespace(st_mode=stat.S_IFDIR|0o755,st_uid=0,st_gid=0)
         with patch.object(I,'_python_metadata',return_value=[]) as runtime,patch.object(I,'_source_metadata',return_value=[]) as source,\
+             patch.object(I,'_engine_metadata',return_value=[]) as engine,\
              patch.object(I,'_journal',return_value=(row('Permission denied'),None)) as command,\
              patch.object(I.time,'time_ns',return_value=NOW*1000),patch.object(I.time,'monotonic',return_value=100),\
              patch.object(I.os,'lstat',side_effect=metadata),\
@@ -243,6 +245,7 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
              patch.object(socket,'socket',side_effect=AssertionError('network')):
             result=I.inspect_host()
         self.assertEqual(seen,[path for _,path in I.METADATA_PATHS])
+        engine.assert_called_once_with(); self.assertEqual(result['engine_files'],[])
         self.assertEqual([call.args for call in command.call_args_list],
             [('product',),('market',),('product_reader',),('market_reader',)])
         self.assertEqual([call.kwargs for call in command.call_args_list],[{'deadline':108}]*4)
@@ -423,6 +426,95 @@ class SavedExportsFailureInspectTests(unittest.TestCase):
             self.assertEqual(I.main(),2)
         inspect.assert_not_called()
         self.assertEqual(json.loads(output.call_args.args[0]),{'version':1,'error':'ARGUMENTS_NOT_SUPPORTED'})
+
+
+class EngineMetadataDiagnosticTests(unittest.TestCase):
+    root = '/var/lib/metainc/naver-engine'
+    ancestors = ('/var', '/var/lib', '/var/lib/metainc')
+    fields = {'role', 'exists', 'kind', 'mode', 'uid', 'gid', 'nlink', 'size'}
+
+    def metadata(self, path, **changes):
+        directory = path in (*self.ancestors, self.root)
+        return SimpleNamespace(st_mode=(stat.S_IFDIR|0o750 if directory else stat.S_IFREG|0o600),
+            st_uid=10001, st_gid=10001, st_nlink=2 if directory else 1,
+            st_size=4096 if directory else 123456, **changes)
+
+    def test_fixed_five_engine_roles_use_one_lstat_per_path_and_exact_closed_metadata(self):
+        with patch.object(I.os, 'lstat', side_effect=self.metadata) as ls,\
+             patch.object(I.os, 'stat', side_effect=AssertionError('follow')),\
+             patch.object(I.os.path, 'realpath', side_effect=AssertionError('resolve')),\
+             patch.object(builtins, 'open', side_effect=AssertionError('body')),\
+             patch.object(I.os, 'open', side_effect=AssertionError('body')),\
+             patch.object(sqlite3, 'connect', side_effect=AssertionError('database')):
+            result = I._engine_metadata()
+        paths = [self.root, *[self.root+'/engine.db'+suffix for suffix in ('', '-wal', '-shm', '-journal')]]
+        self.assertEqual([c.args[0] for c in ls.call_args_list], [*self.ancestors, *paths])
+        self.assertEqual([r['role'] for r in result],
+            ['engine_directory', 'engine_database', 'engine_wal', 'engine_shm', 'engine_journal'])
+        for r in result:
+            self.assertEqual(set(r), self.fields)
+            self.assertIs(r['exists'], True); self.assertEqual((r['uid'], r['gid']), (10001, 10001))
+            self.assertEqual((r['mode'], r['nlink'], r['size']),
+                ('0750', 2, 4096) if r['role']=='engine_directory' else ('0600', 1, 123456))
+        self.assertNotIn('/var', json.dumps(result)); self.assertNotIn('engine.db', json.dumps(result))
+
+    def test_unsafe_or_missing_ancestor_blocks_children_without_following(self):
+        for bad in (*self.ancestors, self.root):
+            for failure in ('symlink', 'missing', 'denied'):
+                seen = []
+                def metadata(path):
+                    seen.append(path)
+                    if path==bad:
+                        if failure=='missing': raise FileNotFoundError('PRIVATE')
+                        if failure=='denied': raise PermissionError('PRIVATE')
+                        return SimpleNamespace(st_mode=stat.S_IFLNK|0o777, st_uid=0,
+                            st_gid=0, st_nlink=1, st_size=99)
+                    return self.metadata(path)
+                with self.subTest(bad=bad, failure=failure), patch.object(I.os, 'lstat', side_effect=metadata):
+                    result = I._engine_metadata()
+                blocked = result[1:] if bad==self.root else result
+                self.assertTrue(all(r['kind']=='blocked' and r['exists'] is None for r in blocked))
+                self.assertFalse(any(path.startswith(bad+'/') for path in seen))
+                self.assertNotIn('PRIVATE', json.dumps(result))
+
+    def test_leaf_symlink_reports_its_own_metadata_without_dereference(self):
+        def metadata(path):
+            if path==self.root+'/engine.db':
+                return SimpleNamespace(st_mode=stat.S_IFLNK|0o777, st_uid=0, st_gid=0, st_nlink=1, st_size=22)
+            return self.metadata(path)
+        with patch.object(I.os, 'lstat', side_effect=metadata),\
+             patch.object(I.os, 'stat', side_effect=AssertionError('follow')),\
+             patch.object(I.os.path, 'realpath', side_effect=AssertionError('resolve')):
+            result = I._engine_metadata()
+        self.assertEqual((result[1]['kind'], result[1]['mode'], result[1]['nlink'], result[1]['size']),
+            ('symlink', '0777', 1, 22))
+
+    def test_size_and_link_count_are_strict_bounded_integers(self):
+        for field, maximum in (('st_nlink', 2147483647), ('st_size', 1024**4)):
+            for invalid in (True, False, -1, 1.0, '1', None, maximum+1):
+                def metadata(path):
+                    info = self.metadata(path); setattr(info, field, invalid); return info
+                with self.subTest(field=field, invalid=invalid), patch.object(I.os, 'lstat', side_effect=metadata):
+                    rows = I._engine_metadata()
+                self.assertTrue(all(r['nlink' if field=='st_nlink' else 'size'] is None for r in rows))
+        for boundary in (0, 1024**4):
+            def metadata(path):
+                info = self.metadata(path); info.st_size=boundary; return info
+            with patch.object(I.os, 'lstat', side_effect=metadata):
+                self.assertEqual(I._engine_metadata()[1]['size'], boundary)
+
+    def test_missing_and_unavailable_files_keep_closed_nullable_details(self):
+        def metadata(path):
+            if path.endswith('-wal'): raise FileNotFoundError('PRIVATE missing')
+            if path.endswith('-shm'): raise PermissionError('PRIVATE denied')
+            return self.metadata(path)
+        with patch.object(I.os, 'lstat', side_effect=metadata):
+            rows=I._engine_metadata()
+        for index, exists, kind in ((2, False, 'missing'), (3, None, 'unavailable')):
+            self.assertEqual(set(rows[index]), self.fields)
+            self.assertIs(rows[index]['exists'], exists); self.assertEqual(rows[index]['kind'], kind)
+            self.assertTrue(all(rows[index][key] is None for key in ('mode', 'uid', 'gid', 'nlink', 'size')))
+        self.assertNotIn('PRIVATE', json.dumps(rows))
 
 
 class UnitParserDiagnosticTests(unittest.TestCase):

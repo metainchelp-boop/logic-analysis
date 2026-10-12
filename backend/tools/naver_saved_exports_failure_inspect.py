@@ -249,15 +249,21 @@ def _journal(kind, *, deadline=None):
                 pass
 
 
-def _metadata(role, path, blocked=False):
+def _metadata(role, path, blocked=False, *, details=False):
     result = {'role': role, 'exists': None, 'kind': 'blocked' if blocked else 'unavailable',
               'mode': None, 'uid': None, 'gid': None}
+    if details:
+        result.update(nlink=None, size=None)
     if blocked:
         return result
     try:
         info = os.lstat(path)
         kind = ('directory' if stat.S_ISDIR(info.st_mode) else 'regular' if stat.S_ISREG(info.st_mode)
                 else 'symlink' if stat.S_ISLNK(info.st_mode) else 'other')
+        if details:
+            for name, maximum in (('nlink', 2147483647), ('size', 1024**4)):
+                value = getattr(info, 'st_'+name, None)
+                result[name] = value if type(value) is int and 0 <= value <= maximum else None
         return {**result, 'exists': True, 'kind': kind, 'mode': format(stat.S_IMODE(info.st_mode), '04o'),
                 'uid': info.st_uid if type(info.st_uid) is int and 0 <= info.st_uid <= 2147483647 else None,
                 'gid': info.st_gid if type(info.st_gid) is int and 0 <= info.st_gid <= 2147483647 else None}
@@ -406,9 +412,29 @@ def inspect_host():
     result = {'version': 1, 'diagnostic_only': True, 'journals': journals, 'paths': paths,
             'source_writes': False, 'service_changes': False, 'network_calls': 0,
             'runtime_executables': _python_metadata(), 'source_files': _source_metadata(),
-            'unit_parser': _unit_parser(paths, deadline=deadline)}
+            'unit_parser': _unit_parser(paths, deadline=deadline),
+            'engine_files': _engine_metadata()}
     if len(json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()) > MAX_OUTPUT:
         raise ValueError('INSPECT_RESULT_SIZE')
+    return result
+
+
+def _engine_metadata():
+    """Fixed lstat metadata only; never open/hash/read the operating DB."""
+    blocked = False
+    for parent in ('/var', '/var/lib', '/var/lib/metainc'):
+        value = _metadata('engine_ancestor', parent, blocked)
+        blocked = value['kind'] != 'directory'
+    result = []
+    root = '/var/lib/metainc/naver-engine'
+    for role, path in [('engine_directory', root)] + [
+            (role, root + '/engine.db' + suffix) for role, suffix in (
+                ('engine_database', ''), ('engine_wal', '-wal'),
+                ('engine_shm', '-shm'), ('engine_journal', '-journal'))]:
+        value = _metadata(role, path, blocked, details=True)
+        result.append(value)
+        if role == 'engine_directory':
+            blocked = value['kind'] != 'directory'
     return result
 
 
