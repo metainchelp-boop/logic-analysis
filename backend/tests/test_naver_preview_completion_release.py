@@ -442,7 +442,7 @@ class CompletionDatabaseTests(unittest.TestCase):
             root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close()
             size=1024**3+1
             with (data/'engine.db').open('r+b') as output:output.truncate(size)
-            need=3*size+C.DATABASE_RESERVE_BYTES
+            need=2*size+C.DATABASE_RESERVE_BYTES
             with patch.object(C,'DATA',data),patch.object(C.os,'fstat',side_effect=owner),\
                     patch.object(C.os,'read',side_effect=AssertionError('BODY_READ')):
                 with patch.object(C.os,'statvfs',return_value=SimpleNamespace(f_bavail=need,f_frsize=1)):
@@ -450,6 +450,22 @@ class CompletionDatabaseTests(unittest.TestCase):
                 with patch.object(C.os,'statvfs',return_value=SimpleNamespace(f_bavail=need-1,f_frsize=1)),\
                         self.assertRaisesRegex(ValueError,'^DB_SPACE$'):C.database_preflight(release)
                 with (data/'engine.db').open('r+b') as output:output.truncate(C.DATABASE_MAX_BYTES+1)
+                with self.assertRaisesRegex(ValueError,'^DB_IDENTITY$'):C.database_preflight(release)
+
+    def test_wal_pair_disk_budget_includes_pages_outside_main_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close()
+            main=(data/'engine.db').stat().st_size;wal=data/'engine.db-wal';shm=data/'engine.db-shm'
+            wal.write_bytes(b'x'*8192);wal.chmod(0o600);shm.write_bytes(b'');shm.chmod(0o600)
+            bound=main+wal.stat().st_size;need=2*bound+C.DATABASE_RESERVE_BYTES
+            with patch.object(C,'DATA',data),patch.object(C.os,'fstat',side_effect=owner),\
+                    patch.object(C.os,'read',side_effect=AssertionError('BODY_READ')):
+                with patch.object(C.os,'statvfs',return_value=SimpleNamespace(f_bavail=need,f_frsize=1)):
+                    C.database_preflight(release)
+                for available in (need-1,2*main+C.DATABASE_RESERVE_BYTES):
+                    with patch.object(C.os,'statvfs',return_value=SimpleNamespace(f_bavail=available,f_frsize=1)),\
+                            self.assertRaisesRegex(ValueError,'^DB_SPACE$'):C.database_preflight(release)
+                shm.unlink()
                 with self.assertRaisesRegex(ValueError,'^DB_IDENTITY$'):C.database_preflight(release)
 
     def test_distinct_disk_budget_checks_receipts_and_data_independently(self):
@@ -506,11 +522,75 @@ class CompletionDatabaseTests(unittest.TestCase):
             with patch.object(C,'DATA',data),patch.object(C,'SCHEMA_SHA256',{'old':shape,'target':'f'*64}),\
                     patch.object(C.os,'fstat',side_effect=owner),patch.object(Path,'read_bytes',side_effect=AssertionError('FULL_BODY_READ')):
                 snapshot=C.db_snapshot('c'*32,release,upgrade)
+                self.assertFalse(snapshot[0].with_suffix('.verify.sqlite').exists())
+                self.assertTrue((root/'receipts'/('completion-snapshot-'+'c'*32+'.json')).is_file())
                 with closing(sqlite3.connect(data/'engine.db')) as current:current.execute('UPDATE t SET owner=9');current.commit()
                 C.restore_db(snapshot,'c'*32,release,upgrade)
                 C.verify_database_schema(C.OLD_COMMIT,release,upgrade)
             upgrade.read_file.assert_not_called()
             with closing(sqlite3.connect(data/'engine.db')) as restored:self.assertEqual(restored.execute('SELECT * FROM t').fetchall(),[(1,0,None)])
+
+    def test_roundtrip_unlink_follows_durable_closed_receipt_and_directory_fsync(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close()
+            operation='d'*32;proof=root/'receipts'/('completion-snapshot-'+operation+'.json');events=[]
+            fsync=os.fsync;directory=C._database_fsync_directory;unlink=C._database_unlink_verify
+            def sync(fd):
+                if proof.exists():
+                    info=os.fstat(fd);named=proof.stat()
+                    if (info.st_dev,info.st_ino)==(named.st_dev,named.st_ino):events.append('receipt-fsync')
+                return fsync(fd)
+            def sync_directory(path):events.append('directory-fsync');return directory(path)
+            def remove(path,fd,created,completed):
+                self.assertEqual(json.loads(proof.read_text())['snapshot_restore_verified'],True)
+                self.assertEqual(events[-2:],['receipt-fsync','directory-fsync'])
+                self.assertEqual(created[:2],completed[:2]);events.append('unlink')
+                return unlink(path,fd,created,completed)
+            with patch.object(C,'DATA',data),patch.object(C,'SCHEMA_SHA256',{'old':shape,'target':'f'*64}),\
+                    patch.object(C.os,'fstat',side_effect=owner),patch.object(C.os,'fsync',side_effect=sync),\
+                    patch.object(C,'_database_fsync_directory',side_effect=sync_directory),\
+                    patch.object(C,'_database_unlink_verify',side_effect=remove):
+                snapshot=C.db_snapshot(operation,release,upgrade)
+            self.assertEqual(events[-2:],['unlink','directory-fsync'])
+            self.assertFalse(snapshot[0].with_suffix('.verify.sqlite').exists())
+            self.assertTrue(snapshot[0].is_file());self.assertTrue((data/'engine.db').is_file())
+            self.assertEqual(json.loads(proof.read_text())['database_sha256'],snapshot[1])
+
+    def test_roundtrip_replacement_is_preserved_and_refused_after_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close()
+            operation='e'*32;unlink=C._database_unlink_verify;replacement_identity=[]
+            def replace_then_remove(path,fd,created,completed):
+                replacement=path.with_name('foreign.sqlite');replacement.write_bytes(path.read_bytes());replacement.chmod(0o600)
+                replacement_identity.append((replacement.stat().st_dev,replacement.stat().st_ino))
+                os.replace(replacement,path)
+                return unlink(path,fd,created,completed)
+            with patch.object(C,'DATA',data),patch.object(C,'SCHEMA_SHA256',{'old':shape,'target':'f'*64}),\
+                    patch.object(C.os,'fstat',side_effect=owner),\
+                    patch.object(C,'_database_unlink_verify',side_effect=replace_then_remove),\
+                    self.assertRaisesRegex(ValueError,'^DB_IDENTITY$'):
+                C.db_snapshot(operation,release,upgrade)
+            snapshot=root/'receipts'/('completion-db-'+operation+'.sqlite');verify=snapshot.with_suffix('.verify.sqlite')
+            self.assertEqual((verify.stat().st_dev,verify.stat().st_ino),replacement_identity[0])
+            self.assertTrue(snapshot.is_file());self.assertTrue((data/'engine.db').is_file())
+
+    def test_roundtrip_copy_is_retained_when_receipt_fsync_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();data,c,shape,release,upgrade,owner=self.fixture(root);c.close()
+            operation='f'*32;proof=root/'receipts'/('completion-snapshot-'+operation+'.json');fsync=os.fsync
+            def sync(fd):
+                if proof.exists():
+                    info=os.fstat(fd);named=proof.stat()
+                    if (info.st_dev,info.st_ino)==(named.st_dev,named.st_ino):raise OSError('SYNTHETIC_FSYNC')
+                return fsync(fd)
+            with patch.object(C,'DATA',data),patch.object(C,'SCHEMA_SHA256',{'old':shape,'target':'f'*64}),\
+                    patch.object(C.os,'fstat',side_effect=owner),patch.object(C.os,'fsync',side_effect=sync),\
+                    patch.object(C,'_database_unlink_verify') as remove,self.assertRaises(OSError):
+                C.db_snapshot(operation,release,upgrade)
+            remove.assert_not_called()
+            snapshot=root/'receipts'/('completion-db-'+operation+'.sqlite')
+            self.assertTrue(snapshot.is_file());self.assertTrue(snapshot.with_suffix('.verify.sqlite').is_file())
+            self.assertTrue((data/'engine.db').is_file())
 
     def test_stopped_sidecar_free_wal_database_schema_uses_immutable_without_new_sidecars(self):
         with tempfile.TemporaryDirectory() as tmp:

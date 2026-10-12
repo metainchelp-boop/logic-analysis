@@ -856,9 +856,18 @@ def database_preflight(release, *, space=True):
     release.trusted_dir(DATA,uid=10001,gid=10001,mode=0o750)
     with _database_file(DATA/'engine.db',uid=10001,gid=10001,stable=False) as (_,identity):size=identity[2]
     if space:
+        # A committed WAL can contain pages absent from the main file. Reserve
+        # its full byte length too, both before STOP and again after STOP.
+        present={suffix for suffix in ('-wal','-shm','-journal') if os.path.lexists(str(DATA/'engine.db')+suffix)}
+        if present and present!={'-wal','-shm'}:raise ValueError('DB_IDENTITY')
+        for suffix in present:
+            with _database_file(Path(str(DATA/'engine.db')+suffix),uid=10001,gid=10001,minimum=0,stable=False) as (_,found):
+                if suffix=='-wal':size+=found[2]
         receipts=release.ROOT/'receipts';release.trusted_dir(receipts,mode=0o700)
         same=DATA.stat().st_dev==receipts.stat().st_dev
-        required=[(receipts,3*size+DATABASE_RESERVE_BYTES)] if same else [
+        # The roundtrip copy is removed durably before migration. Snapshot plus
+        # verification, or snapshot plus a restore temp, therefore peak at 2x.
+        required=[(receipts,2*size+DATABASE_RESERVE_BYTES)] if same else [
             (receipts,2*size+DATABASE_RESERVE_BYTES),(DATA,size+DATABASE_RESERVE_BYTES)]
         for path,need in required:
             capacity=os.statvfs(path)
@@ -935,6 +944,15 @@ def _database_fsync_directory(path):
     finally:os.close(fd)
 
 
+def _database_unlink_verify(path, fd, created, completed):
+    # Only the just-created roundtrip copy is disposable. A replaced path,
+    # changed file, original snapshot, or operating DB is never removed.
+    if (re.fullmatch(r'completion-db-[0-9a-f]{32}\.verify\.sqlite',path.name) is None
+        or created[:2]!=completed[:2] or _database_metadata(path,fd)!=completed):
+        raise ValueError('DB_IDENTITY')
+    os.unlink(path)
+
+
 def verify_database_schema(source, release, upgrade):
     database_preflight(release,space=False)
     db=DATA/'engine.db'
@@ -962,16 +980,26 @@ def db_snapshot(identity, release, upgrade):
         finally:os.close(durable)
         digest=_database_digest(destination)
         # Roundtrip in a second server-local DB; no operating row leaves the server.
-        verify=destination.with_suffix('.verify.sqlite');release.write_new(verify,b'')
-        with _database_file(destination) as (saved,_), _database_reader(destination,saved) as source,closing(sqlite3.connect(verify)) as target:
-            source.backup(target,pages=256,sleep=0.01)
-            database_contract(target,OLD_COMMIT)
-            if target.execute('PRAGMA integrity_check').fetchall()!=[('ok',)]:raise ValueError('DB_SNAPSHOT_INTEGRITY')
-        # The verification copy stays private for audit, never used as authority for rollback.
-        _database_fsync_directory(destination.parent)
-        release.write_new(release.ROOT/'receipts'/('completion-snapshot-'+identity+'.json'),json.dumps({
-            'source_commit':OLD_COMMIT,'target_commit':TARGET_COMMIT,'operation_id':identity,
-            'database_sha256':digest,'schema':OLD_SCHEMA,'snapshot_restore_verified':True},sort_keys=True).encode())
+        verify=destination.with_suffix('.verify.sqlite')
+        verified=os.open(verify,os.O_CREAT|os.O_EXCL|os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK,0o600)
+        try:
+            created=_database_metadata(verify,verified,minimum=0)
+            with _database_file(destination) as (saved,_), _database_reader(destination,saved) as source,closing(sqlite3.connect(verify)) as target:
+                source.backup(target,pages=256,sleep=0.01)
+                database_contract(target,OLD_COMMIT)
+                if target.execute('PRAGMA integrity_check').fetchall()!=[('ok',)]:raise ValueError('DB_SNAPSHOT_INTEGRITY')
+            completed=_database_metadata(verify,verified)
+            if completed[:2]!=created[:2]:raise ValueError('DB_IDENTITY')
+            os.fsync(verified)
+            proof=release.ROOT/'receipts'/('completion-snapshot-'+identity+'.json')
+            release.write_new(proof,json.dumps({
+                'source_commit':OLD_COMMIT,'target_commit':TARGET_COMMIT,'operation_id':identity,
+                'database_sha256':digest,'schema':OLD_SCHEMA,'snapshot_restore_verified':True},sort_keys=True).encode())
+            with _database_file(proof) as (receipt,_):os.fsync(receipt)
+            _database_fsync_directory(destination.parent)
+            _database_unlink_verify(verify,verified,created,completed)
+            _database_fsync_directory(destination.parent)
+        finally:os.close(verified)
         return destination,digest
 
 
