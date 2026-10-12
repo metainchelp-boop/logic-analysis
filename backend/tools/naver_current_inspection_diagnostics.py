@@ -678,8 +678,10 @@ def run(package, host, release):
     if (prepared.get('ok') is not True or prepared.get('stage')!='prepared' or prepared.get('source_commit')!=SOURCE
             or any(prepared.get('package',{}).get(key)!=package[key] for key in ('baseline','source_commit','source_tar_gz_sha256'))
             or prepared.get('package',{}).get('run_id')!=PREPARE_RUN
-            or prepared.get('database_policy')!='preserve-in-place' or prepared.get('database_opened_by_controller') is not False
-            or prepared.get('runtime_environment_preserved') is not True or prepared.get('saved_export_companion_preserved') is not True
+            # P4 stores config/source/image proof here. The three policy fields
+            # are in its returned prepare projection, not this persisted file.
+            # The persisted started receipt below must still prove all three.
+            or prepared.get('runtime_environment_preserved') is not True
             or prepared.get('inventory_enabled') is not True or prepared.get('execution_enabled') is not False
             or prepared.get('runtime_flags_verified') is not True or started.get('ok') is not True
             or started.get('previous_commit')!=PREVIOUS_SOURCE or started.get('operation_id')!=APPLY_OPERATION

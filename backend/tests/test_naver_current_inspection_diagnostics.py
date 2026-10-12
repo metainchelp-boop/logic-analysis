@@ -547,7 +547,7 @@ class ControllerTests(unittest.TestCase):
             files[str(path)]=hashlib.sha256(path.read_bytes()).hexdigest()
         self.image='sha256:'+'a'*64;self.identity='b'*64
         self.prepared.write_text(json.dumps(dict(ok=True,stage='prepared',source_commit=D.SOURCE,
-            package=dict(self.package,run_id=D.PREPARE_RUN),database_policy="preserve-in-place",database_opened_by_controller=False,runtime_environment_preserved=True,saved_export_companion_preserved=True,files=files,images={'engine':self.image},inventory_enabled=True,execution_enabled=False,runtime_flags_verified=True)))
+            package=dict(self.package,run_id=D.PREPARE_RUN),runtime_environment_preserved=True,config_operation_id='74c912dddf824fae99012849bc4c19a5',files=files,images={'engine':self.image},inventory_enabled=True,execution_enabled=False,runtime_flags_verified=True)))
         self.started.write_text(json.dumps(dict(ok=True,stage='internal_ready',source_commit=D.SOURCE,
             previous_commit=D.PREVIOUS_SOURCE,operation_id=D.APPLY_OPERATION,database_policy="preserve-in-place",database_opened_by_controller=False,source_warmup_performed=False,database_snapshot_verified=False,rollback_requires_matching_database=False,saved_export_companion_preserved=True,database_schema=21,execution_enabled=False,runtime_flags_verified=True)))
         self.before=dict(id=self.identity,image=self.image,running=True,user='10001:10001',project='naver-engine',
@@ -615,7 +615,7 @@ class ControllerTests(unittest.TestCase):
     def test_current_prepare_apply_proof_drift_refuses_before_reader(self):
         prepared=json.loads(self.prepared.read_text());started=json.loads(self.started.read_text())
         cases=[('prepare','package',dict(prepared['package'],run_id='38232778371')),
-            ('prepare','database_opened_by_controller',True),('prepare','runtime_environment_preserved',False),
+            ('start','database_opened_by_controller',True),('prepare','runtime_environment_preserved',False),
             ('start','operation_id','0'*32),('start','previous_commit','0'*40),
             ('start','database_schema',20),('start','source_warmup_performed',True),
             ('start','database_snapshot_verified',True),('start','saved_export_companion_preserved',False)]
@@ -624,6 +624,37 @@ class ControllerTests(unittest.TestCase):
             path=self.prepared if target=='prepare' else self.started
             changed=json.loads(path.read_text());changed[key]=value;path.write_text(json.dumps(changed))
             with self.subTest(target=target,key=key),self.assertRaises(ValueError):self.scenario()
+
+
+
+    def test_actual_p4_persisted_prepare_shape_accepts_without_return_only_policy(self):
+        prepared=json.loads(self.prepared.read_text())
+        self.assertEqual(set(prepared),{'ok','stage','source_commit','package','images','files',
+            'inventory_enabled','execution_enabled','runtime_flags_verified','runtime_environment_preserved','config_operation_id'})
+        for key in ('database_policy','database_opened_by_controller','saved_export_companion_preserved'):
+            self.assertNotIn(key,prepared)
+        result,commands,*_=self.scenario()
+        self.assertTrue(result['ok']);self.assertFalse(result['database_opened_by_controller'])
+        self.assertTrue(any(args[:3]==['docker','exec','-i'] for args in commands))
+
+    def test_persisted_started_policy_missing_or_tampered_refuses(self):
+        original=json.loads(self.started.read_text())
+        for key in ('database_policy','database_opened_by_controller','saved_export_companion_preserved'):
+            for kind in ('missing','null','wrong'):
+                changed=dict(original)
+                if kind=='missing':changed.pop(key)
+                elif kind=='null':changed[key]=None
+                else:changed[key]='paired-snapshot' if key=='database_policy' else not original[key]
+                self.started.write_text(json.dumps(changed))
+                with self.subTest(key=key,kind=kind),self.assertRaisesRegex(ValueError,'^SOURCE_NOT_READY$'):self.scenario()
+        self.started.write_text(json.dumps(original))
+
+    def test_prepare_return_only_policy_cannot_substitute_started_policy(self):
+        prepared=json.loads(self.prepared.read_text());prepared.update(database_policy='preserve-in-place',
+            database_opened_by_controller=False,saved_export_companion_preserved=True)
+        self.prepared.write_text(json.dumps(prepared));started=json.loads(self.started.read_text())
+        started.pop('database_opened_by_controller');self.started.write_text(json.dumps(started))
+        with self.assertRaisesRegex(ValueError,'^SOURCE_NOT_READY$'):self.scenario()
 
 
 
