@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-migration-inspect, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, preview-completion-recover-failed-apply, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade, preview-code-prepare, preview-code-upgrade, preview-code-diagnose, preview-code-only-prepare, preview-code-only-upgrade, preview-code-only-rollback, preview-resource-trial, preview-report-recovery, preview-report-recovery-v19, preview-conversion-diagnostics, preview-conversion-recovery-v26, preview-completion-migration-inspect, preview-completion-archive-quarantine, preview-completion-archive-snapshot, preview-completion-restore-quarantine, preview-completion-restore-snapshot, preview-completion-export-inspect, preview-completion-export-failure-inspect, preview-completion-export-recover-failed-unit, preview-completion-prepare, preview-completion-apply, preview-completion-rollback, preview-completion-recover-failed-apply, learning-center-static-check, learning-center-static-install, learning-center-static-rollback]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -2726,7 +2726,7 @@ jobs:
 
 
   completion-database-maintenance:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-completion-migration-inspect'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && contains(fromJSON('["preview-completion-migration-inspect","preview-completion-archive-quarantine","preview-completion-archive-snapshot","preview-completion-restore-quarantine","preview-completion-restore-snapshot"]'), inputs.ad_prepare)
     permissions:
       contents: read
     concurrency:
@@ -2744,17 +2744,17 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           set -eu
-          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_completion_migration_inspect -q
+          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_completion_migration_inspect test_naver_completion_failed_database_archive -q
           python3 - <<'PYCODE'
           import base64,hashlib,json,lzma,os,pathlib
-          actions={'preview-completion-migration-inspect':'inspect'}
+          actions={'preview-completion-migration-inspect':'inspect','preview-completion-archive-quarantine':'archive_quarantine','preview-completion-archive-snapshot':'archive_canonical_snapshot','preview-completion-restore-quarantine':'restore_quarantine','preview-completion-restore-snapshot':'restore_canonical_snapshot'}
           inputs=json.loads(os.environ['INPUTS_JSON']);operation=inputs.pop('ad_prepare')
           assert operation in actions and inputs.pop('ad_expected_baseline')=='none' and all(v=='off' for v in inputs.values())
-          pins={'controller': ('naver_preview_completion_release.py', '1f93e9542dc7892d43150c013ff4db36de7dfeeb5081c70ddcdc84acb5e908fd'), 'release': ('naver_preview_release.py', '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'), 'upgrade': ('naver_preview_upgrade.py', '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28'), 'inspector': ('naver_completion_migration_inspect.py', '79fe3ac6435fafe2c90a81d89cd76a34ce28be495847022274445948b1d70730')}
+          pins={'controller': ('naver_preview_completion_release.py', 'cab8e07f8b4f86cd0263bf021d83437ba2eef8f86ba7f9f144e2c79ff0c10143'), 'release': ('naver_preview_release.py', '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'), 'upgrade': ('naver_preview_upgrade.py', '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28'), 'inspector': ('naver_completion_migration_inspect.py', 'a06868c4fea10cc48acf648acb671bf4aa3b2e04c6acffccf28c4f9d5b806f87'), 'archive': ('naver_completion_failed_database_archive.py', '15cb6e83eb1e169830316acbc1c22aede7395b9323e3c3233e3b8572a9127846')}
           sources={name:pathlib.Path('backend/tools',filename).read_text() for name,(filename,digest) in pins.items()}
           assert all(hashlib.sha256(sources[name].encode()).hexdigest()==digest for name,(_,digest) in pins.items())
           raw=json.dumps(sources,sort_keys=True,separators=(',',':')).encode()
-          assert len(raw)<=786432 and hashlib.sha256(raw).hexdigest()=='df7fb711489c40f3b8f0147623195591a6a1a9bd4884369fd2203652f18ea400'
+          assert len(raw)<=786432 and hashlib.sha256(raw).hexdigest()=='b422de2451f0fbc6ff05a02b924ad27b5aabb1962cf60abecf063febb9e66b3f'
           wire=base64.b64encode(lzma.compress(raw,preset=6)).decode();assert len(wire)<=98304
           with open(os.environ['GITHUB_ENV'],'a') as stream:
               stream.write('COMPLETION_MAINTENANCE_B64='+wire+'\n');stream.write('COMPLETION_MAINTENANCE_ACTION='+actions[operation]+'\n')
@@ -2777,23 +2777,26 @@ jobs:
             modules={};action=None
             try:
                 wire=os.environ['COMPLETION_MAINTENANCE_B64'];action=os.environ['COMPLETION_MAINTENANCE_ACTION']
-                if action not in {'inspect'} or len(wire)>98304:raise ValueError('MAINTENANCE_INPUT')
+                if action not in {'inspect','archive_quarantine','archive_canonical_snapshot','restore_quarantine','restore_canonical_snapshot'} or len(wire)>98304:raise ValueError('MAINTENANCE_INPUT')
                 packed=base64.b64decode(wire,validate=True);decoder=lzma.LZMADecompressor(memlimit=64*1024*1024)
                 raw=decoder.decompress(packed,max_length=786433)
-                if len(raw)>786432 or not decoder.eof or decoder.unused_data or hashlib.sha256(raw).hexdigest()!='df7fb711489c40f3b8f0147623195591a6a1a9bd4884369fd2203652f18ea400':raise ValueError('MAINTENANCE_PIN')
+                if len(raw)>786432 or not decoder.eof or decoder.unused_data or hashlib.sha256(raw).hexdigest()!='b422de2451f0fbc6ff05a02b924ad27b5aabb1962cf60abecf063febb9e66b3f':raise ValueError('MAINTENANCE_PIN')
                 sources=json.loads(raw)
-                if type(sources) is not dict or set(sources)!={'controller','release','upgrade','inspector'}:raise ValueError('MAINTENANCE_FIELDS')
+                if type(sources) is not dict or set(sources)!={'controller','release','upgrade','inspector','archive'}:raise ValueError('MAINTENANCE_FIELDS')
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 modules={}
                 for name,source in sources.items():
                     if type(source) is not str:raise ValueError('MAINTENANCE_SOURCE')
                     module=types.ModuleType('approved_completion_maintenance_'+name);exec(source,module.__dict__);modules[name]=module
-                result=modules['inspector'].inspect_host(modules['controller'],modules['release'],modules['upgrade'])
+                if action=='inspect':result=modules['inspector'].inspect_host(modules['controller'],modules['release'],modules['upgrade'])
+                else:result=modules['archive'].execute(action)
                 output=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
                 if len(output.encode())>16384:raise ValueError('MAINTENANCE_OUTPUT')
                 print('NAVER_COMPLETION_DATABASE_MAINTENANCE='+output)
                 sys.exit(0 if result.get('ok') else 1)
             except Exception as error:
                 result={'ok':False,'error':'MAINTENANCE_REFUSED'}
+                if action in {'archive_quarantine','archive_canonical_snapshot','restore_quarantine','restore_canonical_snapshot'} and 'archive' in modules:
+                    result=modules['archive'].failure_report(error)
                 print('NAVER_COMPLETION_DATABASE_MAINTENANCE='+json.dumps(result,sort_keys=True,separators=(',',':')));sys.exit(1)
             PYCODE

@@ -65,7 +65,7 @@ try:
  for t,columns in tables.items():
   query='SELECT '+','.join(columns)+' FROM '+t
   if t=='naver_auto_meta':query+=" WHERE key != 'schema_version'"
-  query+=' ORDER BY '+','.join(columns)
+  query+=' ORDER BY rowid'
   h=hashlib.sha256();count=0
   for row in c.execute(query):
    count+=1;total+=1

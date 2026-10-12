@@ -332,7 +332,7 @@ class CompletionPinsTests(unittest.TestCase):
             self.assertNotIn(forbidden,seen)
     def test_network_none_migration_script_has_no_provider_erp_naver_or_startup(self):
         script=C.MIGRATION_SCRIPT
-        self.assertIn('st._migrate();st._migrate()',script)
+        self.assertIn("st._migrate();step='apply_repeat';st._migrate()",script)
         self.assertNotIn('open_writer(',script)
         self.assertNotIn('dependencies(',script)
         self.assertNotIn('provider',script)
@@ -617,7 +617,7 @@ class CompletionDatabaseTests(unittest.TestCase):
 
 
 class CompletionMigrationScriptTests(unittest.TestCase):
-    def scene(self,mutant=False):
+    def scene(self,mutant=False,*,failure=None,repeat=False,blob=False,trace=None):
         with tempfile.TemporaryDirectory() as tmp:
             db=Path(tmp)/'synthetic.sqlite';real_connect=sqlite3.connect
             c=real_connect(db,isolation_level=None)
@@ -625,22 +625,32 @@ class CompletionMigrationScriptTests(unittest.TestCase):
             c.execute("INSERT INTO naver_auto_meta VALUES('schema_version','11')")
             c.execute('CREATE TABLE t(owner INTEGER,zero INTEGER,missing REAL)')
             c.execute('INSERT INTO t VALUES(1,0,NULL)');old=C.schema_digest(c)
+            if trace is not None:
+                c.execute('INSERT INTO t(rowid,owner,zero,missing) VALUES(7,0,0,12.5)')
+                c.execute('INSERT INTO t(rowid,owner,zero,missing) VALUES(19,3,0,NULL)')
+                c.execute('INSERT INTO naver_auto_meta VALUES(?,?)',('synthetic-json',json.dumps({'payload':'x'*16384})))
+            if blob:c.execute('UPDATE t SET missing=?',(b'/synthetic/private-row',))
             c.execute('CREATE TABLE new_t(n INTEGER)')
             for table in C.RANDOMIZED_TABLES:c.execute('CREATE TABLE '+table+'(n INTEGER)')
-            c.execute("UPDATE naver_auto_meta SET value='21'");target=C.schema_digest(c)
+            c.execute("UPDATE naver_auto_meta SET value='21' WHERE key='schema_version'");target=C.schema_digest(c)
             c.execute('DROP TABLE new_t')
             for table in C.RANDOMIZED_TABLES:c.execute('DROP TABLE '+table)
-            c.execute("UPDATE naver_auto_meta SET value='11'");c.close()
+            c.execute("UPDATE naver_auto_meta SET value='11' WHERE key='schema_version'");c.close()
+            calls=[]
             class Store:
                 def _migrate(self):
+                    calls.append(1)
+                    if failure is not None and (not repeat or len(calls)==2):failure()
                     self._conn.execute('CREATE TABLE IF NOT EXISTS new_t(n INTEGER)')
                     for table in C.RANDOMIZED_TABLES:self._conn.execute('CREATE TABLE IF NOT EXISTS '+table+'(n INTEGER)')
-                    self._conn.execute("UPDATE naver_auto_meta SET value='21'")
+                    self._conn.execute("UPDATE naver_auto_meta SET value='21' WHERE key='schema_version'")
                     if mutant:self._conn.execute('UPDATE t SET missing=0')
             module=SimpleNamespace(store=SimpleNamespace(Store=Store,SCHEMA_VERSION=21))
             def connect(path,*args,**kwargs):
                 self.assertEqual(path,'/var/lib/naver-engine/engine.db')
-                result=real_connect(db,*args,**kwargs);self.addCleanup(result.close);return result
+                result=real_connect(db,*args,**kwargs);self.addCleanup(result.close)
+                if trace is not None:result.set_trace_callback(trace.append)
+                return result
             output=io.StringIO()
             with patch.dict(sys.modules,{'naver_engine':module}),patch.object(sqlite3,'connect',side_effect=connect),patch.object(sys,'path',list(sys.path)),redirect_stdout(output):
                 try:exec(C.MIGRATION_SCRIPT,{'PINS':{'old':old,'target':target}})
@@ -649,10 +659,89 @@ class CompletionMigrationScriptTests(unittest.TestCase):
     def test_exact_server_script_reports_only_closed_aggregate_and_repeats(self):
         result=self.scene();self.assertEqual(result,{'ok':True,'schema':21,'old_schema':11,'old_tables':2,'old_rows':1,'preserved_rows':True,'migration_repeatable':True,'network_calls':0,'randomized_tables':sorted(C.RANDOMIZED_TABLES),'randomized_tables_empty':True})
     def test_exact_server_script_refuses_null_to_zero_existing_data_mutation(self):
-        self.assertEqual(self.scene(True),{'ok':False,'step':'migration_apply','code':'DB_ROWS_CHANGED'})
+        self.assertEqual(self.scene(True),{'ok':False,'step':'rows_after','code':'DB_ROWS_CHANGED',
+            'error_kind':'ValueError'})
+
+    def test_rowid_scan_preserves_out_of_order_rows_without_text_sort_temporary_tree(self):
+        trace=[];result=self.scene(trace=trace)
+        self.assertTrue(result['ok']);self.assertEqual(result['old_rows'],4)
+        queries=[sql for sql in trace if sql.startswith(('SELECT owner,zero,missing FROM t',
+            'SELECT key,value FROM naver_auto_meta WHERE'))]
+        self.assertEqual(len(queries),4)
+        self.assertTrue(all(sql.endswith(' ORDER BY rowid') for sql in queries))
+        with closing(sqlite3.connect(':memory:')) as c:
+            c.execute('CREATE TABLE t(owner INTEGER,zero INTEGER,missing REAL)')
+            c.execute('CREATE TABLE naver_auto_meta(key TEXT,value TEXT)')
+            for sql in queries:
+                self.assertFalse(any('TEMP B-TREE' in row[3] for row in c.execute('EXPLAIN QUERY PLAN '+sql)))
+            self.assertTrue(any('TEMP B-TREE' in row[3] for row in c.execute(
+                'EXPLAIN QUERY PLAN SELECT key,value FROM naver_auto_meta ORDER BY key,value')))
+        self.assertEqual(self.scene(True,trace=[]),{'ok':False,'step':'rows_after',
+            'code':'DB_ROWS_CHANGED','error_kind':'ValueError'})
+
+    def test_script_preserves_wrapped_sqlite_kind_and_primary_code_without_message(self):
+        class StoreError(RuntimeError):pass
+        def fail():
+            error=sqlite3.OperationalError('/synthetic/private-sql-and-path');error.sqlite_errorcode=13|(3<<8)
+            try:raise error
+            except sqlite3.Error:raise StoreError('/synthetic/private-wrapper') from None
+        for repeat,phase in ((False,'apply_first'),(True,'apply_repeat')):
+            with self.subTest(phase=phase):
+                result=self.scene(failure=fail,repeat=repeat)
+                self.assertEqual(result,{'ok':False,'step':phase,'code':'SQLITE_FULL','error_kind':'StoreError'})
+                self.assertNotIn('private',json.dumps(result))
+
+    def test_rows_before_serialization_failure_does_not_expose_row_or_message(self):
+        result=self.scene(blob=True)
+        self.assertEqual(result,{'ok':False,'step':'rows_before','code':'UNRECOGNIZED','error_kind':'TypeError'})
+        self.assertNotIn('private',json.dumps(result));self.assertNotIn('synthetic',json.dumps(result))
+
+    def diagnostic(self,error):
+        namespace={}
+        with patch.object(sys,'path',list(sys.path)):
+            exec(C.MIGRATION_SCRIPT.split('\ntry:\n',1)[0],namespace)
+        return namespace['migration_failure'](error)
+
+    def test_sqlite_cause_walk_is_four_nodes_bounded_with_cycle_and_cause_precedence(self):
+        def sql(number):
+            error=sqlite3.OperationalError('opaque private value');error.sqlite_errorcode=number;return error
+        for depth,want in ((4,'SQLITE_FULL'),(5,'UNRECOGNIZED')):
+            error=sql(13)
+            for _ in range(depth-1):
+                outer=RuntimeError('opaque private wrapper');outer.__context__=error;error=outer
+            self.assertEqual(self.diagnostic(error)['code'],want)
+        error=RuntimeError('opaque');error.__context__=error
+        self.assertEqual(self.diagnostic(error)['code'],'UNRECOGNIZED')
+        error=RuntimeError('opaque');error.__context__=sql(13);error.__cause__=sql(14)
+        self.assertEqual(self.diagnostic(error)['code'],'SQLITE_CANTOPEN')
+
+    def test_sqlite_codes_and_exception_kinds_are_exact_closed_values(self):
+        for number,code in C.M_SQL.items():
+            error=sqlite3.OperationalError('opaque');error.sqlite_errorcode=number
+            self.assertEqual(self.diagnostic(error)['code'],code)
+        for number in (True,13.0,'13',-1,0,255,2**31):
+            error=sqlite3.OperationalError('opaque');error.sqlite_errorcode=number
+            self.assertEqual(self.diagnostic(error)['code'],'UNRECOGNIZED')
+        class PrivateNamedError(Exception):pass
+        self.assertEqual(self.diagnostic(PrivateNamedError('/synthetic/private')),{
+            'ok':False,'step':'rows_before','code':'UNRECOGNIZED','error_kind':'OtherError'})
+        self.assertEqual(self.diagnostic(ValueError({'private':'value'}))['code'],'UNRECOGNIZED')
 
 
 class CompletionMigrationControllerTests(unittest.TestCase):
+    def failure_scene(self,result):
+        release=Mock();release.ROOT=Path('/synthetic');release.compose.return_value=['compose']
+        def command(args,**kwargs):
+            if args[:2]==['docker','wait']:return b'1'
+            if args[:2]==['docker','logs']:return json.dumps(result).encode()
+            if args[:2]==['docker','ps']:return b''
+            if args[0]=='compose':return b'a'*64
+            raise AssertionError('UNEXPECTED_LOCAL_COMMAND')
+        release.command.side_effect=command
+        with patch.object(C,'TARGET_COMMIT','f'*40),self.assertRaises(ValueError) as caught:
+            C.migrate_database(Path('/synthetic/target'),release)
+        return caught.exception
+
     def test_success_requires_exact_twelve_empty_randomized_tables_proof(self):
         valid={'ok':True,'schema':21,'old_schema':11,'old_tables':2,'old_rows':1,
             'preserved_rows':True,'migration_repeatable':True,'network_calls':0,
@@ -693,6 +782,46 @@ class CompletionMigrationControllerTests(unittest.TestCase):
                 C.migrate_database(Path('/synthetic/naver-'+'f'*40),release)
             self.assertEqual(caught.exception.failure_details['failed_operation'],'migration_apply')
             self.assertEqual(caught.exception.failure_details['failed_error_code'],code)
+
+    def test_new_closed_diagnostic_survives_capture_report_and_all_six_phases(self):
+        for phase in C.M_PHASES:
+            for code in ('UNRECOGNIZED','SQLITE_FULL','SQLITE_IOERR'):
+                with self.subTest(phase=phase,code=code):
+                    error=self.failure_scene({'ok':False,'step':phase,'code':code,'error_kind':'StoreError'})
+                    report=C.failure_report(error)
+                    self.assertEqual(report['failed_operation'],phase)
+                    self.assertEqual(report['failed_error_kind'],'StoreError')
+                    self.assertEqual(report['failed_error_code'],code)
+                    self.assertNotIn('synthetic',json.dumps(report))
+        error=self.failure_scene({'ok':False,'step':'rows_after','code':'DB_ROWS_CHANGED','error_kind':'ValueError'})
+        self.assertEqual(C.failure_report(error)['failed_error_code'],'DB_ROWS_CHANGED')
+
+    def test_malformed_or_unreviewed_diagnostics_are_not_promoted(self):
+        valid={'ok':False,'step':'rows_before','code':'UNRECOGNIZED','error_kind':'TypeError'}
+        invalid=[{**valid,'private':'/synthetic/private'},
+            {**valid,'ok':0},{**valid,'step':'/synthetic/private'},
+            {**valid,'code':'SQLITE_PRIVATE'},{**valid,'error_kind':'PrivateError'},
+            {**valid,'code':13},{**valid,'code':{'private':'value'}},{**valid,'sqlite_code':'SQLITE_FULL'}]
+        for result in invalid:
+            with self.subTest(result=result):
+                error=self.failure_scene(result);report=C.failure_report(error)
+                self.assertEqual(report['failed_operation'],'warm_result')
+                self.assertEqual(report['failed_error_code'],'SOURCE_WARM_FAILED')
+                self.assertNotIn('private',json.dumps(report));self.assertNotIn('PrivateError',json.dumps(report))
+
+    def test_capture_ignores_untrusted_migration_failure_attributes(self):
+        valid={'ok':False,'step':'rows_before','error_kind':'StoreError','code':'SQLITE_FULL'}
+        invalid=[{**valid,'step':'/private'},{**valid,'error_kind':'PrivateError'},
+            {**valid,'code':'/private'},{**valid,'extra':'private'},
+            {**valid,'step':['rows_before']},{**valid,'ok':0},
+            {'operation':'rows_before','error_kind':'StoreError','error_code':'SQLITE_FULL'}]
+        for diagnostic in invalid:
+            error=ValueError('SOURCE_WARM_FAILED');error.migration_failure=diagnostic
+            with patch.object(C,'OPERATION','warm_result'):
+                result=C._capture_failure(error)
+            self.assertEqual(result['failed_operation'],'warm_result')
+            self.assertEqual(result['failed_error_kind'],'ValueError')
+            self.assertNotIn('private',json.dumps(result))
 
 
 class CompletionApplyTests(unittest.TestCase):

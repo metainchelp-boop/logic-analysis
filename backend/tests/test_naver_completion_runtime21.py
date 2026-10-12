@@ -142,14 +142,37 @@ class CompletionRuntime21Tests(unittest.TestCase):
         self.assertGreater(receipt['old_tables'],20);self.assertGreater(receipt['old_rows'],20)
         self.assertEqual(receipt['randomized_tables'],sorted(C.RANDOMIZED_TABLES));self.assertIs(receipt['randomized_tables_empty'],True)
 
+    def test_exact_old_schema_supports_sort_free_stable_rowid_preservation(self):
+        with closing(sqlite3.connect(':memory:',isolation_level=None)) as c:
+            initialize(c,self.contract)
+            tables=c.execute("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
+            before={};old_columns={}
+            for name,ddl in tables:
+                self.assertNotRegex(ddl.upper(),r'WITHOUT\s+ROWID')
+                columns=[r[1] for r in c.execute('PRAGMA table_info('+name+')')]
+                self.assertFalse({'rowid','_rowid_','oid'} & {n.lower() for n in columns})
+                old_columns[name]=columns
+                query='SELECT rowid,'+','.join(columns)+' FROM '+name
+                if name=='naver_auto_meta':query+=" WHERE key<>'schema_version'"
+                query+=' ORDER BY rowid'
+                plan=c.execute('EXPLAIN QUERY PLAN '+query).fetchall()
+                self.assertFalse(any('TEMP B-TREE' in str(row).upper() for row in plan))
+                before[name]=c.execute(query).fetchall()
+            st=object.__new__(S.Store);st._conn=c;st._migrate();st._migrate();c.set_authorizer(None)
+            for name,columns in old_columns.items():
+                query='SELECT rowid,'+','.join(columns)+' FROM '+name
+                if name=='naver_auto_meta':query+=" WHERE key<>'schema_version'"
+                query+=' ORDER BY rowid'
+                self.assertEqual(c.execute(query).fetchall(),before[name])
+
     def test_wrong_randomized_table_set_is_refused_even_with_matching_target_digest(self):
         for mutate in (lambda c:c.execute('DROP TABLE IF EXISTS naver_randomized_switch_event'),
             lambda c:c.execute('CREATE TABLE IF NOT EXISTS naver_randomized_extra(n INTEGER)')):
-            with self.subTest(mutate=mutate):self.assertEqual(self.scene(mutate),{'ok':False,'step':'migration_apply','code':'DB_TARGET_SCHEMA'})
+            with self.subTest(mutate=mutate):self.assertEqual(self.scene(mutate),{'ok':False,'step':'schema_after','code':'DB_TARGET_SCHEMA','error_kind':'ValueError'})
 
     def test_migration_cannot_create_assignments_or_cursor_rows(self):
         def seed(c):c.execute("INSERT OR IGNORE INTO naver_randomized_scan_cursor VALUES('synthetic','0','2026-10-12T00:00:00+09:00')")
-        self.assertEqual(self.scene(seed),{'ok':False,'step':'migration_apply','code':'DB_TARGET_SCHEMA'})
+        self.assertEqual(self.scene(seed),{'ok':False,'step':'schema_after','code':'DB_TARGET_SCHEMA','error_kind':'ValueError'})
 
 
 if __name__=='__main__':unittest.main()

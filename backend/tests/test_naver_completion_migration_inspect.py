@@ -131,6 +131,38 @@ class MigrationInspectTests(unittest.TestCase):
         self.assertFalse(result['row_check']['row_hash_completed']);self.assertIs(result['row_check']['invalid_learning_call_json'],False)
         self.assertNotIn('PRIVATE',json.dumps(result));self.assertTrue(self.removed)
 
+    def test_large_text_rowid_scan_has_no_temp_sort_and_hashes_every_value(self):
+        rows=[(number,'PRIVATE-'+letter*262144,0,None)
+            for number,letter in ((4,'z'),(1,'a'),(3,'y'),(2,'b'))]
+        with closing(sqlite3.connect(self.snapshot)) as c:
+            with c:
+                c.execute('DELETE FROM synthetic_records')
+                c.executemany('INSERT INTO synthetic_records VALUES(?,?,?,?)',rows)
+        expected=hashlib.sha256(b''.join(json.dumps(list(row),ensure_ascii=True,
+            separators=(',',':'),allow_nan=False).encode()+b'\n' for row in rows)).hexdigest()
+        before=self.snapshot.read_bytes()
+        script=M._script(self.C).replace('  h=hashlib.sha256();count=0',
+            "  if any('USE TEMP B-TREE' in r[3] for r in c.execute('EXPLAIN QUERY PLAN '+query)):raise ValueError()\n"
+            '  h=hashlib.sha256();count=0')
+        script=script.replace(" phase='complete';result.update(ok=True,row_hash_completed=True)",
+            " if out['synthetic_records']!="+repr((len(rows),expected))+":raise ValueError()\n"
+            " phase='complete';result.update(ok=True,row_hash_completed=True)")
+        value=M._result(self.script_result(script),self.release)
+        self.assertTrue(value['row_hash_completed']);self.assertFalse(value['invalid_learning_call_json'])
+        self.assertNotIn(expected,json.dumps(value));self.assertNotIn('PRIVATE',json.dumps(value))
+        mutant=script.replace("query+=' ORDER BY rowid'","query+=' ORDER BY '+','.join(columns)")
+        rejected=M._result(self.script_result(mutant),self.release)
+        self.assertEqual(rejected['phase'],'rows_before');self.assertEqual(rejected['error_kind'],'ValueError')
+        self.assertFalse(rejected['row_hash_completed']);self.assertEqual(self.snapshot.read_bytes(),before)
+        self.assertFalse(any(os.path.lexists(str(self.snapshot)+suffix) for suffix in ('-wal','-shm','-journal')))
+
+    def test_actual_snapshot_row_tampering_is_rejected_before_any_docker_command(self):
+        with closing(sqlite3.connect(self.snapshot)) as c:
+            with c:c.execute("UPDATE synthetic_records SET payload='PRIVATE-TAMPERED'")
+        result=self.inspect()
+        self.assertFalse(result['ok']);self.assertEqual(result['code'],'INSPECT_SNAPSHOT')
+        self.assertFalse(self.calls);self.assertNotIn('PRIVATE',json.dumps(result))
+
     def test_receipt_scope_duplicate_hash_and_schema_tampering_prevents_docker(self):
         original=self.receipt.read_text()
         for field,value in (('operation_id','0'*32),('schema',True),('target_commit',M.OLD),('database_sha256','f'*64)):

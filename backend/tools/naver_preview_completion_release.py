@@ -71,6 +71,14 @@ FAILURE_KINDS = frozenset('ValueError RuntimeError TimeoutError TimeoutExpired C
     'TypeError KeyError AttributeError AssertionError ImportError ModuleNotFoundError ConfigError StoreRefused'.split())
 FAILURE_KINDS |= frozenset({'ExportInstallInvalid', 'FileExistsError'})
 SQL_ERRORS={n:'SQLITE_'+s for n,s in zip((1,5,6,8,10,11,14,15,26),'ERROR BUSY LOCKED READONLY IOERR CORRUPT CANTOPEN PROTOCOL NOTADB'.split())}
+M_PHASES=frozenset('rows_before apply_first apply_repeat schema_after rows_after integrity'.split())
+M_KINDS=FAILURE_KINDS|{'StoreError','DatabaseError','OtherError'}
+M_SQL={number:'SQLITE_'+name for number,name in enumerate(
+    'ERROR INTERNAL PERM ABORT BUSY LOCKED NOMEM READONLY INTERRUPT IOERR CORRUPT NOTFOUND FULL CANTOPEN '
+    'PROTOCOL EMPTY SCHEMA TOOBIG CONSTRAINT MISMATCH MISUSE NOLFS AUTH FORMAT RANGE NOTADB NOTICE WARNING'.split(),1)}
+M_CODES=frozenset('DB_OLD_SCHEMA DB_TARGET_SCHEMA DB_ROWS_CHANGED DB_SCHEMA_OBJECT DB_ROW_BOUND DB_SNAPSHOT_INTEGRITY'.split())
+FAILURE_OPERATIONS |= M_PHASES
+FAILURE_KINDS = M_KINDS
 FAILURE_CODES = frozenset(SQL_ERRORS.values()) | frozenset('CODE_TARGET_NOT_PINNED CODE_PACKAGE CODE_TARGET CODE_BASELINE CODE_APPLY_FIELDS '
     'CODE_OPERATION_ID CODE_ALREADY_ATTEMPTED CODE_POST_STATE CODE_TARGET_SOURCE_CHANGED CODE_FAILED_ROLLED_BACK_DB_PRESERVED '
     'CODE_ROLLBACK_FAILED HOST_BASELINE OLD_BASELINE OLD_SOURCE_CHANGED OLD_UNIT_CHANGED OLD_UNIT_NOT_ENABLED '
@@ -84,6 +92,7 @@ FAILURE_CODES = frozenset(SQL_ERRORS.values()) | frozenset('CODE_TARGET_NOT_PINN
     'COMMAND_FAILED DIRECTORY_POLICY FILE_PATH FILE_POLICY PREPARED_MANIFEST PREPARED_DIGEST '
     'PREPARED_FILE_CHANGED PREPARED_IMAGE PREPARED_IMAGE_CHANGED SOURCE_NOT_READY UNIT_CHANGED ENGINE_NOT_READY '
     'PAGE_NOT_READY REPORT_ASSET_NOT_READY UNAUTHENTICATED_READ_NOT_DENIED BUSINESS_WRITE_NOT_DENIED SERVICES_NOT_READY'.split())
+FAILURE_CODES |= frozenset(M_SQL.values())
 FAILURE_CODES |= frozenset({'CODE_ONLY_REQUIRED', 'PROBE_RESPONSE_SIZE'})
 FAILURE_CODES |= frozenset({'RUNTIME_SECRET_CHANGED', 'CONFIG_PRESERVE_NOT_APPROVED', 'CONFIG_PRESERVE_PROOF', 'CONFIG_PRESERVE_DRIFT'})
 FAILURE_STAGES |= frozenset({'code_prepare_runtime_config', 'code_prepare_runtime_postflight'})
@@ -404,9 +413,17 @@ def _error_labels(error):
         code=SQL_ERRORS.get(getattr(error,'sqlite_errorcode',fallback.get(code,0))&255)
     return {'error_kind':kind if kind in FAILURE_KINDS else 'OtherError',
         'error_code':code if code in FAILURE_CODES else 'UNRECOGNIZED'}
+def _migration_details(r):
+    if type(r) is not dict or set(r)!={'ok','step','code','error_kind'} or r['ok'] is not False:return {}
+    p,c,k=(r[k] for k in ('step','code','error_kind'))
+    if (type(p) is type(c) is type(k) is str and p in M_PHASES
+        and c in M_CODES|set(M_SQL.values())|{'UNRECOGNIZED'}
+        and k in M_KINDS):return dict(operation=p,error_kind=k,error_code=c)
+    return {}
 def _capture_failure(error, prefix='failed'):
     details = {'stage':STAGE if STAGE in FAILURE_STAGES else 'unknown',
         'operation':OPERATION if OPERATION in FAILURE_OPERATIONS else 'unknown', **_error_labels(error)}
+    details.update(_migration_details(getattr(error,'migration_failure',None)))
     return {prefix+'_'+key:value for key,value in details.items()}
 def failure_report(error):
     result = {'stage':STAGE if STAGE in FAILURE_STAGES else 'unknown', **_error_labels(error)}
@@ -1029,10 +1046,27 @@ def restore_db(snapshot, identity, release, upgrade):
     verify_database_schema(OLD_COMMIT,release,upgrade)
 
 
-MIGRATION_SCRIPT = 'RANDOMIZED_TABLES='+repr(sorted(RANDOMIZED_TABLES))+'\n'+r'''
-import hashlib,json,os,re,sqlite3,sys
+MIGRATION_SCRIPT = ('RANDOMIZED_TABLES='+repr(sorted(RANDOMIZED_TABLES))+'\n'
+    +'M_KINDS='+repr(sorted(M_KINDS))+'\n'
+    +'M_SQL='+repr(M_SQL)+'\n'
+    +'M_CODES='+repr(sorted(M_CODES))+'\n')+r'''
+import hashlib,json,re,sqlite3,sys
 sys.path[:0]=['/opt/naver-engine','/opt/naver-engine/backend']
-step='migration_start'
+step='rows_before'
+def migration_failure(e):
+ k=type(e).__name__;a=e.args
+ k=k if k in M_KINDS else 'OtherError'
+ c=a[0] if len(a)==1 and isinstance(a[0],str) and a[0] in M_CODES else 'UNRECOGNIZED'
+ seen=set();sql=None
+ for _ in range(4):
+  if not isinstance(e,BaseException) or id(e) in seen:break
+  seen.add(id(e))
+  if isinstance(e,sqlite3.Error):
+   n=getattr(e,'sqlite_errorcode',None)
+   if type(n) is int and 0<n<=2147483647:sql=M_SQL.get(n&255)
+   if sql is not None:break
+  e=e.__cause__ if isinstance(e.__cause__,BaseException) else e.__context__
+ return {'ok':False,'step':step,'code':c if c!='UNRECOGNIZED' else sql or c,'error_kind':k}
 try:
  from naver_engine import store as S
  def shape(c):
@@ -1049,7 +1083,7 @@ try:
   for t,columns in tables.items():
    query='SELECT '+','.join(columns)+' FROM '+t
    if t=='naver_auto_meta':query+=" WHERE key != 'schema_version'"
-   query+=' ORDER BY '+','.join(columns)
+   query+=' ORDER BY rowid'
    h=hashlib.sha256();count=0
    for row in c.execute(query):
     count+=1;total+=1
@@ -1057,18 +1091,20 @@ try:
     h.update(json.dumps(list(row),ensure_ascii=True,separators=(',',':'),allow_nan=False).encode()+b'\n')
    out[t]=(count,h.hexdigest())
   return out
- before=rows();step='migration_apply'
- st=object.__new__(S.Store);st._conn=c;st._migrate();st._migrate();c.set_authorizer(None)
+ before=rows();step='apply_first'
+ st=object.__new__(S.Store);st._conn=c;st._migrate();step='apply_repeat';st._migrate();c.set_authorizer(None)
+ step='schema_after'
  if c.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone()!=('21',) or shape(c)!=PINS['target']:raise ValueError('DB_TARGET_SCHEMA')
  if {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'naver_randomized_*'")}!=set(RANDOMIZED_TABLES):raise ValueError('DB_TARGET_SCHEMA')
  if any(c.execute('SELECT count(*) FROM '+t).fetchone()!=(0,) for t in RANDOMIZED_TABLES):raise ValueError('DB_TARGET_SCHEMA')
+ step='rows_after'
  if rows()!=before:raise ValueError('DB_ROWS_CHANGED')
+ step='integrity'
  if c.execute('PRAGMA integrity_check').fetchall()!=[('ok',)]:raise ValueError('DB_SNAPSHOT_INTEGRITY')
  print(json.dumps({'ok':True,'schema':21,'old_schema':11,'old_tables':len(tables),'old_rows':sum(r[0] for r in before.values()),'preserved_rows':True,'migration_repeatable':True,'network_calls':0,'randomized_tables':RANDOMIZED_TABLES,'randomized_tables_empty':True}))
  c.close()
 except Exception as error:
- code=error.args[0] if len(error.args)==1 and error.args[0] in {'DB_OLD_SCHEMA','DB_TARGET_SCHEMA','DB_ROWS_CHANGED','DB_SCHEMA_OBJECT','DB_ROW_BOUND','DB_SNAPSHOT_INTEGRITY'} else 'UNRECOGNIZED'
- print(json.dumps({'ok':False,'step':step,'code':code}));sys.exit(1)
+ print(json.dumps(migration_failure(error)));sys.exit(1)
 '''
 
 
@@ -1098,9 +1134,15 @@ def migrate_database(path, release):
         result=json.loads(raw)
         OPERATION = 'warm_result'
         if status != b'0':
+            diagnostic=_migration_details(result)
+            if diagnostic:
+                code=diagnostic['error_code']
+                error=ValueError(code if code!='UNRECOGNIZED' else 'SOURCE_WARM_FAILED')
+                error.migration_failure=result
+                raise error
             if (type(result) is dict and set(result)=={'ok','step','code'} and result['ok'] is False
                 and result['step'] in ('migration_start','migration_apply')
-                and result['code'] in {'DB_OLD_SCHEMA','DB_TARGET_SCHEMA','DB_ROWS_CHANGED','DB_SCHEMA_OBJECT','DB_ROW_BOUND','DB_SNAPSHOT_INTEGRITY'}):
+                and result['code'] in M_CODES):
                 OPERATION=result['step']
                 raise ValueError(result['code'])
             raise ValueError('SOURCE_WARM_FAILED')
