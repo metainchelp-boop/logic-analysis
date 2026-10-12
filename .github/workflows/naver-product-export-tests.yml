@@ -102,6 +102,14 @@ jobs:
             LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
             env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_current_inspection_diagnostics test_naver_current_inspection_diagnostics_transport -v \
             2>&1 | tee "$RUNNER_TEMP/product-tests/current-inspection-diagnostics-tests.txt"
+      - name: 기존 예산 초안·상품 가설 패치·15f 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_budget_draft_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/budget-draft-patch-tests.txt"
       - name: 소스·합성 결과 보관 (운영 자료 없음)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
