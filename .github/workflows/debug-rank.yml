@@ -2651,7 +2651,7 @@ jobs:
                 module=types.ModuleType('approved_completion_export_failure_inspect');exec(source,module.__dict__)
                 result=module.inspect_host()
                 raw=json.dumps(result,sort_keys=True,separators=(',',':'),allow_nan=False)
-                if len(raw.encode())>16384:raise ValueError('INSPECT_RESULT_SIZE')
+                if len(raw.encode())>32768:raise ValueError('INSPECT_RESULT_SIZE')
                 print('NAVER_COMPLETION_EXPORT_FAILURE='+raw)
             except Exception:
                 print('NAVER_COMPLETION_EXPORT_FAILURE={"version":1,"error":"INSPECT_REFUSED"}');sys.exit(1)
