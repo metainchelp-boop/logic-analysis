@@ -1,0 +1,465 @@
+"""Explicit, pinned installation of two saved-data exporters; never an app/API client.
+
+The controller supplies the observed host source directory and pinned script bytes.
+Preparing artifacts does not start jobs. Only install() changes system units, and
+only the release controller may call it after approval. No env, keys or DB rows
+are returned. The engine receives dedicated sanitized directories, not SQLite.
+
+Namespace contract: systemd.exec ProtectHome=tmpfs with BindReadOnlyPaths exposes
+only the chosen source directory at /run/naver-saved-source. The whole directory
+is needed for the live SQLite WAL/SHM pair; immutable=1 and source writes are not
+used. See https://www.freedesktop.org/software/systemd/man/systemd.exec.html and
+https://www.sqlite.org/wal.html#read_only_databases . Actual namespace support and
+WAL permissions must pass the one-shot runs on the target host.
+"""
+from datetime import datetime, timezone
+import grp
+import hashlib
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import stat
+
+STAGING = Path('/srv/metainc/ad-deploy-staging/saved-exports')
+INSTALL = Path('/opt/metainc/naver-saved-exports')
+UNITS = Path('/etc/systemd/system')
+OUTPUTS = {'product': Path('/var/lib/metainc/naver-product-source'),
+           'market': Path('/var/lib/metainc/naver-market-source')}
+COMPANION = 'naver-saved-exports.override.yml'
+SOURCE_ALIAS = '/run/naver-saved-source'
+SCRIPTS = ('naver_product_export.py', 'naver_market_export.py')
+KINDS = ('product', 'market')
+MAX_BUNDLE = 5 * 1024 * 1024
+MAX_FILE = 256 * 1024
+ROOT_UID = 0
+READER_GID = 10001
+PROFILE_KEYS = frozenset({'ops_commit', 'source_directory', 'database_name',
+                         'exporter_user', 'source_group', 'python_executable'})
+
+
+class ExportInstallInvalid(ValueError):
+    """Fixed, non-sensitive codes only."""
+
+
+def _fail(code):
+    raise ExportInstallInvalid(code)
+
+
+def _json(value):
+    return json.dumps(value, ensure_ascii=True, sort_keys=True,
+                      separators=(',', ':'), allow_nan=False).encode()
+
+
+def _sha(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def _path(value):
+    # A deliberately narrow path alphabet avoids systemd %, :, $ and YAML escapes.
+    if (not isinstance(value, str) or len(value) > 512 or
+            re.fullmatch(r'/[A-Za-z0-9_./-]+', value) is None or
+            str(Path(value)) != value or '..' in Path(value).parts):
+        _fail('EXPORT_PATH')
+    return Path(value)
+
+
+def build_plan(*, ops_commit, source_directory, database_name, exporter_user,
+               source_group, python_executable):
+    if not isinstance(ops_commit, str) or re.fullmatch(r'[0-9a-f]{40}', ops_commit) is None:
+        _fail('EXPORT_PIN')
+    source = _path(source_directory)
+    if source in (Path('/'), Path('/root'), Path('/home'), Path('/etc'), Path('/var'),
+                  Path('/var/lib'), Path('/run'), Path('/srv'), Path('/opt')):
+        _fail('EXPORT_SOURCE_SCOPE')
+    if any(source == path or source in path.parents or path in source.parents
+           for path in (STAGING, INSTALL, UNITS, *OUTPUTS.values())):
+        _fail('EXPORT_SOURCE_SCOPE')
+    if (not isinstance(database_name, str) or
+            re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\.db', database_name) is None):
+        _fail('EXPORT_DATABASE_NAME')
+    if (not isinstance(exporter_user, str) or
+            re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', exporter_user) is None or exporter_user == 'root'):
+        _fail('EXPORT_IDENTITY')
+    if (source_group is not None and (not isinstance(source_group, str) or
+            re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', source_group) is None or source_group == 'root')):
+        _fail('EXPORT_IDENTITY')
+    if python_executable not in ('/usr/bin/python3', '/usr/local/bin/python3'):
+        _fail('EXPORT_PYTHON')
+    return {'ops_commit': ops_commit, 'source_directory': str(source),
+            'database_name': database_name, 'exporter_user': exporter_user,
+            'source_group': source_group, 'python_executable': python_executable}
+
+
+def _plan(value):
+    if not isinstance(value, dict) or set(value) != PROFILE_KEYS:
+        _fail('EXPORT_PROFILE')
+    return build_plan(**value)
+
+
+def render_companion(plan):
+    _plan(plan)
+    # JSON is YAML 1.2; closed structure is easy to compare without a YAML parser.
+    return _json({'services': {'naver-engine': {
+        'environment': {'NAVER_ENGINE_PRODUCT_EXPORT_FILE': '/var/lib/naver-product-source/bundle.json',
+                        'NAVER_ENGINE_MARKET_EXPORT_FILE': '/var/lib/naver-market-source/bundle.json'},
+        'volumes': [{'type': 'bind', 'source': str(OUTPUTS[kind]),
+                     'target': '/var/lib/naver-' + kind + '-source', 'read_only': True,
+                     'bind': {'create_host_path': False}} for kind in KINDS]}}}) + b'\n'
+
+
+def _unit(plan, kind):
+    code = INSTALL / plan['ops_commit'] / ('naver_' + kind + '_export.py')
+    group = ('SupplementaryGroups=' + plan['source_group'] + '\n') if plan['source_group'] else ''
+    return (f'[Unit]\nDescription=Bounded saved {kind} export for Naver reports\nAfter=local-fs.target\n\n'
+        f'[Service]\nType=oneshot\nUser={plan["exporter_user"]}\nGroup={READER_GID}\n{group}'
+        f'ExecStartPre={plan["python_executable"]} -I -c "import os,sys;sys.exit(0 if '
+        f"os.statvfs('{SOURCE_ALIAS}').f_flag & os.ST_RDONLY else 1)\"\n"
+        f'WorkingDirectory=/\nExecStart={plan["python_executable"]} -I -B {code} '
+        f'--database {SOURCE_ALIAS}/{plan["database_name"]} --output {OUTPUTS[kind]}/bundle.json\n'
+        'UMask=0027\nTimeoutStartSec=45\nMemoryMax=256M\nTasksMax=16\n'
+        'NoNewPrivileges=true\nCapabilityBoundingSet=\nPrivateNetwork=true\nPrivateTmp=true\n'
+        'PrivateDevices=true\nProtectSystem=strict\nProtectHome=tmpfs\n'
+        'ProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\n'
+        'RestrictAddressFamilies=AF_UNIX\n'
+        f'BindReadOnlyPaths={plan["source_directory"]}:{SOURCE_ALIAS}:norbind\n'
+        f'ReadOnlyPaths={INSTALL / plan["ops_commit"]}\nReadWritePaths={OUTPUTS[kind]}\n'
+        'StandardOutput=journal\nStandardError=journal\n').encode()
+
+
+def _timer(kind):
+    # These times follow the source's configured 08:30 daily analysis, not a claim
+    # that every analysis/collection succeeded. Original source timestamps remain.
+    minute = '30' if kind == 'product' else '35'
+    return (f'[Unit]\nDescription=Daily saved {kind} export\n\n[Timer]\n'
+        f'OnCalendar=*-*-* 10:{minute}:00 Asia/Seoul\nRandomizedDelaySec=60\nPersistent=true\n'
+        f'Unit=naver-{kind}-export.service\n\n[Install]\nWantedBy=timers.target\n').encode()
+
+
+def artifacts(plan, scripts, pins):
+    plan = _plan(plan)
+    if (not isinstance(scripts, dict) or set(scripts) != set(SCRIPTS) or
+            not isinstance(pins, dict) or set(pins) != set(SCRIPTS)):
+        _fail('EXPORT_PIN')
+    # Validate pins before touching any host source path.
+    for name in SCRIPTS:
+        body = scripts[name]
+        if (type(body) is not bytes or not 100 <= len(body) <= MAX_FILE or
+                not isinstance(pins[name], str) or re.fullmatch('[0-9a-f]{64}', pins[name]) is None or
+                _sha(body) != pins[name]):
+            _fail('EXPORT_PIN')
+    result = dict(scripts)
+    result[COMPANION] = render_companion(plan)
+    for kind in KINDS:
+        result[f'naver-{kind}-export.service'] = _unit(plan, kind)
+        result[f'naver-{kind}-export.timer'] = _timer(kind)
+    return result
+
+
+def _regular(path, *, maximum=MAX_FILE, owner=None, mode=None, group=None):
+    owner = ROOT_UID if owner is None else owner
+    if path.resolve() != path:
+        _fail('EXPORT_SYMLINK')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != owner or
+                info.st_mode & 0o022 or info.st_size > maximum or
+                mode is not None and stat.S_IMODE(info.st_mode) != mode or
+                group is not None and info.st_gid != group):
+            _fail('EXPORT_FILE_POLICY')
+        chunks=[]; size=0
+        while size <= maximum:
+            chunk=os.read(fd,min(65536,maximum+1-size))
+            if not chunk:break
+            chunks.append(chunk);size+=len(chunk)
+        after=os.fstat(fd)
+        if size > maximum or (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns):
+            _fail('EXPORT_FILE_CHANGED')
+        return b''.join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _directory(path, *, owner=None, mode=None):
+    owner = ROOT_UID if owner is None else owner
+    if path.resolve() != path:
+        _fail('EXPORT_SYMLINK')
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != owner or info.st_mode & 0o022 or
+            mode is not None and stat.S_IMODE(info.st_mode) != mode):
+        _fail('EXPORT_DIRECTORY_POLICY')
+    return info
+
+
+def _source_identity(plan):
+    directory = _path(plan['source_directory'])
+    if directory.resolve() != directory:
+        _fail('EXPORT_SOURCE_SYMLINK')
+    parent = directory.lstat(); source = directory / plan['database_name']; info = source.lstat()
+    if not stat.S_ISDIR(parent.st_mode) or not stat.S_ISREG(info.st_mode) or source.resolve() != source:
+        _fail('EXPORT_SOURCE_PATH')
+    for suffix in ('-wal', '-shm'):
+        path = Path(str(source) + suffix)
+        if path.exists() or path.is_symlink():
+            if path.resolve() != path or not stat.S_ISREG(path.lstat().st_mode):
+                _fail('EXPORT_SOURCE_PATH')
+    # No file content/hash, environment, schema repair or SQLite open here.
+    return {'directory_device': parent.st_dev, 'directory_inode': parent.st_ino,
+            'database_device': info.st_dev, 'database_inode': info.st_ino}
+
+
+def _identity(plan):
+    user = pwd.getpwnam(plan['exporter_user'])
+    if user.pw_uid == 0:
+        _fail('EXPORT_IDENTITY')
+    grp.getgrgid(READER_GID)
+    source_gid = grp.getgrnam(plan['source_group']).gr_gid if plan['source_group'] is not None else None
+    if source_gid == 0:
+        _fail('EXPORT_IDENTITY')
+    return {'exporter_uid': user.pw_uid, 'reader_gid': READER_GID, 'source_gid': source_gid}
+
+
+def _write_new(path, body, mode):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    try:
+        os.fchmod(fd,mode)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(body); stream.flush(); os.fsync(stream.fileno())
+        _fsync_directory(path.parent)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def _fsync_directory(path):
+    fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY)
+    try:os.fsync(fd)
+    finally:os.close(fd)
+
+
+def prepare(plan, *, scripts, pins, operation_id):
+    """Stage root-owned, exact pinned artifacts; no unit/engine/source mutation."""
+    content = artifacts(plan, scripts, pins)
+    if not isinstance(operation_id, str) or re.fullmatch('[0-9a-f]{32}', operation_id) is None:
+        _fail('EXPORT_OPERATION')
+    if os.geteuid() != ROOT_UID:
+        _fail('EXPORT_ROOT_REQUIRED')
+    plan = _plan(plan); identity = _identity(plan); source = _source_identity(plan)
+    _directory(STAGING, mode=0o700)
+    folder = STAGING / operation_id
+    folder.mkdir(mode=0o700)
+    _fsync_directory(STAGING)
+    for name, body in content.items():
+        _write_new(folder / name, body, 0o644)
+    receipt = {'version': 1, 'operation_id': operation_id, 'plan': plan,
+               'plan_sha256': _sha(_json(plan)), 'source_identity': source,
+               'runtime_identity': identity,
+               'manifest': {name: _sha(body) for name, body in sorted(content.items())},
+               'companion_sha256': _sha(content[COMPANION])}
+    _write_new(folder / 'prepared.json', _json(receipt), 0o600)
+    return receipt
+
+
+def _prepared(receipt):
+    if (not isinstance(receipt, dict) or set(receipt) != {'version', 'operation_id', 'plan', 'plan_sha256',
+            'source_identity', 'runtime_identity', 'manifest', 'companion_sha256'} or receipt['version'] != 1 or
+            not isinstance(receipt['operation_id'], str) or re.fullmatch('[0-9a-f]{32}', receipt['operation_id']) is None):
+        _fail('EXPORT_RECEIPT')
+    plan = _plan(receipt['plan'])
+    folder = STAGING / receipt['operation_id']; _directory(STAGING, mode=0o700); _directory(folder, mode=0o700)
+    if _regular(folder / 'prepared.json', mode=0o600) != _json(receipt):
+        _fail('EXPORT_RECEIPT')
+    names = set(SCRIPTS) | {COMPANION} | {f'naver-{kind}-export.{suffix}' for kind in KINDS for suffix in ('service', 'timer')}
+    if not isinstance(receipt['manifest'], dict) or set(receipt['manifest']) != names:
+        _fail('EXPORT_RECEIPT')
+    content = {name: _regular(folder / name, mode=0o644) for name in names}
+    if ({name: _sha(body) for name, body in content.items()} != receipt['manifest'] or
+            receipt['plan_sha256'] != _sha(_json(plan)) or
+            receipt['companion_sha256'] != _sha(render_companion(plan)) or
+            content[COMPANION] != render_companion(plan) or
+            any(content[f'naver-{kind}-export.service'] != _unit(plan, kind) or
+                content[f'naver-{kind}-export.timer'] != _timer(kind) for kind in KINDS)):
+        _fail('EXPORT_PREPARED_CHANGED')
+    return plan, folder, content
+
+
+def _command(command, args):
+    try:
+        return command(args)
+    except Exception:
+        _fail('EXPORT_COMMAND_FAILED')
+
+
+def _journal(folder, receipt, state):
+    # Replace only our exact journal. This is private recovery metadata, not data.
+    path = folder / 'installed.json'
+    if path.exists():
+        old = _regular(path, mode=0o600)
+        if json.loads(old).get('operation_id') != receipt['operation_id']:
+            _fail('EXPORT_JOURNAL')
+    temporary = folder / 'installed.pending'
+    _write_new(temporary, _json(state), 0o600)
+    os.replace(temporary, path)
+    _fsync_directory(folder)
+
+
+def install(receipt, *, command):
+    """Explicit root-only apply; source stays RO. Timers start only after both runs."""
+    if os.geteuid() != ROOT_UID:
+        _fail('EXPORT_ROOT_REQUIRED')
+    plan, folder, content = _prepared(receipt)
+    if (folder / 'installed.json').exists():
+        _fail('EXPORT_ALREADY_ATTEMPTED')
+    if _source_identity(plan) != receipt['source_identity']:
+        _fail('EXPORT_SOURCE_CHANGED')
+    identity = _identity(plan)
+    if identity != receipt['runtime_identity']:
+        _fail('EXPORT_IDENTITY_CHANGED')
+    uid = identity['exporter_uid']; _directory(UNITS); _directory(INSTALL)
+    script_dir = INSTALL / plan['ops_commit']
+    units = [name for name in content if name.endswith(('.service', '.timer'))]
+    if script_dir.exists() or any((UNITS / name).exists() or (UNITS / name).is_symlink() for name in units):
+        _fail('EXPORT_INSTALL_CONFLICT')
+    for output in OUTPUTS.values():
+        if output.exists() or output.is_symlink():
+            info = _directory(output, owner=uid, mode=0o750)
+            names = list(output.iterdir())
+            if info.st_gid != READER_GID or any(path.name != 'bundle.json' for path in names):
+                _fail('EXPORT_OUTPUT_CONFLICT')
+            for path in names:
+                _regular(path, maximum=MAX_BUNDLE, owner=uid, mode=0o640,group=READER_GID)
+    state = {'version': 1, 'operation_id': receipt['operation_id'], 'state': 'installing',
+             'created_files': [], 'created_directories': [], 'timers_enabled': False,
+             'engine_verified': False}
+    _journal(folder, receipt, state)
+    try:
+        state['created_directories'].append(str(script_dir)); _journal(folder, receipt, state)
+        script_dir.mkdir(mode=0o755);os.chmod(script_dir,0o755);_fsync_directory(INSTALL)
+        for name in SCRIPTS:
+            path = script_dir / name
+            state['created_files'].append(str(path)); _journal(folder, receipt, state)
+            _write_new(path, content[name], 0o644)
+        for output in OUTPUTS.values():
+            if not output.exists():
+                state['created_directories'].append(str(output)); _journal(folder, receipt, state)
+                output.mkdir(mode=0o750); os.chown(output, uid, READER_GID);os.chmod(output,0o750);_fsync_directory(output.parent)
+        for name in units:
+            path = UNITS / name
+            state['created_files'].append(str(path)); _journal(folder, receipt, state)
+            _write_new(path, content[name], 0o644)
+        _command(command, ['systemd-analyze', 'verify', *[str(UNITS / name) for name in sorted(units)]])
+        _command(command, ['systemctl', 'daemon-reload'])
+        for kind in KINDS:
+            _command(command, ['systemctl', 'start', f'naver-{kind}-export.service'])
+        verified = verify(receipt, command=command, require_timers=False)
+        for kind in KINDS:
+            _command(command, ['systemctl', 'enable', '--now', f'naver-{kind}-export.timer'])
+        state.update(state='installed', timers_enabled=True, sources=verified['sources'])
+        _journal(folder, receipt, state)
+        return {**verified, 'state': 'installed', 'timers_enabled': True}
+    except BaseException:
+        # Keep journal and exact created paths for explicit paired release rollback.
+        state['state'] = 'failed'; _journal(folder, receipt, state)
+        raise
+
+
+def verify(receipt, *, command, require_timers=True, now=None):
+    plan, folder, content = _prepared(receipt)
+    if _source_identity(plan) != receipt['source_identity'] or _identity(plan) != receipt['runtime_identity']:
+        _fail('EXPORT_SOURCE_CHANGED')
+    for name, body in content.items():
+        if name == COMPANION:
+            continue
+        path = INSTALL / plan['ops_commit'] / name if name in SCRIPTS else UNITS / name
+        if _regular(path, mode=0o644) != body:
+            _fail('EXPORT_INSTALLED_CHANGED')
+    for kind in KINDS:
+        result = _command(command, ['systemctl', 'show', f'naver-{kind}-export.service',
+                                   '--property=Result', '--property=ExecMainStatus'])
+        if isinstance(result, bytes): result = result.decode('ascii')
+        if set(str(result).splitlines()) != {'Result=success', 'ExecMainStatus=0'}:
+            _fail('EXPORT_RUN_NOT_VERIFIED')
+        if require_timers:
+            _command(command, ['systemctl', 'is-enabled', f'naver-{kind}-export.timer'])
+            _command(command, ['systemctl', 'is-active', f'naver-{kind}-export.timer'])
+    # Pass user explicitly into summary; no ambient source/env lookup.
+    now = now or datetime.now(timezone.utc)
+    if not isinstance(now, datetime) or now.utcoffset() is None:
+        _fail('EXPORT_TIME')
+    sources = {kind: _bundle_summary_for_user(kind, now, plan['exporter_user']) for kind in KINDS}
+    return {'version': 1, 'operation_id': receipt['operation_id'], 'state': 'verified',
+            'sources': sources, 'timers_enabled': bool(require_timers),
+            'engine_verified': False, 'source_writes': False, 'network_calls': 0}
+
+
+def _bundle_summary_for_user(kind, now, user):
+    # Kept call-local: an installer may inspect two independent releases.
+    path = OUTPUTS[kind] / 'bundle.json'
+    uid=pwd.getpwnam(user).pw_uid
+    if _directory(OUTPUTS[kind],owner=uid,mode=0o750).st_gid!=READER_GID:
+        _fail('EXPORT_DIRECTORY_POLICY')
+    body = _regular(path, maximum=MAX_BUNDLE, owner=uid, mode=0o640,group=READER_GID)
+    try:
+        value = json.loads(body)
+        if (not isinstance(value, dict) or set(value) != {'schema_version', 'complete', 'exported_at', 'stores'} or
+                type(value['schema_version']) is not int or value['schema_version'] != 1 or
+                value['complete'] is not True or not isinstance(value['stores'], list) or len(value['stores']) > 10000):
+            _fail('EXPORT_BUNDLE_INVALID')
+        at = datetime.fromisoformat(value['exported_at'])
+        if at.utcoffset() is None or not -300 <= (now-at).total_seconds() <= 30*3600:
+            _fail('EXPORT_BUNDLE_STALE')
+        field = 'products' if kind == 'product' else 'cohorts'
+        if any(not isinstance(row, dict) or not isinstance(row.get(field), list) for row in value['stores']):
+            _fail('EXPORT_BUNDLE_INVALID')
+        return {'status': 'ok', 'stores': len(value['stores']),
+                field: sum(len(row[field]) for row in value['stores']),
+                'bytes': len(body), 'exported_at': at.isoformat(), 'sha256': _sha(body)}
+    except (ValueError, TypeError, KeyError, OverflowError):
+        _fail('EXPORT_BUNDLE_INVALID')
+
+
+def _rollback_state(receipt):
+    if os.geteuid() != ROOT_UID:
+        _fail('EXPORT_ROOT_REQUIRED')
+    plan, folder, content = _prepared(receipt)
+    state = json.loads(_regular(folder / 'installed.json', mode=0o600))
+    allowed = {str(INSTALL / plan['ops_commit'] / name): content[name] for name in SCRIPTS}
+    allowed.update({str(UNITS / name): body for name, body in content.items() if name.endswith(('.service', '.timer'))})
+    if (state.get('operation_id') != receipt['operation_id'] or not isinstance(state.get('created_files'), list) or
+            len(state['created_files']) != len(set(state['created_files'])) or any(path not in allowed for path in state['created_files'])):
+        _fail('EXPORT_JOURNAL')
+    # Never delete unknown drift. Complete this preflight before stopping anything.
+    for name in state['created_files']:
+        path = Path(name)
+        if path.exists() or path.is_symlink():
+            if _regular(path, mode=0o644) != allowed[name]:
+                _fail('EXPORT_ROLLBACK_DRIFT')
+    return plan, folder, state
+
+
+def validate_rollback(receipt):
+    """Read-only exact-artifact preflight; never stop services or remove files."""
+    _rollback_state(receipt)
+
+
+def rollback(receipt, *, command):
+    """Stop only these jobs and remove exact installed units/scripts; keep bundles."""
+    plan, folder, state = _rollback_state(receipt)
+    for kind in KINDS:
+        if str(UNITS / f'naver-{kind}-export.timer') in state['created_files'] and (UNITS / f'naver-{kind}-export.timer').exists():
+            _command(command, ['systemctl', 'disable', '--now', f'naver-{kind}-export.timer'])
+        if str(UNITS / f'naver-{kind}-export.service') in state['created_files'] and (UNITS / f'naver-{kind}-export.service').exists():
+            _command(command, ['systemctl', 'stop', f'naver-{kind}-export.service'])
+    for name in reversed(state['created_files']):
+        Path(name).unlink(missing_ok=True)
+    script_dir = INSTALL / plan['ops_commit']
+    if str(script_dir) in state.get('created_directories', ()) and script_dir.exists():
+        script_dir.rmdir()
+    if any(Path(name).parent == UNITS for name in state['created_files']):
+        _command(command, ['systemctl', 'daemon-reload'])
+    state['state'] = 'rolled_back'; state['timers_enabled'] = False
+    _journal(folder, receipt, state)
+    return {'version': 1, 'operation_id': receipt['operation_id'], 'state': 'rolled_back',
+            'source_untouched': True, 'export_bundles_preserved': True}
