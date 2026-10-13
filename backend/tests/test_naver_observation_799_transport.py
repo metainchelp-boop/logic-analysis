@@ -221,6 +221,8 @@ class PinnedSourceTests(unittest.TestCase):
         prior=workflow.replace(section(workflow,'setup-stale-diagnostics'),'').replace(', preview-setup-stale-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),DEBUG_OLD_SHA)
         native=(OPS/'.github/workflows/naver-product-export-tests.yml').read_text()
+        self.assertEqual(native.count('    timeout-minutes: 5\n'),1)
+        native=native.replace('    timeout-minutes: 5\n','    timeout-minutes: 3\n',1)
         p16_only_start=native.index('      - name: Claude HTTP 오류 진단 코드 패치·be97 복구 경계 검사\n')
         p16_only_end=native.index('      - name:',p16_only_start+1)
         native=native[:p16_only_start]+native[p16_only_end:]

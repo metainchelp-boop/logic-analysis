@@ -233,6 +233,8 @@ class PinnedSourceTests(unittest.TestCase):
         prior=prior.replace(section(prior,'completion-source-diagnostics'),'').replace(', preview-completion-source-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'cfe595e18bbb83cb2d4feccf2f12bf91169cd360f14a21d60b8cabec1726337e')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        self.assertEqual(native.count('    timeout-minutes: 5\n'),1)
+        native=native.replace('    timeout-minutes: 5\n','    timeout-minutes: 3\n',1)
         p16_only_start=native.index('      - name: Claude HTTP 오류 진단 코드 패치·be97 복구 경계 검사\n')
         p16_only_end=native.index('      - name:',p16_only_start+1)
         native=native[:p16_only_start]+native[p16_only_end:]
