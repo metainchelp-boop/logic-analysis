@@ -140,7 +140,15 @@ class ScopeTests(unittest.TestCase):
     def test_lifecycle_inverse_and_unreferenced_removals_preserve_all_active_guards(self):
         before=(OPS_TOOLS/'naver_report_defect_patch.py').read_bytes();after=(TOOLS/'naver_report_generation_patch.py').read_bytes()
         def functions(body):return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(body).body if isinstance(n,ast.FunctionDef)}
-        old,new=functions(before),functions(after)
+        # Only the authorized receipts directory policy bug differs from the historical lifecycle.
+        historical=ast.parse(before)
+        rollback=next(node for node in historical.body if isinstance(node,ast.FunctionDef) and node.name=='rollback')
+        expected=ast.parse("for parent in (lifecycle.UNIT_DIR, lifecycle.TMPFILES.parent, release.ROOT / 'receipts'):\n release.trusted_dir(parent)\n").body[0]
+        matches=[(index,node)for index,node in enumerate(rollback.body)if ast.dump(node,include_attributes=False)==ast.dump(expected,include_attributes=False)]
+        self.assertEqual(len(matches),1)
+        index,_=matches[0]
+        rollback.body[index:index+1]=ast.parse("for parent in (lifecycle.UNIT_DIR, lifecycle.TMPFILES.parent):\n release.trusted_dir(parent)\nrelease.trusted_dir(release.ROOT / 'receipts', mode=0o700)\n").body
+        old,new=functions(ast.unparse(historical)),functions(after)
         removed=set()
         self.assertEqual(set(old)-set(new),removed)
         for name in ('prepare','apply','rollback','compatible_inverse_source','compatible_code_scope','current_state','target_override','verify_running','target_engine_snapshot','runtime_flags','container_environment_flags','container_runtime_flags','stopped_writer','safe_source_path','preserve_approved_config'):
@@ -345,5 +353,88 @@ class LifecycleTest(H.LifecycleTests):
 class RuntimeFlagTest(H.ActualFlagHelpersTests):
     def setUp(self):
         binding=patch.object(H,'pinned',pinned);binding.start();self.addCleanup(binding.stop)
+
+
+
+class RollbackDirectoryPolicyTests(unittest.TestCase):
+    """Actual rollback body and trusted_dir policy, synthetic stat-only ownership.
+
+    Existing lifecycle adapters are synthetic; no host, Docker, API or operating
+    database is opened. Directory projections use lstat metadata and never chmod.
+    """
+    def fixture(self):
+        import stat
+        from types import SimpleNamespace
+        p,c=pinned()
+        with patch.object(H,'pinned',return_value=(p,c)):
+            f=H.LifecycleFixture(self)
+        f.apply()
+        f.commands.clear()
+        release_source=(OPS_TOOLS/'naver_preview_release.py').read_text()
+        method=next(node for node in ast.parse(release_source).body if isinstance(node,ast.FunctionDef)and node.name=='trusted_dir')
+        policies={f.unitdir:dict(kind=stat.S_IFDIR,uid=0,gid=0,mode=0o755),
+                  f.tmp.parent:dict(kind=stat.S_IFDIR,uid=0,gid=0,mode=0o755),
+                  f.r.ROOT/'receipts':dict(kind=stat.S_IFDIR,uid=0,gid=0,mode=0o700)}
+        observed=[]
+        class ProjectedPath:
+            def __init__(self,path):self.path=path
+            def lstat(self):
+                value=policies[self.path];observed.append(self.path)
+                return SimpleNamespace(st_mode=value['kind']|value['mode'],st_uid=value['uid'],st_gid=value['gid'])
+        scope={'Path':ProjectedPath,'stat':stat,'os':Mock(),'CREATED':[]}
+        exec(compile(ast.Module(body=[method],type_ignores=[]),'<exact-public-trusted-dir>','exec'),scope)
+        f.r.trusted_dir=scope['trusted_dir']
+        return f,policies,observed,scope
+
+    def rollback(self,f):
+        return f.p.rollback(dict(release=package(f.p),apply_operation_id='a'*32,operation_id='b'*32),f.h,f.r,f.l,f.u)
+
+    def test_normal_private_receipts_0700_and_system_parents_0755_complete_exact_rollback(self):
+        f,policies,observed,scope=self.fixture()
+        result=self.rollback(f)
+        self.assertTrue(result['ok']);self.assertEqual(result['operation'],'code-only-rollback')
+        self.assertEqual(result['source_commit'],f.p.OLD_COMMIT);self.assertEqual(result['previous_commit'],f.p.TARGET_COMMIT)
+        self.assertEqual(result['apply_operation_id'],'a'*32);self.assertEqual(result['operation_id'],'b'*32)
+        self.assertFalse(result['database_opened_by_controller']);self.assertFalse(result['execution_enabled'])
+        self.assertEqual(result['database_policy'],'preserve-in-place')
+        self.assertEqual(set(f.version.values()),{f.p.OLD_COMMIT})
+        self.assertEqual(observed,[f.unitdir,f.tmp.parent,f.r.ROOT/'receipts'])
+        scope['os'].assert_not_called();self.assertFalse(scope['os'].mock_calls)
+        f.assert_preserved()
+
+    def test_private_receipts_wrong_owner_or_group_never_stops_services(self):
+        for field in ('uid','gid'):
+            with self.subTest(field=field):
+                f,policies,observed,scope=self.fixture();policies[f.r.ROOT/'receipts'][field]=1000
+                with self.assertRaisesRegex(ValueError,'^DIRECTORY_POLICY$'):self.rollback(f)
+                self.assertEqual(f.p.STAGE,'rollback_preflight');self.assertEqual(f.commands,[])
+                self.assertFalse(any(path.name.startswith('code-post-rollback-')for path in (f.r.ROOT/'receipts').iterdir()))
+                self.assertFalse(scope['os'].mock_calls);f.assert_preserved()
+
+    def test_private_receipts_0755_is_rejected_before_stop_or_attempt_write(self):
+        f,policies,observed,scope=self.fixture();policies[f.r.ROOT/'receipts']['mode']=0o755
+        with self.assertRaisesRegex(ValueError,'^DIRECTORY_POLICY$'):self.rollback(f)
+        self.assertEqual(f.p.STAGE,'rollback_preflight');self.assertEqual(f.commands,[])
+        self.assertFalse(any(path.name.startswith('code-post-rollback-')for path in (f.r.ROOT/'receipts').iterdir()))
+        self.assertFalse(scope['os'].mock_calls);f.assert_preserved()
+
+    def test_private_receipts_symlink_is_rejected_before_stop_or_attempt_write(self):
+        import stat
+        f,policies,observed,scope=self.fixture();policies[f.r.ROOT/'receipts']['kind']=stat.S_IFLNK
+        with self.assertRaisesRegex(ValueError,'^DIRECTORY_POLICY$'):self.rollback(f)
+        self.assertEqual(f.p.STAGE,'rollback_preflight');self.assertEqual(f.commands,[])
+        self.assertFalse(any(path.name.startswith('code-post-rollback-')for path in (f.r.ROOT/'receipts').iterdir()))
+        self.assertFalse(scope['os'].mock_calls);f.assert_preserved()
+
+    def test_system_parent_policy_remains_exact_0755_root_root_no_new_override(self):
+        for which in ('unitdir','tmp_parent'):
+            for field,value in (('mode',0o700),('uid',1000),('gid',1000)):
+                with self.subTest(which=which,field=field):
+                    f,policies,observed,scope=self.fixture()
+                    path=f.unitdir if which=='unitdir' else f.tmp.parent
+                    policies[path][field]=value
+                    with self.assertRaisesRegex(ValueError,'^DIRECTORY_POLICY$'):self.rollback(f)
+                    self.assertEqual(f.commands,[]);self.assertEqual(f.p.STAGE,'rollback_preflight')
+                    self.assertFalse(scope['os'].mock_calls);f.assert_preserved()
 
 if __name__=='__main__':unittest.main()

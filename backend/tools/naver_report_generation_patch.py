@@ -1284,8 +1284,9 @@ def rollback(package, host, release, lifecycle, upgrade):
     old_files = lifecycle.unit_files(old_path, pwd.getpwnam('www-data').pw_gid, release)
     if files[lifecycle.TMPFILES] != old_files[lifecycle.TMPFILES]:
         raise ValueError('TMPFILES_CHANGED')
-    for parent in (lifecycle.UNIT_DIR, lifecycle.TMPFILES.parent, release.ROOT / 'receipts'):
+    for parent in (lifecycle.UNIT_DIR, lifecycle.TMPFILES.parent):
         release.trusted_dir(parent)
+    release.trusted_dir(release.ROOT / 'receipts', mode=0o700)
     for filename, body in files.items():
         if upgrade.read_file(filename, mode=420, maximum=32768) != body:
             raise ValueError('CODE_ROLLBACK_UNIT')
