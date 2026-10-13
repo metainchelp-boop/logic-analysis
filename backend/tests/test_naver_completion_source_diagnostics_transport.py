@@ -141,6 +141,11 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
+        # Remove only independent P13 registration.
+        workflow=workflow.replace(section(workflow,'report-defect-patch'),'')
+        p13_only_options=', preview-report-defect-patch-prepare, preview-report-defect-patch-apply, preview-report-defect-patch-rollback'
+        self.assertEqual(workflow.count(p13_only_options),1)
+        workflow=workflow.replace(p13_only_options,'')
         # Remove only independent P12 registration.
         workflow=workflow.replace(section(workflow,'detail-ai-patch'),'')
         p12_only_options=', preview-detail-ai-patch-prepare, preview-detail-ai-patch-apply, preview-detail-ai-patch-rollback'
@@ -213,6 +218,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=prior.replace(section(prior,'completion-source-diagnostics'),'').replace(', preview-completion-source-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'cfe595e18bbb83cb2d4feccf2f12bf91169cd360f14a21d60b8cabec1726337e')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        p13_only_start=native.index('      - name: 보고서 결함 수정 코드 패치·38 복구 경계 검사\n')
+        p13_only_end=native.index('      - name:',p13_only_start+1)
+        native=native[:p13_only_start]+native[p13_only_end:]
         p12_only_start=native.index('      - name: 상세점검·AI 연결 코드 패치·fd 복구 경계 검사\n')
         p12_only_end=native.index('      - name:',p12_only_start+1)
         native=native[:p12_only_start]+native[p12_only_end:]
