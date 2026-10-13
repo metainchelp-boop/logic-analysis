@@ -141,6 +141,11 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
+        # Remove only independent P17 registration.
+        workflow=workflow.replace(section(workflow,'report-context-reuse-patch'),'')
+        p17_only_options=', preview-report-context-reuse-patch-prepare, preview-report-context-reuse-patch-apply, preview-report-context-reuse-patch-rollback'
+        self.assertEqual(workflow.count(p17_only_options),1)
+        workflow=workflow.replace(p17_only_options,'')
         # Remove only independent P16 registration.
         workflow=workflow.replace(section(workflow,'provider-diagnostics-patch'),'')
         p16_only_options=', preview-provider-diagnostics-patch-prepare, preview-provider-diagnostics-patch-apply, preview-provider-diagnostics-patch-rollback'
@@ -233,6 +238,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=prior.replace(section(prior,'completion-source-diagnostics'),'').replace(', preview-completion-source-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'cfe595e18bbb83cb2d4feccf2f12bf91169cd360f14a21d60b8cabec1726337e')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        p17_only_start=native.index('      - name: 보고서 원천 재사용 코드 패치·8876 복구 경계 검사\n')
+        p17_only_end=native.index('      - name:',p17_only_start+1)
+        native=native[:p17_only_start]+native[p17_only_end:]
         self.assertEqual(native.count('    timeout-minutes: 5\n'),1)
         native=native.replace('    timeout-minutes: 5\n','    timeout-minutes: 3\n',1)
         p16_only_start=native.index('      - name: Claude HTTP 오류 진단 코드 패치·be97 복구 경계 검사\n')
