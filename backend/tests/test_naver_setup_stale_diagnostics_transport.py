@@ -143,6 +143,11 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
+        # Remove only independent P15 registration.
+        workflow=workflow.replace(section(workflow,'report-generation-patch'),'')
+        p15_only_options=', preview-report-generation-patch-prepare, preview-report-generation-patch-apply, preview-report-generation-patch-rollback'
+        self.assertEqual(workflow.count(p15_only_options),1)
+        workflow=workflow.replace(p15_only_options,'')
         # Remove only independent P14 registration.
         workflow=workflow.replace(section(workflow,'report-writer-recovery-patch'),'')
         p14_only_options=', preview-report-writer-recovery-patch-prepare, preview-report-writer-recovery-patch-apply, preview-report-writer-recovery-patch-rollback'
@@ -209,6 +214,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=workflow.replace(section(workflow,'setup-stale-diagnostics'),'').replace(', preview-setup-stale-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),DEBUG_OLD_SHA)
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        p15_only_start=native.index('      - name: 보고서 생성 형식 코드 패치·be97 복구 경계 검사\n')
+        p15_only_end=native.index('      - name:',p15_only_start+1)
+        native=native[:p15_only_start]+native[p15_only_end:]
         p14_only_start=native.index('      - name: 보고서 종료 기록 복구 코드 패치·7d9 복구 경계 검사\n')
         p14_only_end=native.index('      - name:',p14_only_start+1)
         native=native[:p14_only_start]+native[p14_only_end:]
