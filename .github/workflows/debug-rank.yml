@@ -669,7 +669,8 @@ jobs:
                 p = (p or "-").split("?")[0]
                 out = []
                 for s in p.split("/")[:5]:
-                    if s and ("%" in s or not re.fullmatch(r"[A-Za-z0-9_.\-]+", s)):
+                    if s and ("%" in s or not re.fullmatch(r"[A-Za-z0-9_.\-]+", s)
+                          or (len(s) >= 12 and re.search(r"\d", s) and re.search(r"[A-Za-z]", s))):
                         out.append("*")
                     else:
                         out.append(s)
@@ -781,6 +782,43 @@ jobs:
                 dk = d + KST
                 near = [p for t, p in drops if abs((t - dk).total_seconds()) <= 20]
                 print("     nginx 가 끊김으로 기록한 요청: " + (", ".join(near) if near else "없음(±20초)"))
+            # ── 충돌(네이티브 크래시)인가, 멈춤(5초 무응답 → 강제 종료)인가 ──
+            # main.py 가 faulthandler.enable() 이라 진짜 충돌이면 「Fatal Python error」와 스택이 남는다.
+            print("== 충돌 흔적(앱 기록 · 커널 기록) ==")
+            fatal = [(dt, msg) for dt, msg in events if "Fatal Python error" in msg]
+            print("  앱 기록의 Fatal Python error 줄: " + str(len(fatal)))
+            for dt, msg in fatal[:10]:
+                print("    " + kst(dt) + " " + re.sub(r"[^0-9A-Za-z :_()-]", "", msg)[:60])
+            locs = collections.Counter()
+            for dt, msg in events:
+                mm = re.search(r'File "([^"]+)", line (\d+) in (\w+)', msg)
+                if mm and any(abs((dt - f).total_seconds()) < 3 for f, _ in fatal):
+                    locs[mm.group(1).split("/")[-1] + ":" + mm.group(2) + " " + mm.group(3)] += 1
+            if locs:
+                print("  충돌 순간 스택(파일:줄 함수):", locs.most_common(8))
+            try:
+                kr = subprocess.run(SUDO + "dmesg -T", shell=True, capture_output=True, text=True,
+                                    errors="replace", timeout=30)
+                kern_ok = kr.returncode == 0 and bool(kr.stdout.strip())
+            except Exception:
+                kern_ok = False
+            if not kern_ok:
+                print("  커널 기록: 못 읽음(권한 또는 비어 있음) — 0 으로 읽지 말 것")
+            else:
+                kl = [k for k in kr.stdout.splitlines()
+                      if re.search(r"segfault|traps:|general protection|killed process|out of memory", k, re.I)]
+                print("  커널 기록 전체 " + str(len(kr.stdout.splitlines())) + "줄 중 충돌·강제종료·메모리 부족 줄: " + str(len(kl)))
+                for k in kl[-10:]:
+                    print("    " + re.sub(r"\d+\.\d+\.\d+\.\d+", "*", k)[:150])
+            other_lines = collections.Counter()
+            for d in deaths:
+                lo = d - datetime.timedelta(seconds=60)
+                for dt, msg in events:
+                    if lo <= dt <= d and not rx_acc.search(msg) and not rx_lg.match(msg) and "리뷰추출" not in msg:
+                        if "died" in msg or "Started server" in msg or "startup complete" in msg:
+                            continue
+                        other_lines[re.sub(r"[^A-Za-z :_()-]", "", msg)[:40].strip()] += 1
+            print("  재시작 직전 「기타」 줄의 모양(영문만 · 앞 40자):", other_lines.most_common(8))
             PY
 
       - name: 🔗 네이버 관제 접점 (naver_link=on · 읽기 전용)
