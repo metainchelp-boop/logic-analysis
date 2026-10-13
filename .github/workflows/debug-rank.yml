@@ -540,6 +540,56 @@ jobs:
             free -m | sed -n 1,3p
             cat /proc/pressure/memory 2>/dev/null | sed 's/^/  메모리 압박 /' || true
             cat /proc/pressure/cpu 2>/dev/null | sed 's/^/  CPU 압박 /' || true
+            echo "== CPU 수·부하·IO 압박 =="
+            echo "  CPU $(nproc)개 · $(uptime | sed 's/.*load average/부하/')"
+            cat /proc/pressure/io 2>/dev/null | sed 's/^/  IO 압박 /' || true
+            echo "== vmstat 1초×5 (si/so=스왑 입출력 · wa=IO 대기) =="
+            vmstat 1 5 || true
+            echo "== CPU 많이 쓰는 프로세스(이름만) =="
+            ps -eo pcpu,pmem,etime,comm --sort=-pcpu | head -12
+            echo "== nginx 오류 기록 — 우리 앱(5050) 연결 실패 · 10분 단위(어제·오늘 · 주소 앞부분만 · IP 미출력) =="
+            $S2 sh -c "cat /var/log/nginx/*error*.log.1 /var/log/nginx/*error*.log 2>/dev/null" | python3 -c '
+            import sys, re, collections
+            rx = re.compile(r"^(\d{4})/(\d\d)/(\d\d) (\d\d):(\d)\d:\d\d \[\w+\] \d+#\d+: (?:\*\d+ )?(.*)")
+            rup = re.compile(r"upstream: \"[a-z]+://[^:/\"]+:(\d+)")
+            rrq = re.compile(r"request: \"\S+ (\S+)")
+            c = collections.Counter(); why = collections.Counter(); p = collections.Counter(); ports = collections.Counter()
+            for ln in sys.stdin:
+                m = rx.match(ln)
+                if not m: continue
+                u = rup.search(ln)
+                port = u.group(1) if u else ""
+                ports[port or "-"] += 1
+                if port != "5050": continue
+                d = m.group(2) + "/" + m.group(3)
+                if d not in ("10/12", "10/13"): continue
+                msg = m.group(6)
+                if "buffered to a temporary file" in msg: continue
+                k = ("끊김" if "prematurely" in msg else "거부" if "refused" in msg else "시간초과" if "timed out" in msg else "리셋" if "reset" in msg else "기타")
+                c[d + " " + m.group(4) + ":" + m.group(5) + "0 " + k] += 1
+                why[k] += 1
+                q = rrq.search(ln)
+                path = (q.group(1) if q else "-").split("?")[0]
+                p["/".join(path.split("/")[:4])] += 1
+            print("  업스트림 포트별 오류 줄:", dict(ports.most_common(8)))
+            for k in sorted(c): print("  ", k, c[k])
+            print("  5050 사유별:", dict(why))
+            print("  5050 주소 앞부분별:", p.most_common(12))
+            ' || echo "  (못 쟀다)"
+            echo "== docker 이벤트 13시 전후(어제·오늘 · KST · 종류·동작·이름만) =="
+            for d in 2026-10-12 2026-10-13; do
+              echo "  -- $d 12:40~13:20 KST"
+              timeout 15 docker events --since "${d}T03:40:00Z" --until "${d}T04:20:00Z" --format '{{.Time}} {{.Type}} {{.Action}} {{index .Actor.Attributes "name"}}' 2>/dev/null \
+                | python3 -c 'import sys,datetime
+            for ln in sys.stdin:
+                t, rest = ln.split(" ", 1)
+                print("   ", (datetime.datetime.utcfromtimestamp(int(t)) + datetime.timedelta(hours=9)).strftime("%H:%M:%S"), rest.rstrip()[:90])' | head -40 || echo "    (못 쟀다)"
+            done
+            echo "== 이 서버의 자체 러너가 일한 시각(작업 기록 파일 이름만 · UTC) =="
+            $S2 timeout 25 find / -xdev -maxdepth 5 -type d -name _diag -path '*unner*' 2>/dev/null | while read -r dd; do
+              echo "  [러너 기록 폴더 $(basename "$(dirname "$dd")")]"
+              $S2 ls "$dd" 2>/dev/null | grep -E '^Worker_2026101[23]' | sed 's/^/    /' | tail -30
+            done
             echo "== DB(읽기 전용): 최근 8일 진짜 차단 · 기계 신호 =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3, re
