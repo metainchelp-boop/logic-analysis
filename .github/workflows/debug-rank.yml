@@ -46,6 +46,10 @@ on:
         description: '기계별 소화량·완료율(3대 확장 판단용) — off(기본) / on. 최근 4일 기계별 시도·완료·멈춘 이유·읽은 페이지(숫자만).'
         required: false
         default: 'off'
+      cleanup_validation:
+        description: "9/21 코덱스 수집기 검증 사본 폴더 1개 삭제(대표 승인 2026-10-13 「지워」) — 정확히 delete-20260921-op1 을 넣을 때만 실행"
+        required: false
+        default: ""
       server_health:
         description: "서버 디스크·메모리·워커 재기동·백업·진짜 차단·2번 기계 신호 (on 이면 실행 · 읽기 전용 · IP·키워드 미출력)"
         required: false
@@ -432,6 +436,39 @@ jobs:
                 nav = o.get("nav") or {}
                 print("   %s  기계%s  쪽%s  %-8s %-14s %s" % (str(at)[11:19], hb.get(str(o.get("workerId") or ""), "?"), o.get("pagesRead"), str(nav.get("how", ""))[:8], (reason or "")[:14], kind))
             PY
+      - name: 🧹 9/21 검증 사본 폴더 삭제 (cleanup_validation=delete-20260921-op1 · 대표 승인 10/13)
+        if: ${{ github.event.inputs.cleanup_validation == 'delete-20260921-op1' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 180s
+          script: |
+            # 대표 승인(2026-10-13 「지워」) — 이 폴더 하나만 지운다. 다른 파일·백업·이미지는 건드리지 않는다.
+            # 폴더 출처 = diag/codex-collector-private-20260921 (2026-09-21 수집기 검증용 DB 사본 2개).
+            T=/app/data/backups/collector-validation-20260921-op1
+            echo "== 지우기 전 디스크 =="
+            df -h / | tail -1
+            echo "== 지우기 전 백업 폴더 =="
+            docker exec logic-analysis sh -c 'ls -la --time-style=+%m-%d_%H:%M /app/data/backups/'
+            echo "== 대상 확인(폴더·링크 아님) =="
+            if ! docker exec logic-analysis sh -c "[ -d '$T' ] && [ ! -L '$T' ]"; then
+              echo "  대상이 없거나 링크다 — 아무것도 지우지 않고 끝낸다"; exit 0
+            fi
+            docker exec logic-analysis sh -c "ls -la --time-style=+%m-%d_%H:%M '$T'; du -sh '$T'"
+            echo "== 남겨 둘 복구용 백업 확인 =="
+            N=$(docker exec logic-analysis sh -c 'ls /app/data/backups/logic_analysis_backup_*.db.gz 2>/dev/null | wc -l' | tr -dc '0-9')
+            echo "  압축 백업 ${N}개(그대로 둔다)"
+            if [ "${N:-0}" -lt 1 ]; then echo "  복구용 백업이 없다 — 지우지 않고 끝낸다"; exit 0; fi
+            echo "== 삭제 =="
+            docker exec logic-analysis rm -rf -- /app/data/backups/collector-validation-20260921-op1 && echo "  rm 종료 0"
+            echo "== 지운 뒤 확인 =="
+            docker exec logic-analysis sh -c "[ -e '$T' ] && echo '  ⚠️ 아직 남아 있다' || echo '  ✅ 폴더 없음'"
+            docker exec logic-analysis sh -c 'ls -la --time-style=+%m-%d_%H:%M /app/data/backups/'
+            df -h / | tail -1
+
       - name: 🩺 서버 건강 — 디스크·메모리·워커·백업 (server_health=on · 읽기 전용)
         if: ${{ github.event.inputs.server_health == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
