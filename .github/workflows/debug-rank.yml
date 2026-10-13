@@ -54,6 +54,10 @@ on:
         description: "서버 디스크·메모리·워커 재기동·백업·진짜 차단·2번 기계 신호 (on 이면 실행 · 읽기 전용 · IP·키워드 미출력)"
         required: false
         default: ""
+      death_window:
+        description: "워커 재시작 직전 60초에 처리하던 요청 종류·상세분석 단계 (on 이면 실행 · 읽기 전용 · 주소 앞부분·상태·건수만 · IP·키워드·업체명 미출력)"
+        required: false
+        default: ""
       naver_link:
         description: "네이버 관제와 우리 수집·검색량 오류의 접점 (on 이면 실행 · 읽기 전용 · IP·키워드 미출력)"
         required: false
@@ -622,6 +626,161 @@ jobs:
                     print("  신호", d)
             except Exception as e:
                 print("  기계 신호 조회 실패(못 쟀다):", type(e).__name__)
+            PY
+
+      - name: 🧯 워커 재시작 직전 (death_window=on · 읽기 전용)
+        if: ${{ github.event.inputs.death_window == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 180s
+          script: |
+            # ⚠️ 읽기 전용 — 지우기·정리·재시작 없음. 공개 저장소라 IP·키워드·업체명은 찍지 않는다
+            #    (요청 주소는 앞 4마디까지 · 영문·숫자 아닌 마디는 * · 그 밖의 앱 줄은 종류별 건수만).
+            # uvicorn(0.30.6) 부모는 0.5초마다 워커에 ping 을 보내 5초 안에 pong 이 없으면 강제 종료하고
+            # 「Child process [pid] died」를 남긴다 — 그 직전 60초에 무엇이 돌았는지를 본다.
+            python3 - <<'PY'
+            import subprocess, re, datetime, collections
+
+            KST = datetime.timedelta(hours=9)
+            SINCE = "2026-10-12T00:00:00Z"
+
+
+            def sh(cmd, timeout=120):
+                try:
+                    r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                                       errors="replace", timeout=timeout)
+                    return r.stdout
+                except Exception as e:
+                    print("  (못 읽음: " + type(e).__name__ + ")")
+                    return None
+
+
+            SUDO = "sudo -n " if subprocess.run("sudo -n true", shell=True, capture_output=True).returncode == 0 else ""
+            app = sh("docker logs --timestamps --since " + SINCE + " logic-analysis 2>&1")
+            ngx_err = sh(SUDO + "sh -c 'cat /var/log/nginx/*error*.log.1 /var/log/nginx/*error*.log 2>/dev/null'")
+            ngx_acc = sh(SUDO + "sh -c 'cat /var/log/nginx/*access*.log.1 /var/log/nginx/*access*.log 2>/dev/null'")
+
+
+            def safe_path(p):
+                p = (p or "-").split("?")[0]
+                out = []
+                for s in p.split("/")[:5]:
+                    if s and ("%" in s or not re.fullmatch(r"[A-Za-z0-9_.\-]+", s)):
+                        out.append("*")
+                    else:
+                        out.append(s)
+                return "/".join(out)
+
+
+            def kst(dt):
+                return (dt + KST).strftime("%m/%d %H:%M:%S")
+
+
+            # ── 앱 기록 ──
+            rx_ts = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z (.*)$")
+            rx_acc = re.compile(r"\"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) (\S+) HTTP/[\d.]+\" (\d{3})")
+            rx_lg = re.compile(r"^(INFO|WARNING|ERROR|DEBUG|CRITICAL):([\w.]+):")
+            events = []
+            if app is None:
+                print("  앱 기록을 읽지 못했다 — 아래 앱 기록 칸은 전부 「못 쟀다」")
+            else:
+                for ln in app.splitlines():
+                    m = rx_ts.match(ln)
+                    if not m:
+                        continue
+                    dt = datetime.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S")
+                    frac = (m.group(2) or "0")[:6].ljust(6, "0")
+                    events.append((dt.replace(microsecond=int(frac)), m.group(3)))
+            deaths = [dt for dt, msg in events if re.search(r"Child process \[\d+\] died", msg)]
+            acc_total = sum(1 for _, msg in events if rx_acc.search(msg))
+            print("== 앱 기록 개요(" + SINCE[:10] + " 이후) ==")
+            print("  줄 " + str(len(events)) + " · 앱이 남긴 요청 완료 줄 " + str(acc_total)
+                  + (" (0 이면 요청 기록이 꺼져 있어 직전 요청을 앱 쪽에서는 못 본다)" if acc_total == 0 else ""))
+            rv = [msg for _, msg in events if "리뷰추출" in msg]
+            print("  상세분석 리뷰추출 줄 " + str(len(rv)) + " · 그중 「평점 후보」(마지막 무거운 단계까지 끝남) "
+                  + str(sum(1 for m in rv if "평점 후보" in m)))
+            print("  워커 재시작 " + str(len(deaths)) + "회")
+
+            # ── nginx: 우리 앱(5050) 끊김 · 상세페이지 분석 요청 상태 ──
+            rx_err = re.compile(r"^(\d{4})/(\d\d)/(\d\d) (\d\d):(\d\d):(\d\d) \[\w+\] \d+#\d+: (?:\*\d+ )?(.*)")
+            rx_up = re.compile(r"upstream: \"[a-z]+://[^:/\"]+:(\d+)")
+            rx_rq = re.compile(r"request: \"\S+ (\S+)")
+            drops = []  # (dt_kst_naive, path)
+            if ngx_err is None:
+                print("  nginx 오류 기록을 읽지 못했다")
+            else:
+                for ln in ngx_err.splitlines():
+                    m = rx_err.match(ln)
+                    if not m:
+                        continue
+                    u = rx_up.search(ln)
+                    if not u or u.group(1) != "5050":
+                        continue
+                    if "prematurely" not in m.group(7):
+                        continue
+                    q = rx_rq.search(ln)
+                    dt = datetime.datetime(*[int(m.group(i)) for i in range(1, 7)])
+                    drops.append((dt, safe_path(q.group(1) if q else "-")))
+            rx_ngx = re.compile(r"\[(\d\d)/(\w{3})/(\d{4}):(\d\d):(\d\d):(\d\d) [^\]]*\] \"(\S+) (\S+)[^\"]*\" (\d{3}) ")
+            MON = {m: i for i, m in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
+            dp = collections.Counter()
+            dp_hour = collections.Counter()
+            if ngx_acc is None:
+                print("  nginx 접속 기록을 읽지 못했다")
+            else:
+                for ln in ngx_acc.splitlines():
+                    m = rx_ngx.search(ln)
+                    if not m:
+                        continue
+                    if not m.group(8).split("?")[0].startswith("/api/seo/detail-page"):
+                        continue
+                    day = m.group(2) + " " + m.group(1)
+                    if m.group(1) not in ("12", "13") or m.group(2) != "Oct":
+                        continue
+                    dp[day + " " + m.group(9)] += 1
+                    if m.group(9).startswith("5"):
+                        dp_hour[day + " " + m.group(4) + "시 " + m.group(9)] += 1
+            print("== 상세페이지 분석 요청(nginx · 10/12~10/13 · 날짜·상태별) ==")
+            for k in sorted(dp):
+                print("  " + k + " " + str(dp[k]))
+            if dp_hour:
+                print("  실패한 것의 시각:", ", ".join(k + "×" + str(v) for k, v in sorted(dp_hour.items())))
+
+            # ── 재시작마다 직전 60초 ──
+            print("== 재시작 직전 60초(앱 기록은 요청 주소 앞부분·상태·건수만 · nginx 끊김은 ±20초) ==")
+            for d in deaths:
+                lo = d - datetime.timedelta(seconds=60)
+                win = [(dt, msg) for dt, msg in events if lo <= dt <= d]
+                print("-- 재시작 " + kst(d) + " KST")
+                shown = 0
+                other = collections.Counter()
+                for dt, msg in win:
+                    a = rx_acc.search(msg)
+                    if a:
+                        if shown < 12:
+                            print("     " + kst(dt)[6:] + " 완료 " + a.group(1) + " " + safe_path(a.group(2)) + " " + a.group(3))
+                        shown += 1
+                        continue
+                    if "리뷰추출" in msg:
+                        tail = msg.split("]", 1)[-1].strip()
+                        tail = re.sub(r"[^0-9A-Za-z가-힣 .,:=()\[\]_-]", "", tail)[:70]
+                        print("     " + kst(dt)[6:] + " 상세분석 " + tail)
+                        continue
+                    if "died" in msg or "Started server" in msg or "startup complete" in msg:
+                        continue
+                    lg = rx_lg.match(msg)
+                    other[(lg.group(1) + ":" + lg.group(2)) if lg else "기타"] += 1
+                if shown > 12:
+                    print("     … 완료 줄 " + str(shown - 12) + "개 더")
+                if other:
+                    print("     그 밖의 줄(종류별 건수): " + ", ".join(k + "×" + str(v) for k, v in other.most_common(6)))
+                dk = d + KST
+                near = [p for t, p in drops if abs((t - dk).total_seconds()) <= 20]
+                print("     nginx 가 끊김으로 기록한 요청: " + (", ".join(near) if near else "없음(±20초)"))
             PY
 
       - name: 🔗 네이버 관제 접점 (naver_link=on · 읽기 전용)
