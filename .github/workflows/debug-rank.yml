@@ -516,6 +516,30 @@ jobs:
             docker logs --timestamps logic-analysis 2>&1 | grep -E 'Started server process' | cut -c1-10 | sort | uniq -c
             echo "  최근 기동·종료 줄 40:"
             docker logs --timestamps logic-analysis 2>&1 | grep -E 'Started server process|Child process|died|Application startup complete|Killed|Shutting down|Terminated|timeout|Timeout' | grep -vE '\[DB백업\]|naver_crawler' | cut -c1-150 | tail -40
+            echo "== 백업 압축·검증 줄(오늘) =="
+            docker logs --timestamps logic-analysis 2>&1 | grep -E '백업 압축|압축 검증|일관 백업 실패|DB 백업 완료' | grep -E "^$(date -u +%Y-%m-%d)|^$(date -u -d '-1 day' +%Y-%m-%d)" | cut -c1-170 | tail -10
+            echo "== 오늘(KST) 5xx 응답 — 10분 단위 건수(주소 앞부분만 · IP 미출력) =="
+            sudo -n true 2>/dev/null && S2="sudo -n" || S2=""
+            $S2 sh -c "cat /var/log/nginx/*access*.log 2>/dev/null" | python3 -c '
+            import sys, re, collections
+            rx = re.compile(r"\[(\d\d)/(\w{3})/(\d{4}):(\d\d):(\d\d):\d\d [^\]]*\] \"\S+ (\S+)[^\"]*\" (\d{3}) ")
+            c = collections.Counter(); p = collections.Counter()
+            for ln in sys.stdin:
+                m = rx.search(ln)
+                if not m: continue
+                st = m.group(7)
+                if not st.startswith("5"): continue
+                key = m.group(1) + " " + m.group(4) + ":" + m.group(5)[0] + "0 " + st
+                c[key] += 1
+                path = m.group(6).split("?")[0]
+                p["/".join(path.split("/")[:3]) + " " + st] += 1
+            for k in sorted(c)[-40:]: print("  ", k, c[k])
+            print("  경로 앞부분별:", p.most_common(10))
+            ' || echo "  (못 쟀다)"
+            echo "== 메모리·스왑 지금 =="
+            free -m | sed -n 1,3p
+            cat /proc/pressure/memory 2>/dev/null | sed 's/^/  메모리 압박 /' || true
+            cat /proc/pressure/cpu 2>/dev/null | sed 's/^/  CPU 압박 /' || true
             echo "== DB(읽기 전용): 최근 8일 진짜 차단 · 기계 신호 =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3, re
