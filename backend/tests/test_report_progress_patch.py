@@ -21,6 +21,7 @@ def pinned():
 class ReportProgressPatchTests(unittest.TestCase):
  def test_pending_pins_refuse_before_base_or_host_access(self):
   p=load('naver_report_progress_patch')
+  p.TARGET_COMMIT=None
   with self.assertRaisesRegex(ValueError,'PINS_PENDING'):p.require_target_pins()
   with self.assertRaisesRegex(ValueError,'PINS_PENDING'):p.bind_base(object())
  def test_baseline_exact_ten_existing_paths_manifest166_store_and_schema(self):
