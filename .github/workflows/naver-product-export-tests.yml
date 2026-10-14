@@ -254,6 +254,14 @@ jobs:
             LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
             env PYTHONPATH=backend/tools:backend/tests python -m unittest test_provider_error_shape_patch test_provider_error_shape_transport -v \
             2>&1 | tee "$RUNNER_TEMP/product-tests/provider-error-shape-patch-tests.txt"
+      - name: 최소 보고서 형식·설정 마감 코드 패치·07890 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_format_setup_patch test_format_setup_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/format-setup-tests.txt"
       - name: 소스·합성 결과 보관 (운영 자료 없음)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

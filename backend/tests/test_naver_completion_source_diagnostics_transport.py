@@ -141,6 +141,11 @@ class PinnedSourceTests(unittest.TestCase):
 
     def test_every_previous_workflow_job_and_native_test_step_is_unchanged(self):
         workflow=(TOOLS.parents[1]/'.github/workflows/debug-rank.yml').read_text()
+        # Remove only independent P19 registration.
+        workflow=workflow.replace(section(workflow,'format-setup'),'')
+        p19_only_options=', preview-format-setup-prepare, preview-format-setup-apply, preview-format-setup-rollback'
+        self.assertEqual(workflow.count(p19_only_options),1)
+        workflow=workflow.replace(p19_only_options,'')
         # Remove only independent P18 registration.
         workflow=workflow.replace(section(workflow,'provider-error-shape-patch'),'')
         p18_only_options=', preview-provider-error-shape-patch-prepare, preview-provider-error-shape-patch-apply, preview-provider-error-shape-patch-rollback'
@@ -243,6 +248,9 @@ class PinnedSourceTests(unittest.TestCase):
         prior=prior.replace(section(prior,'completion-source-diagnostics'),'').replace(', preview-completion-source-diagnostics','')
         self.assertEqual(hashlib.sha256(prior.encode()).hexdigest(),'cfe595e18bbb83cb2d4feccf2f12bf91169cd360f14a21d60b8cabec1726337e')
         native=(TOOLS.parents[1]/'.github/workflows/naver-product-export-tests.yml').read_text()
+        p19_only_start=native.index('      - name: 최소 보고서 형식·설정 마감 코드 패치·07890 복구 경계 검사\n')
+        p19_only_end=native.index('      - name:',p19_only_start+1)
+        native=native[:p19_only_start]+native[p19_only_end:]
         p18_only_start=native.index('      - name: HTTP400 고정 판독 진단 코드 패치·d599 복구 경계 검사\n')
         p18_only_end=native.index('      - name:',p18_only_start+1)
         native=native[:p18_only_start]+native[p18_only_end:]
