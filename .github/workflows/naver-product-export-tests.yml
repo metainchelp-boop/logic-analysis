@@ -16,7 +16,7 @@ jobs:
   synthetic-export:
     if: github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: 개발 소스 받기 (배포 자격 없음)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
