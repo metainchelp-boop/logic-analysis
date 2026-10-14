@@ -264,8 +264,8 @@ class PinnedSourceTests(unittest.TestCase):
         p17_only_start=native.index('      - name: 보고서 원천 재사용 코드 패치·8876 복구 경계 검사\n')
         p17_only_end=native.index('      - name:',p17_only_start+1)
         native=native[:p17_only_start]+native[p17_only_end:]
-        self.assertEqual(native.count('    timeout-minutes: 5\n'),1)
-        native=native.replace('    timeout-minutes: 5\n','    timeout-minutes: 3\n',1)
+        self.assertEqual(native.count('    timeout-minutes: 10\n'),1)
+        native=native.replace('    timeout-minutes: 10\n','    timeout-minutes: 3\n',1)
         p16_only_start=native.index('      - name: Claude HTTP 오류 진단 코드 패치·be97 복구 경계 검사\n')
         p16_only_end=native.index('      - name:',p16_only_start+1)
         native=native[:p16_only_start]+native[p16_only_end:]
