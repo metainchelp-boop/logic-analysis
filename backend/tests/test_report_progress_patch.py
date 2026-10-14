@@ -42,20 +42,20 @@ class ProductBasisPatchTests(unittest.TestCase):
    for key in ('TARGET_COMMIT','APPROVED_TARGET_COMMIT','TARGET_SOURCE_SHA256','APPROVED_TARGET_SOURCE_SHA256','TARGET_CANONICAL_SHA256','APPROVED_CANONICAL_SHA256','CI_PROOF','APPROVED_CI_PROOF','TARGET_DELTA','EXPECTED_TARGET_DELTA','APPROVED_AST_SCOPE','EXPECTED_AST_SCOPE'):self.assertIsNone(getattr(p,key))
    with self.assertRaisesRegex(ValueError,'PINS_PENDING'):p.require_target_pins()
    with self.assertRaisesRegex(ValueError,'PINS_PENDING'):p.bind_base(object())
- def test_actual_c200_baseline_two_existing_paths_manifest166_same_store_schema_and_assets(self):
-  p=pinned();self.assertEqual(p.OLD_COMMIT,'c20089be6c2e397bedea913a8ba9448f44a03de8')
+ def test_actual_1fc_baseline_two_existing_paths_manifest166_same_store_schema_and_assets(self):
+  p=pinned();self.assertEqual(p.OLD_COMMIT,'1fc2c92a18ea50dfef4e0b3da9ddd973f4017715')
   self.assertEqual((p.OLD_SCHEMA,p.TARGET_SCHEMA),(21,21));self.assertEqual(p.CODE_PATHS,PATHS);self.assertEqual(p.NEW_PATHS,frozenset())
   self.assertEqual((len(p.OLD_MANIFEST),len(p.TARGET_MANIFEST)),(166,166));self.assertEqual(set(p.OLD_MANIFEST),set(p.TARGET_MANIFEST))
   self.assertEqual({k for k in p.OLD_MANIFEST if p.OLD_MANIFEST[k]!=p.TARGET_MANIFEST[k]},PATHS)
-  self.assertEqual(p.manifest_digest(p.OLD_MANIFEST),'40282323d1d38ebbcc4b38755c7cf81fe8b585fd6152708feaddd66656c7093b')
+  self.assertEqual(p.manifest_digest(p.OLD_MANIFEST),'336158139eeff8a51bb02b38aa9ce31b30c165bc225b3b272e2685b65a5633ec')
   self.assertEqual(p.H_M,'51620b5091b7374d6739ff022f3eed09088751c6e3bcd21277e12d96d61d8fc5')
   self.assertEqual(p.STORE_SHA256['old'],p.STORE_SHA256['target']);self.assertEqual(p.ROLLBACK_COMMIT,p.OLD_COMMIT);self.assertEqual(p.OLD_REPORT_ASSETS,p.REPORT_ASSETS)
  def test_all_old_history_and_new_c200_layer_and_receipt_pairs_cannot_mutate(self):
-  for name,value in [('H_M','a'*64),('H_A','a'*64),('H_C','a'*40),('H_S','a'*64),('H_R','12345678901'),('H_O','a'*32),('H_D',{}),('Z_M','a'*64),('Z_A','a'*64),('Z_C','a'*40),('Z_S','a'*64),('Z_R','12345678901'),('Z_O','a'*32),('Z_D',{}),('BASE_PREPARE_RUN','38523201246'),('BASE_APPLY_OPERATION','a'*32)]:
+  for name,value in [('H_M','a'*64),('H_A','a'*64),('H_C','a'*40),('H_S','a'*64),('H_R','12345678901'),('H_O','a'*32),('H_D',{}),('Z_M','a'*64),('Z_A','a'*64),('Z_C','a'*40),('Z_S','a'*64),('Z_R','12345678901'),('Z_O','a'*32),('Z_D',{}),('F','a'*64),('G','a'*64),('A','a'*40),('B','a'*64),('C','12345678901'),('D','a'*32),('E',{}),('BASE_PREPARE_RUN','38523201246'),('BASE_APPLY_OPERATION','a'*32)]:
    p=pinned();setattr(p,name,value)
    with self.subTest(name=name),self.assertRaises(ValueError):p.require_pins()
  def test_foreign_new_missing_paths_and_previous_source_pins_refuse(self):
-  for name,value in [('NEW_PATHS',frozenset({'unapproved.py'})),('CODE_PATHS',frozenset({'unapproved.py'})),('TARGET_COMMIT','c20089be6c2e397bedea913a8ba9448f44a03de8'),('TARGET_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_SOURCE_SHA256','a'*64)]:
+  for name,value in [('NEW_PATHS',frozenset({'unapproved.py'})),('CODE_PATHS',frozenset({'unapproved.py'})),('TARGET_COMMIT','1fc2c92a18ea50dfef4e0b3da9ddd973f4017715'),('TARGET_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_SOURCE_SHA256','a'*64)]:
    p=pinned();setattr(p,name,value)
    with self.subTest(name=name),self.assertRaises(ValueError):p.require_pins()
  def test_exact_scope_field_shape_and_unapproved_ABI_remain_closed(self):
@@ -110,7 +110,8 @@ class ProductBasisPatchTests(unittest.TestCase):
   with patch.object(p,'_receipt_step',return_value='proof')as check:
    self.assertEqual(p.inspection_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.proposal_success,p.H_C,p.H_S,p.H_R,p.F_C,p.H_O))
    self.assertEqual(p.funnel_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.inspection_success,p.Z_C,p.Z_S,'38523201246',p.H_C,'56e0a8bbfcf04b1e82129cdeffa28811'))
-   self.assertEqual(p.base_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.funnel_success,p.OLD_COMMIT,p.OLD_SOURCE_SHA256,'38531626583',p.Z_C,'e5864b94306c4736a5ecadd10b16d998'))
+   self.assertEqual(p.Y('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.funnel_success,p.A,p.B,'38531626583',p.Z_C,'e5864b94306c4736a5ecadd10b16d998'))
+   self.assertEqual(p.base_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.Y,p.OLD_COMMIT,p.OLD_SOURCE_SHA256,'38543952683',p.A,'10469ee6378f4e36bc314f81cebb1d7d'))
  def test_both_approved_paths_reach_strict_AST_and_then_final_inventory(self):
   p,reader,before,after=fixture()
   with patch.object(p,'python_contract',wraps=p.python_contract)as contract,patch.object(p,'compatible_code_scope')as inventory:p.compatible_source(Path('/old'),Path('/new'),reader)
