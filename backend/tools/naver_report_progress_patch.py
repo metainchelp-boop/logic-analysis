@@ -1,4 +1,4 @@
-"""P23 7f138 퍼널 후보 조회 점유시간 축소. DB·설정·키·광고 실행 보존."""
+"""P24 c20089 상품 근거 선택 생성 계약. DB·설정·키·광고 실행 보존."""
 import ast
 import hashlib
 import json
@@ -10,29 +10,29 @@ import stat
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = '7f138a8d42bb292567ccb3e117bd0305efc42ad7'
+OLD_COMMIT = 'c20089be6c2e397bedea913a8ba9448f44a03de8'
 BASE_PREVIOUS_COMMIT = '737a65952f2ddbc05a235cf2b139a4a11f4e7673'
-BASE_PREPARE_RUN = '38523201246'
-BASE_APPLY_OPERATION = '56e0a8bbfcf04b1e82129cdeffa28811'
+BASE_PREPARE_RUN = '38531626583'
+BASE_APPLY_OPERATION = 'e5864b94306c4736a5ecadd10b16d998'
 BASE_CONTROLLER_SHA256 = '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 APPROVED_CONFIG_OPERATION_ID = '74c912dddf824fae99012849bc4c19a5'
 OLD_SCHEMA = TARGET_SCHEMA = 21
-ROLLBACK_COMMIT = '7f138a8d42bb292567ccb3e117bd0305efc42ad7'
-EXPECTED_CODE_PATHS = frozenset({'naver_engine/funnel_store.py'})
-CODE_PATHS = frozenset({'naver_engine/funnel_store.py'})
+ROLLBACK_COMMIT = 'c20089be6c2e397bedea913a8ba9448f44a03de8'
+EXPECTED_CODE_PATHS = frozenset({'naver_runtime/report_output_schema.py', 'naver_runtime/claude_provider.py'})
+CODE_PATHS = frozenset({'naver_runtime/report_output_schema.py', 'naver_runtime/claude_provider.py'})
 NEW_PATHS = frozenset()
-TARGET_COMMIT = 'c20089be6c2e397bedea913a8ba9448f44a03de8'
-TARGET_SOURCE_SHA256 = '586a70f70dee551e260b685ca05cff1847c575db1355b27874fe97d59afcc18d'
-TARGET_CANONICAL_SHA256 = '1137824c7cdb23c946bf53f217aa7a90c2c070e264f0c8360b2d5eb91cd4561b'
-EXPECTED_TARGET_DELTA = {'naver_engine/funnel_store.py': (420, 30535, 'a320b7e2ae58e1be5e7a135cdcb4bdc0edd280db91bce4cd19887c444d0891d8')}
-TARGET_DELTA = {'naver_engine/funnel_store.py': (420, 30535, 'a320b7e2ae58e1be5e7a135cdcb4bdc0edd280db91bce4cd19887c444d0891d8')}
+TARGET_COMMIT = '1fc2c92a18ea50dfef4e0b3da9ddd973f4017715'
+TARGET_SOURCE_SHA256 = '00ed6d3e8e65996bd926c3943a9b5f60f8259b63acfb5154eb1a99ac2465efc6'
+TARGET_CANONICAL_SHA256 = 'cac19e5ad628d4123fb25e96090bbd3f3f4d6c2e8b8b68e1aaccff821da6a18b'
+EXPECTED_TARGET_DELTA = {'naver_runtime/claude_provider.py': (420, 44505, 'bc38bbd23736cddf21443df9000588cac0c74882add3faac2d7baa02168ddd68'), 'naver_runtime/report_output_schema.py': (420, 1853, '60d4bff326ae7f2936d9410df99f4b22b51385a59573cd0ac7e3d420761475d9')}
+TARGET_DELTA = {'naver_runtime/claude_provider.py': (420, 44505, 'bc38bbd23736cddf21443df9000588cac0c74882add3faac2d7baa02168ddd68'), 'naver_runtime/report_output_schema.py': (420, 1853, '60d4bff326ae7f2936d9410df99f4b22b51385a59573cd0ac7e3d420761475d9')}
 TARGET_MANIFEST = None
 REPORT_ASSETS = None
 # receipt_sha256 is the exact native-CI canonical-source.json receipt digest.
-CI_PROOF = {'source_commit': 'c20089be6c2e397bedea913a8ba9448f44a03de8', 'tooling_head': '3681929741fe26e41b98cb748106658aaf1a64a1', 'run_id': '38528286875', 'receipt_sha256': '1137824c7cdb23c946bf53f217aa7a90c2c070e264f0c8360b2d5eb91cd4561b'}
+CI_PROOF = {'source_commit': '1fc2c92a18ea50dfef4e0b3da9ddd973f4017715', 'tooling_head': '48864f2892219b4753504a7b259f889efd1e3a49', 'run_id': '38540386434', 'receipt_sha256': 'cac19e5ad628d4123fb25e96090bbd3f3f4d6c2e8b8b68e1aaccff821da6a18b'}
 BASE = None
-OLD_SOURCE_SHA256 = 'c6730d64ae25f234bface0cbf2f8de4536953d524a7c1f84e2dc03400f00f0ac'
+OLD_SOURCE_SHA256 = '586a70f70dee551e260b685ca05cff1847c575db1355b27874fe97d59afcc18d'
 OLD_MANIFEST = None
 OLD_REPORT_ASSETS = None
 STORE_SHA256 = None
@@ -79,10 +79,10 @@ BF = {'naver_runtime/claude_provider.py': (420, 46328, 'a53f9c68126ab67069791055
 BG = '33cd39e7c6d1633b9bb0d52b660eed0575834d7b99e2b9c7d3732bce480cc926'
 BH = 'bdc1bcb0ee32f6ec8d90afee040e7bc0c10fd23e91ffa87885ced45e15dafc29'
 BI = '7d01ddfbd2300c0d87d1867ea829dae421a02d3911daa5c223520a6e3d5de867'
-APPROVED_TARGET_COMMIT = 'c20089be6c2e397bedea913a8ba9448f44a03de8'
-APPROVED_TARGET_SOURCE_SHA256 = '586a70f70dee551e260b685ca05cff1847c575db1355b27874fe97d59afcc18d'
-APPROVED_CI_PROOF = {'source_commit': 'c20089be6c2e397bedea913a8ba9448f44a03de8', 'tooling_head': '3681929741fe26e41b98cb748106658aaf1a64a1', 'run_id': '38528286875', 'receipt_sha256': '1137824c7cdb23c946bf53f217aa7a90c2c070e264f0c8360b2d5eb91cd4561b'}
-APPROVED_CANONICAL_SHA256 = '1137824c7cdb23c946bf53f217aa7a90c2c070e264f0c8360b2d5eb91cd4561b'
+APPROVED_TARGET_COMMIT = '1fc2c92a18ea50dfef4e0b3da9ddd973f4017715'
+APPROVED_TARGET_SOURCE_SHA256 = '00ed6d3e8e65996bd926c3943a9b5f60f8259b63acfb5154eb1a99ac2465efc6'
+APPROVED_CI_PROOF = {'source_commit': '1fc2c92a18ea50dfef4e0b3da9ddd973f4017715', 'tooling_head': '48864f2892219b4753504a7b259f889efd1e3a49', 'run_id': '38540386434', 'receipt_sha256': 'cac19e5ad628d4123fb25e96090bbd3f3f4d6c2e8b8b68e1aaccff821da6a18b'}
+APPROVED_CANONICAL_SHA256 = 'cac19e5ad628d4123fb25e96090bbd3f3f4d6c2e8b8b68e1aaccff821da6a18b'
 
 
 BJ = 'dc168ff8cf8dac519ea38597305a0d9dd6f6c843'
@@ -126,8 +126,8 @@ CN = 'c40a1dbd0132043ce5b6a6a5565c7786699b60c0'
 CO = 'afc1547c598502032fc0d34737e524627d4d7b1fd834b5204b4c11e6a4f3031a'
 CP = '38329975429'
 CQ = 'ee474c9b697e411ab3748f185728f56d'
-APPROVED_AST_SCOPE = {'naver_engine/funnel_store.py': {'added': ('FunnelStorage._funnel_account_valid', '_FUNNEL_SELECTION_DEFAULTS'), 'changed': ('FunnelStorage.funnel_work', 'FunnelStorage.funnel_account_valid'), 'removed': (), 'optional_abi': {}, 'imports_added': (), 'imports_removed': ()}}
-EXPECTED_AST_SCOPE = {'naver_engine/funnel_store.py': {'added': ('FunnelStorage._funnel_account_valid', '_FUNNEL_SELECTION_DEFAULTS'), 'changed': ('FunnelStorage.funnel_work', 'FunnelStorage.funnel_account_valid'), 'removed': (), 'optional_abi': {}, 'imports_added': (), 'imports_removed': ()}}
+APPROVED_AST_SCOPE = {'naver_runtime/claude_provider.py': {'changed': ('AnthropicProvider.invoke', '_generation_contract', '_proposal_instructions'), 'added': (), 'removed': (), 'optional_abi': {}, 'imports_added': (), 'imports_removed': ()}, 'naver_runtime/report_output_schema.py': {'changed': ('FORMAT_VERSION', 'output_format'), 'added': (), 'removed': (), 'optional_abi': {'output_format': ('basis_ids',)}, 'imports_added': (), 'imports_removed': ()}}
+EXPECTED_AST_SCOPE = {'naver_runtime/claude_provider.py': {'changed': ('AnthropicProvider.invoke', '_generation_contract', '_proposal_instructions'), 'added': (), 'removed': (), 'optional_abi': {}, 'imports_added': (), 'imports_removed': ()}, 'naver_runtime/report_output_schema.py': {'changed': ('FORMAT_VERSION', 'output_format'), 'added': (), 'removed': (), 'optional_abi': {'output_format': ('basis_ids',)}, 'imports_added': (), 'imports_removed': ()}}
 
 CR = 'fd9132c07031cae7162fb8af2a5131a8b1aeaba0'
 CS = 'a089de0912b34352ca21b998640c858d9f86d7e63d3d5b2db33d37d33a8c9a3b'
@@ -211,6 +211,14 @@ H_D = {'backend/naver_page/automation-ui.js': (420, 60043, '8756b54c6f622343f6b2
 H_M = '51620b5091b7374d6739ff022f3eed09088751c6e3bcd21277e12d96d61d8fc5'
 H_A = 'ff0774988bba001633b0fa9971ed2482e3ead9c39672d5a425e05cd6387d7f2a'
 
+Z_C = '7f138a8d42bb292567ccb3e117bd0305efc42ad7'
+Z_S = 'c6730d64ae25f234bface0cbf2f8de4536953d524a7c1f84e2dc03400f00f0ac'
+Z_R = '38523201246'
+Z_O = '56e0a8bbfcf04b1e82129cdeffa28811'
+Z_D = {'naver_engine/funnel_store.py': (420, 30535, 'a320b7e2ae58e1be5e7a135cdcb4bdc0edd280db91bce4cd19887c444d0891d8')}
+Z_M = '40282323d1d38ebbcc4b38755c7cf81fe8b585fd6152708feaddd66656c7093b'
+Z_A = 'ff0774988bba001633b0fa9971ed2482e3ead9c39672d5a425e05cd6387d7f2a'
+
 def valid_row(row):
     return (type(row) is tuple and len(row)==3 and type(row[0]) is int and row[0]==0o644
             and type(row[1]) is int and 0<row[1]<=1024*1024 and type(row[2]) is str
@@ -227,7 +235,7 @@ def require_target_pins():
         APPROVED_TARGET_SOURCE_SHA256,APPROVED_AST_SCOPE,EXPECTED_AST_SCOPE)
     if any(value is None for value in GT):raise ValueError('DETAIL_AI_PINS_PENDING')
     if (type(TARGET_COMMIT)is not str or re.fullmatch('[0-9a-f]{40}',TARGET_COMMIT)is None
-        or TARGET_COMMIT!=APPROVED_TARGET_COMMIT or TARGET_COMMIT in (OLD_COMMIT,CY,CN,CD,BW,BP,BJ,BC,AV,AO,AA,AK,BASE_PREVIOUS_COMMIT,RD_C,WR_C,R_COMMIT,Q_C)
+        or TARGET_COMMIT!=APPROVED_TARGET_COMMIT or TARGET_COMMIT in (OLD_COMMIT,Z_C,CY,CN,CD,BW,BP,BJ,BC,AV,AO,AA,AK,BASE_PREVIOUS_COMMIT,RD_C,WR_C,R_COMMIT,Q_C)
         or TARGET_SOURCE_SHA256!=APPROVED_TARGET_SOURCE_SHA256 or TARGET_CANONICAL_SHA256!=APPROVED_CANONICAL_SHA256
         or any(type(v)is not str or re.fullmatch('[0-9a-f]{64}',v)is None for v in (TARGET_SOURCE_SHA256,TARGET_CANONICAL_SHA256))
         or type(CI_PROOF)is not dict or set(CI_PROOF)!={'source_commit','tooling_head','run_id','receipt_sha256'}
@@ -324,6 +332,10 @@ def bind_base(base):
         or any(not valid_row(row) or name not in old or old[name]==row for name,row in H_D.items())):raise ValueError('PATCH_BASELINE')
     old={**old,**H_D}
     if manifest_digest(old)!=H_M or len(old)!=166:raise ValueError('PATCH_BASELINE')
+    if (type(Z_D)is not dict or set(Z_D)!={'naver_engine/funnel_store.py'}
+        or any(not valid_row(row) or name not in old or old[name]==row for name,row in Z_D.items())):raise ValueError('PATCH_BASELINE')
+    old={**old,**Z_D}
+    if manifest_digest(old)!=Z_M or len(old)!=166:raise ValueError('PATCH_BASELINE')
     if (CODE_PATHS!=EXPECTED_CODE_PATHS or set(TARGET_DELTA)-set(old)!=NEW_PATHS
         or any(TARGET_DELTA[name]==old[name] for name in CODE_PATHS-NEW_PATHS)):raise ValueError('PATCH_SCOPE')
     BASE=base;OLD_MANIFEST=old;TARGET_MANIFEST={**old,**TARGET_DELTA}
@@ -341,14 +353,15 @@ def require_pins():
     if manifest_digest(chain)!=AE:raise ValueError('PATCH_SCOPE')
     for delta,digest in (({'naver_runtime/claude_provider.py':AI},AJ),
             (AR,AS),(AY,AZ),
-            (BF,BG),(BM,BN),(BT,BU),(CA,CB),(CH,CI),(CK,CL),(CV,CW),(RD_D,RD_M),(WR_D,WR_M),(PD_D,PD_M),(CR_D,CR_M),(E_DELTA,E_MANIFEST),(F_D,F_M),(P_D,P_M),(H_D,H_M)):
+            (BF,BG),(BM,BN),(BT,BU),(CA,CB),(CH,CI),(CK,CL),(CV,CW),(RD_D,RD_M),(WR_D,WR_M),(PD_D,PD_M),(CR_D,CR_M),(E_DELTA,E_MANIFEST),(F_D,F_M),(P_D,P_M),(H_D,H_M),(Z_D,Z_M)):
         chain={**chain,**delta}
         if manifest_digest(chain)!=digest:raise ValueError('PATCH_SCOPE')
     EW=chain
     FQ=EXPECTED_CODE_PATHS
     FG={route:(TARGET_MANIFEST['backend/naver_page/'+route.removeprefix('/naver/')][1],TARGET_MANIFEST['backend/naver_page/'+route.removeprefix('/naver/')][2],row[2]) for route,row in BASE.REPORT_ASSETS.items()}
-    if (OLD_COMMIT!='7f138a8d42bb292567ccb3e117bd0305efc42ad7' or OLD_SOURCE_SHA256!='c6730d64ae25f234bface0cbf2f8de4536953d524a7c1f84e2dc03400f00f0ac'
-        or BASE_PREPARE_RUN!='38523201246' or BASE_APPLY_OPERATION!='56e0a8bbfcf04b1e82129cdeffa28811'
+    if (OLD_COMMIT!='c20089be6c2e397bedea913a8ba9448f44a03de8' or OLD_SOURCE_SHA256!='586a70f70dee551e260b685ca05cff1847c575db1355b27874fe97d59afcc18d'
+        or BASE_PREPARE_RUN!='38531626583' or BASE_APPLY_OPERATION!='e5864b94306c4736a5ecadd10b16d998'
+        or Z_C!='7f138a8d42bb292567ccb3e117bd0305efc42ad7' or Z_S!='c6730d64ae25f234bface0cbf2f8de4536953d524a7c1f84e2dc03400f00f0ac' or Z_R!='38523201246' or Z_O!='56e0a8bbfcf04b1e82129cdeffa28811'
         or H_C!='7b61f64223cbd386c6971b8bc93b9ab17c11f34f' or H_S!='f3c18012b4944b7ac505badcd72e0fd4f9c20bb3600eb899652de0924298dfe1' or H_R!='38509559215' or H_O!='47d10b22631c4e158ad1697e27eaec08'
         or F_C!='53926862e3263097b6ed5cb7b9bc0bb7617ff1c5' or F_S!='02305d8fd11856b8662843345a402c0155e5c155eb0b7e76ea6e3d9e42bfbabe' or F_R!='38498058014' or F_O!='f9a32b991e354b10a4f26385e5570b96'
         or Q_C!='07890f1da91f09aca87f2b093852f46778971ba1' or Q_S!='b9eaca9a2617c94c616bf090f0249aa19544a4b36f4c0636c1883615848fff2c'
@@ -373,11 +386,11 @@ def require_pins():
         or BC!='15f3a23c2255de98cba3670fce3b489309698e1f'
         or BD!='38247492655' or BE!='66a3ac90ed9c4db6a38aee0cca626f42'
         or CODE_PATHS!=FQ or NEW_PATHS!=frozenset()
-        or OLD_MANIFEST!=EW or manifest_digest(OLD_MANIFEST)!=H_M
+        or OLD_MANIFEST!=EW or manifest_digest(OLD_MANIFEST)!=Z_M
         or TARGET_MANIFEST!={**EW,**TARGET_DELTA} or len(TARGET_MANIFEST)!=166
         or set(TARGET_MANIFEST)-set(OLD_MANIFEST)!=NEW_PATHS or set(OLD_MANIFEST)-set(TARGET_MANIFEST)
         or {name for name in OLD_MANIFEST if OLD_MANIFEST[name]!=TARGET_MANIFEST[name]}!=CODE_PATHS-NEW_PATHS
-        or REPORT_ASSETS!=FG or manifest_digest(OLD_REPORT_ASSETS)!=H_A
+        or REPORT_ASSETS!=FG or manifest_digest(OLD_REPORT_ASSETS)!=Z_A or H_A!='ff0774988bba001633b0fa9971ed2482e3ead9c39672d5a425e05cd6387d7f2a'
         or STORE_SHA256!={'old':EW['naver_engine/store.py'][2],'target':TARGET_MANIFEST['naver_engine/store.py'][2]}
         or ROLLBACK_COMMIT!=OLD_COMMIT):raise ValueError('PATCH_SCOPE')
 
@@ -552,9 +565,13 @@ def inspection_success(release,upgrade):
     return _receipt_step(release,upgrade,proposal_success,H_C,H_S,H_R,F_C,H_O)
 
 
+def funnel_success(release,upgrade):
+    return _receipt_step(release,upgrade,inspection_success,Z_C,Z_S,Z_R,H_C,Z_O)
+
+
 def base_success(release,upgrade):
-    return _receipt_step(release,upgrade,inspection_success,OLD_COMMIT,OLD_SOURCE_SHA256,
-        BASE_PREPARE_RUN,H_C,BASE_APPLY_OPERATION)
+    return _receipt_step(release,upgrade,funnel_success,OLD_COMMIT,OLD_SOURCE_SHA256,
+        BASE_PREPARE_RUN,Z_C,BASE_APPLY_OPERATION)
 
 
 def preserve_approved_config(files,operation_id,active,release,upgrade):
@@ -713,6 +730,7 @@ def _abi(name):
         'naver_engine/naver_write.py':('issue_spend_handle',('campaign_budget_proof',),None,False),
         'naver_engine/inspection_reads.py':('_initial',('detail_reads',),False,False),
         'naver_engine/setup_checks.py':('_budget_item',('proof','now'),None,True),
+        'naver_runtime/report_output_schema.py':('output_format',('basis_ids',),None,False),
     }.get(name)
 
 

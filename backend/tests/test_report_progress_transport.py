@@ -1,17 +1,17 @@
-"""P23 one-source transport pins; unchanged codec/caps/nine immutable sources."""
+"""P24 pending two-source transport pins; unchanged codec/caps/nine immutable sources."""
 import ast,hashlib,importlib.util
 from pathlib import Path
 import unittest
 TOOLS=Path(__file__).resolve().parents[1]/'tools'
 def load():
- spec=importlib.util.spec_from_file_location('funnel_writer_transport',TOOLS/'naver_report_progress_transport.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
+ spec=importlib.util.spec_from_file_location('product_basis_transport',TOOLS/'naver_report_progress_transport.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 
 def pinned():
  t=load();text='pass';digest=hashlib.sha256(text.encode()).hexdigest()
  t.SOURCE_SHA256=t.COMPACT_SHA256=t.COMPACT_SOURCE_SHA256={k:digest for k in t.SOURCE_FILES};t.TRANSPORT_RAW_SHA256='d'*64;t.TARGET_SOURCE=t.EXPECTED_TARGET_SOURCE='b'*40
  package=dict(operation='code-prepare',baseline='a'*64,source_commit='b'*40,source_tar_gz_sha256='c'*64,ciphertext_sha256='d'*64,run_id='91827364509182736450')
  return t,dict(version=1,operation='preview-report-progress-prepare',package=package,sources={k:text for k in t.SOURCE_FILES})
-class FunnelWriterTransportTests(unittest.TestCase):
+class ProductBasisTransportTests(unittest.TestCase):
  def test_pending_target_and_patch_source_maps_refuse_before_module_loading(self):
   t=load();t.TARGET_SOURCE=None
   with self.assertRaisesRegex(ValueError,'PINS_PENDING'):t.require_pins()
@@ -25,10 +25,10 @@ class FunnelWriterTransportTests(unittest.TestCase):
   old=ast.parse((TOOLS/'naver_budget_format_transport.py').read_bytes());new=ast.parse((TOOLS/'naver_report_progress_transport.py').read_bytes())
   for name in ('encode','decode','unique','compact','bootstrap'):
    a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name);self.assertEqual(ast.dump(a),ast.dump(b),name)
- def test_single_funnel_scope_oversize_source_and_foreign_scope_remain_closed(self):
-  t,value=pinned();self.assertEqual(t.CODE_PATHS,('naver_engine/funnel_store.py',));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
+ def test_two_exact_existing_paths_oversize_and_foreign_scope_remain_closed(self):
+  t,value=pinned();self.assertEqual(t.CODE_PATHS,('naver_runtime/claude_provider.py','naver_runtime/report_output_schema.py'));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
   with self.assertRaises(ValueError):t.encode({**value,'sources':{**value['sources'],'patch':'a'*(t.MAX_SOURCE+1)}})
-  for scope in ((),('unapproved.py',),('naver_engine/funnel_store.py','extra.py')):
+  for scope in ((),('unapproved.py',),('naver_runtime/claude_provider.py','extra.py'),('naver_runtime/claude_provider.py','naver_runtime/report_output_schema.py','extra.py')):
    t.CODE_PATHS=scope
    with self.subTest(scope=scope),self.assertRaises(ValueError):t.require_pins()
  def test_nine_dependency_raw_and_compact_hashes_remain_the_actual_existing_files(self):
