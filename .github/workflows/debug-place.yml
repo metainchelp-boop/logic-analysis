@@ -88,7 +88,7 @@ on:
         required: false
         default: 'off'
       place_stall:
-        description: '플레이스 무인 추적 멈춤 원인 — true. 추적기 도착 기록 전부 · 날짜별 기록 시각·계정 번호 · 그 계정의 로그인 시각 · nginx 회전분(.gz)까지 추적 결과 도착/전산 연동 로그인/대상 목록 조회 시각과 응답 · 컨테이너 로그(기동 이후) 같은 축. 업체명·키워드·사람 이름·IP 미출력(IP 는 런마다 새 소금 해시) · 읽기 전용.'
+        description: '플레이스 무인 추적 멈춤 원인 — true(도착·로그인·접속 기록 날짜별) / ua(추적기가 돌던 브라우저가 지금도 켜져 있나 — 브라우저 표지는 해시+운영체제·크롬 판만). 추적기 도착 기록 전부 · 날짜별 기록 시각·계정 번호 · 그 계정의 로그인 시각 · nginx 회전분(.gz)까지 추적 결과 도착/전산 연동 로그인/대상 목록 조회 시각과 응답 · 컨테이너 로그(기동 이후) 같은 축. 업체명·키워드·사람 이름·IP 미출력(IP 는 런마다 새 소금 해시) · 읽기 전용.'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -2612,6 +2612,87 @@ jobs:
                       + (f" · 전산 검증 연결 실패 {ssofail[d]}" if ssofail[d] else ""))
             PYS3
             rm -f /tmp/_ps_clog.txt
+
+      - name: 플레이스 추적기 브라우저 생존 (읽기 전용 · IP 미출력 · 브라우저 표지는 해시)
+        if: ${{ github.event.inputs.place_stall == 'ua' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            # ⚠️ 이 저장소는 공개다 — IP 원문·사람 이름을 찍지 않는다. 브라우저 표지(UA)는 런마다 새 소금 해시 + 운영체제·크롬 판만.
+            echo "== [S4] 추적기가 돌던 브라우저가 지금도 켜져 있나 =="
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            $S sh -c 'for f in $(ls -1tr /var/log/nginx/access.log* 2>/dev/null); do zcat -f "$f"; done' > /tmp/_ps_all.txt 2>/dev/null
+            python3 - <<'PYS4' || echo "  ⚠️ 접속 기록 해석 실패 — 못 쟀다"
+            # [S4] 추적기가 돌던 브라우저가 지금도 켜져 있나 — 브라우저 표지(UA)는 해시 + 운영체제·크롬 판만 · IP 미출력
+            import re, os, hashlib, collections, datetime, sys
+            PATH = os.environ.get("PS_LOG", "/tmp/_ps_all.txt")
+            salt = os.urandom(8).hex()
+            def hsh(s): return hashlib.md5((salt + s).encode()).hexdigest()[:6]
+            def short(ua):
+                osn = "윈도우" if "Windows" in ua else ("맥" if "Macintosh" in ua else ("리눅스" if "Linux" in ua else "기타"))
+                m = re.search(r"Chrome/(\d+)", ua)
+                return f"{osn}·크롬{m.group(1) if m else '?'}·{hsh(ua)}"
+            MON = {m: i for i, m in enumerate("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(), 1)}
+            RX = re.compile(r'^(\S+) \S+ \S+ \[(\d\d)/(\w{3})/(\d{4}):(\d\d):(\d\d):(\d\d) [+-]\d{4}\] "(\S+) (\S+)[^"]*" (\d{3}) \S+ "[^"]*" "([^"]*)"')
+            try:
+                lines = open(PATH, errors="ignore").read().splitlines()
+            except Exception as e:
+                print(f"  ⚠️ 접속 기록을 못 읽었다 — 못 쟀다: {type(e).__name__}"); sys.exit(0)
+            recs = []
+            for ln in lines:
+                m = RX.match(ln)
+                if not m: continue
+                ip, dd, mon, yy, H, M, S_, meth, url, code, ua = m.groups()
+                try: d = datetime.date(int(yy), MON[mon], int(dd)).isoformat()
+                except Exception: continue
+                recs.append((d, f"{H}:{M}:{S_}", int(H) * 60 + int(M), ip, meth, url.split("?", 1)[0], code, ua))
+            print(f"  읽은 줄 {len(lines)} · UA 까지 해석한 줄 {len(recs)}")
+            if not recs:
+                print("  ⚠️ 해석한 줄이 없다(로그 형식이 다를 수 있다) — 못 쟀다"); sys.exit(0)
+            recs.sort(key=lambda r: (r[0], r[1]))
+            ING, SSO, HB = "/api/place/ingest", "/api/auth/sso", "/api/collector/heartbeat"
+            # 추적기 표지 = 결과를 보낸 브라우저 + 06:29~06:31 에 연동 로그인한 브라우저
+            T = {r[7] for r in recs if r[5] == ING} | {r[7] for r in recs if r[5] == SSO and 389 <= r[2] <= 391}
+            IPS = {r[3] for r in recs if r[5] == ING}
+            print(f"  추적기 브라우저 표지 {len(T)}개: " + (" ".join(sorted(short(u) for u in T)) or "없음"))
+            def cls(p):
+                if p.startswith("/api/"): return p
+                if p in ("/", "/index.html", "/index.bundle.html"): return "화면(첫 장)"
+                return "화면 파일"
+            days = sorted({r[0] for r in recs})
+            for d in days[-10:]:
+                R = [r for r in recs if r[0] == d]
+                wd = "월화수목금토일"[datetime.date.fromisoformat(d).weekday()]
+                print(f"  {d}({wd})")
+                for u in sorted(T, key=short):
+                    RU = [r for r in R if r[7] == u]
+                    if not RU:
+                        print(f"     추적기 브라우저 [{short(u)}] 이날 요청 0건"); continue
+                    win = collections.Counter(cls(r[5]) for r in RU if 385 <= r[2] <= 430)
+                    hb = sum(1 for r in RU if r[5] == HB)
+                    print(f"     추적기 브라우저 [{short(u)}] 이날 {len(RU)}건 ({RU[0][1]}~{RU[-1][1]}) · 살아있음 신호 {hb}건 · 06:25~07:10: "
+                          + (", ".join(f"{k}×{v}" for k, v in win.most_common(8)) or "없음"))
+                hbu = collections.Counter(r[7] for r in R if r[5] == HB)
+                for u, n in hbu.most_common():
+                    RU = [r for r in R if r[7] == u and r[5] == HB]
+                    print(f"     수집기 신호 [{short(u)}]{' ★추적기와 같은 브라우저' if u in T else ''} {n}건 ({RU[0][1]}~{RU[-1][1]})")
+                # 같은 회선(추적 결과를 보내던 곳)의 06:25~07:10 수집기 아닌 요청
+                other = collections.Counter((short(r[7]), cls(r[5])) for r in R
+                                            if r[3] in IPS and 385 <= r[2] <= 430 and not r[5].startswith("/api/collector"))
+                print("     같은 회선 06:25~07:10 수집기 아닌 요청: "
+                      + (", ".join(f"[{k[0]}] {k[1]}×{v}" for k, v in other.most_common(8)) or "없음"))
+            print()
+            print("  같은 회선(추적 결과를 보내던 곳)의 날짜별 브라우저 표지 — 크롬이 업데이트되면 표지가 바뀐다(같은 PC 라도)")
+            for d in days[-10:]:
+                R = [r for r in recs if r[0] == d and r[3] in IPS]
+                c = collections.Counter(short(r[7]) for r in R)
+                print(f"  {d}: " + (", ".join(f"[{k}]×{v}" for k, v in c.most_common(10)) or "없음"))
+            PYS4
+            rm -f /tmp/_ps_all.txt
 
       - name: 오프라인(플레이스) 분석 점검 (읽기 전용 · 이름 미출력)
         if: ${{ github.event.inputs.offline_health == 'on' }}
