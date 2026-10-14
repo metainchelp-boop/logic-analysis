@@ -270,6 +270,14 @@ jobs:
             LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
             env PYTHONPATH=backend/tools:backend/tests python -m unittest test_format_rule_patch test_format_rule_transport -v \
             2>&1 | tee "$RUNNER_TEMP/product-tests/format-rule-tests.txt"
+      - name: 공유예산 단건 원천·보고서 참조 복구 코드 패치·539 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_budget_format_patch test_budget_format_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/budget-format-tests.txt"
       - name: 소스·합성 결과 보관 (운영 자료 없음)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
