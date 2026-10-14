@@ -64,4 +64,50 @@ class ReportProgressPatchTests(unittest.TestCase):
   with patch.object(p,'_receipt_step',return_value='proof')as check:
    self.assertEqual(p.proposal_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.shape_success,p.F_C,p.F_S,p.F_R,p.Q_C,p.F_O))
    self.assertEqual(p.base_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.proposal_success,p.OLD_COMMIT,p.OLD_SOURCE_SHA256,'38509559215',p.F_C,'47d10b22631c4e158ad1697e27eaec08'))
+
+def _approved_observation_fixture():
+ p=pinned()
+ p.APPROVED_AST_SCOPE['naver_engine/observation_store.py']['added']=('ObservationStorage.learning_strategy_validation',)
+ common=b'public synthetic infrastructure\n'
+ store=b"SCHEMA_VERSION=21\n_SCHEMA=''\n_REVISION_COLUMNS={}\ndef _migrate():pass\n"
+ jobs=b'def clean():pass\ndef public():pass\ndef identity():pass\n'
+ obs_before=b'class ObservationStorage:\n def prior(self):return True\n'
+ obs_after=obs_before+b' def learning_strategy_validation(self,job):return None\n'
+ p.ENGINE_COMPOSE_SHA256=hashlib.sha256(common).hexdigest()
+ p.STORE_SHA256={role:hashlib.sha256(store).hexdigest()for role in ('old','target')}
+ class Reader:
+  mutation=None
+  def read_file(self,path,**kw):
+   name=Path(*path.parts[2:]).as_posix();target=path.parts[1]=='new'
+   if name=='naver_engine/store.py':body=store
+   elif name=='naver_runtime/learning_jobs.py':body=jobs
+   elif name=='naver_engine/observation_store.py':body=obs_after if target else obs_before
+   elif name in ('preview-engine.override.yml','preview-relay.override.yml'):
+    before=('source:'+p.OLD_COMMIT).encode();body=p.target_override(before,'engine')if target else before
+   elif name in p.CODE_PATHS and name.endswith('.py'):body=b'pass\n'
+   else:body=common
+   return body+b'\n# unauthorized infrastructure\n'if target and name==self.mutation else body
+ return p,Reader(),obs_before,obs_after
+
+class ReportProgressApprovedObservationTests(unittest.TestCase):
+ def test_approved_observation_path_reaches_strict_ast_and_final_source_inventory(self):
+  p,reader,before,after=_approved_observation_fixture();old,new=Path('/old'),Path('/new')
+  with patch.object(p,'python_contract',wraps=p.python_contract)as python,patch.object(p,'compatible_code_scope')as inventory:
+   p.compatible_source(old,new,reader)
+  self.assertIn(('naver_engine/observation_store.py',before,after),[row.args for row in python.call_args_list])
+  self.assertEqual({row.args[0]for row in python.call_args_list},{name for name in p.CODE_PATHS if name.endswith('.py')})
+  inventory.assert_called_once_with(old,new,reader)
+ def test_observation_unapproved_global_and_existing_method_changes_stay_rejected(self):
+  p,_,before,after=_approved_observation_fixture();name='naver_engine/observation_store.py'
+  p.python_contract(name,before,after)
+  for mutant in (after+b'UNAPPROVED=True\n',after.replace(b'return True',b'return False')):
+   with self.subTest(mutant=hashlib.sha256(mutant).hexdigest()),self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
+    p.python_contract(name,before,mutant)
+ def test_genuine_infrastructure_mutations_still_refuse_before_final_inventory(self):
+  for name in ('compose.naver-engine.yml','Dockerfile.naver-engine','backend/requirements.txt'):
+   p,reader,_,_=_approved_observation_fixture();reader.mutation=name
+   with self.subTest(name=name),patch.object(p,'compatible_code_scope')as inventory:
+    with self.assertRaisesRegex(ValueError,'CODE_INFRASTRUCTURE_CHANGED'):p.compatible_source(Path('/old'),Path('/new'),reader)
+    inventory.assert_not_called()
+
 if __name__=='__main__':unittest.main()

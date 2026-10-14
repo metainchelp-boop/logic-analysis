@@ -802,7 +802,7 @@ def provider_contract(before,after):
 def compatible_source(old,new,upgrade):
     read=lambda path:upgrade.read_file(path,mode=0o644,maximum=1024*1024,minimum=0)
     compatible_engine_compose(read(old/'compose.naver-engine.yml'),read(new/'compose.naver-engine.yml'))
-    for name in ('compose.naver-relay.yml','deploy/naver-engine-backup.override.yml','Dockerfile.naver-engine','Dockerfile.naver-relay','backend/requirements.txt','naver_runtime/bootstrap.py','naver_engine/observation_store.py','naver_engine/report_schedule_store.py','naver_runtime/observation_binding.py','naver_engine/observation_views.py'):
+    for name in ('compose.naver-relay.yml','deploy/naver-engine-backup.override.yml','Dockerfile.naver-engine','Dockerfile.naver-relay','backend/requirements.txt','naver_runtime/bootstrap.py','naver_engine/report_schedule_store.py','naver_runtime/observation_binding.py','naver_engine/observation_views.py'):
         if read(old/name)!=read(new/name):raise ValueError('CODE_INFRASTRUCTURE_CHANGED')
     migration_contract(read(old/'naver_engine/store.py'),read(new/'naver_engine/store.py'))
     learning_job_contract(read(old/'naver_runtime/learning_jobs.py'),read(new/'naver_runtime/learning_jobs.py'))
