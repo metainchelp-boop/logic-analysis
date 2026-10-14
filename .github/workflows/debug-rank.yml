@@ -54,6 +54,10 @@ on:
         description: "서버 디스크·메모리·워커 재기동·백업·진짜 차단·2번 기계 신호 (on 이면 실행 · 읽기 전용 · IP·키워드 미출력)"
         required: false
         default: ""
+      report_gap:
+        description: "보고서 빈칸 원인 — 키워드 SHA-256 해시(쉼표로 여러 개 · 빈칸이면 안 돈다 · 읽기 전용 · 키워드·업체명 미출력)"
+        required: false
+        default: ""
       death_window:
         description: "워커 재시작 직전 60초에 처리하던 요청 종류·상세분석 단계 (on 이면 실행 · 읽기 전용 · 주소 앞부분·상태·건수만 · IP·키워드·업체명 미출력)"
         required: false
@@ -626,6 +630,167 @@ jobs:
                     print("  신호", d)
             except Exception as e:
                 print("  기계 신호 조회 실패(못 쟀다):", type(e).__name__)
+            PY
+
+      - name: 🧾 보고서 빈칸 원인 (report_gap=해시 · 읽기 전용)
+        if: ${{ github.event.inputs.report_gap != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          RG_HASH: ${{ github.event.inputs.report_gap }}
+        with:
+          envs: RG_HASH
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 180s
+          script: |
+            # ⚠️ 읽기 전용(DB mode=ro · 앱 기록 읽기만). 공개 저장소라 키워드는 해시로만 받고 찍지 않는다.
+            KWH=$(printf '%s' "$RG_HASH" | tr -cd '0-9a-f,')
+            echo "== 광고주 분석 요청 · 경쟁 상품 0건으로 끝난 것 — 날짜별(앱 기록 · 키워드 미출력) =="
+            docker logs --timestamps logic-analysis 2>&1 | python3 -c '
+            import sys, collections
+            tot = collections.Counter(); empty = collections.Counter(); det = collections.Counter(); strat = collections.Counter()
+            for ln in sys.stdin:
+                d = ln[:10]
+                if '"'"'"POST /api/advertiser/analyze'"'"' in ln:
+                    tot[d] += 1
+                elif "광고주분석: 쇼핑 API 결과 0건" in ln:
+                    empty[d] += 1
+                elif '"'"'"POST /api/seo/detail-page'"'"' in ln:
+                    det[d] += 1
+            days = sorted(set(tot) | set(empty))
+            if not days:
+                print("  (앱 기록에 해당 줄이 없다 — 기록 보관 기간 밖이거나 이름이 다르다 · 못 쟀다)")
+            for d in days:
+                t, e = tot[d], empty[d]
+                pct = (" (" + str(round(e * 100 / t)) + "%)") if t else ""
+                print(f"  {d}(UTC) 광고주 분석 {t}건 · 그중 경쟁 상품 0건으로 끝난 것 {e}건{pct}")
+            ' || echo "  (못 쟀다)"
+            docker exec -i -e KWH="$KWH" logic-analysis python3 - <<'PY'
+            import os, sys, sqlite3, hashlib, json, collections
+            sys.path.insert(0, "/app")
+            H = {h.strip().lower() for h in os.environ.get("KWH", "").split(",") if h.strip()}
+            DB = os.environ.get("RG_DB", "file:/app/data/logic_data.db?mode=ro")
+            conn = sqlite3.connect(DB, uri=True)
+
+
+            def hk(k):
+                return hashlib.sha256((k or "").strip().encode("utf-8")).hexdigest()
+
+
+            def is_target(k):
+                k = (k or "").strip()
+                return bool(k) and (hk(k) in H or hk(k.replace(" ", "")) in H)
+
+
+            def q(sql, a=()):
+                try:
+                    return conn.execute(sql, a).fetchall()
+                except Exception as e:
+                    print("    (조회 실패: " + type(e).__name__ + " — 0 이 아니라 못 쟀다)")
+                    return None
+
+
+            today = (q("SELECT date('now','localtime')") or [[""]])[0][0]
+            print("== 보고서 빈칸 원인 — 지정 키워드(해시로만 찾음 · 키워드 미출력) · 기준일 " + str(today) + " ==")
+            srcs = {
+                "수집분(collected_serp)": "SELECT DISTINCT keyword FROM collected_serp",
+                "관측 원장(부분 수집 포함)": "SELECT DISTINCT keyword FROM collector_observations",
+                "요청 큐": "SELECT keyword FROM collect_requests",
+                "추적 상품 키워드": "SELECT DISTINCT keyword FROM tracked_keywords",
+                "분석 이력(client_analyses)": "SELECT DISTINCT keyword FROM client_analyses",
+            }
+            found = set()
+            for label, sql in srcs.items():
+                rows = q(sql)
+                if rows is None:
+                    print("  " + label + ": 못 쟀다")
+                    continue
+                hits = {r[0] for r in rows if is_target(r[0])}
+                found |= hits
+                print("  " + label + ": " + ("있음(" + str(len(hits)) + "가지 표기)" if hits else "없음"))
+            rows = q("SELECT id, main_keywords FROM clients")
+            mk = 0
+            if rows is not None:
+                for cid, s in rows:
+                    for k in (s or "").split(","):
+                        if is_target(k):
+                            mk += 1
+                            found.add(k.strip())
+                print("  업체 대표 키워드: " + (str(mk) + "곳에 있음" if mk else "없음"))
+            try:
+                from collector import _keyword_universe
+                uni = _keyword_universe(conn)
+                inu = [k for k in uni if is_target(k)]
+                print("  수집 대상(유니버스 " + str(len(uni)) + "개)에 들어 있나: " + ("예" if inu else "아니오"))
+            except Exception as e:
+                uni = None
+                print("  유니버스 조회 실패: " + type(e).__name__ + " — 못 쟀다")
+            ks = sorted(found)
+            if not ks:
+                print("  ⇒ 서버 어디에도 이 키워드가 없다(분석 이력에도 없음 — 해시가 다르거나 띄어쓰기가 다른 표기일 수 있다)")
+            ph = ",".join("?" * len(ks)) if ks else "''"
+            print("  [수집분(완전 수집) 최근 21일 — 날짜 · 상품 수 · 전체 결과 수]")
+            r = q(f"SELECT collected_date, product_count, total FROM collected_serp WHERE keyword IN ({ph}) "
+                  "AND collected_date >= date('now','localtime','-21 day') ORDER BY collected_date DESC", ks)
+            if r is not None:
+                print("    " + (", ".join(f"{d}·{c}개·{t}" for d, c, t in r) if r else "없음"))
+            print("  [관측 원장 최근 14일 — 날짜 시각 · 상태 · 반영 · 상품 수]")
+            r = q(f"SELECT received_at, status, kind, products_json FROM collector_observations WHERE keyword IN ({ph}) "
+                  "AND collected_date >= date('now','localtime','-14 day') ORDER BY received_at DESC LIMIT 20", ks)
+            if r is not None:
+                if not r:
+                    print("    없음")
+                for at, st, kd, pj in r:
+                    try:
+                        n = len(json.loads(pj or "[]"))
+                    except Exception:
+                        n = -1
+                    print(f"    {at} · {st} · {kd} · 상품 {n}개")
+            print("  [요청 큐]")
+            r = q(f"SELECT status, attempts, requested_at FROM collect_requests WHERE keyword IN ({ph})", ks)
+            if r is not None:
+                print("    " + (", ".join(f"{s}·시도{a}·{t}" for s, a, t in r) if r else "없음"))
+            print("  [분석 이력 — 최근 30일 날짜별 건수 · 그중 경쟁 상품 목록이 채워진 것]")
+            r = q(f"SELECT analyzed_date, COUNT(*), SUM(CASE WHEN length(COALESCE(shop_products_json,'')) > 5 THEN 1 ELSE 0 END), "
+                  f"COUNT(DISTINCT client_id) FROM client_analyses WHERE keyword IN ({ph}) "
+                  "AND analyzed_date >= date('now','localtime','-30 day') GROUP BY analyzed_date ORDER BY analyzed_date DESC", ks)
+            if r is not None:
+                print("    " + (", ".join(f"{d}:{n}건(채움 {f})·업체{c}" for d, n, f, c in r) if r else "없음"))
+
+            print("== 지금 분석을 돌리면 경쟁 상품이 나오는가 — 수집 대상 전체 ==")
+            if uni is not None:
+                full = {x[0] for x in (q("SELECT DISTINCT keyword FROM collected_serp WHERE collected_date >= date('now','localtime','-1 day')") or [])}
+                part = collections.Counter()
+                for k, pj in (q("SELECT keyword, products_json FROM collector_observations WHERE collected_date >= date('now','localtime','-1 day') AND status='partial'") or []):
+                    try:
+                        if len(json.loads(pj or "[]")) >= 10:
+                            part[k] += 1
+                    except Exception:
+                        pass
+                U = set(uni)
+                a = len(U & full)
+                b = len((U & set(part)) - full)
+                c = len(U) - a - b
+                print(f"  수집 대상 {len(U)}개 중 — 완전 수집분 있음(분석에 나옴) {a} · 1페이지만 있음(지금은 분석에 안 나옴) {b} · 아무것도 없음 {c}")
+            r = q("SELECT DISTINCT keyword FROM client_analyses WHERE created_at >= datetime('now','localtime','-7 day')")
+            if r is not None and uni is not None:
+                ak = {x[0] for x in r}
+                full = {x[0] for x in (q("SELECT DISTINCT keyword FROM collected_serp WHERE collected_date >= date('now','localtime','-1 day')") or [])}
+                print(f"  최근 7일 분석 이력 키워드 {len(ak)}개 중 — 지금 완전 수집분 있음 {len(ak & full)} · 수집 대상 밖 {len(ak - set(uni))}")
+            print("== 요청 큐(직원이 찾은 새 키워드 — 시험 상한이 켜져 있으면 확장에 안 내려간다) ==")
+            try:
+                from collect_cap import effective_cap, ondemand_allowed
+                cap = effective_cap()
+                print(f"  시험 상한 {cap} · 요청 큐 내려보냄 {'예' if ondemand_allowed(cap) else '아니오(막힘)'}")
+            except Exception as e:
+                print("  시험 상한 조회 실패: " + type(e).__name__)
+            r = q("SELECT COUNT(*), SUM(attempts=0), SUM(attempts>=5), MIN(requested_at), MAX(requested_at) FROM collect_requests WHERE status='pending'")
+            if r is not None:
+                n, z, f, lo, hi = r[0]
+                print(f"  대기 {n}건 · 한 번도 안 내려간 것 {z} · 5회 소진 {f} · 가장 오래된 요청 {lo} · 가장 최근 요청 {hi}")
+            conn.close()
             PY
 
       - name: 🧯 워커 재시작 직전 (death_window=on · 읽기 전용)
