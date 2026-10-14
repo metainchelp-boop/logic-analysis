@@ -1,4 +1,4 @@
-"""P22 7b61 보고서 진단·점검 진행 코드 교체. DB·설정·키·광고 실행 보존."""
+"""P23 7f138 퍼널 후보 조회 점유시간 축소. DB·설정·키·광고 실행 보존."""
 import ast
 import hashlib
 import json
@@ -10,29 +10,29 @@ import stat
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = '7b61f64223cbd386c6971b8bc93b9ab17c11f34f'
+OLD_COMMIT = '7f138a8d42bb292567ccb3e117bd0305efc42ad7'
 BASE_PREVIOUS_COMMIT = '737a65952f2ddbc05a235cf2b139a4a11f4e7673'
-BASE_PREPARE_RUN = '38509559215'
-BASE_APPLY_OPERATION = '47d10b22631c4e158ad1697e27eaec08'
+BASE_PREPARE_RUN = '38523201246'
+BASE_APPLY_OPERATION = '56e0a8bbfcf04b1e82129cdeffa28811'
 BASE_CONTROLLER_SHA256 = '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 APPROVED_CONFIG_OPERATION_ID = '74c912dddf824fae99012849bc4c19a5'
 OLD_SCHEMA = TARGET_SCHEMA = 21
-ROLLBACK_COMMIT = '7b61f64223cbd386c6971b8bc93b9ab17c11f34f'
-EXPECTED_CODE_PATHS = frozenset({'naver_runtime/claude_provider.py', 'naver_engine/observation_store.py', 'backend/naver_page/automation-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/inspection_reads.py', 'naver_engine/strategy_validation.py', 'naver_engine/web.py', 'backend/naver_page/operations-ui.js', 'naver_engine/automation_views.py', 'backend/naver_page/report-ui.js'})
-CODE_PATHS = frozenset({'naver_runtime/claude_provider.py', 'naver_engine/observation_store.py', 'backend/naver_page/automation-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/inspection_reads.py', 'naver_engine/strategy_validation.py', 'naver_engine/web.py', 'backend/naver_page/operations-ui.js', 'naver_engine/automation_views.py', 'backend/naver_page/report-ui.js'})
+ROLLBACK_COMMIT = '7f138a8d42bb292567ccb3e117bd0305efc42ad7'
+EXPECTED_CODE_PATHS = frozenset({'naver_engine/funnel_store.py'})
+CODE_PATHS = frozenset({'naver_engine/funnel_store.py'})
 NEW_PATHS = frozenset()
-TARGET_COMMIT = '7f138a8d42bb292567ccb3e117bd0305efc42ad7'
-TARGET_SOURCE_SHA256 = 'c6730d64ae25f234bface0cbf2f8de4536953d524a7c1f84e2dc03400f00f0ac'
-TARGET_CANONICAL_SHA256 = '8fa8cab1342791a428292018e1d6dbf7411399e09aa5a079c451cdc70beab1f5'
-EXPECTED_TARGET_DELTA = {'backend/naver_page/automation-ui.js': (420, 60043, '8756b54c6f622343f6b215198fae5423bccde50a17961adaf743472924fa33ce'), 'backend/naver_page/operations-ui.js': (420, 19257, '67ea8c217e282653bba25a5a2eedd35492722f768bce1832a07709ff04866f3c'), 'backend/naver_page/report-ui.js': (420, 107930, '5b159ed30a0093bff4133ed4100660c9c00e0c79868655550ea9db536e21e557'), 'naver_engine/automation_views.py': (420, 12928, 'fbbb0f4d371d6a6061c60551c3b771a38b13a7ea24c1e79ec479aeb1bd1ab713'), 'naver_engine/inspection_reads.py': (420, 28773, 'c0f4a0b8df790dc8d4814962722fff3f4cc379e443a18b2efe70fcccdf41d462'), 'naver_engine/inspection_store.py': (420, 42280, 'fea2fee52cb6db3af9792c9c2ec19acd0ee63c68a84c35db67db02e9fcfe9717'), 'naver_engine/observation_store.py': (420, 18728, '3d650604453e9f3cce596a8dddee08be55d8ef923949613454cefbc98eff9b97'), 'naver_engine/strategy_validation.py': (420, 5020, 'f223cecbb82484673055ca209a853c4b3537f01e8c4a694b71f6c6609f6915ef'), 'naver_engine/web.py': (420, 130691, 'dd78867f36ff484625f7a71d9e87bfe97e51b9e57ed04e763f9ac4127262425d'), 'naver_runtime/claude_provider.py': (420, 45311, '1b3dc5198cbe4f8877484ce14c5d7afcc78ca90765eb4955c871d7726d353183')}
-TARGET_DELTA = {'backend/naver_page/automation-ui.js': (420, 60043, '8756b54c6f622343f6b215198fae5423bccde50a17961adaf743472924fa33ce'), 'backend/naver_page/operations-ui.js': (420, 19257, '67ea8c217e282653bba25a5a2eedd35492722f768bce1832a07709ff04866f3c'), 'backend/naver_page/report-ui.js': (420, 107930, '5b159ed30a0093bff4133ed4100660c9c00e0c79868655550ea9db536e21e557'), 'naver_engine/automation_views.py': (420, 12928, 'fbbb0f4d371d6a6061c60551c3b771a38b13a7ea24c1e79ec479aeb1bd1ab713'), 'naver_engine/inspection_reads.py': (420, 28773, 'c0f4a0b8df790dc8d4814962722fff3f4cc379e443a18b2efe70fcccdf41d462'), 'naver_engine/inspection_store.py': (420, 42280, 'fea2fee52cb6db3af9792c9c2ec19acd0ee63c68a84c35db67db02e9fcfe9717'), 'naver_engine/observation_store.py': (420, 18728, '3d650604453e9f3cce596a8dddee08be55d8ef923949613454cefbc98eff9b97'), 'naver_engine/strategy_validation.py': (420, 5020, 'f223cecbb82484673055ca209a853c4b3537f01e8c4a694b71f6c6609f6915ef'), 'naver_engine/web.py': (420, 130691, 'dd78867f36ff484625f7a71d9e87bfe97e51b9e57ed04e763f9ac4127262425d'), 'naver_runtime/claude_provider.py': (420, 45311, '1b3dc5198cbe4f8877484ce14c5d7afcc78ca90765eb4955c871d7726d353183')}
+TARGET_COMMIT = 'c20089be6c2e397bedea913a8ba9448f44a03de8'
+TARGET_SOURCE_SHA256 = '586a70f70dee551e260b685ca05cff1847c575db1355b27874fe97d59afcc18d'
+TARGET_CANONICAL_SHA256 = '1137824c7cdb23c946bf53f217aa7a90c2c070e264f0c8360b2d5eb91cd4561b'
+EXPECTED_TARGET_DELTA = {'naver_engine/funnel_store.py': (420, 30535, 'a320b7e2ae58e1be5e7a135cdcb4bdc0edd280db91bce4cd19887c444d0891d8')}
+TARGET_DELTA = {'naver_engine/funnel_store.py': (420, 30535, 'a320b7e2ae58e1be5e7a135cdcb4bdc0edd280db91bce4cd19887c444d0891d8')}
 TARGET_MANIFEST = None
 REPORT_ASSETS = None
 # receipt_sha256 is the exact native-CI canonical-source.json receipt digest.
-CI_PROOF = {'source_commit': '7f138a8d42bb292567ccb3e117bd0305efc42ad7', 'tooling_head': 'a81eea0a07679a2723223e58f99be31f586d0876', 'run_id': '38515082673', 'receipt_sha256': '8fa8cab1342791a428292018e1d6dbf7411399e09aa5a079c451cdc70beab1f5'}
+CI_PROOF = {'source_commit': 'c20089be6c2e397bedea913a8ba9448f44a03de8', 'tooling_head': '3681929741fe26e41b98cb748106658aaf1a64a1', 'run_id': '38528286875', 'receipt_sha256': '1137824c7cdb23c946bf53f217aa7a90c2c070e264f0c8360b2d5eb91cd4561b'}
 BASE = None
-OLD_SOURCE_SHA256 = 'f3c18012b4944b7ac505badcd72e0fd4f9c20bb3600eb899652de0924298dfe1'
+OLD_SOURCE_SHA256 = 'c6730d64ae25f234bface0cbf2f8de4536953d524a7c1f84e2dc03400f00f0ac'
 OLD_MANIFEST = None
 OLD_REPORT_ASSETS = None
 STORE_SHA256 = None
@@ -79,10 +79,10 @@ BF = {'naver_runtime/claude_provider.py': (420, 46328, 'a53f9c68126ab67069791055
 BG = '33cd39e7c6d1633b9bb0d52b660eed0575834d7b99e2b9c7d3732bce480cc926'
 BH = 'bdc1bcb0ee32f6ec8d90afee040e7bc0c10fd23e91ffa87885ced45e15dafc29'
 BI = '7d01ddfbd2300c0d87d1867ea829dae421a02d3911daa5c223520a6e3d5de867'
-APPROVED_TARGET_COMMIT = '7f138a8d42bb292567ccb3e117bd0305efc42ad7'
-APPROVED_TARGET_SOURCE_SHA256 = 'c6730d64ae25f234bface0cbf2f8de4536953d524a7c1f84e2dc03400f00f0ac'
-APPROVED_CI_PROOF = {'source_commit': '7f138a8d42bb292567ccb3e117bd0305efc42ad7', 'tooling_head': 'a81eea0a07679a2723223e58f99be31f586d0876', 'run_id': '38515082673', 'receipt_sha256': '8fa8cab1342791a428292018e1d6dbf7411399e09aa5a079c451cdc70beab1f5'}
-APPROVED_CANONICAL_SHA256 = '8fa8cab1342791a428292018e1d6dbf7411399e09aa5a079c451cdc70beab1f5'
+APPROVED_TARGET_COMMIT = 'c20089be6c2e397bedea913a8ba9448f44a03de8'
+APPROVED_TARGET_SOURCE_SHA256 = '586a70f70dee551e260b685ca05cff1847c575db1355b27874fe97d59afcc18d'
+APPROVED_CI_PROOF = {'source_commit': 'c20089be6c2e397bedea913a8ba9448f44a03de8', 'tooling_head': '3681929741fe26e41b98cb748106658aaf1a64a1', 'run_id': '38528286875', 'receipt_sha256': '1137824c7cdb23c946bf53f217aa7a90c2c070e264f0c8360b2d5eb91cd4561b'}
+APPROVED_CANONICAL_SHA256 = '1137824c7cdb23c946bf53f217aa7a90c2c070e264f0c8360b2d5eb91cd4561b'
 
 
 BJ = 'dc168ff8cf8dac519ea38597305a0d9dd6f6c843'
@@ -126,8 +126,8 @@ CN = 'c40a1dbd0132043ce5b6a6a5565c7786699b60c0'
 CO = 'afc1547c598502032fc0d34737e524627d4d7b1fd834b5204b4c11e6a4f3031a'
 CP = '38329975429'
 CQ = 'ee474c9b697e411ab3748f185728f56d'
-APPROVED_AST_SCOPE = {'naver_engine/automation_views.py': {'added': (), 'changed': ('view',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_engine/inspection_reads.py': {'added': (), 'changed': ('run_inspection',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_engine/inspection_store.py': {'added': ('InspectionStorage.inspection_checkpoint_summary',), 'changed': ('InspectionStorage.record_inspection_check',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_engine/observation_store.py': {'added': ('ObservationStorage.learning_strategy_validation',), 'changed': (), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_engine/strategy_validation.py': {'added': ('PROPOSAL_REASONS', 'proposal_pair'), 'changed': ('normalize',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_engine/web.py': {'added': (), 'changed': ('App._learning_job_response',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_runtime/claude_provider.py': {'added': (), 'changed': ('_compile_proposal',), 'imports_added': ('from naver_engine import strategy_validation as SV',), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}}
-EXPECTED_AST_SCOPE = {'naver_engine/automation_views.py': {'added': (), 'changed': ('view',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_engine/inspection_reads.py': {'added': (), 'changed': ('run_inspection',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_engine/inspection_store.py': {'added': ('InspectionStorage.inspection_checkpoint_summary',), 'changed': ('InspectionStorage.record_inspection_check',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_engine/observation_store.py': {'added': ('ObservationStorage.learning_strategy_validation',), 'changed': (), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_engine/strategy_validation.py': {'added': ('PROPOSAL_REASONS', 'proposal_pair'), 'changed': ('normalize',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_engine/web.py': {'added': (), 'changed': ('App._learning_job_response',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_runtime/claude_provider.py': {'added': (), 'changed': ('_compile_proposal',), 'imports_added': ('from naver_engine import strategy_validation as SV',), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}}
+APPROVED_AST_SCOPE = {'naver_engine/funnel_store.py': {'added': ('FunnelStorage._funnel_account_valid', '_FUNNEL_SELECTION_DEFAULTS'), 'changed': ('FunnelStorage.funnel_work', 'FunnelStorage.funnel_account_valid'), 'removed': (), 'optional_abi': {}, 'imports_added': (), 'imports_removed': ()}}
+EXPECTED_AST_SCOPE = {'naver_engine/funnel_store.py': {'added': ('FunnelStorage._funnel_account_valid', '_FUNNEL_SELECTION_DEFAULTS'), 'changed': ('FunnelStorage.funnel_work', 'FunnelStorage.funnel_account_valid'), 'removed': (), 'optional_abi': {}, 'imports_added': (), 'imports_removed': ()}}
 
 CR = 'fd9132c07031cae7162fb8af2a5131a8b1aeaba0'
 CS = 'a089de0912b34352ca21b998640c858d9f86d7e63d3d5b2db33d37d33a8c9a3b'
@@ -202,6 +202,14 @@ F_O = 'f9a32b991e354b10a4f26385e5570b96'
 P_D = {'naver_engine/execution_store.py': (420, 78727, 'c4da4337ac0e754b577049f3aaf600542866b9ba90767dbab8c8f86a31ebd650'), 'naver_engine/inspection_reads.py': (420, 28600, 'b750b6bcf7b87ddb1e189ef12abc5cdf8eec5f5a52ba8b9b0b36c9837f4f9053'), 'naver_engine/inspection_store.py': (420, 38363, 'e6f019e0e6ae87f6b726d81ec032c10bdbcd4bc5987adf2b5a36e804fb09c218'), 'naver_engine/naver_read.py': (420, 70889, 'c3a8e0d0d0c6f1364ee57f3bb5d796b6b39fe2de07e0980998e2394ef4c84b7a'), 'naver_engine/naver_write.py': (420, 25012, '427f87ccdc77eb8078bae0e2744aa1d3229c99ab18957d597766e9f854eccd0e'), 'naver_engine/setup_checks.py': (420, 40254, '63f6bc01917b7f82d2f10f2466428f52e9034152ce2d4495708c9fd8988cabf5'), 'naver_engine/shared_budget_evidence.py': (420, 6640, '3c4fabb77204f103d6fbe7b98f5d8a7ce937fcf0543b4e266982ce71bb99634e'), 'naver_runtime/claude_provider.py': (420, 42822, '21f6a28cfd327eae89fb8d7e823b143878523736214dad6388265b0412c75464'), 'naver_runtime/report_output_schema.py': (420, 1444, '4aeefa2d6ee79c9cb02f346835338de8a3c13137b2ff45ac67bb9f29797c56b2'), 'naver_runtime/scheduler.py': (420, 37017, '58a5884a5ccd38d799dbfa423df5ccc561dec9382d7534bc882a36c722b18f15')}
 P_M = '6da78aaaa8f03978b982fc6ea90c0f79aea1471d8f2361b811f4d0cb34e944b8'
 P_A = '340159bb437e9cae77255536aa2e87ff35438639d4c785896dfbaa99a34d5c9b'
+
+H_C = '7b61f64223cbd386c6971b8bc93b9ab17c11f34f'
+H_S = 'f3c18012b4944b7ac505badcd72e0fd4f9c20bb3600eb899652de0924298dfe1'
+H_R = '38509559215'
+H_O = '47d10b22631c4e158ad1697e27eaec08'
+H_D = {'backend/naver_page/automation-ui.js': (420, 60043, '8756b54c6f622343f6b215198fae5423bccde50a17961adaf743472924fa33ce'), 'backend/naver_page/operations-ui.js': (420, 19257, '67ea8c217e282653bba25a5a2eedd35492722f768bce1832a07709ff04866f3c'), 'backend/naver_page/report-ui.js': (420, 107930, '5b159ed30a0093bff4133ed4100660c9c00e0c79868655550ea9db536e21e557'), 'naver_engine/automation_views.py': (420, 12928, 'fbbb0f4d371d6a6061c60551c3b771a38b13a7ea24c1e79ec479aeb1bd1ab713'), 'naver_engine/inspection_reads.py': (420, 28773, 'c0f4a0b8df790dc8d4814962722fff3f4cc379e443a18b2efe70fcccdf41d462'), 'naver_engine/inspection_store.py': (420, 42280, 'fea2fee52cb6db3af9792c9c2ec19acd0ee63c68a84c35db67db02e9fcfe9717'), 'naver_engine/observation_store.py': (420, 18728, '3d650604453e9f3cce596a8dddee08be55d8ef923949613454cefbc98eff9b97'), 'naver_engine/strategy_validation.py': (420, 5020, 'f223cecbb82484673055ca209a853c4b3537f01e8c4a694b71f6c6609f6915ef'), 'naver_engine/web.py': (420, 130691, 'dd78867f36ff484625f7a71d9e87bfe97e51b9e57ed04e763f9ac4127262425d'), 'naver_runtime/claude_provider.py': (420, 45311, '1b3dc5198cbe4f8877484ce14c5d7afcc78ca90765eb4955c871d7726d353183')}
+H_M = '51620b5091b7374d6739ff022f3eed09088751c6e3bcd21277e12d96d61d8fc5'
+H_A = 'ff0774988bba001633b0fa9971ed2482e3ead9c39672d5a425e05cd6387d7f2a'
 
 def valid_row(row):
     return (type(row) is tuple and len(row)==3 and type(row[0]) is int and row[0]==0o644
@@ -312,6 +320,10 @@ def bind_base(base):
         or set(P_D)-set(old)!={'naver_engine/shared_budget_evidence.py'}):raise ValueError('PATCH_BASELINE')
     old={**old,**P_D}
     if manifest_digest(old)!=P_M or len(old)!=166:raise ValueError('PATCH_BASELINE')
+    if (type(H_D)is not dict or set(H_D)!={'naver_engine/automation_views.py', 'naver_engine/web.py', 'naver_engine/inspection_store.py', 'backend/naver_page/operations-ui.js', 'naver_runtime/claude_provider.py', 'naver_engine/inspection_reads.py', 'backend/naver_page/report-ui.js', 'naver_engine/strategy_validation.py', 'backend/naver_page/automation-ui.js', 'naver_engine/observation_store.py'}
+        or any(not valid_row(row) or name not in old or old[name]==row for name,row in H_D.items())):raise ValueError('PATCH_BASELINE')
+    old={**old,**H_D}
+    if manifest_digest(old)!=H_M or len(old)!=166:raise ValueError('PATCH_BASELINE')
     if (CODE_PATHS!=EXPECTED_CODE_PATHS or set(TARGET_DELTA)-set(old)!=NEW_PATHS
         or any(TARGET_DELTA[name]==old[name] for name in CODE_PATHS-NEW_PATHS)):raise ValueError('PATCH_SCOPE')
     BASE=base;OLD_MANIFEST=old;TARGET_MANIFEST={**old,**TARGET_DELTA}
@@ -329,14 +341,15 @@ def require_pins():
     if manifest_digest(chain)!=AE:raise ValueError('PATCH_SCOPE')
     for delta,digest in (({'naver_runtime/claude_provider.py':AI},AJ),
             (AR,AS),(AY,AZ),
-            (BF,BG),(BM,BN),(BT,BU),(CA,CB),(CH,CI),(CK,CL),(CV,CW),(RD_D,RD_M),(WR_D,WR_M),(PD_D,PD_M),(CR_D,CR_M),(E_DELTA,E_MANIFEST),(F_D,F_M),(P_D,P_M)):
+            (BF,BG),(BM,BN),(BT,BU),(CA,CB),(CH,CI),(CK,CL),(CV,CW),(RD_D,RD_M),(WR_D,WR_M),(PD_D,PD_M),(CR_D,CR_M),(E_DELTA,E_MANIFEST),(F_D,F_M),(P_D,P_M),(H_D,H_M)):
         chain={**chain,**delta}
         if manifest_digest(chain)!=digest:raise ValueError('PATCH_SCOPE')
     EW=chain
     FQ=EXPECTED_CODE_PATHS
     FG={route:(TARGET_MANIFEST['backend/naver_page/'+route.removeprefix('/naver/')][1],TARGET_MANIFEST['backend/naver_page/'+route.removeprefix('/naver/')][2],row[2]) for route,row in BASE.REPORT_ASSETS.items()}
-    if (OLD_COMMIT!='7b61f64223cbd386c6971b8bc93b9ab17c11f34f' or OLD_SOURCE_SHA256!='f3c18012b4944b7ac505badcd72e0fd4f9c20bb3600eb899652de0924298dfe1'
-        or BASE_PREPARE_RUN!='38509559215' or BASE_APPLY_OPERATION!='47d10b22631c4e158ad1697e27eaec08'
+    if (OLD_COMMIT!='7f138a8d42bb292567ccb3e117bd0305efc42ad7' or OLD_SOURCE_SHA256!='c6730d64ae25f234bface0cbf2f8de4536953d524a7c1f84e2dc03400f00f0ac'
+        or BASE_PREPARE_RUN!='38523201246' or BASE_APPLY_OPERATION!='56e0a8bbfcf04b1e82129cdeffa28811'
+        or H_C!='7b61f64223cbd386c6971b8bc93b9ab17c11f34f' or H_S!='f3c18012b4944b7ac505badcd72e0fd4f9c20bb3600eb899652de0924298dfe1' or H_R!='38509559215' or H_O!='47d10b22631c4e158ad1697e27eaec08'
         or F_C!='53926862e3263097b6ed5cb7b9bc0bb7617ff1c5' or F_S!='02305d8fd11856b8662843345a402c0155e5c155eb0b7e76ea6e3d9e42bfbabe' or F_R!='38498058014' or F_O!='f9a32b991e354b10a4f26385e5570b96'
         or Q_C!='07890f1da91f09aca87f2b093852f46778971ba1' or Q_S!='b9eaca9a2617c94c616bf090f0249aa19544a4b36f4c0636c1883615848fff2c'
         or Q_R!='38484358780' or Q_O!='fd9ff1f12a104778bc24ee2b92649ea9'
@@ -360,11 +373,11 @@ def require_pins():
         or BC!='15f3a23c2255de98cba3670fce3b489309698e1f'
         or BD!='38247492655' or BE!='66a3ac90ed9c4db6a38aee0cca626f42'
         or CODE_PATHS!=FQ or NEW_PATHS!=frozenset()
-        or OLD_MANIFEST!=EW or manifest_digest(OLD_MANIFEST)!=P_M
+        or OLD_MANIFEST!=EW or manifest_digest(OLD_MANIFEST)!=H_M
         or TARGET_MANIFEST!={**EW,**TARGET_DELTA} or len(TARGET_MANIFEST)!=166
         or set(TARGET_MANIFEST)-set(OLD_MANIFEST)!=NEW_PATHS or set(OLD_MANIFEST)-set(TARGET_MANIFEST)
         or {name for name in OLD_MANIFEST if OLD_MANIFEST[name]!=TARGET_MANIFEST[name]}!=CODE_PATHS-NEW_PATHS
-        or REPORT_ASSETS!=FG or manifest_digest(OLD_REPORT_ASSETS)!=P_A
+        or REPORT_ASSETS!=FG or manifest_digest(OLD_REPORT_ASSETS)!=H_A
         or STORE_SHA256!={'old':EW['naver_engine/store.py'][2],'target':TARGET_MANIFEST['naver_engine/store.py'][2]}
         or ROLLBACK_COMMIT!=OLD_COMMIT):raise ValueError('PATCH_SCOPE')
 
@@ -535,9 +548,13 @@ def proposal_success(release,upgrade):
     return _receipt_step(release,upgrade,shape_success,F_C,F_S,F_R,Q_C,F_O)
 
 
+def inspection_success(release,upgrade):
+    return _receipt_step(release,upgrade,proposal_success,H_C,H_S,H_R,F_C,H_O)
+
+
 def base_success(release,upgrade):
-    return _receipt_step(release,upgrade,proposal_success,OLD_COMMIT,OLD_SOURCE_SHA256,
-        BASE_PREPARE_RUN,F_C,BASE_APPLY_OPERATION)
+    return _receipt_step(release,upgrade,inspection_success,OLD_COMMIT,OLD_SOURCE_SHA256,
+        BASE_PREPARE_RUN,H_C,BASE_APPLY_OPERATION)
 
 
 def preserve_approved_config(files,operation_id,active,release,upgrade):
