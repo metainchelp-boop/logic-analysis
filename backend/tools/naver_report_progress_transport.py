@@ -30,18 +30,18 @@ MAX_CIPHERTEXT_BYTES=MAX_CIPHERTEXT
 MAX_PAYLOAD_BYTES=MAX_PAYLOAD
 MAX_BOOTSTRAP_B64_BYTES=MAX_BOOTSTRAP_B64
 MAX_SSH_BYTES=MAX_SSH
-TARGET_SOURCE = '621c5efeaf607b8227898bdf65d3ef040d1740fa'
-CODE_PATHS = ('naver_runtime/claude_provider.py', 'naver_runtime/report_output_schema.py')
+TARGET_SOURCE = '114dde8a45e1753ade0ff871f024c7e5880546c5'
+CODE_PATHS = ('backend/naver_page/operations-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/observation_store.py')
 # An external, independently verified template supplies this self-source hash.
 # It must never be embedded by rewriting this module with its own hash.
 TRANSPORT_RAW_SHA256=None
-EXPECTED_TARGET_SOURCE = '621c5efeaf607b8227898bdf65d3ef040d1740fa'
-EXPECTED_CODE_PATHS = ('naver_runtime/claude_provider.py', 'naver_runtime/report_output_schema.py')
+EXPECTED_TARGET_SOURCE = '114dde8a45e1753ade0ff871f024c7e5880546c5'
+EXPECTED_CODE_PATHS = ('backend/naver_page/operations-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/observation_store.py')
 FUNCTIONS={'preview-report-progress-prepare':'prepare','preview-report-progress-apply':'apply','preview-report-progress-rollback':'rollback'}
 SOURCE_FILES = {'host': 'naver_erp_tunnel_service_install.py', 'release': 'naver_preview_release.py', 'lifecycle': 'naver_preview_lifecycle.py', 'upgrade': 'naver_preview_upgrade.py', 'exports_binding': 'naver_completion_exports.py', 'exports_helper': 'naver_saved_exports.py', 'product_exporter': '../naver_product_export.py', 'market_exporter': '../naver_market_export.py', 'controller': 'naver_preview_completion_release.py', 'patch': 'naver_report_progress_patch.py'}
 # Exact raw and AST-equivalent compact sources match the reviewed target proof.
-SOURCE_SHA256 = {'patch': 'cc70a26b78e22bf40d0bd5cdfc89c64bed584ca59daf3d6b96dd537bb2911108', 'controller': '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'lifecycle': '4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4', 'upgrade': '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28', 'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
-COMPACT_SHA256 = {'patch': '5955ad74a230a9e6ccb11764dca4880e3b80d64c57ce98a8fb591361e7d9f00b', 'controller': '1b5170db0cad1eb6a7b33cc68364ee98292c32322eaadd6fdc333fc41a23ba12', 'host': 'cd6daeb55fe3ed1fd2553404c012d16f46b05bb9a1d651bd929b9787aa758840', 'release': '9681437257dd92309eb0ab2ad33c7c5c3c1e2abed334f1fa1c253fad2288c64a', 'lifecycle': '2020afcf0d616107c9043914a7e70ed8a842ccfb22ca05052d5be4b585d17b15', 'upgrade': 'ec2d47245647bcd5742675a955d8b4833c4e31eb32ff1c8dd0580ce090d85800', 'exports_binding': 'c8605f111ec8e71b8c639cc7426726d6636c5af85f4c745328a32643e7a82f55', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
+SOURCE_SHA256 = {'patch': 'b42b3dc3e906b334f78bdab1f3e4cc170af80b23ba93577e6f223b0f4c583bb0', 'controller': '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'lifecycle': '4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4', 'upgrade': '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28', 'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
+COMPACT_SHA256 = {'host': '0d3a035a59273ac56a05fc3af5a04c99b80f2c033270d3d27d7c0348bca95ce0', 'release': '7dcb1468ed73cf45a4d18a44717eabc433300556df3433362a94bc1a9fb3ee35', 'lifecycle': '1e639b3376c5efb1d7942b73bbfd13414f62fd8f0adf732435e76da947d18f40', 'upgrade': '62aeb7a7a1fb3b12011e5f55e3b238e6c81cbdc6f24255122d6e0d7bd78209f3', 'exports_binding': '448225a9dccf1da919cc503068673a71e3365504b19ecc897930553fe9d79ed2', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8', 'controller': 'a67a71758da00ae1d2cf271571fb5e8eef611e2c301450fbb279cf0cc6d751e4', 'patch': 'ababc449309b9300d3939aca6bcdd022544e16350b3c28996106cef4d1f3c430'}
 
 
 # Compatibility alias; both public views must agree with the pinned map.
@@ -57,7 +57,7 @@ def require_pins():
             raise ValueError('DETAIL_AI_PINS_PENDING')
     if (COMPACT_SOURCE_SHA256!=COMPACT_SHA256 or not digest(TRANSPORT_RAW_SHA256)
         or type(TARGET_SOURCE)is not str or len(TARGET_SOURCE)!=40 or TARGET_SOURCE!=EXPECTED_TARGET_SOURCE or type(CODE_PATHS) is not tuple
-        or len(CODE_PATHS)!=2 or set(CODE_PATHS)!=set(EXPECTED_CODE_PATHS)):
+        or len(CODE_PATHS)!=3 or set(CODE_PATHS)!=set(EXPECTED_CODE_PATHS)):
         raise ValueError('DETAIL_AI_PINS_PENDING')
 
 
@@ -110,6 +110,41 @@ def unique(pairs):
     return value
 
 
+def _compact_horizontal_layout(source):
+    tokens=list(tokenize.generate_tokens(io.StringIO(source).readline));lines=source.splitlines(True);offsets=[0]
+    for line in lines:offsets.append(offsets[-1]+len(line))
+    layout={tokenize.INDENT,tokenize.DEDENT,tokenize.NEWLINE,tokenize.NL,tokenize.ENDMARKER}
+    changes=[];active_fstring=0
+    def pair_exact(a,b):
+        if a.type in (tokenize.NAME,tokenize.NUMBER)and b.type in (tokenize.NAME,tokenize.NUMBER):return False
+        try:
+            rows=[]
+            for token in tokenize.generate_tokens(io.StringIO(a.string+b.string).readline):
+                if token.type not in layout:rows.append((token.type,token.string))
+                if len(rows)==2:break
+            return rows==[(a.type,a.string),(b.type,b.string)]
+        except (tokenize.TokenError,IndentationError,SyntaxError):return False
+    previous=None
+    for token in tokens:
+        kind=tokenize.tok_name[token.type]
+        if kind=='FSTRING_START':active_fstring+=1
+        inside=active_fstring>0
+        if kind=='FSTRING_END':active_fstring-=1
+        if (not inside and previous is not None and previous.type not in layout and token.type not in layout
+                and previous.end[0]==token.start[0] and (previous.type==tokenize.OP or token.type==tokenize.OP)):
+            start=offsets[previous.end[0]-1]+previous.end[1];end=offsets[token.start[0]-1]+token.start[1]
+            gap=source[start:end]
+            if gap and all(char in ' \t'for char in gap)and pair_exact(previous,token):changes.append((start,end))
+        previous=token
+    result=source
+    for start,end in reversed(changes):result=result[:start]+result[end:]
+    actual=list(tokenize.generate_tokens(io.StringIO(result).readline))
+    if ([(token.type,token.string)for token in actual]!=[(token.type,token.string)for token in tokens]
+            or ast.dump(ast.parse(source),include_attributes=False)!=ast.dump(ast.parse(result),include_attributes=False)):
+        raise ValueError('COMPLETION_SOURCE_AST')
+    return result
+
+
 def compact(source):
     def fields(value):
         if isinstance(value,ast.AST):return(type(value).__name__,tuple((name,fields(item)) for name,item in ast.iter_fields(value)))
@@ -131,7 +166,7 @@ def compact(source):
     result=tokenize.untokenize(pairs)
     if literals(tokens)!=literals(tokenize.generate_tokens(io.StringIO(result).readline)) or fields(ast.parse(source))!=fields(ast.parse(result)):
         raise ValueError('COMPLETION_SOURCE_AST')
-    return result
+    return _compact_horizontal_layout(result)
 
 class CompletionRelease:
     """Preserve the existing fixed sealed source envelope."""
