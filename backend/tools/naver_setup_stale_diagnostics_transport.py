@@ -12,8 +12,8 @@ import types
 
 OPERATION='preview-setup-stale-diagnostics'
 PREFIX='setup-stale-diagnostics-ad-account-dc168-xz-v1:'
-SOURCE='dc168ff8cf8dac519ea38597305a0d9dd6f6c843'
-ARCHIVE='7d01ddfbd2300c0d87d1867ea829dae421a02d3911daa5c223520a6e3d5de867'
+SOURCE='b5e40fa01e6432ab0a62541c330652e1cb4fae2c'
+ARCHIVE='1d3857f19aa8d4eeff573b267cd4a7229df32c58ed1c063e501d3676a64e3a89'
 BASELINE='5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 MODE='setup-stale-diagnostics-ad-account-dc168-v1'
 IDENTIFIER_NAMESPACE='ad_account_no'
@@ -26,8 +26,8 @@ MAX_RESULT=20480
 MAX_TRANSPORT_BASE64=32768
 SOURCE_FILES={'diagnostic':'naver_setup_stale_diagnostics.py',
     'host':'naver_erp_tunnel_service_install.py','release':'naver_preview_release.py'}
-SOURCE_SHA256={'diagnostic': '588d7ee3c3475ee788d9ccd35e9c9034dd0a08b3f7d97506b104540c9cbb43b1', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'}
-COMPACT_SHA256={'diagnostic': '5edf17d785ba9c0798283ba444e744fe4f6229c44ddadfb4dd52284205dbe48a', 'host': 'cd6daeb55fe3ed1fd2553404c012d16f46b05bb9a1d651bd929b9787aa758840', 'release': '9681437257dd92309eb0ab2ad33c7c5c3c1e2abed334f1fa1c253fad2288c64a'}
+SOURCE_SHA256={'diagnostic': '04d4f939324b4aa99d2b855cbbdea4bd4faf1ef0dd426f64ddbb123721f40e71', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'}
+COMPACT_SHA256={'diagnostic': '61518866ee2f7233b5bfe263df606c4d95e0ae3f0b7b8049c49e0ff10c0dfb59', 'host': 'cd6daeb55fe3ed1fd2553404c012d16f46b05bb9a1d651bd929b9787aa758840', 'release': '9681437257dd92309eb0ab2ad33c7c5c3c1e2abed334f1fa1c253fad2288c64a'}
 DEFAULTS={name:'off' for name in ('collector','rank_link','capacity','structure','expired','queue','urlshape','use_branch_code')}
 STAGES=frozenset(('input','bootstrap','preflight','read_only_source_diagnostics','postflight'))
 PREFLIGHT_CODES=frozenset(('SOURCE_DIAGNOSTICS_NOT_PINNED SOURCE_DIAGNOSTICS_SOURCE SOURCE_DIAGNOSTICS_BUNDLE '

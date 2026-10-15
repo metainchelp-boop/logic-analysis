@@ -10,19 +10,19 @@ from pathlib import Path
 import re
 
 STAGE = 'input'
-SOURCE = 'dc168ff8cf8dac519ea38597305a0d9dd6f6c843'
-ARCHIVE = '7d01ddfbd2300c0d87d1867ea829dae421a02d3911daa5c223520a6e3d5de867'
+SOURCE = 'b5e40fa01e6432ab0a62541c330652e1cb4fae2c'
+ARCHIVE = '1d3857f19aa8d4eeff573b267cd4a7229df32c58ed1c063e501d3676a64e3a89'
 BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 SCHEMA = 21
-PREPARE_RUN = '38258857593'
-APPLY_OPERATION = '8137805c235747ca8a155711034e7d82'
-PREVIOUS_SOURCE = '15f3a23c2255de98cba3670fce3b489309698e1f'
+PREPARE_RUN = '38726899460'
+APPLY_OPERATION = '9e72159e3ce146a6ba2846396a6ce4b4'
+PREVIOUS_SOURCE = '114dde8a45e1753ade0ff871f024c7e5880546c5'
 MODE = 'setup-stale-diagnostics-ad-account-dc168-v1'
 TARGET_NAMESPACE = 'ad_account_no'
 # These are UI advertising-account numbers, never internal customer IDs.
 TARGETS = (('gomso', 74789, 2488728), ('foodin', 51952, 1030001))
 MAX_OUTPUT = 16384
-CODE_PINS = {'naver_engine/store.py': '4e45f6035c8603676b6a5f04b593bb4c0155e2655d2e8e26ae309ade71b51bbf', 'naver_engine/inspection_store.py': 'aa694ce93b6094d2598f4f3e06eaacfed4a04b1f787e6bc715a22a9f30253799', 'naver_engine/inspection_reads.py': '965f5dac65cbf867a6232c5af2d3992a6324b81cc6470e65167e06d674d0e543', 'naver_engine/inspection_fields.py': '102028ecb4f35647043b5efc1751e516c92f326252b88c3ab6c983ca7c61ba6a', 'naver_engine/management.py': '84862507d3831053edf618c6d68e800f1f1a1ec4019bcc88030eacb4d14f37e4', 'naver_engine/management_store.py': '13ee58e1d4383acf3ab8da469e7e09b9032640c2629e601809a3991b4c650fc5', 'naver_engine/inventory.py': '2a5c4d5f6acb0b431daa9e16be517322a43008aa636cfdf90c49c4a9305ae28e', 'naver_engine/product_evidence.py': '755c97900d34e06ac4a7f46c4ac3aafb3477f5a616cb560bb002f86deac87711', 'naver_engine/sync.py': '7ddd57ccce8a8edcf13e3d4495d748d122b067e1bba32becfa6326a4dda32dad', 'backend/app/naver_auto/org_snapshot.py': '34da0635ee7d071c3dd02bf4001343f2c42001ebc70d7e5548e692d687920f97', 'backend/app/naver_auto/scope.py': 'fd25fae418f27e6bd9b01415489164eb85241a5151a3e5fa1ad085edec7b3cd7', 'naver_engine/inspection_catalog.py': '3d0652bcb8ef6a5eef6bf16ec85f1e0319b96a078abd68381af070aa3dad46b6'}
+CODE_PINS = {'naver_engine/store.py': '9359770b96097bf5cfd70242b4902536c08572fc7bca2a76c4be159a4aac4477', 'naver_engine/inspection_store.py': '1162d78edb0623fd423fc4cb5e547b16eb6861b877655a0981dc32ef479ab5ca', 'naver_engine/inspection_reads.py': 'c0f4a0b8df790dc8d4814962722fff3f4cc379e443a18b2efe70fcccdf41d462', 'naver_engine/inspection_fields.py': '102028ecb4f35647043b5efc1751e516c92f326252b88c3ab6c983ca7c61ba6a', 'naver_engine/management.py': '84862507d3831053edf618c6d68e800f1f1a1ec4019bcc88030eacb4d14f37e4', 'naver_engine/management_store.py': '13ee58e1d4383acf3ab8da469e7e09b9032640c2629e601809a3991b4c650fc5', 'naver_engine/inventory.py': '2a5c4d5f6acb0b431daa9e16be517322a43008aa636cfdf90c49c4a9305ae28e', 'naver_engine/product_evidence.py': '755c97900d34e06ac4a7f46c4ac3aafb3477f5a616cb560bb002f86deac87711', 'naver_engine/sync.py': '7ddd57ccce8a8edcf13e3d4495d748d122b067e1bba32becfa6326a4dda32dad', 'backend/app/naver_auto/org_snapshot.py': '34da0635ee7d071c3dd02bf4001343f2c42001ebc70d7e5548e692d687920f97', 'backend/app/naver_auto/scope.py': 'fd25fae418f27e6bd9b01415489164eb85241a5151a3e5fa1ad085edec7b3cd7', 'naver_engine/inspection_catalog.py': '3d0652bcb8ef6a5eef6bf16ec85f1e0319b96a078abd68381af070aa3dad46b6'}
 READ_FAILURE_CODES = frozenset(('SOURCE_DIAGNOSTICS_READER_FAILED SOURCE_DIAGNOSTICS_READ_FAILED '
     'SOURCE_DIAGNOSTICS_DEADLINE SOURCE_DIAGNOSTICS_TIME SOURCE_DIAGNOSTICS_ROW_LIMIT '
     'SOURCE_DIAGNOSTICS_DATABASE_PATH SOURCE_DIAGNOSTICS_READER_MODE SOURCE_DIAGNOSTICS_TARGETS '
