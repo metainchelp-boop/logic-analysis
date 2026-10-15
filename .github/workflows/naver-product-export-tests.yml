@@ -37,6 +37,14 @@ jobs:
             LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
             python -m unittest discover -s backend/tests -p test_naver_product_export.py -v \
             2>&1 | tee "$RUNNER_TEMP/product-tests/export-tests.txt"
+      - name: 고정 Claude 단문·키 비노출·호출 1회 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_claude_minimal_probe test_naver_claude_minimal_probe_host -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/claude-minimal-probe-tests.txt"
       - name: 실제 Linux 서비스 문법·격리된 설치 회귀 검사
         run: |
           set -euo pipefail
