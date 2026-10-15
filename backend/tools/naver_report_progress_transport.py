@@ -30,18 +30,18 @@ MAX_CIPHERTEXT_BYTES=MAX_CIPHERTEXT
 MAX_PAYLOAD_BYTES=MAX_PAYLOAD
 MAX_BOOTSTRAP_B64_BYTES=MAX_BOOTSTRAP_B64
 MAX_SSH_BYTES=MAX_SSH
-TARGET_SOURCE = '114dde8a45e1753ade0ff871f024c7e5880546c5'
-CODE_PATHS = ('backend/naver_page/operations-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/observation_store.py')
+TARGET_SOURCE = 'b5e40fa01e6432ab0a62541c330652e1cb4fae2c'
+CODE_PATHS = ('backend/naver_page/operations-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/observation_store.py', 'naver_engine/web.py')
 # An external, independently verified template supplies this self-source hash.
 # It must never be embedded by rewriting this module with its own hash.
 TRANSPORT_RAW_SHA256=None
-EXPECTED_TARGET_SOURCE = '114dde8a45e1753ade0ff871f024c7e5880546c5'
-EXPECTED_CODE_PATHS = ('backend/naver_page/operations-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/observation_store.py')
+EXPECTED_TARGET_SOURCE = 'b5e40fa01e6432ab0a62541c330652e1cb4fae2c'
+EXPECTED_CODE_PATHS = ('backend/naver_page/operations-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/observation_store.py', 'naver_engine/web.py')
 FUNCTIONS={'preview-report-progress-prepare':'prepare','preview-report-progress-apply':'apply','preview-report-progress-rollback':'rollback'}
 SOURCE_FILES = {'host': 'naver_erp_tunnel_service_install.py', 'release': 'naver_preview_release.py', 'lifecycle': 'naver_preview_lifecycle.py', 'upgrade': 'naver_preview_upgrade.py', 'exports_binding': 'naver_completion_exports.py', 'exports_helper': 'naver_saved_exports.py', 'product_exporter': '../naver_product_export.py', 'market_exporter': '../naver_market_export.py', 'controller': 'naver_preview_completion_release.py', 'patch': 'naver_report_progress_patch.py'}
 # Exact raw and AST-equivalent compact sources match the reviewed target proof.
-SOURCE_SHA256 = {'patch': 'b42b3dc3e906b334f78bdab1f3e4cc170af80b23ba93577e6f223b0f4c583bb0', 'controller': '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'lifecycle': '4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4', 'upgrade': '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28', 'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
-COMPACT_SHA256 = {'host': '0d3a035a59273ac56a05fc3af5a04c99b80f2c033270d3d27d7c0348bca95ce0', 'release': '7dcb1468ed73cf45a4d18a44717eabc433300556df3433362a94bc1a9fb3ee35', 'lifecycle': '1e639b3376c5efb1d7942b73bbfd13414f62fd8f0adf732435e76da947d18f40', 'upgrade': '62aeb7a7a1fb3b12011e5f55e3b238e6c81cbdc6f24255122d6e0d7bd78209f3', 'exports_binding': '448225a9dccf1da919cc503068673a71e3365504b19ecc897930553fe9d79ed2', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8', 'controller': 'a67a71758da00ae1d2cf271571fb5e8eef611e2c301450fbb279cf0cc6d751e4', 'patch': 'ababc449309b9300d3939aca6bcdd022544e16350b3c28996106cef4d1f3c430'}
+SOURCE_SHA256 = {'patch': '0e316acde19836d178f4728317744aeb28ff59f993ae92a57936815940bb1783', 'controller': '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'lifecycle': '4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4', 'upgrade': '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28', 'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
+COMPACT_SHA256 = {'host': '4e95c24f9da93d814cc90e919ffb9fdfb6113667f16205f382406b7369085b95', 'release': 'd9b4456ecd3de6bfe9fa12430616cf6b9cedadf4ba4dbe28582ad3ea22f84367', 'lifecycle': '0c3ffaa303ad066f23117b304b8f9289e0e3bc78a9c59a8dced8d58e54f498bd', 'upgrade': 'e4dd1f3c29c04439321bff785d803a12356d56e2b83986cf81f286d4dce46f60', 'exports_binding': '2c7f944b2b992eead34508ba671422c50d9becbc5ae5ff39933ab00a5958f32f', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8', 'controller': '4d937e6c55c36853f6d9e6b0f7557558e074a66910ab03c8b43aae92c5ef3fba', 'patch': 'a24f356e1b2c45604fa6b50b06ea25c111b6dc881e6b851bd314439a12d44a8d'}
 
 
 # Compatibility alias; both public views must agree with the pinned map.
@@ -57,7 +57,7 @@ def require_pins():
             raise ValueError('DETAIL_AI_PINS_PENDING')
     if (COMPACT_SOURCE_SHA256!=COMPACT_SHA256 or not digest(TRANSPORT_RAW_SHA256)
         or type(TARGET_SOURCE)is not str or len(TARGET_SOURCE)!=40 or TARGET_SOURCE!=EXPECTED_TARGET_SOURCE or type(CODE_PATHS) is not tuple
-        or len(CODE_PATHS)!=3 or set(CODE_PATHS)!=set(EXPECTED_CODE_PATHS)):
+        or len(CODE_PATHS)!=4 or set(CODE_PATHS)!=set(EXPECTED_CODE_PATHS)):
         raise ValueError('DETAIL_AI_PINS_PENDING')
 
 
@@ -81,7 +81,7 @@ def validate(value=None):
 def encode(value=None):
     raw=json.dumps(validate(value),ensure_ascii=False,separators=(',',':')).encode()
     if len(raw)>MAX_JSON:raise ValueError('PATCH_JSON_SIZE')
-    wire=PREFIX+base64.b85encode(lzma.compress(raw,format=lzma.FORMAT_XZ,check=lzma.CHECK_CRC64,filters=[{'id':lzma.FILTER_LZMA2,'preset':6|lzma.PRESET_EXTREME,'lc':4,'pb':0}])).decode()
+    wire=PREFIX+base64.b85encode(lzma.compress(raw,format=lzma.FORMAT_XZ,check=lzma.CHECK_CRC64,filters=[{'id':lzma.FILTER_LZMA2,'preset':6|lzma.PRESET_EXTREME,'lc':3,'pb':0}])).decode()
     if len(wire)>MAX_WIRE:raise ValueError('PATCH_WIRE_SIZE')
     return wire
 
@@ -145,6 +145,35 @@ def _compact_horizontal_layout(source):
     return result
 
 
+def _compact_continuation_layout(source):
+    tokens=list(tokenize.generate_tokens(io.StringIO(source).readline))
+    lines=source.splitlines(keepends=True);starts=[0]
+    for line in lines:starts.append(starts[-1]+len(line))
+    start_kind=getattr(tokenize,'FSTRING_START',-1);end_kind=getattr(tokenize,'FSTRING_END',-2)
+    depth=0;fstrings=0;edits=[]
+    for token in tokens:
+        if token.type==start_kind:fstrings+=1;continue
+        if token.type==end_kind:fstrings-=1;continue
+        if fstrings:continue
+        if token.type==tokenize.OP:
+            if token.string in ('(','[','{'):depth+=1
+            elif token.string in (')',']','}'):depth-=1
+            if depth<0:raise ValueError('COMPLETION_SOURCE_AST')
+        if token.type==tokenize.NL and depth>0:
+            begin=starts[token.start[0]-1]+token.start[1]
+            end=starts[token.end[0]-1]+token.end[1]
+            while end<len(source)and source[end]in (' ','\t'):end+=1
+            edits.append((begin,end))
+    if depth or fstrings:raise ValueError('COMPLETION_SOURCE_AST')
+    result=source
+    for begin,end in reversed(edits):result=result[:begin]+' '+result[end:]
+    after=list(tokenize.generate_tokens(io.StringIO(result).readline))
+    keep=lambda sequence:[(t.type,t.string)for t in sequence if t.type!=tokenize.NL]
+    if keep(tokens)!=keep(after)or ast.dump(ast.parse(source),include_attributes=False)!=ast.dump(ast.parse(result),include_attributes=False):
+        raise ValueError('COMPLETION_SOURCE_AST')
+    return result
+
+
 def compact(source):
     def fields(value):
         if isinstance(value,ast.AST):return(type(value).__name__,tuple((name,fields(item)) for name,item in ast.iter_fields(value)))
@@ -166,7 +195,7 @@ def compact(source):
     result=tokenize.untokenize(pairs)
     if literals(tokens)!=literals(tokenize.generate_tokens(io.StringIO(result).readline)) or fields(ast.parse(source))!=fields(ast.parse(result)):
         raise ValueError('COMPLETION_SOURCE_AST')
-    return _compact_horizontal_layout(result)
+    return _compact_horizontal_layout(_compact_continuation_layout(result))
 
 class CompletionRelease:
     """Preserve the existing fixed sealed source envelope."""

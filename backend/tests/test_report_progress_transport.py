@@ -1,4 +1,4 @@
-"""Three-source diagnostic epoch; closed codec and uniform layout representation."""
+"""Four-source binding diagnostics; lossless continuation layout and closed codec."""
 import ast,hashlib,importlib.util
 import base64,copy,io,json,lzma,tokenize
 from unittest.mock import patch
@@ -32,13 +32,17 @@ class ProductBasisTransportTests(unittest.TestCase):
   t=load();self.assertEqual((t.MAX_JSON,t.MAX_WIRE,t.MAX_SOURCE,t.MAX_SOURCE_GZIP,t.MAX_CIPHERTEXT,t.MAX_PAYLOAD,t.MAX_BOOTSTRAP_B64,t.MAX_SSH),(393216,98304,160000,3*1024*1024,3*1024*1024,4*1024*1024,32768,131072))
   old=ast.parse((TOOLS/'naver_budget_format_transport.py').read_bytes());new=ast.parse((TOOLS/'naver_report_progress_transport.py').read_bytes())
   for name in ('encode','decode','unique','bootstrap'):
-   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name);self.assertEqual(ast.dump(a),ast.dump(b),name)
+   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name)
+   if name=='encode':
+    lc=[node.values[i]for node in ast.walk(b)if isinstance(node,ast.Dict)for i,key in enumerate(node.keys)if isinstance(key,ast.Constant)and key.value=='lc']
+    self.assertEqual(len(lc),1);self.assertEqual(lc[0].value,3);lc[0].value=4
+   self.assertEqual(ast.dump(a),ast.dump(b),name)
   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name=='compact');b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name=='compact')
   self.assertEqual(ast.dump(ast.Module(body=a.body[:-1],type_ignores=[])),ast.dump(ast.Module(body=b.body[:-1],type_ignores=[])))
   self.assertEqual(ast.dump(a.body[-1]),ast.dump(ast.parse('return result').body[0]))
-  self.assertEqual(ast.dump(b.body[-1]),ast.dump(ast.parse('return _compact_horizontal_layout(result)').body[0]))
+  self.assertEqual(ast.dump(b.body[-1]),ast.dump(ast.parse('return _compact_horizontal_layout(_compact_continuation_layout(result))').body[0]))
  def test_two_exact_existing_paths_oversize_and_foreign_scope_remain_closed(self):
-  t,value=pinned();self.assertEqual(t.CODE_PATHS,('backend/naver_page/operations-ui.js','naver_engine/inspection_store.py','naver_engine/observation_store.py'));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
+  t,value=pinned();self.assertEqual(t.CODE_PATHS,('backend/naver_page/operations-ui.js','naver_engine/inspection_store.py','naver_engine/observation_store.py','naver_engine/web.py'));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
   with self.assertRaises(ValueError):t.encode({**value,'sources':{**value['sources'],'patch':'a'*(t.MAX_SOURCE+1)}})
   for scope in ((),('unapproved.py',),('naver_runtime/claude_provider.py','extra.py'),('naver_runtime/claude_provider.py','naver_runtime/report_output_schema.py','extra.py'),t.CODE_PATHS[:-1],t.CODE_PATHS+('extra.py',)):
    t.CODE_PATHS=scope
@@ -124,5 +128,33 @@ class UniformCompactBoundaryTests(unittest.TestCase):
         with patch.object(t.tokenize,'generate_tokens',side_effect=generate):
             with self.assertRaisesRegex(ValueError,'COMPLETION_SOURCE_AST'):
                 t._compact_horizontal_layout(source)
+
+    def test_continuation_layout_preserves_adjacent_strings_fstrings_names_comments_and_indent(self):
+        t=load()
+        spec=importlib.util.spec_from_file_location('legacy_compact_for_continuations',TOOLS/'naver_budget_format_transport.py')
+        legacy=importlib.util.module_from_spec(spec);spec.loader.exec_module(legacy)
+        snippets=(
+            "items = (\n 'left'\n 'right'\n)\n",
+            "text = (\n '''first\nsecond {literal}'''\n)\n",
+            "text = (\n f'''first\n{value + 1}\nlast'''\n)\n",
+            "text = f'''value{(\n value + 1\n)}end'''\n",
+            "chosen = (\n left\n if ready\n else right\n)\n",
+            "# old compact comment policy\ndef chosen():\n    value = (\n        1 # inside bracket\n        + 2\n    )\n    return value\n\n",
+            "def chosen():\n    items = [\n        'a',\n        'b',\n    ]\n    return items\n\n",
+        )
+        tokens=lambda source:[(v.type,v.string)for v in tokenize.generate_tokens(io.StringIO(source).readline)if v.type!=tokenize.NL]
+        changed=0
+        for source in snippets:
+            with self.subTest(source=source):
+                before=t._compact_horizontal_layout(legacy.compact(source))
+                result=t.compact(source)
+                self.assertEqual(tokens(before),tokens(result))
+                self.assertEqual(ast.dump(ast.parse(source)),ast.dump(ast.parse(result)))
+                self.assertEqual(t._compact_continuation_layout(result),result)
+                compile(result,'unexecuted-continuation-layout','exec')
+                changed+=result!=before
+        self.assertGreaterEqual(changed,5)
+        unchanged="def chosen():\n return 'literal { }'\n\n"
+        self.assertEqual(t._compact_continuation_layout(unchanged),unchanged)
 
 if __name__=='__main__':unittest.main()

@@ -1,4 +1,4 @@
-"""Three-file diagnostic epoch; synthetic fixtures do not claim actual source CI."""
+"""Four-file binding diagnostic epoch; synthetic fixtures do not claim actual source CI."""
 import ast,hashlib,importlib.util
 from pathlib import Path
 from copy import deepcopy
@@ -9,7 +9,8 @@ TOOLS=Path(__file__).resolve().parents[1]/'tools'
 CP='naver_engine/observation_store.py'
 SCHEMA='naver_engine/inspection_store.py'
 JS='backend/naver_page/operations-ui.js'
-PYTHON_PATHS=frozenset((CP,SCHEMA))
+WEB='naver_engine/web.py'
+PYTHON_PATHS=frozenset((CP,SCHEMA,WEB))
 PATHS=PYTHON_PATHS|{JS}
 
 def load(name):
@@ -17,7 +18,8 @@ def load(name):
 
 def fixture_scope():
  return {CP:dict(changed=('chosen',),added=(),removed=(),optional_abi={},imports_added=(),imports_removed=()),
-  SCHEMA:dict(changed=('FORMAT_VERSION','output_format'),added=(),removed=(),optional_abi={},imports_added=(),imports_removed=())}
+  SCHEMA:dict(changed=('FORMAT_VERSION','output_format'),added=(),removed=(),optional_abi={},imports_added=(),imports_removed=()),
+  WEB:dict(changed=('chosen',),added=(),removed=(),optional_abi={},imports_added=(),imports_removed=())}
 
 def pinned():
  p=load('naver_report_progress_patch')
@@ -34,6 +36,7 @@ def bodies():
   SCHEMA:b"FORMAT_VERSION='v4'\ndef output_format(context):return {}\ndef text_pattern():return 'fixed'\n"}
  after={CP:b"def chosen(context):return 'new'\ndef keep():return True\n",
   SCHEMA:b"FORMAT_VERSION='v5'\ndef output_format(context):return {'type':'json_schema'}\ndef text_pattern():return 'fixed'\n"}
+ before[WEB]=b"def chosen(context):return 'old'\n";after[WEB]=b"def chosen(context):return 'new'\n"
  before[JS]=b'const diagnostic = false;\n';after[JS]=b'const diagnostic = true;\n'
  return before,after
 
@@ -46,19 +49,19 @@ class ProductBasisPatchTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'PINS_PENDING'):p.require_target_pins()
    with self.assertRaisesRegex(ValueError,'PINS_PENDING'):p.bind_base(object())
  def test_actual_1fc_baseline_two_existing_paths_manifest166_same_store_schema_and_assets(self):
-  p=pinned();self.assertEqual(p.OLD_COMMIT,'621c5efeaf607b8227898bdf65d3ef040d1740fa')
+  p=pinned();self.assertEqual(p.OLD_COMMIT,'114dde8a45e1753ade0ff871f024c7e5880546c5')
   self.assertEqual((p.OLD_SCHEMA,p.TARGET_SCHEMA),(21,21));self.assertEqual(p.CODE_PATHS,PATHS);self.assertEqual(p.NEW_PATHS,frozenset())
   self.assertEqual((len(p.OLD_MANIFEST),len(p.TARGET_MANIFEST)),(166,166));self.assertEqual(set(p.OLD_MANIFEST),set(p.TARGET_MANIFEST))
   self.assertEqual({k for k in p.OLD_MANIFEST if p.OLD_MANIFEST[k]!=p.TARGET_MANIFEST[k]},PATHS)
-  self.assertEqual(p.manifest_digest(p.OLD_MANIFEST),'9de931063d86a011682a0e38568de36532d2fb47077f50cca0ddfe24ad2f1d9f')
+  self.assertEqual(p.manifest_digest(p.OLD_MANIFEST),'744bc24aadadd683dec7fa4b99d33669996d0b92eae78b654884cf3f9f404950');self.assertEqual(p.I_M,'9de931063d86a011682a0e38568de36532d2fb47077f50cca0ddfe24ad2f1d9f')
   self.assertEqual(p.H_M,'51620b5091b7374d6739ff022f3eed09088751c6e3bcd21277e12d96d61d8fc5')
   self.assertEqual(p.STORE_SHA256['old'],p.STORE_SHA256['target']);self.assertEqual(p.ROLLBACK_COMMIT,p.OLD_COMMIT);self.assertEqual(set(p.OLD_REPORT_ASSETS),set(p.REPORT_ASSETS));self.assertEqual({key for key in p.REPORT_ASSETS if p.REPORT_ASSETS[key]!=p.OLD_REPORT_ASSETS[key]}, {'/naver/operations-ui.js'})
  def test_all_old_history_and_new_c200_layer_and_receipt_pairs_cannot_mutate(self):
-  for name,value in [('H_M','a'*64),('H_A','a'*64),('H_C','a'*40),('H_S','a'*64),('H_R','12345678901'),('H_O','a'*32),('H_D',{}),('Z_M','a'*64),('Z_A','a'*64),('Z_C','a'*40),('Z_S','a'*64),('Z_R','12345678901'),('Z_O','a'*32),('Z_D',{}),('F','a'*64),('G','a'*64),('A','a'*40),('B','a'*64),('C','12345678901'),('D','a'*32),('E',{}),('I_M','a'*64),('I_A','a'*64),('I_C','a'*40),('I_S','a'*64),('I_R','12345678901'),('I_O','a'*32),('I_D',{}),('BASE_PREPARE_RUN','38523201246'),('BASE_APPLY_OPERATION','a'*32)]:
+  for name,value in [('H_M','a'*64),('H_A','a'*64),('H_C','a'*40),('H_S','a'*64),('H_R','12345678901'),('H_O','a'*32),('H_D',{}),('Z_M','a'*64),('Z_A','a'*64),('Z_C','a'*40),('Z_S','a'*64),('Z_R','12345678901'),('Z_O','a'*32),('Z_D',{}),('F','a'*64),('G','a'*64),('A','a'*40),('B','a'*64),('C','12345678901'),('D','a'*32),('E',{}),('I_M','a'*64),('I_A','a'*64),('I_C','a'*40),('I_S','a'*64),('I_R','12345678901'),('I_O','a'*32),('I_D',{}),('K_C','a'*40),('K_S','a'*64),('K_R','12345678901'),('K_O','a'*32),('K_D',{}),('K_M','a'*64),('K_A','a'*64),('BASE_PREPARE_RUN','38523201246'),('BASE_APPLY_OPERATION','a'*32)]:
    p=pinned();setattr(p,name,value)
    with self.subTest(name=name),self.assertRaises(ValueError):p.require_pins()
  def test_foreign_new_missing_paths_and_previous_source_pins_refuse(self):
-  for name,value in [('NEW_PATHS',frozenset({'unapproved.py'})),('CODE_PATHS',frozenset({'unapproved.py'})),('TARGET_COMMIT','621c5efeaf607b8227898bdf65d3ef040d1740fa'),('TARGET_COMMIT','1fc2c92a18ea50dfef4e0b3da9ddd973f4017715'),('TARGET_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_SOURCE_SHA256','a'*64)]:
+  for name,value in [('NEW_PATHS',frozenset({'unapproved.py'})),('CODE_PATHS',frozenset({'unapproved.py'})),('TARGET_COMMIT','114dde8a45e1753ade0ff871f024c7e5880546c5'),('TARGET_COMMIT','621c5efeaf607b8227898bdf65d3ef040d1740fa'),('TARGET_COMMIT','1fc2c92a18ea50dfef4e0b3da9ddd973f4017715'),('TARGET_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_SOURCE_SHA256','a'*64)]:
    p=pinned();setattr(p,name,value)
    with self.subTest(name=name),self.assertRaises(ValueError):p.require_pins()
  def test_exact_scope_field_shape_and_unapproved_ABI_remain_closed(self):
@@ -72,7 +75,7 @@ class ProductBasisPatchTests(unittest.TestCase):
   for name,bad in [(CP,after[CP]+b'UNAPPROVED=True\n'),(CP,b'import os\n'+after[CP]),(CP,after[CP].replace(b'chosen(context)',b'chosen(context,bypass=False)')),(CP,after[CP].replace(b'keep():return True',b'keep():return False')),(SCHEMA,after[SCHEMA].replace(b"return 'fixed'",b"return 'changed'"))]:
    with self.subTest(name=name),self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):p.python_contract(name,before[name],bad)
  def test_schema_basis_optional_ABI_is_one_exact_None_keyword_only_combination(self):
-  p=pinned();legacy='naver_runtime/report_output_schema.py';p.EXPECTED_CODE_PATHS=p.CODE_PATHS=frozenset((CP,legacy));scope=fixture_scope();scope[legacy]=scope.pop(SCHEMA);scope[legacy]['optional_abi']={'output_format':('basis_ids',)};p.APPROVED_AST_SCOPE=p.EXPECTED_AST_SCOPE=scope;p.validate_ast_scope(scope)
+  p=pinned();legacy='naver_runtime/report_output_schema.py';p.EXPECTED_CODE_PATHS=p.CODE_PATHS=frozenset((CP,legacy,WEB));scope=fixture_scope();scope[legacy]=scope.pop(SCHEMA);scope[legacy]['optional_abi']={'output_format':('basis_ids',)};p.APPROVED_AST_SCOPE=p.EXPECTED_AST_SCOPE=scope;p.validate_ast_scope(scope)
   before=b"FORMAT_VERSION='v4'\ndef output_format(context):return {}\ndef text_pattern():return 'fixed'\n"
   after=b"FORMAT_VERSION='v5'\ndef output_format(context, *, basis_ids=None):return {'type':'json_schema'}\ndef text_pattern():return 'fixed'\n"
   p.python_contract(legacy,before,after)
@@ -115,7 +118,8 @@ class ProductBasisPatchTests(unittest.TestCase):
    self.assertEqual(p.funnel_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.inspection_success,p.Z_C,p.Z_S,'38523201246',p.H_C,'56e0a8bbfcf04b1e82129cdeffa28811'))
    self.assertEqual(p.Y('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.funnel_success,p.A,p.B,'38531626583',p.Z_C,'e5864b94306c4736a5ecadd10b16d998'))
    self.assertEqual(p.J('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.Y,p.I_C,p.I_S,'38543952683',p.A,'10469ee6378f4e36bc314f81cebb1d7d'))
-   self.assertEqual(p.base_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.J,p.OLD_COMMIT,p.OLD_SOURCE_SHA256,'38553360666',p.I_C,'029616671477434c85f452206e09ecd0'))
+   self.assertEqual(p.reference_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.J,p.K_C,p.K_S,'38553360666',p.I_C,'029616671477434c85f452206e09ecd0'))
+   self.assertEqual(p.base_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.reference_success,p.OLD_COMMIT,p.OLD_SOURCE_SHA256,'38708112912',p.K_C,'dfdd1a4c72ed4cafa57e2bbe7af6d370'))
  def test_both_approved_paths_reach_strict_AST_and_then_final_inventory(self):
   p,reader,before,after=fixture()
   with patch.object(p,'python_contract',wraps=p.python_contract)as contract,patch.object(p,'compatible_code_scope')as inventory:p.compatible_source(Path('/old'),Path('/new'),reader)
