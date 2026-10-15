@@ -26,8 +26,8 @@ MAX_RESULT=20480
 MAX_TRANSPORT_BASE64=32768
 SOURCE_FILES={'diagnostic':'naver_setup_stale_diagnostics.py',
     'host':'naver_erp_tunnel_service_install.py','release':'naver_preview_release.py'}
-SOURCE_SHA256 = {'diagnostic': 'a0e1ec7f1fddf637b24df214fd0258c4b519b36fb3e9121752cf398b19094ed8', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'}
-COMPACT_SHA256 = {'diagnostic': 'dc3435a0c31743a1b6117e7b15aa245ec764735f72f2a7efb0a5137c8e4f548d', 'host': 'cd6daeb55fe3ed1fd2553404c012d16f46b05bb9a1d651bd929b9787aa758840', 'release': '9681437257dd92309eb0ab2ad33c7c5c3c1e2abed334f1fa1c253fad2288c64a'}
+SOURCE_SHA256 = {'diagnostic': '54b37007cf2955f95f046ffec9c11079f4154d8a1fe18fd1327c09fb3d959901', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84'}
+COMPACT_SHA256 = {'diagnostic': '815f2c664fc90115c028788005724604bc6abb0df03722012d156f83ecd75b99', 'host': 'cd6daeb55fe3ed1fd2553404c012d16f46b05bb9a1d651bd929b9787aa758840', 'release': '9681437257dd92309eb0ab2ad33c7c5c3c1e2abed334f1fa1c253fad2288c64a'}
 DEFAULTS={name:'off' for name in ('collector','rank_link','capacity','structure','expired','queue','urlshape','use_branch_code')}
 STAGES=frozenset(('input','bootstrap','preflight','read_only_source_diagnostics','postflight'))
 PREFLIGHT_CODES=frozenset(('SOURCE_DIAGNOSTICS_NOT_PINNED SOURCE_DIAGNOSTICS_SOURCE SOURCE_DIAGNOSTICS_BUNDLE '

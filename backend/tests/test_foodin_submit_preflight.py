@@ -2,10 +2,13 @@
 import ast
 import copy
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import unittest
 TOOLS=Path(__file__).parents[1]/'tools'
+IMAGE_DOCKERFILE = '# 개발 CI 빌드용. 운영 기동에는 별도 배포 승인이 필요하며 운영 image digest도 별도로 고정한다.\nFROM python:3.12-slim-trixie\n\nENV PYTHONUNBUFFERED=1 \\\n    PYTHONDONTWRITEBYTECODE=1 \\\n    TZ=Asia/Seoul \\\n    PYTHONPATH=/opt/naver-engine:/opt/naver-engine/backend\n\n# 공개 인증서 CMS 암호화와 받기 전용 SSH 업로드에만 사용한다.\n# 복호화 개인키는 이미지에도, 실행 컨테이너에도 넣지 않는다.\nRUN apt-get update \\\n    && apt-get install -y --no-install-recommends ca-certificates openssl openssh-client \\\n    && rm -rf /var/lib/apt/lists/* \\\n    && groupadd --gid 10001 naver-engine \\\n    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin naver-engine\n\nWORKDIR /opt/naver-engine\nCOPY naver_engine/ ./naver_engine/\nCOPY naver_runtime/ ./naver_runtime/\nCOPY backend/app/__init__.py ./backend/app/__init__.py\nCOPY backend/app/naver_auto/ ./backend/app/naver_auto/\n\nUSER 10001:10001\n# TCP EXPOSE 없음. 웹과 예약 실행은 같은 프로세스·사용자·쓰기 소유자를 사용한다.\nCMD ["python", "-m", "naver_runtime", "run"]\n'.encode("utf-8")
+IMAGE_DOCKERIGNORE = '# 엔진 build context 허용 목록. 레거시 문서·③ 코드·데이터·키는 보내지 않는다.\n**\n!Dockerfile.naver-engine\n!naver_engine/\n!naver_engine/**\n!naver_runtime/\n!naver_runtime/**\n!backend/\n!backend/app/\n!backend/app/__init__.py\n!backend/app/naver_auto/\n!backend/app/naver_auto/**\n**/tests/\n**/__pycache__/\n**/*.pyc\n**/*.db*\n**/.env*\n**/*.pem\n**/*.key*\n'.encode("utf-8")
 def load(name):
     spec=importlib.util.spec_from_file_location(name,TOOLS/(name+'.py'))
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
@@ -20,7 +23,15 @@ class SubmitPreflightTests(unittest.TestCase):
         self.assertEqual(text.count('result=collect_submit_preflight(reader,datetime.now(KST),deadline,modules)'),1)
         for literal in ('os.geteuid()!=10001','socket.socket.connect=socket.socket.connect_ex=no_network',"connection.execute('BEGIN')",'connection.total_changes!=0','time.monotonic()+20'):
             self.assertIn(literal,text)
-        self.assertEqual(len(d.CODE_PINS),115)
+        self.assertEqual(len(d.CODE_PINS),109)
+        docker=IMAGE_DOCKERFILE
+        ignore=IMAGE_DOCKERIGNORE
+        self.assertEqual(hashlib.sha256(docker).hexdigest(),'f838c3da2687e8b800046005ef5bd39b1fc3e3454cecdbe291a233ee00004edc')
+        self.assertEqual(hashlib.sha256(ignore).hexdigest(),'4b3d1a3f35e7f84a6db89382a1b27358ed1a8f2ee9d3b0112c87ded1f468f43d')
+        copied=[line.split()[1] for line in docker.decode().splitlines() if line.startswith('COPY ')]
+        self.assertEqual(copied,['naver_engine/','naver_runtime/','backend/app/__init__.py','backend/app/naver_auto/'])
+        self.assertTrue(all(name.startswith(('naver_engine/','naver_runtime/','backend/app/naver_auto/')) or name=='backend/app/__init__.py' for name in d.CODE_PINS))
+        self.assertEqual(hashlib.sha256(json.dumps(d.CODE_PINS,sort_keys=True,separators=(',',':')).encode()).hexdigest(),'5b12713b7c4a884db6be79ec4ec0d84c9e5d7489d98359015c1eea3b25e4fb07')
     def test_closed_result_rejects_raw_extra_wrong_types_and_success_overclaim(self):
         d=load('naver_setup_stale_diagnostics');self.assertEqual(d.validate_submit_preflight_result(copy.deepcopy(GOOD)),GOOD)
         mutations=[lambda x:x.update(raw='RAW_CANARY'),lambda x:x['checks'].update(raw='RAW_CANARY'),lambda x:x.update(failure_checkpoint=[]),lambda x:x.update(failure_kind='RAW_CANARY'),lambda x:x.update(strategy_version=True),lambda x:x['checks'].update(report_latest=False),lambda x:x['checks'].update(report_dirty=True),lambda x:x['checks'].update(authority_passed=False),lambda x:x['limits'].update(provider_not_called=False),lambda x:x.update(projection_model='dc168-setup-stale-v1')]

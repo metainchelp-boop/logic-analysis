@@ -3281,7 +3281,7 @@ jobs:
                 wire=os.environ['SETUP_STALE_DIAGNOSTICS_B64'];source=os.environ['SETUP_STALE_DIAGNOSTICS_TRANSPORT_B64']
                 if len(source)>32768:raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SIZE')
                 raw=base64.b64decode(source,validate=True)
-                if hashlib.sha256(raw).hexdigest()!='5607f734ee61e4a183ee10efaffa32acffa3a73d6e3c641a6977021f6fff9ad9':raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SOURCE')
+                if hashlib.sha256(raw).hexdigest()!='3d236689080e13eff58eb4aa972f1cd81072316040fb3f6524386cefe333d9e0':raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SOURCE')
                 transport=types.ModuleType('approved_setup_stale_diagnostics_transport');exec(raw,transport.__dict__)
                 bundle=transport.decode(wire)
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
