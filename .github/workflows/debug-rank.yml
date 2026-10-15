@@ -3217,7 +3217,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           set -eu
-          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_setup_stale_diagnostics test_naver_setup_stale_diagnostics_transport -q
+          PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_naver_setup_stale_diagnostics test_naver_setup_stale_diagnostics_transport test_foodin_submit_preflight -q
           python3 - <<'PYCODE'
           import base64,json,os,pathlib,sys
           sys.path.insert(0,'backend/tools')
@@ -3281,13 +3281,13 @@ jobs:
                 wire=os.environ['SETUP_STALE_DIAGNOSTICS_B64'];source=os.environ['SETUP_STALE_DIAGNOSTICS_TRANSPORT_B64']
                 if len(source)>32768:raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SIZE')
                 raw=base64.b64decode(source,validate=True)
-                if hashlib.sha256(raw).hexdigest()!='19394ee35c8ac628fac0ecb565e2f1529ff8abb59e2ceee049f996fd14e07c13':raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SOURCE')
+                if hashlib.sha256(raw).hexdigest()!='5607f734ee61e4a183ee10efaffa32acffa3a73d6e3c641a6977021f6fff9ad9':raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SOURCE')
                 transport=types.ModuleType('approved_setup_stale_diagnostics_transport');exec(raw,transport.__dict__)
                 bundle=transport.decode(wire)
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 result=transport.execute(bundle)
             except Exception:
-                result={'ok':False,'mode':'setup-stale-diagnostics-ad-account-dc168-v1','source_commit':'b5e40fa01e6432ab0a62541c330652e1cb4fae2c','mutations':0,'collection_completion_verified':False,'stage':'bootstrap','error_code':'SOURCE_DIAGNOSTICS_BOOTSTRAP_REFUSED'}
+                result={'ok':False,'mode':'foodin-submit-preflight-b5e-v1','source_commit':'b5e40fa01e6432ab0a62541c330652e1cb4fae2c','mutations':0,'collection_completion_verified':False,'stage':'bootstrap','error_code':'SOURCE_DIAGNOSTICS_BOOTSTRAP_REFUSED'}
             print('NAVER_SETUP_STALE_DIAGNOSTICS_DC168_V1='+json.dumps(result,sort_keys=True,allow_nan=False));sys.exit(0 if result.get('ok') else 1)
             PYCODE
 

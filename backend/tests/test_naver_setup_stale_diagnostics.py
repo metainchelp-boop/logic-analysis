@@ -277,7 +277,14 @@ class ReaderBoundsTests(unittest.TestCase):
         script=D.script().decode();ast.parse(script);self.assertLess(script.index('for relative,digest in CODE_PINS.items()'),script.index("connection=connect_reader("))
         self.assertIn('os.geteuid()!=10001',script);self.assertIn('socket.socket.connect=socket.socket.connect_ex=no_network',script);self.assertIn("connection.execute('BEGIN')",script)
         self.assertIn('connection.total_changes!=0',script);self.assertIn('time.monotonic()+20',script)
-        for forbidden in ('synchronize_management(','.inspection_work(','.tick(','.record_', 'Anthropic','claude','read_text('):self.assertNotIn(forbidden,script)
+        pin_nodes=[node for node in ast.parse(script).body if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='CODE_PINS' for target in node.targets)]
+        self.assertEqual(len(pin_nodes),1)
+        pins=ast.literal_eval(pin_nodes[0].value);self.assertEqual(pins,D.CODE_PINS)
+        self.assertTrue(all(type(key) is str and type(value) is str and len(value)==64 and all(c in '0123456789abcdef' for c in value) for key,value in pins.items()))
+        pin_literal='CODE_PINS='+repr(D.CODE_PINS)+'\n';self.assertEqual(script.count(pin_literal),1)
+        at=script.index(pin_literal);checked_script=script.replace(pin_literal,'',1)
+        self.assertEqual(checked_script[:at]+pin_literal+checked_script[at:],script)
+        for forbidden in ('synchronize_management(','.inspection_work(','.tick(','.record_', 'Anthropic','claude','read_text('):self.assertNotIn(forbidden,checked_script)
     def test_authorizer_denies_write_attach_pragma_and_extension(self):
         with tempfile.TemporaryDirectory() as td:
             path=Path(td).resolve()/'db';c=sqlite3.connect(path);c.execute('CREATE TABLE x(n)');c.commit();c.close();reader=D.connect_reader(path)

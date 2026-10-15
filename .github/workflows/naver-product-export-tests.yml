@@ -108,7 +108,7 @@ jobs:
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
             LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
-            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_setup_stale_diagnostics test_naver_setup_stale_diagnostics_transport -v \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_setup_stale_diagnostics test_naver_setup_stale_diagnostics_transport test_foodin_submit_preflight -v \
             2>&1 | tee "$RUNNER_TEMP/product-tests/setup-stale-diagnostics-tests.txt"
       - name: 기존 예산 초안·상품 가설 패치·15f 복구 경계 검사
         run: |

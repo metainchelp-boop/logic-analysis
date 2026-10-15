@@ -323,7 +323,7 @@ class ProjectionTests(unittest.TestCase):
     def diagnostic(self):
         spec=importlib.util.spec_from_file_location('closed_failure_detail_test',TOOLS/'naver_setup_stale_diagnostics.py')
         helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
-        return SimpleNamespace(READ_FAILURE_CODES=frozenset({'SOURCE_DIAGNOSTICS_READ_FAILED','SOURCE_DIAGNOSTICS_TARGET_NOT_FOUND','SOURCE_DIAGNOSTICS_TARGET_AMBIGUOUS'}),validate_result=Mock(),validate_failure_detail=helper.validate_failure_detail)
+        return SimpleNamespace(READ_FAILURE_CODES=frozenset({'SOURCE_DIAGNOSTICS_READ_FAILED','SOURCE_DIAGNOSTICS_TARGET_NOT_FOUND','SOURCE_DIAGNOSTICS_TARGET_AMBIGUOUS'}),validate_submit_preflight_result=Mock(),validate_failure_detail=helper.validate_failure_detail)
 
     def test_reader_and_postflight_failures_are_preserved_together(self):
         t=load();d=self.diagnostic();value=failure_value(t);value['failure'].update(post_engine_code='POST_ENGINE_CHANGED',post_legacy_baseline_code='POST_LEGACY_BASELINE_UNVERIFIED')
@@ -363,10 +363,10 @@ class ProjectionTests(unittest.TestCase):
 
     def test_success_requires_exact_outer_contract_and_delegates_nested_validation(self):
         t=load();d=self.diagnostic();value=dict(ok=True,mode=t.MODE,source_commit=t.SOURCE,mutations=0,collection_completion_verified=False,reader_mode='sqlite-mode-ro-query-only-authorizer',database_opened_by_controller=False,existing_app_baseline_unchanged=True,diagnostics={'closed':'fixture','target_identifier_namespace':'ad_account_no'})
-        self.assertEqual(t.project_result(value,d),value);d.validate_result.assert_called_once_with(value['diagnostics'])
+        self.assertEqual(t.project_result(value,d),value);d.validate_submit_preflight_result.assert_called_once_with(value['diagnostics'])
         for key,wrong in (('database_opened_by_controller',True),('existing_app_baseline_unchanged',False),('source_commit','0'*40),('raw','secret')):
             with self.subTest(key=key),self.assertRaises(ValueError):t.project_result(dict(value,**{key:wrong}),d)
-        d.validate_result.side_effect=ValueError('SOURCE_DIAGNOSTICS_OUTPUT_FIELDS')
+        d.validate_submit_preflight_result.side_effect=ValueError('SOURCE_DIAGNOSTICS_OUTPUT_FIELDS')
         with self.assertRaises(ValueError):t.project_result(value,d)
 
     def test_old_customer_id_profile_or_ambiguous_namespace_cannot_be_accepted(self):
@@ -405,16 +405,16 @@ class ProjectionTests(unittest.TestCase):
             self.assertEqual(result['error_code'],'SOURCE_NOT_READY' if type(error) is ValueError else 'UNRECOGNIZED')
 
     def test_invalid_result_cannot_escape_execute(self):
-        t,v=fixture();d=self.diagnostic();d.STAGE='postflight';d.run=Mock(return_value=dict(ok=True,private='secret'))
+        t,v=fixture();d=self.diagnostic();d.STAGE='postflight';d.run_submit_preflight=Mock(return_value=dict(ok=True,private='secret'))
         host=Mock();m=dict(diagnostic=d,host=SimpleNamespace(NativeHost=Mock(return_value=host)),release=Mock())
         with patch.object(t,'modules',return_value=m):result=t.execute(v)
         self.assertFalse(result['ok']);self.assertEqual(result['error_code'],'SOURCE_DIAGNOSTICS_RESULT');self.assertNotIn('secret',json.dumps(result))
 
     def test_execute_only_invokes_fixed_run_and_never_runtime_collection_or_write_methods(self):
-        t,v=fixture();d=self.diagnostic();d.STAGE='postflight';d.run=Mock(return_value=failure_value(t));host=Mock();release=Mock();native=Mock(return_value=host)
+        t,v=fixture();d=self.diagnostic();d.STAGE='postflight';d.run_submit_preflight=Mock(return_value=failure_value(t));host=Mock();release=Mock();native=Mock(return_value=host)
         with patch.object(t,'modules',return_value=dict(diagnostic=d,host=SimpleNamespace(NativeHost=native),release=release)):
             result=t.execute(v)
-        self.assertFalse(result['ok']);d.run.assert_called_once_with(v['package'],host,release);release.assert_not_called()
+        self.assertFalse(result['ok']);d.run_submit_preflight.assert_called_once_with(v['package'],host,release);release.assert_not_called()
 
 
 class WorkflowTests(unittest.TestCase):
