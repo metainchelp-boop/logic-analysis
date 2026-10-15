@@ -1,4 +1,4 @@
-"""Four-source binding diagnostics; lossless continuation layout and closed codec."""
+"""Two-source text-pool epoch; unchanged continuation layout and closed codec."""
 import ast,hashlib,importlib.util
 import base64,copy,io,json,lzma,tokenize
 from unittest.mock import patch
@@ -42,7 +42,7 @@ class ProductBasisTransportTests(unittest.TestCase):
   self.assertEqual(ast.dump(a.body[-1]),ast.dump(ast.parse('return result').body[0]))
   self.assertEqual(ast.dump(b.body[-1]),ast.dump(ast.parse('return _compact_horizontal_layout(_compact_continuation_layout(result))').body[0]))
  def test_two_exact_existing_paths_oversize_and_foreign_scope_remain_closed(self):
-  t,value=pinned();self.assertEqual(t.CODE_PATHS,('backend/naver_page/operations-ui.js','naver_engine/inspection_store.py','naver_engine/observation_store.py','naver_engine/web.py'));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
+  t,value=pinned();self.assertEqual(t.CODE_PATHS,('naver_runtime/claude_provider.py','naver_runtime/report_output_schema.py'));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
   with self.assertRaises(ValueError):t.encode({**value,'sources':{**value['sources'],'patch':'a'*(t.MAX_SOURCE+1)}})
   for scope in ((),('unapproved.py',),('naver_runtime/claude_provider.py','extra.py'),('naver_runtime/claude_provider.py','naver_runtime/report_output_schema.py','extra.py'),t.CODE_PATHS[:-1],t.CODE_PATHS+('extra.py',)):
    t.CODE_PATHS=scope
