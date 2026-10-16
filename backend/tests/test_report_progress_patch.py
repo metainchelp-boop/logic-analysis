@@ -6,19 +6,20 @@ import tempfile
 import unittest
 from unittest.mock import patch
 TOOLS=Path(__file__).resolve().parents[1]/'tools'
-CP='naver_runtime/claude_provider.py'
-SCHEMA='naver_runtime/report_output_schema.py'
+CP='naver_runtime/scheduler.py'
+SCHEMA='naver_runtime/runtime_status.py'
 JS='backend/naver_page/operations-ui.js'
 WEB='naver_engine/web.py'
-PYTHON_PATHS=frozenset((CP,SCHEMA))
-PATHS=PYTHON_PATHS
+PYTHON_PATHS=frozenset(('naver_engine/collection_diagnostics.py', 'naver_engine/inspection_reads.py', 'naver_engine/web.py', 'naver_runtime/__main__.py', 'naver_runtime/runtime_status.py', 'naver_runtime/scheduler.py'))
+PATHS=frozenset(('backend/naver_page/operations-ui.js', 'naver_engine/collection_diagnostics.py', 'naver_engine/inspection_reads.py', 'naver_engine/web.py', 'naver_runtime/__main__.py', 'naver_runtime/runtime_status.py', 'naver_runtime/scheduler.py'))
 
 def load(name):
  spec=importlib.util.spec_from_file_location(name,TOOLS/(name+'.py'));module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 
 def fixture_scope():
- return {CP:dict(changed=('chosen',),added=(),removed=(),optional_abi={},imports_added=(),imports_removed=()),
-  SCHEMA:dict(changed=('FORMAT_VERSION','output_format'),added=(),removed=(),optional_abi={},imports_added=(),imports_removed=())}
+ value={name:dict(changed=('chosen',),added=(),removed=(),optional_abi={},imports_added=(),imports_removed=()) for name in PYTHON_PATHS}
+ value[SCHEMA]=dict(changed=('FORMAT_VERSION','output_format'),added=(),removed=(),optional_abi={},imports_added=(),imports_removed=())
+ return value
 
 def pinned():
  p=load('naver_report_progress_patch')
@@ -31,12 +32,38 @@ def pinned():
  p.bind_base(load('naver_preview_completion_release'));return p
 
 def bodies():
- before={CP:b"def chosen(context):return 'old'\ndef keep():return True\n",
-  SCHEMA:b"FORMAT_VERSION='v4'\ndef output_format(context):return {}\ndef text_pattern():return 'fixed'\n"}
- after={CP:b"def chosen(context):return 'new'\ndef keep():return True\n",
-  SCHEMA:b"FORMAT_VERSION='v5'\ndef output_format(context):return {'type':'json_schema'}\ndef text_pattern():return 'fixed'\n"}
- # The successor approves only the two runtime Python paths.
+ before={name:b"def chosen(context):return 'old'\ndef keep():return True\n" for name in PYTHON_PATHS}
+ after={name:b"def chosen(context):return 'new'\ndef keep():return True\n" for name in PYTHON_PATHS}
+ before[SCHEMA]=b"FORMAT_VERSION='v4'\ndef output_format(context):return {}\ndef text_pattern():return 'fixed'\n"
+ after[SCHEMA]=b"FORMAT_VERSION='v5'\ndef output_format(context):return {'type':'json_schema'}\ndef text_pattern():return 'fixed'\n"
+ before[JS]=b'const approved = false;\n';after[JS]=b'const approved = true;\n'
  return before,after
+
+
+def inverse_approved_predicate(node,name):
+ node=deepcopy(node)
+ new_loop=ast.parse("for key,args in value['optional_abi'].items():\n abi=_abi(name,key)\n if (not abi or type(args)is not tuple or args!=abi[1]):raise ValueError('PATCH_NOT_PINNED')").body[0]
+ old_loop=ast.parse("abi=_abi(name)\nif value['optional_abi'] and (not abi or value['optional_abi']!={abi[0]:abi[1]} or any(type(args)is not tuple for args in value['optional_abi'].values())):raise ValueError('PATCH_NOT_PINNED')").body
+ class_branch=ast.parse("if name=='naver_runtime/runtime_status.py' and not prefix and node.name=='InspectionWorkerObservation':\n full=ast.dump(node,include_attributes=False,**({'show_empty':True} if 'show_empty' in ast.dump.__code__.co_varnames else {}))\n if index!=1 or hashlib.sha256(full.encode()).hexdigest()!='42871023e225323376f947de3926ca7f912c9737080557254ee67c7d1f636da3':raise ValueError('CODE_SCOPE_CHANGED')\n continue").body[0]
+ class Restore(ast.NodeTransformer):
+  loops=calls=classes=0
+  def visit_For(self,item):
+   if name=='validate_ast_scope' and ast.dump(item.target)==ast.dump(new_loop.target) and ast.dump(item.iter)==ast.dump(new_loop.iter):
+    assert ast.dump(item)==ast.dump(new_loop);self.loops+=1;return deepcopy(old_loop)
+   return self.generic_visit(item)
+  def visit_Call(self,item):
+   if name=='python_contract' and isinstance(item.func,ast.Name) and item.func.id=='_abi':
+    assert len(item.args)==2 and ast.dump(item.args[0])==ast.dump(ast.Name(id='name',ctx=ast.Load())) and ast.dump(item.args[1])==ast.dump(ast.Name(id='key',ctx=ast.Load()));self.calls+=1;item.args=item.args[:1]
+   return self.generic_visit(item)
+  def visit_If(self,item):
+   if name=='python_contract' and ast.dump(item.test)==ast.dump(class_branch.test):
+    assert ast.dump(item)==ast.dump(class_branch);self.classes+=1;return None
+   return self.generic_visit(item)
+ restore=Restore();result=restore.visit(node)
+ assert (restore.loops,restore.calls,restore.classes)==((1,0,0) if name=='validate_ast_scope' else (0,1,1))
+ return result
+
+APPROVED_OBSERVATION_CLASS='class InspectionWorkerObservation:\n    """Bounded local branch evidence only; never a current source/job proof."""\n    MAX_ACCOUNTS = 256\n\n    def __init__(self, *, clock=None):\n        from datetime import datetime, timezone\n        self._clock = clock or (lambda: datetime.now(timezone.utc))\n        self._lock = threading.Lock()\n        self._sequence = 0\n        self._cycle_at = None\n        self._global = self._window = None\n        self._accounts = {}\n        self._performance = None\n        self._window_accounts = frozenset()\n\n    def note(self, event, *, job=None, jobs=None, customers=(), calls_remaining=None,\n             seconds_remaining=None, budget_scope=None, stored_status=None):\n        # Observation has a separate wall clock: no extra business clock/budget calls.\n        try:\n            from datetime import timezone\n            stamp = self._clock()\n            if stamp.tzinfo is None:\n                raise ValueError()\n            at = stamp.astimezone(timezone.utc).isoformat(timespec=\'microseconds\')\n            with self._lock:\n                if event == \'inventory_started\':\n                    self._sequence += 1\n                    self._cycle_at = at\n                    self._window = None\n                    self._window_accounts = frozenset()\n                    self._performance = None\n                if self._cycle_at is None or at < self._cycle_at:\n                    return\n                if event == \'performance_finished\':\n                    if type(customers) in (tuple, list, set, frozenset) and len(customers) <= 24 \\\n                            and all(type(cid) is int and cid > 0 for cid in customers):\n                        self._performance = frozenset(customers)\n                    else:\n                        self._cycle_at = self._global = self._window = None\n                    return\n                row = {\'version\': 1, \'scope\': \'process_memory\', \'current_job_match\': \'not_proven\',\n                       \'cycle_started_at\': self._cycle_at, \'observed_at\': at, \'in_latest_cycle\': True,\n                       \'event\': event, \'candidate_count\': None if self._window is None else len(self._window_accounts),\n                       \'calls_remaining\': calls_remaining, \'seconds_remaining\': seconds_remaining,\n                       \'budget_scope\': budget_scope, \'stored_status\': stored_status}\n                if event == \'candidate_window\':\n                    if type(jobs) not in (list, tuple) or len(jobs) > 24:\n                        return\n                    ids = [item.get(\'customer_id\') for item in jobs if type(item) is dict]\n                    if len(ids) != len(jobs) or any(type(cid) is not int or cid <= 0 for cid in ids):\n                        return\n                    self._window_accounts = frozenset(ids)\n                    row.update(event=\'window_not_returned\', candidate_count=len(jobs))\n                    self._window = dict(row)\n                    self._global = dict(row)\n                    for cid in ids:\n                        self._put(cid, dict(row, event=\'candidate_returned\'))\n                    return\n                if type(job) is dict and type(job.get(\'customer_id\')) is int and job[\'customer_id\'] > 0:\n                    cid = job[\'customer_id\']\n                    if event == \'excluded\':\n                        if self._performance is None:\n                            self._cycle_at = self._global = self._window = None\n                            return\n                        row[\'event\'] = (\'performance_same_cycle_excluded\' if cid in self._performance\n                                        else \'earlier_lane_excluded\')\n                    self._put(cid, row)\n                else:\n                    self._global = row\n                    if event in (\'call_budget_exhausted\', \'time_budget_exhausted\', \'rate_limited\',\n                                 \'source_changed\', \'execution_error\'):\n                        for cid, (sequence, prior) in tuple(self._accounts.items()):\n                            if sequence == self._sequence and prior[\'event\'] == \'candidate_returned\':\n                                self._put(cid, dict(row))\n        except Exception:\n            # Failed clock/read observation is unavailable, not fresh evidence.\n            with self._lock:\n                self._global = self._window = None\n                if event == \'inventory_started\':\n                    self._cycle_at = None\n            return\n\n    def _put(self, cid, row):\n        self._accounts.pop(cid, None)\n        self._accounts[cid] = (self._sequence, row)\n        while len(self._accounts) > self.MAX_ACCOUNTS:\n            self._accounts.pop(next(iter(self._accounts)))\n\n    def snapshot(self, possibility_id, customer_id):\n        """Read-only. Authority is resolved by the caller; no job/generation match is asserted."""\n        try:\n            if type(possibility_id) is not int or possibility_id <= 0 \\\n                    or type(customer_id) is not int or customer_id <= 0:\n                return None\n            with self._lock:\n                if self._global is None:\n                    return None\n                prior = self._accounts.get(customer_id)\n                if prior is not None and prior[0] == self._sequence:\n                    return dict(prior[1])\n                if self._window is not None and customer_id not in self._window_accounts:\n                    return dict(self._window)\n                if self._global[\'event\'] not in (\'inventory_started\', \'lane_entered\'):\n                    return dict(self._global)\n                if prior is not None:\n                    return dict(prior[1], in_latest_cycle=False)\n                return dict(self._global)\n        except Exception:\n            return None\n'
 
 class ProductBasisPatchTests(unittest.TestCase):
  def test_pending_fresh_target_scope_refuses_before_base_or_host_access(self):
@@ -47,19 +74,19 @@ class ProductBasisPatchTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'PINS_PENDING'):p.require_target_pins()
    with self.assertRaisesRegex(ValueError,'PINS_PENDING'):p.bind_base(object())
  def test_actual_1fc_baseline_two_existing_paths_manifest166_same_store_schema_and_assets(self):
-  p=pinned();self.assertEqual(p.OLD_COMMIT,'b5e40fa01e6432ab0a62541c330652e1cb4fae2c')
+  p=pinned();self.assertEqual(p.OLD_COMMIT,'9379023a7a13b0d71b79a57ebf8979591b574f9f')
   self.assertEqual((p.OLD_SCHEMA,p.TARGET_SCHEMA),(21,21));self.assertEqual(p.CODE_PATHS,PATHS);self.assertEqual(p.NEW_PATHS,frozenset())
   self.assertEqual((len(p.OLD_MANIFEST),len(p.TARGET_MANIFEST)),(166,166));self.assertEqual(set(p.OLD_MANIFEST),set(p.TARGET_MANIFEST))
   self.assertEqual({k for k in p.OLD_MANIFEST if p.OLD_MANIFEST[k]!=p.TARGET_MANIFEST[k]},PATHS)
-  self.assertEqual(p.manifest_digest(p.OLD_MANIFEST),'6dcd809ac49ba3d8ba78f9fdcb3cf43980d0550ee0a873770e9535bb6d663780');self.assertEqual(p.K_M,'744bc24aadadd683dec7fa4b99d33669996d0b92eae78b654884cf3f9f404950');self.assertEqual(p.I_M,'9de931063d86a011682a0e38568de36532d2fb47077f50cca0ddfe24ad2f1d9f')
+  self.assertEqual(p.manifest_digest(p.OLD_MANIFEST),'dd9bcaa4103e8a38ab91dda0a4810144c01345671387c0829f19d41b0663e746');self.assertEqual(p.K_M,'744bc24aadadd683dec7fa4b99d33669996d0b92eae78b654884cf3f9f404950');self.assertEqual(p.I_M,'9de931063d86a011682a0e38568de36532d2fb47077f50cca0ddfe24ad2f1d9f')
   self.assertEqual(p.H_M,'51620b5091b7374d6739ff022f3eed09088751c6e3bcd21277e12d96d61d8fc5')
-  self.assertEqual(p.STORE_SHA256['old'],p.STORE_SHA256['target']);self.assertEqual(p.ROLLBACK_COMMIT,p.OLD_COMMIT);self.assertEqual(set(p.OLD_REPORT_ASSETS),set(p.REPORT_ASSETS));self.assertEqual({key for key in p.REPORT_ASSETS if p.REPORT_ASSETS[key]!=p.OLD_REPORT_ASSETS[key]}, set())
+  self.assertEqual(p.STORE_SHA256['old'],p.STORE_SHA256['target']);self.assertEqual(p.ROLLBACK_COMMIT,p.OLD_COMMIT);self.assertEqual(set(p.OLD_REPORT_ASSETS),set(p.REPORT_ASSETS));self.assertEqual({key for key in p.REPORT_ASSETS if p.REPORT_ASSETS[key]!=p.OLD_REPORT_ASSETS[key]}, {'/naver/operations-ui.js'})
  def test_all_old_history_and_new_c200_layer_and_receipt_pairs_cannot_mutate(self):
-  for name,value in [('H_M','a'*64),('H_A','a'*64),('H_C','a'*40),('H_S','a'*64),('H_R','12345678901'),('H_O','a'*32),('H_D',{}),('Z_M','a'*64),('Z_A','a'*64),('Z_C','a'*40),('Z_S','a'*64),('Z_R','12345678901'),('Z_O','a'*32),('Z_D',{}),('F','a'*64),('G','a'*64),('A','a'*40),('B','a'*64),('C','12345678901'),('D','a'*32),('E',{}),('I_M','a'*64),('I_A','a'*64),('I_C','a'*40),('I_S','a'*64),('I_R','12345678901'),('I_O','a'*32),('I_D',{}),('K_C','a'*40),('K_S','a'*64),('K_R','12345678901'),('K_O','a'*32),('K_D',{}),('K_M','a'*64),('K_A','a'*64),('U_C','a'*40),('U_S','a'*64),('U_R','12345678901'),('U_O','a'*32),('U_D',{}),('U_M','a'*64),('U_A','a'*64),('BASE_PREPARE_RUN','38523201246'),('BASE_APPLY_OPERATION','a'*32)]:
+  for name,value in [('H_M','a'*64),('H_A','a'*64),('H_C','a'*40),('H_S','a'*64),('H_R','12345678901'),('H_O','a'*32),('H_D',{}),('Z_M','a'*64),('Z_A','a'*64),('Z_C','a'*40),('Z_S','a'*64),('Z_R','12345678901'),('Z_O','a'*32),('Z_D',{}),('F','a'*64),('G','a'*64),('A','a'*40),('B','a'*64),('C','12345678901'),('D','a'*32),('E',{}),('I_M','a'*64),('I_A','a'*64),('I_C','a'*40),('I_S','a'*64),('I_R','12345678901'),('I_O','a'*32),('I_D',{}),('K_C','a'*40),('K_S','a'*64),('K_R','12345678901'),('K_O','a'*32),('K_D',{}),('K_M','a'*64),('K_A','a'*64),('U_C','a'*40),('U_S','a'*64),('U_R','12345678901'),('U_O','a'*32),('U_D',{}),('U_M','a'*64),('U_A','a'*64),('W_C','a'*40),('W_S','a'*64),('W_R','12345678901'),('W_O','a'*32),('W_D',{}),('W_M','a'*64),('W_A','a'*64),('BASE_PREPARE_RUN','38523201246'),('BASE_APPLY_OPERATION','a'*32)]:
    p=pinned();setattr(p,name,value)
    with self.subTest(name=name),self.assertRaises(ValueError):p.require_pins()
  def test_foreign_new_missing_paths_and_previous_source_pins_refuse(self):
-  for name,value in [('NEW_PATHS',frozenset({'unapproved.py'})),('CODE_PATHS',frozenset({'unapproved.py'})),('TARGET_COMMIT','b5e40fa01e6432ab0a62541c330652e1cb4fae2c'),('TARGET_COMMIT','114dde8a45e1753ade0ff871f024c7e5880546c5'),('TARGET_COMMIT','621c5efeaf607b8227898bdf65d3ef040d1740fa'),('TARGET_COMMIT','1fc2c92a18ea50dfef4e0b3da9ddd973f4017715'),('TARGET_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_SOURCE_SHA256','a'*64)]:
+  for name,value in [('TARGET_COMMIT','9379023a7a13b0d71b79a57ebf8979591b574f9f'),('NEW_PATHS',frozenset({'unapproved.py'})),('CODE_PATHS',frozenset({'unapproved.py'})),('TARGET_COMMIT','b5e40fa01e6432ab0a62541c330652e1cb4fae2c'),('TARGET_COMMIT','114dde8a45e1753ade0ff871f024c7e5880546c5'),('TARGET_COMMIT','621c5efeaf607b8227898bdf65d3ef040d1740fa'),('TARGET_COMMIT','1fc2c92a18ea50dfef4e0b3da9ddd973f4017715'),('TARGET_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_SOURCE_SHA256','a'*64)]:
    p=pinned();setattr(p,name,value)
    with self.subTest(name=name),self.assertRaises(ValueError):p.require_pins()
  def test_exact_scope_field_shape_and_unapproved_ABI_remain_closed(self):
@@ -73,7 +100,7 @@ class ProductBasisPatchTests(unittest.TestCase):
   for name,bad in [(CP,after[CP]+b'UNAPPROVED=True\n'),(CP,b'import os\n'+after[CP]),(CP,after[CP].replace(b'chosen(context)',b'chosen(context,bypass=False)')),(CP,after[CP].replace(b'keep():return True',b'keep():return False')),(SCHEMA,after[SCHEMA].replace(b"return 'fixed'",b"return 'changed'"))]:
    with self.subTest(name=name),self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):p.python_contract(name,before[name],bad)
  def test_schema_basis_optional_ABI_is_one_exact_None_keyword_only_combination(self):
-  p=pinned();legacy='naver_runtime/report_output_schema.py';p.EXPECTED_CODE_PATHS=p.CODE_PATHS=frozenset((CP,legacy));scope=fixture_scope();scope[legacy]=scope.pop(SCHEMA);scope[legacy]['optional_abi']={'output_format':('basis_ids',)};p.APPROVED_AST_SCOPE=p.EXPECTED_AST_SCOPE=scope;p.validate_ast_scope(scope)
+  p=pinned();legacy='naver_runtime/report_output_schema.py';p.EXPECTED_CODE_PATHS=p.CODE_PATHS=frozenset((CP,legacy));scope={CP:fixture_scope()[CP],legacy:fixture_scope()[SCHEMA]};scope[legacy]['optional_abi']={'output_format':('basis_ids',)};p.APPROVED_AST_SCOPE=p.EXPECTED_AST_SCOPE=scope;p.validate_ast_scope(scope)
   before=b"FORMAT_VERSION='v4'\ndef output_format(context):return {}\ndef text_pattern():return 'fixed'\n"
   after=b"FORMAT_VERSION='v5'\ndef output_format(context, *, basis_ids=None):return {'type':'json_schema'}\ndef text_pattern():return 'fixed'\n"
   p.python_contract(legacy,before,after)
@@ -104,7 +131,7 @@ class ProductBasisPatchTests(unittest.TestCase):
   self.assertEqual(p._abi('naver_runtime/report_output_schema.py'),('output_format',('basis_ids',),None,False));self.assertIsNone(p._abi('unapproved.py'))
   old=ast.parse((TOOLS/'naver_budget_format_patch.py').read_bytes());new=ast.parse((TOOLS/'naver_report_progress_patch.py').read_bytes())
   for name in ('validate_ast_scope','python_contract'):
-   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name);self.assertEqual(ast.dump(a),ast.dump(b),name)
+   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name);self.assertEqual(ast.dump(a),ast.dump(inverse_approved_predicate(b,name)),name)
  def test_lifecycle_migration_off_and_security_function_AST_remain_original(self):
   old=ast.parse((TOOLS/'naver_budget_format_patch.py').read_bytes());new=ast.parse((TOOLS/'naver_report_progress_patch.py').read_bytes())
   for name in ('prepare','apply','rollback','compatible_inverse_source','compatible_code_scope','current_state','target_override','verify_running','target_engine_snapshot','runtime_flags','container_environment_flags','container_runtime_flags','stopped_writer','safe_source_path','preserve_approved_config','migration_contract'):
@@ -118,7 +145,8 @@ class ProductBasisPatchTests(unittest.TestCase):
    self.assertEqual(p.J('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.Y,p.I_C,p.I_S,'38543952683',p.A,'10469ee6378f4e36bc314f81cebb1d7d'))
    self.assertEqual(p.reference_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.J,p.K_C,p.K_S,'38553360666',p.I_C,'029616671477434c85f452206e09ecd0'))
    self.assertEqual(p.binding_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.reference_success,p.U_C,p.U_S,'38708112912',p.K_C,'dfdd1a4c72ed4cafa57e2bbe7af6d370'))
-   self.assertEqual(p.base_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.binding_success,p.OLD_COMMIT,p.OLD_SOURCE_SHA256,'38726899460',p.U_C,'9e72159e3ce146a6ba2846396a6ce4b4'))
+   self.assertEqual(p.text_pool_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.binding_success,p.W_C,p.W_S,'38726899460',p.U_C,'9e72159e3ce146a6ba2846396a6ce4b4'))
+   self.assertEqual(p.base_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.text_pool_success,p.OLD_COMMIT,p.OLD_SOURCE_SHA256,'38789089753',p.W_C,'e70966984fa04ac0b9ee046f6fd7b917'))
  def test_both_approved_paths_reach_strict_AST_and_then_final_inventory(self):
   p,reader,before,after=fixture()
   with patch.object(p,'python_contract',wraps=p.python_contract)as contract,patch.object(p,'compatible_code_scope')as inventory:p.compatible_source(Path('/old'),Path('/new'),reader)
@@ -147,6 +175,33 @@ class ProductBasisPatchTests(unittest.TestCase):
   p=pinned();old,target=Path('/old'),Path('/target')
   with patch.object(p,'compatible_source')as forward,patch.object(p,'compatible_code_scope')as inventory:p.compatible_inverse_source(target,old,'reader')
   forward.assert_called_once_with(old,target,'reader');inventory.assert_called_once_with(target,old,'reader',inverse=True)
+
+
+ def test_two_new_optional_abi_rows_have_exact_None_and_reject_wrong_defaults(self):
+  p=pinned()
+  for path,method,parameter,before in ((WEB,'App.__init__','inspection_worker_status',b'class App:\n def __init__(self, *, existing=None):pass\n'),('naver_engine/inspection_reads.py','run_inspection','observe',b'def run_inspection(reader,store,clock):pass\n')):
+   scope=deepcopy(p.APPROVED_AST_SCOPE);scope[path]=dict(changed=(method,),added=(),removed=(),optional_abi={method:(parameter,)},imports_added=(),imports_removed=());p.APPROVED_AST_SCOPE=scope;p.validate_ast_scope(scope)
+   if path==WEB:after=before.replace(b'existing=None',b'existing=None, inspection_worker_status=None')
+   else:after=before.replace(b'clock)',b'clock, *, observe=None)')
+   p.python_contract(path,before,after)
+   for default in ('True','False','0','()'):
+    with self.subTest(path=path,default=default),self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):p.python_contract(path,before,after.replace((parameter+'=None').encode(),(parameter+'='+default).encode()))
+   bad=deepcopy(scope);bad[path]['optional_abi']={method:[parameter]}
+   with self.assertRaisesRegex(ValueError,'PATCH_NOT_PINNED'):p.validate_ast_scope(bad)
+ def test_exact_new_class_ast_and_unapproved_body_bases_decorators_classes_refuse(self):
+  p=pinned();path='naver_runtime/runtime_status.py'
+  approved=APPROVED_OBSERVATION_CLASS.encode();before=b"class RuntimeStatus:\n def snapshot(self):return 'fixed'\n";after=before+approved
+  scope=deepcopy(p.APPROVED_AST_SCOPE);scope[path]=dict(changed=(),added=('InspectionWorkerObservation.MAX_ACCOUNTS','InspectionWorkerObservation.__init__','InspectionWorkerObservation._put','InspectionWorkerObservation.note','InspectionWorkerObservation.snapshot'),removed=(),optional_abi={},imports_added=(),imports_removed=());p.APPROVED_AST_SCOPE=scope;p.validate_ast_scope(scope);p.python_contract(path,before,after)
+  for part in ('body','bases','decorator','existing','extra'):
+   tree=ast.parse(after);node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='InspectionWorkerObservation')
+   if part=='body':next(n for n in node.body if isinstance(n,ast.Assign)).value=ast.Constant(value=255)
+   elif part=='bases':node.bases.append(ast.Name(id='object',ctx=ast.Load()))
+   elif part=='decorator':node.decorator_list.append(ast.Name(id='object',ctx=ast.Load()))
+   elif part=='existing':tree.body[0].body[0].body=[ast.Return(value=ast.Constant(value=None))]
+   else:tree.body.append(ast.ClassDef(name='Unapproved',bases=[],keywords=[],body=[ast.Pass()],decorator_list=[],type_params=[]))
+   bad=ast.unparse(ast.fix_missing_locations(tree)).encode()
+   with self.subTest(part=part),self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):p.python_contract(path,before,bad)
+  with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):p.python_contract(path,after,after)
 
 def fixture():
  p=pinned();before,after=bodies();common=b'public synthetic infrastructure\n';store=b"SCHEMA_VERSION=21\n_SCHEMA=''\n_REVISION_COLUMNS={}\ndef _migrate():pass\n";jobs=b'def clean():pass\ndef public():pass\ndef identity():pass\n'
