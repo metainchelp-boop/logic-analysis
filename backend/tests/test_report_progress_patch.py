@@ -44,7 +44,7 @@ def inverse_approved_predicate(node,name):
  node=deepcopy(node)
  new_loop=ast.parse("for key,args in value['optional_abi'].items():\n abi=_abi(name,key)\n if (not abi or type(args)is not tuple or args!=abi[1]):raise ValueError('PATCH_NOT_PINNED')").body[0]
  old_loop=ast.parse("abi=_abi(name)\nif value['optional_abi'] and (not abi or value['optional_abi']!={abi[0]:abi[1]} or any(type(args)is not tuple for args in value['optional_abi'].values())):raise ValueError('PATCH_NOT_PINNED')").body
- class_branch=ast.parse("if name=='naver_runtime/runtime_status.py' and not prefix and node.name=='InspectionWorkerObservation':\n full=ast.dump(node,include_attributes=False,**({'show_empty':True} if 'show_empty' in ast.dump.__code__.co_varnames else {}))\n if index!=1 or hashlib.sha256(full.encode()).hexdigest()!='42871023e225323376f947de3926ca7f912c9737080557254ee67c7d1f636da3':raise ValueError('CODE_SCOPE_CHANGED')\n continue").body[0]
+ class_branch=ast.parse("if name=='naver_runtime/runtime_status.py' and not prefix and node.name=='InspectionWorkerObservation':\n for typed in ast.walk(node):\n  if isinstance(typed,(ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef)):\n   if getattr(typed,'type_params',[])!=[]:raise ValueError('CODE_SCOPE_CHANGED')\n   if 'type_params' not in typed._fields:\n    typed.type_params=[]\n    typed._fields=(*typed._fields,'type_params')\n full=ast.dump(node,include_attributes=False,**({'show_empty':True} if 'show_empty' in ast.dump.__code__.co_varnames else {}))\n if index!=1 or hashlib.sha256(full.encode()).hexdigest()!='42871023e225323376f947de3926ca7f912c9737080557254ee67c7d1f636da3':raise ValueError('CODE_SCOPE_CHANGED')\n continue").body[0]
  class Restore(ast.NodeTransformer):
   loops=calls=classes=0
   def visit_For(self,item):
@@ -192,16 +192,46 @@ class ProductBasisPatchTests(unittest.TestCase):
   p=pinned();path='naver_runtime/runtime_status.py'
   approved=APPROVED_OBSERVATION_CLASS.encode();before=b"class RuntimeStatus:\n def snapshot(self):return 'fixed'\n";after=before+approved
   scope=deepcopy(p.APPROVED_AST_SCOPE);scope[path]=dict(changed=(),added=('InspectionWorkerObservation.MAX_ACCOUNTS','InspectionWorkerObservation.__init__','InspectionWorkerObservation._put','InspectionWorkerObservation.note','InspectionWorkerObservation.snapshot'),removed=(),optional_abi={},imports_added=(),imports_removed=());p.APPROVED_AST_SCOPE=scope;p.validate_ast_scope(scope);p.python_contract(path,before,after)
-  for part in ('body','bases','decorator','existing','extra'):
+  for part in ('body','bases','decorator','existing','extra','nested'):
    tree=ast.parse(after);node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='InspectionWorkerObservation')
    if part=='body':next(n for n in node.body if isinstance(n,ast.Assign)).value=ast.Constant(value=255)
    elif part=='bases':node.bases.append(ast.Name(id='object',ctx=ast.Load()))
    elif part=='decorator':node.decorator_list.append(ast.Name(id='object',ctx=ast.Load()))
    elif part=='existing':tree.body[0].body[0].body=[ast.Return(value=ast.Constant(value=None))]
+   elif part=='nested':next(n for n in node.body if isinstance(n,ast.FunctionDef)).body.append(ast.ClassDef(name='Unapproved',bases=[],keywords=[],body=[ast.Pass()],decorator_list=[],type_params=[]))
    else:tree.body.append(ast.ClassDef(name='Unapproved',bases=[],keywords=[],body=[ast.Pass()],decorator_list=[],type_params=[]))
    bad=ast.unparse(ast.fix_missing_locations(tree)).encode()
    with self.subTest(part=part),self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):p.python_contract(path,before,bad)
   with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):p.python_contract(path,after,after)
+
+
+ def test_new_class_empty_type_params_are_canonical_and_nonempty_values_refuse(self):
+  import types
+  p=pinned();path='naver_runtime/runtime_status.py'
+  before=b"class RuntimeStatus:\n def snapshot(self):return 'fixed'\n";after=before+APPROVED_OBSERVATION_CLASS.encode()
+  scope=deepcopy(p.APPROVED_AST_SCOPE);scope[path]=dict(changed=(),added=('InspectionWorkerObservation.MAX_ACCOUNTS','InspectionWorkerObservation.__init__','InspectionWorkerObservation._put','InspectionWorkerObservation.note','InspectionWorkerObservation.snapshot'),removed=(),optional_abi={},imports_added=(),imports_removed=());p.APPROVED_AST_SCOPE=scope
+  real_parse=ast.parse
+  for mode in ('missing','empty','class_nonempty','function_nonempty','malformed'):
+   def parse(*args,**kwargs):
+    tree=real_parse(*args,**kwargs)
+    for root in tree.body:
+     if not isinstance(root,ast.ClassDef) or root.name!='InspectionWorkerObservation':continue
+     for node in ast.walk(root):
+      if not isinstance(node,(ast.ClassDef,ast.FunctionDef,ast.AsyncFunctionDef)):continue
+      if mode=='missing':
+       node._fields=tuple(field for field in node._fields if field!='type_params')
+       if hasattr(node,'type_params'):del node.type_params
+      else:
+       if 'type_params' not in node._fields:node._fields=(*node._fields,'type_params')
+       node.type_params=[]
+       if mode=='class_nonempty' and isinstance(node,ast.ClassDef) or mode=='function_nonempty' and isinstance(node,ast.FunctionDef):node.type_params=[ast.Name(id='T',ctx=ast.Load())]
+       elif mode=='malformed':node.type_params=None
+    return tree
+   local_ast=types.SimpleNamespace(**{key:getattr(ast,key)for key in dir(ast)if key!='parse'},parse=parse)
+   with self.subTest(mode=mode),patch.object(p,'ast',local_ast):
+    if mode in ('missing','empty'):p.python_contract(path,before,after)
+    else:
+     with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):p.python_contract(path,before,after)
 
 def fixture():
  p=pinned();before,after=bodies();common=b'public synthetic infrastructure\n';store=b"SCHEMA_VERSION=21\n_SCHEMA=''\n_REVISION_COLUMNS={}\ndef _migrate():pass\n";jobs=b'def clean():pass\ndef public():pass\ndef identity():pass\n'

@@ -783,6 +783,13 @@ def python_contract(name, before, after):
             for node in body:
                 if isinstance(node, ast.ClassDef):
                     if name == 'naver_runtime/runtime_status.py' and (not prefix) and (node.name == 'InspectionWorkerObservation'):
+                        for typed in ast.walk(node):
+                            if isinstance(typed, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                                if getattr(typed, 'type_params', []) != []:
+                                    raise ValueError('CODE_SCOPE_CHANGED')
+                                if 'type_params' not in typed._fields:
+                                    typed.type_params = []
+                                    typed._fields = (*typed._fields, 'type_params')
                         full = ast.dump(node, include_attributes=False, **{'show_empty': True} if 'show_empty' in ast.dump.__code__.co_varnames else {})
                         if index != 1 or hashlib.sha256(full.encode()).hexdigest() != '42871023e225323376f947de3926ca7f912c9737080557254ee67c7d1f636da3':
                             raise ValueError('CODE_SCOPE_CHANGED')
