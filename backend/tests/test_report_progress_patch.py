@@ -6,12 +6,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 TOOLS=Path(__file__).resolve().parents[1]/'tools'
-CP='naver_engine/inspection_reads.py'
+CP='naver_engine/inspection_store.py'
 SCHEMA='naver_engine/collection_diagnostics.py'
 JS='backend/naver_page/operations-ui.js'
 WEB='naver_engine/web.py'
-PYTHON_PATHS=frozenset(('naver_engine/collection_diagnostics.py', 'naver_engine/inspection_reads.py', 'naver_engine/inspection_store.py', 'naver_runtime/runtime_status.py'))
-PATHS=frozenset(('backend/naver_page/operations-ui.js', 'naver_engine/collection_diagnostics.py', 'naver_engine/inspection_reads.py', 'naver_engine/inspection_store.py', 'naver_runtime/runtime_status.py'))
+PYTHON_PATHS=frozenset(('naver_engine/inspection_store.py',))
+PATHS=frozenset(('naver_engine/inspection_store.py',))
 
 def load(name):
  spec=importlib.util.spec_from_file_location(name,TOOLS/(name+'.py'));module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
@@ -29,7 +29,7 @@ def pinned():
  p.TARGET_CANONICAL_SHA256=p.APPROVED_CANONICAL_SHA256='f'*64
  p.CI_PROOF=p.APPROVED_CI_PROOF=dict(source_commit='b'*40,tooling_head='d'*40,run_id='91827364509182736450',receipt_sha256='f'*64)
  p.TARGET_DELTA=p.EXPECTED_TARGET_DELTA={name:(420,100,'d'*64)for name in PATHS}
- p.APPROVED_AST_SCOPE=p.EXPECTED_AST_SCOPE=fixture_scope()
+ p.APPROVED_AST_SCOPE=p.EXPECTED_AST_SCOPE={name:row for name,row in fixture_scope().items() if name in PYTHON_PATHS}
  p.bind_base(load('naver_preview_completion_release'));return p
 
 def bodies():
@@ -80,19 +80,19 @@ class ProductBasisPatchTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'PINS_PENDING'):p.require_target_pins()
    with self.assertRaisesRegex(ValueError,'PINS_PENDING'):p.bind_base(object())
  def test_actual_1fc_baseline_two_existing_paths_manifest166_same_store_schema_and_assets(self):
-  p=pinned();self.assertEqual(p.OLD_COMMIT,'70045db75473407591d79c3bfa4e69cbb217f6b9')
+  p=pinned();self.assertEqual(p.OLD_COMMIT,'513e52eaee4d1bb722461961639cd588df9080cd')
   self.assertEqual((p.OLD_SCHEMA,p.TARGET_SCHEMA),(21,21));self.assertEqual(p.CODE_PATHS,PATHS);self.assertEqual(p.NEW_PATHS,frozenset())
   self.assertEqual((len(p.OLD_MANIFEST),len(p.TARGET_MANIFEST)),(166,166));self.assertEqual(set(p.OLD_MANIFEST),set(p.TARGET_MANIFEST))
   self.assertEqual({k for k in p.OLD_MANIFEST if p.OLD_MANIFEST[k]!=p.TARGET_MANIFEST[k]},PATHS)
-  self.assertEqual(p.manifest_digest(p.OLD_MANIFEST),'9a124a3157842f483251d5a7c7b88712cedffc45a5ce5460b6f44547cf1ddd3f');self.assertEqual(p.K_M,'744bc24aadadd683dec7fa4b99d33669996d0b92eae78b654884cf3f9f404950');self.assertEqual(p.I_M,'9de931063d86a011682a0e38568de36532d2fb47077f50cca0ddfe24ad2f1d9f')
+  self.assertEqual(p.manifest_digest(p.OLD_MANIFEST),'fe006d69ffebae1b303e9914b139417f7f1ad461881e864b4951fa60253b486a');self.assertEqual(p.K_M,'744bc24aadadd683dec7fa4b99d33669996d0b92eae78b654884cf3f9f404950');self.assertEqual(p.I_M,'9de931063d86a011682a0e38568de36532d2fb47077f50cca0ddfe24ad2f1d9f')
   self.assertEqual(p.H_M,'51620b5091b7374d6739ff022f3eed09088751c6e3bcd21277e12d96d61d8fc5')
-  self.assertEqual(p.STORE_SHA256['old'],p.STORE_SHA256['target']);self.assertEqual(p.ROLLBACK_COMMIT,p.OLD_COMMIT);self.assertEqual(set(p.OLD_REPORT_ASSETS),set(p.REPORT_ASSETS));self.assertEqual({key for key in p.REPORT_ASSETS if p.REPORT_ASSETS[key]!=p.OLD_REPORT_ASSETS[key]}, {'/naver/operations-ui.js'})
+  self.assertEqual(p.STORE_SHA256['old'],p.STORE_SHA256['target']);self.assertEqual(p.ROLLBACK_COMMIT,p.OLD_COMMIT);self.assertEqual(set(p.OLD_REPORT_ASSETS),set(p.REPORT_ASSETS));self.assertEqual({key for key in p.REPORT_ASSETS if p.REPORT_ASSETS[key]!=p.OLD_REPORT_ASSETS[key]}, set())
  def test_all_old_history_and_new_c200_layer_and_receipt_pairs_cannot_mutate(self):
-  for name,value in [('H_M','a'*64),('H_A','a'*64),('H_C','a'*40),('H_S','a'*64),('H_R','12345678901'),('H_O','a'*32),('H_D',{}),('Z_M','a'*64),('Z_A','a'*64),('Z_C','a'*40),('Z_S','a'*64),('Z_R','12345678901'),('Z_O','a'*32),('Z_D',{}),('F','a'*64),('G','a'*64),('A','a'*40),('B','a'*64),('C','12345678901'),('D','a'*32),('E',{}),('I_M','a'*64),('I_A','a'*64),('I_C','a'*40),('I_S','a'*64),('I_R','12345678901'),('I_O','a'*32),('I_D',{}),('K_C','a'*40),('K_S','a'*64),('K_R','12345678901'),('K_O','a'*32),('K_D',{}),('K_M','a'*64),('K_A','a'*64),('U_C','a'*40),('U_S','a'*64),('U_R','12345678901'),('U_O','a'*32),('U_D',{}),('U_M','a'*64),('U_A','a'*64),('W_C','a'*40),('W_S','a'*64),('W_R','12345678901'),('W_O','a'*32),('W_D',{}),('W_M','a'*64),('W_A','a'*64),('X_C','a'*40),('X_S','a'*64),('X_R','12345678901'),('X_O','a'*32),('X_D',{}),('X_M','a'*64),('X_A','a'*64),('BASE_PREPARE_RUN','38523201246'),('BASE_APPLY_OPERATION','a'*32)]:
+  for name,value in [('H_M','a'*64),('H_A','a'*64),('H_C','a'*40),('H_S','a'*64),('H_R','12345678901'),('H_O','a'*32),('H_D',{}),('Z_M','a'*64),('Z_A','a'*64),('Z_C','a'*40),('Z_S','a'*64),('Z_R','12345678901'),('Z_O','a'*32),('Z_D',{}),('F','a'*64),('G','a'*64),('A','a'*40),('B','a'*64),('C','12345678901'),('D','a'*32),('E',{}),('I_M','a'*64),('I_A','a'*64),('I_C','a'*40),('I_S','a'*64),('I_R','12345678901'),('I_O','a'*32),('I_D',{}),('K_C','a'*40),('K_S','a'*64),('K_R','12345678901'),('K_O','a'*32),('K_D',{}),('K_M','a'*64),('K_A','a'*64),('U_C','a'*40),('U_S','a'*64),('U_R','12345678901'),('U_O','a'*32),('U_D',{}),('U_M','a'*64),('U_A','a'*64),('W_C','a'*40),('W_S','a'*64),('W_R','12345678901'),('W_O','a'*32),('W_D',{}),('W_M','a'*64),('W_A','a'*64),('X_C','a'*40),('X_S','a'*64),('X_R','12345678901'),('X_O','a'*32),('X_D',{}),('X_M','a'*64),('X_A','a'*64),('Y_C','a'*40),('Y_S','a'*64),('Y_R','12345678901'),('Y_O','a'*32),('Y_D',{}),('Y_M','a'*64),('Y_A','a'*64),('BASE_PREPARE_RUN','38523201246'),('BASE_APPLY_OPERATION','a'*32)]:
    p=pinned();setattr(p,name,value)
    with self.subTest(name=name),self.assertRaises(ValueError):p.require_pins()
  def test_foreign_new_missing_paths_and_previous_source_pins_refuse(self):
-  for name,value in [('TARGET_COMMIT','70045db75473407591d79c3bfa4e69cbb217f6b9'),('TARGET_COMMIT','9379023a7a13b0d71b79a57ebf8979591b574f9f'),('NEW_PATHS',frozenset({'unapproved.py'})),('CODE_PATHS',frozenset({'unapproved.py'})),('TARGET_COMMIT','b5e40fa01e6432ab0a62541c330652e1cb4fae2c'),('TARGET_COMMIT','114dde8a45e1753ade0ff871f024c7e5880546c5'),('TARGET_COMMIT','621c5efeaf607b8227898bdf65d3ef040d1740fa'),('TARGET_COMMIT','1fc2c92a18ea50dfef4e0b3da9ddd973f4017715'),('TARGET_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_SOURCE_SHA256','a'*64)]:
+  for name,value in [('TARGET_COMMIT','513e52eaee4d1bb722461961639cd588df9080cd'),('TARGET_COMMIT','70045db75473407591d79c3bfa4e69cbb217f6b9'),('TARGET_COMMIT','9379023a7a13b0d71b79a57ebf8979591b574f9f'),('NEW_PATHS',frozenset({'unapproved.py'})),('CODE_PATHS',frozenset({'unapproved.py'})),('TARGET_COMMIT','b5e40fa01e6432ab0a62541c330652e1cb4fae2c'),('TARGET_COMMIT','114dde8a45e1753ade0ff871f024c7e5880546c5'),('TARGET_COMMIT','621c5efeaf607b8227898bdf65d3ef040d1740fa'),('TARGET_COMMIT','1fc2c92a18ea50dfef4e0b3da9ddd973f4017715'),('TARGET_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_COMMIT','7f138a8d42bb292567ccb3e117bd0305efc42ad7'),('OLD_SOURCE_SHA256','a'*64)]:
    p=pinned();setattr(p,name,value)
    with self.subTest(name=name),self.assertRaises(ValueError):p.require_pins()
  def test_exact_scope_field_shape_and_unapproved_ABI_remain_closed(self):
@@ -101,7 +101,7 @@ class ProductBasisPatchTests(unittest.TestCase):
    scope=deepcopy(p.APPROVED_AST_SCOPE);mutation(scope)
    with self.assertRaises(ValueError):p.validate_ast_scope(scope)
  def test_python_contract_accepts_only_approved_body_and_version_names(self):
-  p=pinned();before,after=bodies()
+  p=pinned();before,after=bodies();p.APPROVED_AST_SCOPE=fixture_scope();p.EXPECTED_CODE_PATHS=p.CODE_PATHS=frozenset(p.APPROVED_AST_SCOPE)
   for name in PYTHON_PATHS:p.python_contract(name,before[name],after[name])
   for name,bad in [(CP,after[CP]+b'UNAPPROVED=True\n'),(CP,b'import os\n'+after[CP]),(CP,after[CP].replace(b'chosen(context)',b'chosen(context,bypass=False)')),(CP,after[CP].replace(b'keep():return True',b'keep():return False')),(SCHEMA,after[SCHEMA].replace(b"return 'fixed'",b"return 'changed'"))]:
    with self.subTest(name=name),self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):p.python_contract(name,before[name],bad)
@@ -153,7 +153,8 @@ class ProductBasisPatchTests(unittest.TestCase):
    self.assertEqual(p.binding_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.reference_success,p.U_C,p.U_S,'38708112912',p.K_C,'dfdd1a4c72ed4cafa57e2bbe7af6d370'))
    self.assertEqual(p.text_pool_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.binding_success,p.W_C,p.W_S,'38726899460',p.U_C,'9e72159e3ce146a6ba2846396a6ce4b4'))
    self.assertEqual(p.worker_observation_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.text_pool_success,p.X_C,p.X_S,'38789089753',p.W_C,'e70966984fa04ac0b9ee046f6fd7b917'))
-   self.assertEqual(p.base_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.worker_observation_success,p.OLD_COMMIT,p.OLD_SOURCE_SHA256,'38838921412',p.X_C,'efe877fb1b314df897e1b4c9ca2cd998'))
+   self.assertEqual(p.selection_observation_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.worker_observation_success,p.Y_C,p.Y_S,'38838921412',p.X_C,'efe877fb1b314df897e1b4c9ca2cd998'))
+   self.assertEqual(p.base_success('r','u'),'proof');self.assertEqual(check.call_args.args,('r','u',p.selection_observation_success,p.OLD_COMMIT,p.OLD_SOURCE_SHA256,'38847877253',p.Y_C,'0cf4c00158704aa5988365314c56312b'))
  def test_both_approved_paths_reach_strict_AST_and_then_final_inventory(self):
   p,reader,before,after=fixture()
   with patch.object(p,'python_contract',wraps=p.python_contract)as contract,patch.object(p,'compatible_code_scope')as inventory:p.compatible_source(Path('/old'),Path('/new'),reader)
@@ -199,7 +200,7 @@ class ProductBasisPatchTests(unittest.TestCase):
  def test_exact_new_class_ast_and_unapproved_body_bases_decorators_classes_refuse(self):
   p=pinned();path='naver_runtime/runtime_status.py'
   approved=APPROVED_OBSERVATION_CLASS.encode();prefix=b"class RuntimeStatus:\n def snapshot(self):return 'fixed'\n";before=prefix+BASELINE_OBSERVATION_CLASS.encode();after=prefix+approved
-  scope=deepcopy(p.APPROVED_AST_SCOPE);scope[path]={'added': ('InspectionWorkerObservation.SELECTION_EVENTS',), 'changed': ('InspectionWorkerObservation.__init__', 'InspectionWorkerObservation._put', 'InspectionWorkerObservation.note', 'InspectionWorkerObservation.snapshot'), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()};p.APPROVED_AST_SCOPE=scope;p.validate_ast_scope(scope);p.python_contract(path,before,after)
+  scope=deepcopy(p.APPROVED_AST_SCOPE);scope[path]={'added': ('InspectionWorkerObservation.SELECTION_EVENTS',), 'changed': ('InspectionWorkerObservation.__init__', 'InspectionWorkerObservation._put', 'InspectionWorkerObservation.note', 'InspectionWorkerObservation.snapshot'), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()};p.APPROVED_AST_SCOPE=scope;p.EXPECTED_CODE_PATHS=p.CODE_PATHS=frozenset(scope);p.validate_ast_scope(scope);p.python_contract(path,before,after)
   for part in ('body','bases','decorator','existing','extra','nested'):
    tree=ast.parse(after);node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='InspectionWorkerObservation')
    if part=='body':next(n for n in node.body if isinstance(n,ast.Assign)).value=ast.Constant(value=255)
@@ -217,7 +218,7 @@ class ProductBasisPatchTests(unittest.TestCase):
   import types
   p=pinned();path='naver_runtime/runtime_status.py'
   prefix=b"class RuntimeStatus:\n def snapshot(self):return 'fixed'\n";before=prefix+BASELINE_OBSERVATION_CLASS.encode();after=prefix+APPROVED_OBSERVATION_CLASS.encode()
-  scope=deepcopy(p.APPROVED_AST_SCOPE);scope[path]={'added': ('InspectionWorkerObservation.SELECTION_EVENTS',), 'changed': ('InspectionWorkerObservation.__init__', 'InspectionWorkerObservation._put', 'InspectionWorkerObservation.note', 'InspectionWorkerObservation.snapshot'), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()};p.APPROVED_AST_SCOPE=scope
+  scope=deepcopy(p.APPROVED_AST_SCOPE);scope[path]={'added': ('InspectionWorkerObservation.SELECTION_EVENTS',), 'changed': ('InspectionWorkerObservation.__init__', 'InspectionWorkerObservation._put', 'InspectionWorkerObservation.note', 'InspectionWorkerObservation.snapshot'), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()};p.APPROVED_AST_SCOPE=scope;p.EXPECTED_CODE_PATHS=p.CODE_PATHS=frozenset(scope)
   real_parse=ast.parse
   for mode in ('missing','empty','class_nonempty','function_nonempty','malformed'):
    def parse(*args,**kwargs):
