@@ -11,7 +11,7 @@ import lzma
 import re
 import types
 
-CORE_SHA256 = '63f3a3c2b4a1cd0537eeae76d625fa47e916decc59b883b2d04d39431aa5aa4a'  # Root registers the independently reviewed final core.
+CORE_SHA256 = 'd5d9ca2d8f3221469040a9f3a38b143a78b46828eb2fc1e576fed236a47f68a8'  # Root registers the independently reviewed final core.
 SOURCE_FILES = {
     'exports_binding': 'backend/tools/naver_completion_exports.py',
     'exports_helper': 'backend/tools/naver_saved_exports.py',
