@@ -1,0 +1,12 @@
+# Review only. Task12 verifies actual source completion before installation.
+[Unit]
+Description=Refresh the saved-search-sample export daily
+
+[Timer]
+OnCalendar=*-*-* 10:35:00 Asia/Seoul
+RandomizedDelaySec=60
+Persistent=true
+Unit=naver-market-export.service
+
+[Install]
+WantedBy=timers.target

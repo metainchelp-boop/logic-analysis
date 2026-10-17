@@ -1,0 +1,296 @@
+name: 저장 상품 내보내기 개발 검증 (배포 없음)
+
+on:
+  push:
+    branches: [codex/naver-claude-reference-ops-20261011]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: naver-product-export-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-export:
+    if: github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: 개발 소스 받기 (배포 자격 없음)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: 합성 SQLite·파일 검사 (외부망 차단)
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/product-tests" "$RUNNER_TEMP/product-home"
+          git rev-parse HEAD > "$RUNNER_TEMP/product-tests/source-sha.txt"
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            python -m unittest discover -s backend/tests -p test_naver_product_export.py -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/export-tests.txt"
+      - name: 실제 Linux 서비스 문법·격리된 설치 회귀 검사
+        run: |
+          set -euo pipefail
+          command -v systemd-analyze
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_saved_exports test_naver_saved_exports_failed_unit_recovery -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/saved-export-tests.txt"
+      - name: 큰 DB 배포·정확한 실패 복구 Linux 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_preview_completion_release test_naver_completion_transport test_naver_completion_failed_apply_recovery test_naver_completion_migration_inspect test_naver_completion_failed_database_archive test_naver_completion_exports_reinstall -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/completion-database-tests.txt"
+      - name: 스키마 유지 코드 패치·롤백·전송 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_completion_postcompletion_transport test_naver_completion_patch_workflow -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/completion-patch-tests.txt"
+      - name: Claude 문안 코드 패치·현재판 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_claude_quality_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/claude-quality-patch-tests.txt"
+      - name: AI 검증 진단 코드 패치·faa0 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_strategy_validation_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/strategy-validation-patch-tests.txt"
+      - name: 고정 광고주 번호 v2·source 진단·읽기 전용 전송 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_completion_source_diagnostics test_naver_completion_source_diagnostics_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/completion-source-diagnostics-tests.txt"
+      - name: 점검 연속 수집 코드 패치·70e 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_inspection_continuity_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/inspection-continuity-patch-tests.txt"
+      - name: 현재 15f 점검 진척·증명·읽기 전용 진단 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_current_inspection_diagnostics test_naver_current_inspection_diagnostics_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/current-inspection-diagnostics-tests.txt"
+      - name: 현재 dc168 설정 원천·scope·읽기 전용 진단 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_setup_stale_diagnostics test_naver_setup_stale_diagnostics_transport test_foodin_submit_preflight -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/setup-stale-diagnostics-tests.txt"
+      - name: 기존 예산 초안·상품 가설 패치·15f 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_budget_draft_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/budget-draft-patch-tests.txt"
+      - name: 학습 실패 관측 패치·dc168 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_learning_failure_patch test_naver_learning_failure_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/learning-failure-patch-tests.txt"
+      - name: 현재 799 관측 sidecar·identity·읽기 전용 진단 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_observation_799_diagnostics test_naver_observation_799_transport test_observation_799_identity -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/observation-799-diagnostics-tests.txt"
+      - name: 현재 799 관측 사유 v2·읽기 전용 진단 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_observation_799_v2_diagnostics test_naver_observation_799_v2_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/observation-799-diagnostics-v2-tests.txt"
+      - name: 관측 저장 연결 코드 패치·799 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_observation_binding_patch test_observation_binding_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/observation-binding-patch-tests.txt"
+      - name: 소구 가설 진단 코드 패치·328 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_appeal_diagnostic_patch test_appeal_diagnostic_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/appeal-diagnostic-patch-tests.txt"
+      - name: 소구 가설 시작 형식 패치·4d 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_appeal_prefix_patch test_appeal_prefix_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/appeal-prefix-patch-tests.txt"
+      - name: 현재 일일 점검 원천·4d 읽기 전용 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            python3 -I -B -m unittest discover -s backend/tests -p 'test_daily_current_*.py' -q \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/daily-current-source-diagnostics-v3-tests.txt"
+      - name: 현재 일일 점검 원천·4d companion 읽기 전용 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            python3 -I -B -m unittest discover -s backend/tests -p 'test_daily_v4_*.py' -q \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/daily-current-source-diagnostics-v4-tests.txt"
+      - name: 현재 일일 점검 원천·4d 이미지 원천 읽기 전용 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            python3 -I -B -m unittest discover -s backend/tests -p 'test_daily_v5_*.py' -q \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/daily-current-source-diagnostics-v5-tests.txt"
+      - name: 소구 가설 끝 형식 패치·c40 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_appeal_suffix_patch test_appeal_suffix_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/appeal-suffix-patch-tests.txt"
+      - name: 상세점검·AI 연결 코드 패치·fd 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_detail_ai_patch test_detail_ai_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/detail-ai-patch-tests.txt"
+      - name: 보고서 결함 수정 코드 패치·38 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_report_defect_patch test_report_defect_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/report-defect-patch-tests.txt"
+      - name: 보고서 종료 기록 복구 코드 패치·7d9 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_report_writer_recovery_patch test_report_writer_recovery_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/report-writer-recovery-patch-tests.txt"
+      - name: 보고서 생성 형식 코드 패치·be97 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_report_generation_patch test_report_generation_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/report-generation-patch-tests.txt"
+      - name: Claude HTTP 오류 진단 코드 패치·be97 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_provider_diagnostics_patch test_provider_diagnostics_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/provider-diagnostics-patch-tests.txt"
+      - name: 보고서 원천 재사용 코드 패치·8876 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_report_context_reuse_patch test_report_context_reuse_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/report-context-reuse-patch-tests.txt"
+      - name: HTTP400 고정 판독 진단 코드 패치·d599 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_provider_error_shape_patch test_provider_error_shape_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/provider-error-shape-patch-tests.txt"
+      - name: 최소 보고서 형식·설정 마감 코드 패치·07890 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_format_setup_patch test_format_setup_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/format-setup-tests.txt"
+      - name: 보고서 고정 규칙·설정 마감 코드 패치·07890 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_format_rule_patch test_format_rule_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/format-rule-tests.txt"
+      - name: 공유예산 단건 원천·보고서 참조 복구 코드 패치·539 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_budget_format_patch test_budget_format_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/budget-format-tests.txt"
+      - name: 보고서 거절 진단·점검 진행 코드 패치·7b61 복구 경계 검사
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/product-home" "TMPDIR=$RUNNER_TEMP/product-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            env PYTHONPATH=backend/tools:backend/tests python -m unittest test_report_progress_patch test_report_progress_transport -v \
+            2>&1 | tee "$RUNNER_TEMP/product-tests/report-progress-tests.txt"
+      - name: 소스·합성 결과 보관 (운영 자료 없음)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: naver-product-export-tests-${{ github.run_id }}
+          path: ${{ runner.temp }}/product-tests/
+          retention-days: 7
+          if-no-files-found: error

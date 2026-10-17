@@ -1,0 +1,30 @@
+# Review template only. Task12 resolves every @PLACEHOLDER@ before installation.
+[Unit]
+Description=Export bounded saved product observations for Naver reports
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=@EXPORTER_USER@
+Group=@EXPORT_READER_GROUP@
+SupplementaryGroups=@LOGIC_READ_GROUP@
+WorkingDirectory=/
+ExecStart=@PYTHON_EXECUTABLE@ -I "@EXPORTER_SCRIPT@" --database "@LOGIC_DATABASE@" --output "@EXPORT_DIRECTORY@/bundle.json"
+UMask=0027
+TimeoutStartSec=45
+MemoryMax=256M
+TasksMax=16
+NoNewPrivileges=true
+PrivateNetwork=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+ReadOnlyPaths=@LOGIC_DATA_DIRECTORY@ @EXPORTER_SCRIPT@
+ReadWritePaths=@EXPORT_DIRECTORY@
+StandardOutput=journal
+StandardError=journal

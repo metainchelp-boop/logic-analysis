@@ -1,0 +1,13 @@
+# Review-only additive override. Resolve service/path placeholders in Task12.
+# This directory contains only the sanitized export; never use the logic DB directory.
+services:
+  "@ENGINE_SERVICE@":
+    environment:
+      NAVER_ENGINE_PRODUCT_EXPORT_FILE: /var/lib/naver-product-source/bundle.json
+    volumes:
+      - type: bind
+        source: "@EXPORT_DIRECTORY@"
+        target: /var/lib/naver-product-source
+        read_only: true
+        bind:
+          create_host_path: false

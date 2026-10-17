@@ -1,0 +1,30 @@
+# Review only. Task12 resolves placeholders and verifies the source profile.
+[Unit]
+Description=Export verified saved search samples for Naver report plans
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=@EXPORTER_USER@
+Group=@EXPORT_READER_GROUP@
+SupplementaryGroups=@LOGIC_READ_GROUP@
+WorkingDirectory=/
+ExecStart=@PYTHON_EXECUTABLE@ -I "@EXPORTER_DIRECTORY@/naver_market_export.py" --database "@LOGIC_DATABASE@" --output "@MARKET_EXPORT_DIRECTORY@/bundle.json"
+UMask=0027
+TimeoutStartSec=45
+MemoryMax=256M
+TasksMax=16
+NoNewPrivileges=true
+PrivateNetwork=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+ReadOnlyPaths=@LOGIC_DATA_DIRECTORY@ @EXPORTER_DIRECTORY@
+ReadWritePaths=@MARKET_EXPORT_DIRECTORY@
+StandardOutput=journal
+StandardError=journal

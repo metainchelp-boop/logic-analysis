@@ -1,0 +1,12 @@
+# Review template only. The daily source-analysis completion time is checked in Task12.
+[Unit]
+Description=Refresh the dedicated saved-product export daily
+
+[Timer]
+OnCalendar=*-*-* 10:30:00 Asia/Seoul
+RandomizedDelaySec=60
+Persistent=true
+Unit=naver-product-export.service
+
+[Install]
+WantedBy=timers.target

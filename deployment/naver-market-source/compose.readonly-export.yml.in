@@ -1,0 +1,12 @@
+# Review-only additive override. Never mount the logic database directory.
+services:
+  "@ENGINE_SERVICE@":
+    environment:
+      NAVER_ENGINE_MARKET_EXPORT_FILE: /var/lib/naver-market-source/bundle.json
+    volumes:
+      - type: bind
+        source: "@MARKET_EXPORT_DIRECTORY@"
+        target: /var/lib/naver-market-source
+        read_only: true
+        bind:
+          create_host_path: false
