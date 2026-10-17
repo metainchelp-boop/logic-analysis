@@ -13,6 +13,7 @@ on:
       - backend/tests/test_naver_market_source_limit_probe_namespace_provenance.py
       - backend/tests/naver_market_probe_namespace_fixture.py
       - backend/tests/test_naver_market_probe_fixture_fd_summary.py
+      - backend/tests/test_naver_market_probe_preflight_phases.py
   workflow_dispatch:
     inputs:
       confirm:
@@ -40,7 +41,7 @@ jobs:
           set -euo pipefail
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
-            PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_market_source_limit_probe test_naver_market_source_limit_probe_host test_naver_market_probe_namespace_fd_order test_naver_market_probe_fixture_fd_summary -v
+            PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_market_source_limit_probe test_naver_market_source_limit_probe_host test_naver_market_probe_namespace_fd_order test_naver_market_probe_fixture_fd_summary test_naver_market_probe_preflight_phases -v
       - name: Linux 격리 읽기전용 WAL 실제 경계 검사
         run: |
           set -euo pipefail
@@ -65,7 +66,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PYCODE'
           import hashlib,json,os,pathlib,re,subprocess,sys
-          EXPECTED_HOST_SHA256 = '3da4aed716cf90ac1a78d301b2dd8b916ce8f5c45237f864ea6483c8d1c92f53'  # Root registers the reviewed host.
+          EXPECTED_HOST_SHA256 = 'cba14b996470aaa97a1533a0c1041870b49bc962674ddd9f398ebb1f22b068be'  # Root registers the reviewed host.
           if type(EXPECTED_HOST_SHA256) is not str or not re.fullmatch('[0-9a-f]{64}', EXPECTED_HOST_SHA256):
               raise SystemExit('HOST_PIN_REQUIRED')
           runs=json.loads(subprocess.check_output(['gh','api','repos/'+os.environ['GITHUB_REPOSITORY']+'/actions/workflows/naver-product-export-tests.yml/runs?head_sha='+os.environ['GITHUB_SHA']+'&per_page=10']))['workflow_runs']
@@ -96,7 +97,7 @@ jobs:
             set -eu
             /usr/bin/python3 -I -B - <<'PYCODE'
             import base64,hashlib,json,lzma,os,re,types
-            EXPECTED_HOST_SHA256 = '3da4aed716cf90ac1a78d301b2dd8b916ce8f5c45237f864ea6483c8d1c92f53'  # Root registers the same reviewed host.
+            EXPECTED_HOST_SHA256 = 'cba14b996470aaa97a1533a0c1041870b49bc962674ddd9f398ebb1f22b068be'  # Root registers the same reviewed host.
             result={'version':1,'transport':'market-source-limit-probe','transport_ok':False,'error_code':'HOST_REFUSED','result':None}
             try:
                 wire=os.environ.pop('MARKET_SOURCE_LIMIT_WIRE')

@@ -13,6 +13,7 @@ OPERATING_SOURCE = '21cd739cf171c066b84683b24e3340feda495858'
 PACKAGE = {'operation': 'code-prepare', 'baseline': '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', 'source_commit': EXPORT_SOURCE, 'source_tar_gz_sha256': '7d02a455ff2b8b2e2bbcd598b71f5e06ffe8e9d2099f08a2e87a8ea10cbae872', 'ciphertext_sha256': '5f7bcd5b0399603b75de806ce3332be5d89997aca8c06db8807f2d6f23019416', 'run_id': '38198428850'}
 SOURCE_PINS = {'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
 PHASES = ('pins', 'modules', 'operating_receipt', 'construction', 'prepared', 'verify', 'complete')
+PREFLIGHT_PHASES = ('probe_plan', 'probe_prepared', 'probe_platform', 'probe_interpreter_open', 'probe_interpreter_shape', 'probe_interpreter_stability', 'probe_source_family', 'probe_child_setup', 'probe_interpreter_match', 'probe_installed_product', 'probe_installed_market')
 UNITS = {'product': 'naver-product-export.service', 'product_reader': 'naver-product-export-reader.service', 'market': 'naver-market-export.service', 'market_reader': 'naver-market-export-reader.service'}
 TIMERS = {kind: 'naver-' + kind + '-export.timer' for kind in ('product', 'market')}
 MAX_PUBLIC_SOURCE = 160000
@@ -551,38 +552,54 @@ def _run_child(plan, sources, family, install):
     return out
 
 def _verified_probe(bound, helper, sources):
-    plan = bound.plan
-    if plan != helper.build_plan(**plan):
-        raise ProbeStop()
-    install = helper.INSTALL / plan['ops_commit']
-    _, _, prepared = helper._prepared(bound.receipt)
-    if sys.platform != 'linux':
-        raise ProbeStop()
-    target = Path('/proc/self/exe')
-    fd = os.open(target, os.O_RDONLY | os.O_NONBLOCK)
+    stage = 'probe_plan'
     try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= helper.MAX_INTERPRETER or info.st_uid != 0 or info.st_mode & 18:
+        stage = 'probe_plan'
+        plan = bound.plan
+        if plan != helper.build_plan(**plan):
             raise ProbeStop()
-        digest, total = (hashlib.sha256(), 0)
-        while total <= helper.MAX_INTERPRETER:
-            piece = os.read(fd, min(65536, helper.MAX_INTERPRETER + 1 - total))
-            if not piece:
-                break
-            total += len(piece)
-            digest.update(piece)
-        if total > helper.MAX_INTERPRETER or _identity(os.fstat(fd)) != _identity(info) or _identity(target.stat()) != _identity(info) or (digest.hexdigest() != hashlib.sha256(prepared[helper.INTERPRETER]).hexdigest()):
+        install = helper.INSTALL / plan['ops_commit']
+        stage = 'probe_prepared'
+        _, _, prepared = helper._prepared(bound.receipt)
+        stage = 'probe_platform'
+        if sys.platform != 'linux':
             raise ProbeStop()
-    finally:
-        os.close(fd)
-    installed = {}
-    for role, name in (('product_exporter', 'naver_product_export.py'), ('market_exporter', 'naver_market_export.py')):
-        body = helper._regular(install / name, mode=420)
-        if type(body) is not bytes or hashlib.sha256(body).hexdigest() != SOURCE_PINS[role] or body != sources[role]:
-            raise ProbeStop()
-        installed[role] = body
-    family = _file_family(Path(plan['source_directory']), plan['database_name'])
-    return _run_child(plan, installed, family, install)
+        stage = 'probe_interpreter_open'
+        target = Path('/proc/self/exe')
+        fd = os.open(target, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            stage = 'probe_interpreter_shape'
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= helper.MAX_INTERPRETER or info.st_uid != 0 or info.st_mode & 18:
+                raise ProbeStop()
+            stage = 'probe_interpreter_stability'
+            digest, total = (hashlib.sha256(), 0)
+            while total <= helper.MAX_INTERPRETER:
+                piece = os.read(fd, min(65536, helper.MAX_INTERPRETER + 1 - total))
+                if not piece:
+                    break
+                total += len(piece)
+                digest.update(piece)
+            if total > helper.MAX_INTERPRETER or _identity(os.fstat(fd)) != _identity(info) or _identity(target.stat()) != _identity(info):
+                raise ProbeStop()
+            stage = 'probe_interpreter_match'
+            if digest.hexdigest() != hashlib.sha256(prepared[helper.INTERPRETER]).hexdigest():
+                raise ProbeStop()
+        finally:
+            os.close(fd)
+        installed = {}
+        for role, name in (('product_exporter', 'naver_product_export.py'), ('market_exporter', 'naver_market_export.py')):
+            stage = 'probe_installed_product' if role == 'product_exporter' else 'probe_installed_market'
+            body = helper._regular(install / name, mode=420)
+            if type(body) is not bytes or hashlib.sha256(body).hexdigest() != SOURCE_PINS[role] or body != sources[role]:
+                raise ProbeStop()
+            installed[role] = body
+        stage = 'probe_source_family'
+        family = _file_family(Path(plan['source_directory']), plan['database_name'])
+        stage = 'probe_child_setup'
+        return _run_child(plan, installed, family, install)
+    except Exception:
+        raise ProbeStop(stage) from None
 
 def diagnose(sources):
     phase = 'pins'
@@ -613,13 +630,15 @@ def diagnose(sources):
             out['probe'] = _verified_probe(bound, helper, sources)
             out['ok'] = out['probe']['status'] in ('source_limit', 'original_collect_passed', 'original_other_failure')
         phase = 'complete'
-    except Exception:
+    except Exception as error:
+        if phase == 'probe' and type(error) is ProbeStop and len(error.args) == 1 and type(error.args[0]) is str and error.args[0] in PREFLIGHT_PHASES:
+            phase = error.args[0]
         out['probe']['status'] = 'diagnostic_unavailable'
     out['phase'] = phase
     return out
 
 def closed_json(result):
-    if type(result) is not dict or set(result) != {'version', 'diagnostic', 'ok', 'phase', 'operating_receipt_match', 'source_pins_match', 'original_verify_error', 'probe'} or type(result['version']) is not int or (result['version'] != 1) or (result['diagnostic'] != 'market-source-limit-readonly-probe') or (result['phase'] not in set(PHASES) | {'probe'}) or any((type(result[k]) is not bool for k in ('ok', 'operating_receipt_match', 'source_pins_match'))) or (result['original_verify_error'] not in (None, 'market_result_EXPORT_RUN_NOT_VERIFIED')):
+    if type(result) is not dict or set(result) != {'version', 'diagnostic', 'ok', 'phase', 'operating_receipt_match', 'source_pins_match', 'original_verify_error', 'probe'} or type(result['version']) is not int or (result['version'] != 1) or (result['diagnostic'] != 'market-source-limit-readonly-probe') or (result['phase'] not in set(PHASES) | set(PREFLIGHT_PHASES) | {'probe'}) or any((type(result[k]) is not bool for k in ('ok', 'operating_receipt_match', 'source_pins_match'))) or (result['original_verify_error'] not in (None, 'market_result_EXPORT_RUN_NOT_VERIFIED')):
         raise ValueError('DIAGNOSTIC_RESULT')
     _probe_json(result['probe'])
     body = json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
