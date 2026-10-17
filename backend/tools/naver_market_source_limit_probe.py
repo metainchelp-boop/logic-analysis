@@ -13,7 +13,6 @@ OPERATING_SOURCE = '21cd739cf171c066b84683b24e3340feda495858'
 PACKAGE = {'operation': 'code-prepare', 'baseline': '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76', 'source_commit': EXPORT_SOURCE, 'source_tar_gz_sha256': '7d02a455ff2b8b2e2bbcd598b71f5e06ffe8e9d2099f08a2e87a8ea10cbae872', 'ciphertext_sha256': '5f7bcd5b0399603b75de806ce3332be5d89997aca8c06db8807f2d6f23019416', 'run_id': '38198428850'}
 SOURCE_PINS = {'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
 PHASES = ('pins', 'modules', 'operating_receipt', 'construction', 'prepared', 'verify', 'complete')
-PREFLIGHT_PHASES = ('probe_plan', 'probe_prepared', 'probe_platform', 'probe_interpreter_open', 'probe_interpreter_shape', 'probe_interpreter_stability', 'probe_source_family', 'probe_child_setup', 'probe_interpreter_match', 'probe_installed_product', 'probe_installed_market')
 UNITS = {'product': 'naver-product-export.service', 'product_reader': 'naver-product-export-reader.service', 'market': 'naver-market-export.service', 'market_reader': 'naver-market-export-reader.service'}
 TIMERS = {kind: 'naver-' + kind + '-export.timer' for kind in ('product', 'market')}
 MAX_PUBLIC_SOURCE = 160000
@@ -551,6 +550,7 @@ def _run_child(plan, sources, family, install):
             out[key] = None
     return out
 
+PREFLIGHT_PHASES = ('probe_plan', 'probe_prepared', 'probe_platform', 'probe_interpreter_open', 'probe_interpreter_shape', 'probe_interpreter_stability', 'probe_source_family', 'probe_child_setup', 'probe_interpreter_match', 'probe_installed_product', 'probe_installed_market')
 def _verified_probe(bound, helper, sources):
     stage = 'probe_plan'
     try:
