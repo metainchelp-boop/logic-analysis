@@ -66,7 +66,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PYCODE'
           import hashlib,json,os,pathlib,re,subprocess,sys
-          EXPECTED_HOST_SHA256 = 'cba14b996470aaa97a1533a0c1041870b49bc962674ddd9f398ebb1f22b068be'  # Root registers the reviewed host.
+          EXPECTED_HOST_SHA256 = '34556410fb6823f24cc16c7f43cf1e6cca477630b7b6efc78d908794dacb322b'  # Root registers the reviewed host.
           if type(EXPECTED_HOST_SHA256) is not str or not re.fullmatch('[0-9a-f]{64}', EXPECTED_HOST_SHA256):
               raise SystemExit('HOST_PIN_REQUIRED')
           runs=json.loads(subprocess.check_output(['gh','api','repos/'+os.environ['GITHUB_REPOSITORY']+'/actions/workflows/naver-product-export-tests.yml/runs?head_sha='+os.environ['GITHUB_SHA']+'&per_page=10']))['workflow_runs']
@@ -97,7 +97,7 @@ jobs:
             set -eu
             /usr/bin/python3 -I -B - <<'PYCODE'
             import base64,hashlib,json,lzma,os,re,types
-            EXPECTED_HOST_SHA256 = 'cba14b996470aaa97a1533a0c1041870b49bc962674ddd9f398ebb1f22b068be'  # Root registers the same reviewed host.
+            EXPECTED_HOST_SHA256 = '34556410fb6823f24cc16c7f43cf1e6cca477630b7b6efc78d908794dacb322b'  # Root registers the same reviewed host.
             result={'version':1,'transport':'market-source-limit-probe','transport_ok':False,'error_code':'HOST_REFUSED','result':None}
             try:
                 wire=os.environ.pop('MARKET_SOURCE_LIMIT_WIRE')
