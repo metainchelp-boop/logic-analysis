@@ -29,7 +29,7 @@ class ProductBasisTransportTests(unittest.TestCase):
    with self.assertRaises(ValueError):t.decode(bad)
   with self.assertRaises(ValueError):t.encode({**value,'PRIVATE':'PRIVATE'})
  def test_all_original_size_caps_and_codec_AST_remain_exact(self):
-  t=load();self.assertEqual((t.MAX_JSON,t.MAX_WIRE,t.MAX_SOURCE,t.MAX_SOURCE_GZIP,t.MAX_CIPHERTEXT,t.MAX_PAYLOAD,t.MAX_BOOTSTRAP_B64,t.MAX_SSH),(393216,100352,160000,3*1024*1024,3*1024*1024,4*1024*1024,32768,131072))
+  t=load();self.assertEqual((t.MAX_JSON,t.MAX_WIRE,t.MAX_SOURCE,t.MAX_SOURCE_GZIP,t.MAX_CIPHERTEXT,t.MAX_PAYLOAD,t.MAX_BOOTSTRAP_B64,t.MAX_SSH),(393216,102400,160000,3*1024*1024,3*1024*1024,4*1024*1024,32768,131072))
   old=ast.parse((TOOLS/'naver_budget_format_transport.py').read_bytes());new=ast.parse((TOOLS/'naver_report_progress_transport.py').read_bytes())
   for name in ('encode','decode','unique','bootstrap'):
    a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name)
@@ -42,7 +42,7 @@ class ProductBasisTransportTests(unittest.TestCase):
   self.assertEqual(ast.dump(a.body[-1]),ast.dump(ast.parse('return result').body[0]))
   self.assertEqual(ast.dump(b.body[-1]),ast.dump(ast.parse('return _compact_horizontal_layout(_compact_continuation_layout(result))').body[0]))
  def test_explicitly_approved_wire_cap_exact_and_plus_one_remain_closed(self):
-  t,value=pinned();self.assertEqual(t.MAX_WIRE,t.MAX_WIRE_BYTES);self.assertEqual(t.MAX_WIRE,100352)
+  t,value=pinned();self.assertEqual(t.MAX_WIRE,t.MAX_WIRE_BYTES);self.assertEqual(t.MAX_WIRE,102400)
   # Isolate the wire-size policy; actual XZ roundtrip is covered by the public-pin three-operation measurement.
   with patch.object(t.base64,'b85encode',return_value=b'A'*(t.MAX_WIRE-len(t.PREFIX))):
    self.assertEqual(len(t.encode(value)),t.MAX_WIRE)
@@ -52,7 +52,7 @@ class ProductBasisTransportTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'PATCH_ENCODING'):t.decode(t.PREFIX+'A'*(t.MAX_WIRE+1-len(t.PREFIX)))
    decompress.assert_not_called()
  def test_two_exact_existing_paths_oversize_and_foreign_scope_remain_closed(self):
-  t,value=pinned();self.assertEqual(t.CODE_PATHS,('naver_engine/inspection_store.py',));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
+  t,value=pinned();self.assertEqual(t.CODE_PATHS,('naver_engine/inspection_catalog.py', 'naver_engine/inspection_store.py', 'naver_engine/store.py'));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
   with self.assertRaises(ValueError):t.encode({**value,'sources':{**value['sources'],'patch':'a'*(t.MAX_SOURCE+1)}})
   for scope in ((),('unapproved.py',),('naver_runtime/claude_provider.py','extra.py'),('naver_runtime/claude_provider.py','naver_runtime/report_output_schema.py','extra.py'),t.CODE_PATHS[:-1],t.CODE_PATHS+('extra.py',)):
    t.CODE_PATHS=scope
