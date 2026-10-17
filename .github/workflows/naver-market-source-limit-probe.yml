@@ -14,6 +14,7 @@ on:
       - backend/tests/naver_market_probe_namespace_fixture.py
       - backend/tests/test_naver_market_probe_fixture_fd_summary.py
       - backend/tests/test_naver_market_probe_preflight_phases.py
+      - backend/tests/test_naver_market_probe_family_failure.py
   workflow_dispatch:
     inputs:
       confirm:
@@ -41,7 +42,7 @@ jobs:
           set -euo pipefail
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
-            PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_market_source_limit_probe test_naver_market_source_limit_probe_host test_naver_market_probe_namespace_fd_order test_naver_market_probe_fixture_fd_summary test_naver_market_probe_preflight_phases -v
+            PYTHONPATH=backend/tools:backend/tests python -m unittest test_naver_market_source_limit_probe test_naver_market_source_limit_probe_host test_naver_market_probe_namespace_fd_order test_naver_market_probe_fixture_fd_summary test_naver_market_probe_preflight_phases test_naver_market_probe_family_failure -v
       - name: Linux 격리 읽기전용 WAL 실제 경계 검사
         run: |
           set -euo pipefail
@@ -66,7 +67,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PYCODE'
           import hashlib,json,os,pathlib,re,subprocess,sys
-          EXPECTED_HOST_SHA256 = '34556410fb6823f24cc16c7f43cf1e6cca477630b7b6efc78d908794dacb322b'  # Root registers the reviewed host.
+          EXPECTED_HOST_SHA256 = '61348615f078b8b430fea67bf4adc30ec33e471e4b0720ea0d346e278b98ab7b'  # Root registers the reviewed host.
           if type(EXPECTED_HOST_SHA256) is not str or not re.fullmatch('[0-9a-f]{64}', EXPECTED_HOST_SHA256):
               raise SystemExit('HOST_PIN_REQUIRED')
           runs=json.loads(subprocess.check_output(['gh','api','repos/'+os.environ['GITHUB_REPOSITORY']+'/actions/workflows/naver-product-export-tests.yml/runs?head_sha='+os.environ['GITHUB_SHA']+'&per_page=10']))['workflow_runs']
@@ -97,7 +98,7 @@ jobs:
             set -eu
             /usr/bin/python3 -I -B - <<'PYCODE'
             import base64,hashlib,json,lzma,os,re,types
-            EXPECTED_HOST_SHA256 = '34556410fb6823f24cc16c7f43cf1e6cca477630b7b6efc78d908794dacb322b'  # Root registers the same reviewed host.
+            EXPECTED_HOST_SHA256 = '61348615f078b8b430fea67bf4adc30ec33e471e4b0720ea0d346e278b98ab7b'  # Root registers the same reviewed host.
             result={'version':1,'transport':'market-source-limit-probe','transport_ok':False,'error_code':'HOST_REFUSED','result':None}
             try:
                 wire=os.environ.pop('MARKET_SOURCE_LIMIT_WIRE')

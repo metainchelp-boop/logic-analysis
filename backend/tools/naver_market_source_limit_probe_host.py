@@ -11,7 +11,7 @@ import lzma
 import re
 import types
 
-CORE_SHA256 = 'd41d674a9db1a9d6317e2ff4a3587a2d29cbef5278bda5e330c3d471bcfe6c90'
+CORE_SHA256 = '84c38054d75afd0d95c03f33cb9f28d90a16075be8ffd182e124b4ac24785a64'
 SOURCE_FILES = {
     'exports_binding': 'backend/tools/naver_completion_exports.py',
     'exports_helper': 'backend/tools/naver_saved_exports.py',

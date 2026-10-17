@@ -26,7 +26,7 @@ except ModuleNotFoundError as error:
     spec.loader.exec_module(module)
     D, SOURCES, BACKEND, tables = module.D, module.SOURCES, module.BACKEND, module.tables
 
-CORE_SHA256 = 'd41d674a9db1a9d6317e2ff4a3587a2d29cbef5278bda5e330c3d471bcfe6c90'
+CORE_SHA256 = '84c38054d75afd0d95c03f33cb9f28d90a16075be8ffd182e124b4ac24785a64'
 # In this isolated draft only, use the adjacent candidate core. Installed CI
 # loads backend/tools through the original fixture module above.
 _candidate = Path(__file__).with_name('naver_market_source_limit_probe.py')

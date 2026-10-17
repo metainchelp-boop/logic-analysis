@@ -550,56 +550,62 @@ def _run_child(plan, sources, family, install):
             out[key] = None
     return out
 
+FAMILY_PHASES = tuple('probe_family_'+a+'_'+b for a in ('dir','main','wal','shm') for b in ('missing','denied','guard'))
 PREFLIGHT_PHASES = ('probe_plan', 'probe_prepared', 'probe_platform', 'probe_interpreter_open', 'probe_interpreter_shape', 'probe_interpreter_stability', 'probe_source_family', 'probe_child_setup', 'probe_interpreter_match', 'probe_installed_product', 'probe_installed_market')
 def _verified_probe(bound, helper, sources):
-    stage = 'probe_plan'
-    try:
-        stage = 'probe_plan'
-        plan = bound.plan
-        if plan != helper.build_plan(**plan):
-            raise ProbeStop()
-        install = helper.INSTALL / plan['ops_commit']
-        stage = 'probe_prepared'
-        _, _, prepared = helper._prepared(bound.receipt)
-        stage = 'probe_platform'
-        if sys.platform != 'linux':
-            raise ProbeStop()
-        stage = 'probe_interpreter_open'
-        target = Path('/proc/self/exe')
-        fd = os.open(target, os.O_RDONLY | os.O_NONBLOCK)
-        try:
-            stage = 'probe_interpreter_shape'
-            info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= helper.MAX_INTERPRETER or info.st_uid != 0 or info.st_mode & 18:
-                raise ProbeStop()
-            stage = 'probe_interpreter_stability'
-            digest, total = (hashlib.sha256(), 0)
-            while total <= helper.MAX_INTERPRETER:
-                piece = os.read(fd, min(65536, helper.MAX_INTERPRETER + 1 - total))
-                if not piece:
-                    break
-                total += len(piece)
-                digest.update(piece)
-            if total > helper.MAX_INTERPRETER or _identity(os.fstat(fd)) != _identity(info) or _identity(target.stat()) != _identity(info):
-                raise ProbeStop()
-            stage = 'probe_interpreter_match'
-            if digest.hexdigest() != hashlib.sha256(prepared[helper.INTERPRETER]).hexdigest():
-                raise ProbeStop()
-        finally:
-            os.close(fd)
-        installed = {}
-        for role, name in (('product_exporter', 'naver_product_export.py'), ('market_exporter', 'naver_market_export.py')):
-            stage = 'probe_installed_product' if role == 'product_exporter' else 'probe_installed_market'
-            body = helper._regular(install / name, mode=420)
-            if type(body) is not bytes or hashlib.sha256(body).hexdigest() != SOURCE_PINS[role] or body != sources[role]:
-                raise ProbeStop()
-            installed[role] = body
-        stage = 'probe_source_family'
-        family = _file_family(Path(plan['source_directory']), plan['database_name'])
-        stage = 'probe_child_setup'
-        return _run_child(plan, installed, family, install)
-    except Exception:
-        raise ProbeStop(stage) from None
+ stage = 'probe_plan'
+ try:
+  stage = 'probe_plan'
+  plan = bound.plan
+  if plan != helper.build_plan(**plan):
+   raise ProbeStop()
+  install = helper.INSTALL / plan['ops_commit']
+  stage = 'probe_prepared'
+  _, _, prepared = helper._prepared(bound.receipt)
+  stage = 'probe_platform'
+  if sys.platform != 'linux':
+   raise ProbeStop()
+  stage = 'probe_interpreter_open'
+  target = Path('/proc/self/exe')
+  fd = os.open(target, os.O_RDONLY | os.O_NONBLOCK)
+  try:
+   stage = 'probe_interpreter_shape'
+   info = os.fstat(fd)
+   if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= helper.MAX_INTERPRETER or info.st_uid != 0 or info.st_mode & 18:
+    raise ProbeStop()
+   stage = 'probe_interpreter_stability'
+   digest, total = (hashlib.sha256(), 0)
+   while total <= helper.MAX_INTERPRETER:
+    piece = os.read(fd, min(65536, helper.MAX_INTERPRETER + 1 - total))
+    if not piece:
+     break
+    total += len(piece)
+    digest.update(piece)
+   if total > helper.MAX_INTERPRETER or _identity(os.fstat(fd)) != _identity(info) or _identity(target.stat()) != _identity(info):
+    raise ProbeStop()
+   stage = 'probe_interpreter_match'
+   if digest.hexdigest() != hashlib.sha256(prepared[helper.INTERPRETER]).hexdigest():
+    raise ProbeStop()
+  finally:
+   os.close(fd)
+  installed = {}
+  for role, name in (('product_exporter', 'naver_product_export.py'), ('market_exporter', 'naver_market_export.py')):
+   stage = 'probe_installed_product' if role == 'product_exporter' else 'probe_installed_market'
+   body = helper._regular(install / name, mode=420)
+   if type(body) is not bytes or hashlib.sha256(body).hexdigest() != SOURCE_PINS[role] or body != sources[role]:
+    raise ProbeStop()
+   installed[role] = body
+  stage = 'probe_source_family'
+  family = _file_family(Path(plan['source_directory']), plan['database_name'])
+  stage = 'probe_child_setup'
+  return _run_child(plan, installed, family, install)
+ except Exception as error:
+  if stage == 'probe_source_family' and type(error) in (FileNotFoundError, PermissionError, ProbeStop):
+   tb = error.__traceback__.tb_next
+   if tb and tb.tb_frame.f_code is _file_family.__code__:
+    member = (None, '', '-wal', '-shm').index(tb.tb_frame.f_locals.get('suffix'))
+    stage = FAMILY_PHASES[member*3+(FileNotFoundError, PermissionError, ProbeStop).index(type(error))]
+  raise ProbeStop(stage) from None
 
 def diagnose(sources):
     phase = 'pins'
@@ -631,14 +637,14 @@ def diagnose(sources):
             out['ok'] = out['probe']['status'] in ('source_limit', 'original_collect_passed', 'original_other_failure')
         phase = 'complete'
     except Exception as error:
-        if phase == 'probe' and type(error) is ProbeStop and len(error.args) == 1 and type(error.args[0]) is str and error.args[0] in PREFLIGHT_PHASES:
+        if phase == 'probe' and type(error) is ProbeStop and len(error.args) == 1 and type(error.args[0]) is str and error.args[0] in PREFLIGHT_PHASES+FAMILY_PHASES:
             phase = error.args[0]
         out['probe']['status'] = 'diagnostic_unavailable'
     out['phase'] = phase
     return out
 
 def closed_json(result):
-    if type(result) is not dict or set(result) != {'version', 'diagnostic', 'ok', 'phase', 'operating_receipt_match', 'source_pins_match', 'original_verify_error', 'probe'} or type(result['version']) is not int or (result['version'] != 1) or (result['diagnostic'] != 'market-source-limit-readonly-probe') or (result['phase'] not in set(PHASES) | set(PREFLIGHT_PHASES) | {'probe'}) or any((type(result[k]) is not bool for k in ('ok', 'operating_receipt_match', 'source_pins_match'))) or (result['original_verify_error'] not in (None, 'market_result_EXPORT_RUN_NOT_VERIFIED')):
+    if type(result) is not dict or set(result) != {'version', 'diagnostic', 'ok', 'phase', 'operating_receipt_match', 'source_pins_match', 'original_verify_error', 'probe'} or type(result['version']) is not int or (result['version'] != 1) or (result['diagnostic'] != 'market-source-limit-readonly-probe') or (result['phase'] not in set(PHASES) | set(PREFLIGHT_PHASES+FAMILY_PHASES) | {'probe'}) or any((type(result[k]) is not bool for k in ('ok', 'operating_receipt_match', 'source_pins_match'))) or (result['original_verify_error'] not in (None, 'market_result_EXPORT_RUN_NOT_VERIFIED')):
         raise ValueError('DIAGNOSTIC_RESULT')
     _probe_json(result['probe'])
     body = json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
