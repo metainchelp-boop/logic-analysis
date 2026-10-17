@@ -25,7 +25,19 @@ except ModuleNotFoundError as error:
     spec.loader.exec_module(module)
     D, SOURCES, BACKEND, tables = module.D, module.SOURCES, module.BACKEND, module.tables
 
-CORE_SHA256 = '894fb22f69f21cda40f41b755db1725e103bd448cdd089c1189fdb72abde5869'
+CORE_SHA256 = '40e7a5faffdde1e83c64b4464c39064e8873467e3bdb5663cc9d77568c46d45e'
+# In this isolated draft only, use the adjacent candidate core. Installed CI
+# loads backend/tools through the original fixture module above.
+_candidate = Path(__file__).with_name('naver_market_source_limit_probe.py')
+if _candidate.is_file():
+    _body = _candidate.read_bytes()
+    if hashlib.sha256(_body).hexdigest() != CORE_SHA256:
+        raise ValueError('FIXTURE_CORE_PIN')
+    _candidate_module = types.ModuleType('fixed_candidate_namespace_core')
+    _candidate_module.__file__ = str(_candidate)
+    exec(compile(_body, str(_candidate), 'exec'), _candidate_module.__dict__)
+    D = _candidate_module
+    del _body
 PHASES = ('none', 'source_load', 'namespace', 'connect', 'collect', 'file_family', 'fd_bind', 'fd_snapshot')
 STAGES = (
     'none', 'unmapped_fixed_frame', 'source_load', 'connect', 'collect',
@@ -38,26 +50,7 @@ STAGES = (
     'capability_structures', 'capability_clear', 'capability_status_read', 'capability_status_check',
     'environment_clear', 'readonly_family_after_drop', 'file_family', 'fd_bind', 'fd_snapshot',
 )
-NS_LINES = {
-    358: 'linux_root', 359: 'linux_root', 360: 'source_family', 361: 'source_family', 362: 'source_family',
-    363: 'parent_mount_namespace', 364: 'parent_network_namespace', 365: 'libc_load',
-    366: 'libc_load', 367: 'libc_load', 372: 'source_directory_fd',
-    374: 'unshare', 375: 'unshare', 376: 'namespace_identity', 377: 'namespace_identity',
-    378: 'private_propagation', 379: 'private_tmpfs', 380: 'alias_directory',
-    381: 'source_bind', 382: 'readonly_remount', 384: 'source_fd_close',
-    385: 'readonly_family_before_drop', 386: 'readonly_family_before_drop',
-    387: 'user_database', 388: 'user_lookup', 391: 'group_lookup',
-    392: 'nonroot_identity', 393: 'nonroot_identity', 394: 'limit_core', 395: 'limit_file',
-    396: 'limit_memory', 397: 'limit_cpu', 398: 'limit_fds',
-    400: 'bounding_capability_drop', 401: 'bounding_capability_drop',
-    402: 'ambient_capability_clear', 403: 'ambient_capability_clear',
-    404: 'set_groups', 405: 'set_gid', 406: 'set_uid', 407: 'no_new_privileges', 408: 'no_new_privileges',
-    410: 'capability_structures', 411: 'capability_structures', 413: 'capability_structures',
-    414: 'capability_structures', 415: 'capability_structures', 416: 'capability_clear', 417: 'capability_clear',
-    418: 'capability_status_read', 420: 'capability_status_check', 421: 'capability_status_check',
-    422: 'capability_status_check', 423: 'environment_clear',
-    424: 'readonly_family_after_drop', 425: 'readonly_family_after_drop',
-}
+NS_LINES = {358: 'linux_root', 359: 'linux_root', 360: 'source_family', 361: 'source_family', 362: 'source_family', 363: 'parent_mount_namespace', 364: 'parent_network_namespace', 365: 'libc_load', 366: 'libc_load', 367: 'libc_load', 378: 'source_directory_fd', 374: 'unshare', 375: 'unshare', 376: 'namespace_identity', 377: 'namespace_identity', 379: 'private_propagation', 380: 'private_tmpfs', 381: 'alias_directory', 382: 'source_bind', 383: 'readonly_remount', 386: 'source_fd_close', 387: 'readonly_family_before_drop', 388: 'readonly_family_before_drop', 389: 'user_database', 390: 'user_lookup', 393: 'group_lookup', 394: 'nonroot_identity', 395: 'nonroot_identity', 396: 'limit_core', 397: 'limit_file', 398: 'limit_memory', 399: 'limit_cpu', 400: 'limit_fds', 402: 'bounding_capability_drop', 403: 'bounding_capability_drop', 404: 'ambient_capability_clear', 405: 'ambient_capability_clear', 406: 'set_groups', 407: 'set_gid', 408: 'set_uid', 409: 'no_new_privileges', 410: 'no_new_privileges', 412: 'capability_structures', 413: 'capability_structures', 415: 'capability_structures', 416: 'capability_structures', 417: 'capability_structures', 418: 'capability_clear', 419: 'capability_clear', 420: 'capability_status_read', 422: 'capability_status_check', 423: 'capability_status_check', 424: 'capability_status_check', 425: 'environment_clear', 426: 'readonly_family_after_drop', 427: 'readonly_family_after_drop'}
 FAMILY_CHECKS = ('none', 'directory_identity', 'readonly_directory', 'file_stat', 'file_identity_access')
 FAMILY_LINES = {326: 'directory_identity', 327: 'directory_identity', 328: 'readonly_directory',
                 329: 'readonly_directory', 333: 'file_stat', 334: 'file_identity_access', 335: 'file_identity_access'}
@@ -119,11 +112,11 @@ class Provenance:
             if frame.f_code is self.namespace_code:
                 namespace_line = line
                 values[3] = STAGES.index(NS_LINES.get(line, 'unmapped_fixed_frame'))
-                if line in (375, 401, 403, 417):
+                if line in (375, 403, 405, 419):
                     c_failure = True
-                if line == 401 and type(frame.f_locals.get('capability')) is int and 0 <= frame.f_locals['capability'] <= 63:
+                if line == 403 and type(frame.f_locals.get('capability')) is int and 0 <= frame.f_locals['capability'] <= 63:
                     values[9] = frame.f_locals['capability']
-                if line in (421, 422):
+                if line in (423, 424):
                     field = frame.f_locals.get('field')
                     values[8] = {'CapInh:': 1, 'CapPrm:': 2, 'CapEff:': 3, 'CapAmb:': 4, 'CapBnd:': 5}.get(field, 0)
             elif frame.f_code is self.family_code:

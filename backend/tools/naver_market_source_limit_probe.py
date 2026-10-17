@@ -369,19 +369,21 @@ def _namespace(plan, family):
     def mount(source, target, kind, flags, data):
         if libc.mount(source, target, kind, flags, data) != 0:
             raise ProbeStop()
-    fd = os.open(directory, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW)
+    fd = None
     try:
         if libc.unshare(131072 | 1073741824) != 0:
             raise ProbeStop()
         if os.stat('/proc/self/ns/mnt').st_ino == root_namespace or os.stat('/proc/self/ns/net').st_ino == net_namespace:
             raise ProbeStop()
+        fd = os.open(directory, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW)
         mount(None, b'/', None, 1 << 18 | 16384, None)
         mount(b'tmpfs', b'/tmp', b'tmpfs', 2 | 4 | 8, b'size=1048576,mode=1777')
         ALIAS.mkdir(parents=True, mode=493)
         mount(('/proc/self/fd/' + str(fd)).encode(), os.fsencode(ALIAS), None, 4096, None)
         mount(None, os.fsencode(ALIAS), None, 4096 | 32 | 1 | 2 | 4 | 8, None)
     finally:
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
     if _file_family(ALIAS, plan['database_name'], True) != family:
         raise ProbeStop()
     import pwd, grp
