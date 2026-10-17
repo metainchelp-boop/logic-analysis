@@ -7,7 +7,8 @@ import sys
 import tempfile
 import unittest
 
-from test_naver_market_source_limit_probe import D, SOURCES, BACKEND, tables
+from test_naver_market_source_limit_probe_namespace_provenance import D, SOURCES, BACKEND
+from naver_market_probe_namespace_fixture import independent_writer
 
 
 class MarketProbeLinuxNamespaceTests(unittest.TestCase):
@@ -17,11 +18,7 @@ class MarketProbeLinuxNamespaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='naver-probe-fixture-') as temp:
             directory = Path(temp).resolve(); os.chmod(directory, 0o755)
             source = directory/'logic_data.db'
-            writer = sqlite3.connect(source, isolation_level=None)
-            try:
-                writer.execute('PRAGMA journal_mode=WAL')
-                writer.execute('PRAGMA wal_autocheckpoint=0')
-                tables(writer)
+            with independent_writer(directory):
                 for suffix in ('', '-wal', '-shm'):
                     os.chmod(str(source)+suffix, 0o644)
                 originals = {suffix: hashlib.sha256(Path(str(source)+suffix).read_bytes()).hexdigest() for suffix in ('', '-wal', '-shm')}
@@ -40,8 +37,6 @@ class MarketProbeLinuxNamespaceTests(unittest.TestCase):
                 self.assertEqual(os.stat('/proc/self/ns/net').st_ino, before_net)
                 for suffix, digest in originals.items():
                     self.assertEqual(hashlib.sha256(Path(str(source)+suffix).read_bytes()).hexdigest(), digest)
-            finally:
-                writer.close()
 
 
 if __name__ == '__main__':

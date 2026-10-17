@@ -13,6 +13,7 @@ import tempfile
 import types
 import unittest
 from unittest.mock import patch
+from naver_market_probe_namespace_fixture import independent_writer
 
 try:
     from test_naver_market_source_limit_probe import D, SOURCES, BACKEND, tables
@@ -29,6 +30,8 @@ CORE_SHA256 = '40e7a5faffdde1e83c64b4464c39064e8873467e3bdb5663cc9d77568c46d45e'
 # In this isolated draft only, use the adjacent candidate core. Installed CI
 # loads backend/tools through the original fixture module above.
 _candidate = Path(__file__).with_name('naver_market_source_limit_probe.py')
+if not _candidate.is_file():
+    _candidate = Path(__file__).resolve().parents[1] / 'market-limit-probe-linux-fix-draft/naver_market_source_limit_probe.py'
 if _candidate.is_file():
     _body = _candidate.read_bytes()
     if hashlib.sha256(_body).hexdigest() != CORE_SHA256:
@@ -57,7 +60,7 @@ FAMILY_LINES = {326: 'directory_identity', 327: 'directory_identity', 328: 'read
 SUFFIXES = ('none', 'main', 'wal', 'shm')
 CAP_FIELDS = ('none', 'inheritable', 'permitted', 'effective', 'ambient', 'bounding')
 EXCEPTIONS = ('none', 'probe_stop', 'os_error', 'memory', 'key', 'value', 'sqlite', 'other')
-WORDS = struct.Struct('!12i')
+WORDS = struct.Struct('!18i')
 
 
 def verify_core():
@@ -71,12 +74,13 @@ class Provenance:
     """Only fixed integers cross fork, with no traceback or raw values retained."""
     def __init__(self):
         verify_core()
-        self.shared = mmap.mmap(-1, 64, flags=mmap.MAP_SHARED, prot=mmap.PROT_READ | mmap.PROT_WRITE)
+        self.shared = mmap.mmap(-1, 96, flags=mmap.MAP_SHARED, prot=mmap.PROT_READ | mmap.PROT_WRITE)
         self.namespace_code = D._namespace.__code__
         self.family_code = D._file_family.__code__
+        self.fd_bind_code = D._bind_sqlite_fds.__code__
         self.mount_codes = {value for value in self.namespace_code.co_consts
                             if isinstance(value, types.CodeType) and value.co_name == 'mount'}
-        self.shared[:WORDS.size] = WORDS.pack(0, 0, 0, 0, 0, 0, 0, -1, 0, -1, 0, 0)
+        self.shared[:WORDS.size] = WORDS.pack(0, 0, 0, 0, 0, 0, 0, -1, 0, -1, 0, 0, -1, -1, -1, -1, -1, -1)
 
     def _get(self):
         return list(WORDS.unpack(self.shared[:WORDS.size]))
@@ -122,6 +126,18 @@ class Provenance:
             elif frame.f_code is self.family_code:
                 values[4] = FAMILY_CHECKS.index(FAMILY_LINES.get(line, 'none'))
                 values[5] = {'': 1, '-wal': 2, '-shm': 3}.get(frame.f_locals.get('suffix'), 0)
+            elif frame.f_code is self.fd_bind_code:
+                local = frame.f_locals
+                actual, family, before = local.get('actual'), local.get('family'), local.get('before')
+                def metadata(value):
+                    return type(value) is tuple and len(value) == 5 and all(type(x) is int and 0 <= x < 2**64 for x in value)
+                if (type(actual) is list and len(actual) <= 64 and all(metadata(x) for x in actual)
+                        and type(family) is dict and set(family) == {'', '-wal', '-shm'} and all(metadata(x) for x in family.values())
+                        and type(before) is dict and len(before) <= 64 and all(metadata(x) for x in before.values())):
+                    expected = tuple(family.values())
+                    values[12:18] = [len(actual), actual.count(family['']), actual.count(family['-wal']),
+                        actual.count(family['-shm']), sum(x not in expected for x in actual),
+                        int(any(x in expected for x in before.values()))]
             elif frame.f_code in self.mount_codes and line == 371:
                 c_failure = True
             tb = tb.tb_next
@@ -152,9 +168,14 @@ class Provenance:
                 or not 0 <= values[4] < len(FAMILY_CHECKS) or not 0 <= values[5] < len(SUFFIXES)
                 or not 0 <= values[6] < len(EXCEPTIONS) or not -1 <= values[7] <= 4095
                 or not 0 <= values[8] < len(CAP_FIELDS) or not -1 <= values[9] <= 63
-                or values[10] not in (0, 1) or values[11] not in (0, 1)):
+                or values[10] not in (0, 1) or values[11] not in (0, 1)
+                or any(not -1 <= x <= 64 for x in values[12:17]) or values[17] not in (-1, 0, 1)
+                or (any(x == -1 for x in values[12:18]) and values[12:18] != [-1] * 6)):
             raise ValueError('FIXTURE_PROVENANCE_SHAPE')
-        return dict(entered=[p for i, p in enumerate(PHASES) if values[0] & (1 << i)],
+        fd_summary = None if values[12] == -1 else dict(new_regular_count=values[12],
+            main_matches=values[13], wal_matches=values[14], shm_matches=values[15],
+            extra_regular_count=values[16], before_family_match=bool(values[17]))
+        return dict(fd_summary=fd_summary, entered=[p for i, p in enumerate(PHASES) if values[0] & (1 << i)],
             passed=[p for i, p in enumerate(PHASES) if values[1] & (1 << i)],
             failure_phase=PHASES[values[2]], failure_stage=STAGES[values[3]],
             family_check=FAMILY_CHECKS[values[4]], family_member=SUFFIXES[values[5]],
@@ -176,11 +197,7 @@ class MarketProbeLinuxNamespaceProvenanceTests(unittest.TestCase):
                 directory = Path(temp).resolve()
                 os.chmod(directory, 0o755)
                 source = directory / 'logic_data.db'
-                writer = sqlite3.connect(source, isolation_level=None)
-                try:
-                    writer.execute('PRAGMA journal_mode=WAL')
-                    writer.execute('PRAGMA wal_autocheckpoint=0')
-                    tables(writer)
+                with independent_writer(directory):
                     for suffix in ('', '-wal', '-shm'):
                         os.chmod(str(source) + suffix, 0o644)
                     originals = {suffix: hashlib.sha256(Path(str(source) + suffix).read_bytes()).hexdigest()
@@ -210,8 +227,6 @@ class MarketProbeLinuxNamespaceProvenanceTests(unittest.TestCase):
                     self.assertTrue(result['read_transaction_fds_bound'])
                     self.assertTrue(result['path_identity_unchanged'])
                     self.assertEqual(result['collect_calls'], 1)
-                finally:
-                    writer.close()
         finally:
             provenance.close()
 
