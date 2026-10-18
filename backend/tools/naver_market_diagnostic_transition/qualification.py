@@ -77,7 +77,7 @@ SOURCE_REGISTRY = {'bootstrap': {'bytes': 3974,
                 'sha256': '89ab4f61004846a90ec75a147b398d5f17eae016a268e375e7c44433143c3a92'}}
 DEPENDENCY_ORDER = ('native_contract','workflow_delivery','portable_contract','portable_ci','fixed_actions_api')
 NATIVE_WORKFLOW_SHA256 = 'd6f504478e5141d7861a278013fd26f99a73347f26a829dcbc7568f41fc40289'
-PORTABLE_WORKFLOW_SHA256 = 'd6fff09eec44a1174346825e7b922d6ed5d5b68823549f623976a3877bf05a1c'
+PORTABLE_WORKFLOW_SHA256 = 'bd1186ce5fcced4d174d90da5ba570440e68d18ccdec18d91d77e251f5eb0fde'
 LINUX_MANIFEST_SHA256 = 'de94b30c23e97e6f8b047e01b6a7d0dd78c0fc93aff1e82efe74c06e8175b96b'
 # Registered exact completed 17-check Linux result; future runs are not evidence.
 LINUX_QUALIFICATION_SHA256 = '08a199f9eb53bad06223e594f2de794b5b858f021afa5c5d3a5ffc66647db5cf'
