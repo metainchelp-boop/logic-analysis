@@ -6,6 +6,14 @@ name: Debug Rank Batch (읽기 전용 진단)
 on:
   workflow_dispatch:
     inputs:
+      seo_logs:
+        description: 'SEO 보존 로그만 안전 집계 — on이면 다른 모든 진단·적용을 건너뜀. 원문·비밀값·업체/키워드 미출력, 운영 쓰기·외부 API 호출 없음.'
+        required: false
+        type: choice
+        options:
+          - 'off'
+          - 'on'
+        default: 'off'
       collector:
         description: '수집기 진단 — off(기본) / on(확장이 서버에 접속했는지·큐·토큰 상태)'
         required: false
@@ -41,6 +49,7 @@ on:
 
 jobs:
   diagnose:
+    if: ${{ github.event.inputs.seo_logs != 'on' }}
     runs-on: ubuntu-latest
     steps:
       # 브랜치 코드 미리보기용 — 평소(off)엔 받아만 두고 쓰지 않는다.
@@ -1055,3 +1064,26 @@ jobs:
               | grep -aE '\"(GET|POST) /api/' \
               | awk '{for(i=1;i<=NF;i++) if($i ~ /^\/api\//) {split($i,a,"?"); print a[1]}}' \
               | sort | uniq -c | sort -rn | head -15
+
+  seo_diagnose:
+    if: ${{ github.event.inputs.seo_logs == 'on' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Encode reviewed SEO diagnosis (runner only)
+        run: echo "SEO_DIAG_B64=$(base64 -w0 backend/tools/seo_readonly_diagnosis.py)" >> "$GITHUB_ENV"
+      - name: SEO read-only diagnosis (allowlisted JSON only)
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          SEO_DIAG_B64: ${{ env.SEO_DIAG_B64 }}
+        with:
+          envs: SEO_DIAG_B64
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 120s
+          script: |
+            printf '%s' "$SEO_DIAG_B64" | base64 --decode | python3 -I -B -
