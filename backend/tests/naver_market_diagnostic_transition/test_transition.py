@@ -101,11 +101,15 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(source.replace(self.plan['reader'].encode(), T.OLD_READER.encode()),
                          h._coordinator_source(T.PROFILE, 'market').encode())
         coordinator = self.files[T.UNIT_ROOT + '/' + self.plan['coordinator']]
+        self.assertEqual(coordinator.count(b'Type=oneshot\nRemainAfterExit=yes\n'), 1)
+        coordinator = coordinator.replace(b'Type=oneshot\nRemainAfterExit=yes\n', b'Type=oneshot\n', 1)
         coordinator = coordinator.replace((new_root + '/naver_market_coordinate.py').encode(),
             (old_root + '/naver_market_coordinate.py').encode()).replace(
             (old_root + ' ' + new_root).encode(), old_root.encode())
         self.assertEqual(coordinator, h._unit(T.PROFILE, 'market'))
         reader = self.files[T.UNIT_ROOT + '/' + self.plan['reader']]
+        self.assertEqual(reader.count(b'Type=oneshot\nRemainAfterExit=yes\n'), 1)
+        reader = reader.replace(b'Type=oneshot\nRemainAfterExit=yes\n', b'Type=oneshot\n', 1)
         reader = reader.replace(self.plan['coordinator'].encode(), T.OLD_COORDINATOR.encode())
         reader = reader.replace((new_root + '/naver_market_export.py').encode(),
                                 (old_root + '/naver_market_export.py').encode())

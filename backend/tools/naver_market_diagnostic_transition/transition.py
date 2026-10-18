@@ -141,6 +141,12 @@ def compile_plan(*, apply_id, rollback_id, sources, previous):
         ('ReadOnlyPaths=' + old_root + '\n').encode(),
         ('ReadOnlyPaths=' + old_root + ' ' + code_root + '\n').encode())
     reader_unit = exact_replace(reader_unit, old_output.encode(), output_root.encode(), 2)
+    # Only these operation-owned oneshots retain their completed invocation.
+    # Cleanup must stop the completed retained units before removing them.
+    coord_unit = exact_replace(coord_unit, b'Type=oneshot\n',
+                               b'Type=oneshot\nRemainAfterExit=yes\n')
+    reader_unit = exact_replace(reader_unit, b'Type=oneshot\n',
+                                b'Type=oneshot\nRemainAfterExit=yes\n')
     files = {
         code_root + '/naver_market_export.py': sources['market'],
         code_root + '/naver_product_export.py': sources['product'],

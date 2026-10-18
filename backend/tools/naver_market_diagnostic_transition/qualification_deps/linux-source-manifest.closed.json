@@ -21,16 +21,16 @@
       "sha256": "42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59"
     }
   },
-  "created_at": "2026-10-18T03:05:12.757094+00:00",
+  "created_at": "2026-10-18T05:27:04.463164+00:00",
   "exports_binding_executed_in_linux": false,
   "full_linux_result_verified": true,
-  "head_sha": "9d4555b144153600b221ffc68b762ec0db489061",
+  "head_sha": "6b0e3bc7049a962cc3fb3ed3655f65663eed2194",
   "linux_fixture": {
-    "bytes": 22910,
+    "bytes": 25871,
     "path": "backend/tools/naver_market_diagnostic_transition/linux_root_fixture.py",
-    "sha256": "07ce1d72c2e59e5f3caf6f6a331696466b83ac86c523016feadeb7445338c62b"
+    "sha256": "9c9c48f5a1bcd4344b51e5c7aeac08ebde12ca16a42fae6c9d9a00625644105b"
   },
-  "run_id": 39092068912,
+  "run_id": 39100502906,
   "runtime": {
     "current_guard": {
       "bytes": 10836,
@@ -68,14 +68,14 @@
       "sha256": "da60c15bca0dc48c9dda794ade7e87877f5fec13678a908a3f58657bb34be8a1"
     },
     "systemd_boundary": {
-      "bytes": 14085,
+      "bytes": 15655,
       "path": "backend/tools/naver_market_diagnostic_transition/systemd_boundary.py",
-      "sha256": "3f96d25bacb7555cee39af4a6d8b73e4148a9587eb15411c728fd12eac839444"
+      "sha256": "a0559bdca3bee319a8bc3d37425a6854185ec06245b69ec494a4513221fe72ac"
     },
     "transition": {
-      "bytes": 15664,
+      "bytes": 16085,
       "path": "backend/tools/naver_market_diagnostic_transition/transition.py",
-      "sha256": "acd5636795506381c89ac0aa8657c7ea1b4f6a26985f50b0297fba62c7d5591a"
+      "sha256": "89ab4f61004846a90ec75a147b398d5f17eae016a268e375e7c44433143c3a92"
     }
   },
   "schema": "exact-linux-runtime-source-manifest-v1",

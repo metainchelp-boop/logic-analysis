@@ -31,7 +31,7 @@ jobs:
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
             python3 -B backend/tools/naver_market_diagnostic_transition/portable_ci.py inventory
-      - name: Portable core 138
+      - name: Portable core 150
         run: |
           set -euo pipefail
           test "$(id -u)" -ne 0

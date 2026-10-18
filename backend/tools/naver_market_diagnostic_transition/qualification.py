@@ -16,17 +16,17 @@ BASE = "backend/tools/naver_market_diagnostic_transition/"
 DEPENDENCY_PINS = {'fixed_actions_api': 'fa5b25f8a64ad98b1bad2f9008003654eef98f03976c7c4992a0be3909f4befc',
  'native_contract': '7c157b45c150f3597e9e126b0d6a2348d9fb90421976c534591426d268f2303a',
  'portable_ci': '476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c',
- 'portable_contract': 'bc857d7b60b0654f951adc4241904e53cf4dbf8e3a5ad551fa47d19986cf004e',
- 'workflow_delivery': '8379ed5d1d6bfe69f8e5bfe1c9d0dfa1f4f464d5363aaaf8d01ccfd66a3cda51'}
+ 'portable_contract': 'c38c07520c81ef443a0875ac36e8feb26f9b3265499309401655dd40464653cb',
+ 'workflow_delivery': 'ffe5e94bd54e2beb3c0d6855cc2048a6cef3e7a7070c6c2da8f80888b9c03e81'}
 SOURCE_REGISTRY = {'bootstrap': {'bytes': 3974,
                'path': 'backend/tools/naver_market_diagnostic_transition/bootstrap.py',
                'sha256': 'c7031553808146394ccc899a67e8ef76fbae7946ff4a389f874d0c041feb098c'},
  'current_guard': {'bytes': 10836,
                    'path': 'backend/tools/naver_market_diagnostic_transition/current_guard.py',
                    'sha256': '6a9377b6ed3d511e054c1234b0b830314331ddadad3b5887b79a8c36e611e5d8'},
- 'delivery': {'bytes': 8477,
+ 'delivery': {'bytes': 8446,
               'path': 'backend/tools/naver_market_diagnostic_transition/delivery.py',
-              'sha256': '82aaeac471f73c5df81e4645b71b9bcbac7a44fe4f152c8b164ee2617b2dd016'},
+              'sha256': '3026d83baa140cd45b0e9361c40a50274fd41bd914885aa46011f904a99b7bcc'},
  'diagnostic_exporter': {'bytes': 19540,
                          'path': 'backend/tools/naver_market_diagnostic_transition/diagnostic_market_export.py',
                          'sha256': '9bb25d4acda4edca44aa71c238a6bf53be7dab5e093bc4f0c69d45c0d0891851'},
@@ -68,19 +68,19 @@ SOURCE_REGISTRY = {'bootstrap': {'bytes': 3974,
                  'sha256': 'da60c15bca0dc48c9dda794ade7e87877f5fec13678a908a3f58657bb34be8a1'},
  'strict_receiver': {'bytes': 13955,
                      'path': 'backend/tools/naver_market_diagnostic_transition/strict_receiver.py',
-                     'sha256': '8a317edaf466dbeff8e1773449191988e9799f55b0ca723d675749de86acce4a'},
- 'systemd_boundary': {'bytes': 14085,
+                     'sha256': '30ed12d72c185df61a69494d7368b1f80030c53a6958ed213b067d99653d29c7'},
+ 'systemd_boundary': {'bytes': 15655,
                       'path': 'backend/tools/naver_market_diagnostic_transition/systemd_boundary.py',
-                      'sha256': '3f96d25bacb7555cee39af4a6d8b73e4148a9587eb15411c728fd12eac839444'},
- 'transition': {'bytes': 15664,
+                      'sha256': 'a0559bdca3bee319a8bc3d37425a6854185ec06245b69ec494a4513221fe72ac'},
+ 'transition': {'bytes': 16085,
                 'path': 'backend/tools/naver_market_diagnostic_transition/transition.py',
-                'sha256': 'acd5636795506381c89ac0aa8657c7ea1b4f6a26985f50b0297fba62c7d5591a'}}
+                'sha256': '89ab4f61004846a90ec75a147b398d5f17eae016a268e375e7c44433143c3a92'}}
 DEPENDENCY_ORDER = ('native_contract','workflow_delivery','portable_contract','portable_ci','fixed_actions_api')
 NATIVE_WORKFLOW_SHA256 = 'd6f504478e5141d7861a278013fd26f99a73347f26a829dcbc7568f41fc40289'
-PORTABLE_WORKFLOW_SHA256 = '215a6e0d5c32870b9dc504ad70532a72169d7ce95d0d3e3b55c03cff5c3a18ef'
-LINUX_MANIFEST_SHA256 = '58bc64d39c9102a9f987a588de703a8cc9abe64bafcfa94e28b6930e100ffd50'
-# Root must register the actual successful strict receipt, not a candidate run.
-LINUX_QUALIFICATION_SHA256 = '3759a570b1437916e938ae60079a404be7a203385229be547e12b8e151f22cff'
+PORTABLE_WORKFLOW_SHA256 = 'd6fff09eec44a1174346825e7b922d6ed5d5b68823549f623976a3877bf05a1c'
+LINUX_MANIFEST_SHA256 = 'de94b30c23e97e6f8b047e01b6a7d0dd78c0fc93aff1e82efe74c06e8175b96b'
+# Registered exact completed 17-check Linux result; future runs are not evidence.
+LINUX_QUALIFICATION_SHA256 = '08a199f9eb53bad06223e594f2de794b5b858f021afa5c5d3a5ffc66647db5cf'
 MAX_FILE = 131072
 MAX_REGISTRY = 32768
 
@@ -149,7 +149,7 @@ def dependencies(root):
     loaded={}
     try:
         # Verify all dependency byte buffers before executing the first.
-        buffers={n:read_fixed(root,BASE+'qualification_deps/'+n+'.py',DEPENDENCY_PINS[n]) for n in DEPENDENCY_ORDER}
+        buffers={n:read_fixed(root,BASE+'qualification_deps/'+('workflow_delivery_completed.py' if n=='workflow_delivery' else n+'.py'),DEPENDENCY_PINS[n]) for n in DEPENDENCY_ORDER}
         for name in DEPENDENCY_ORDER:
             module=types.ModuleType(name);sys.modules[name]=module;loaded[name]=module
             exec(compile(buffers[name],'<exact-qualification-'+name+'>','exec'),module.__dict__)
