@@ -267,7 +267,12 @@ def portable(actual,G,P,C):
     projected_job={k:job.get(k) for k in ('id','run_id','head_sha','name','status','conclusion')}
     raw_steps=job.get('steps');need(type(raw_steps) is list,'PORTABLE_STEPS')
     need(all(type(s) is dict for s in raw_steps),'PORTABLE_STEPS')
-    projected_job['steps']=[{k:s.get(k) for k in ('number','name','status','conclusion')} for s in raw_steps]
+    numbers=[s.get('number') for s in raw_steps]
+    need(all(type(n) is int and n>0 for n in numbers) and len(set(numbers))==len(numbers)
+        and numbers==sorted(numbers),'PORTABLE_STEP_NUMBERS')
+    # API post-step numbers may have gaps; preserve validated order, not numeric gaps.
+    projected_job['steps']=[dict(number=i,**{k:s.get(k) for k in ('name','status','conclusion')})
+        for i,s in enumerate(raw_steps,1)]
     projected_artifact={k:item.get(k) for k in ('id','name','expired','size_in_bytes')}
     projected_artifact['workflow_run']={k:item['workflow_run'].get(k) for k in ('id','head_sha')}
     result=P.verify(projected_run,[projected_job],[projected_artifact],packed,
