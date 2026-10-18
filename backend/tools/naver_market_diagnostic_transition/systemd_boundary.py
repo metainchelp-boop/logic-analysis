@@ -14,6 +14,7 @@ import transition as T
 
 PROPERTIES = ('LoadState', 'UnitFileState', 'FragmentPath', 'DropInPaths', 'Job',
               'Result', 'ExecMainStatus', 'ActiveState', 'SubState', 'InvocationID')
+TIMER_PROPERTIES = tuple(p for p in PROPERTIES if p != 'ExecMainStatus')
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
 MASK_ROOT = '/run/systemd/system.control'
 
@@ -80,16 +81,20 @@ def bounded(argv, *, limit, timeout):
             if process.stdout is not None: process.stdout.close()
 
 
-def snapshot(raw):
+def snapshot(raw, *, kind='service'):
+    if type(kind) is not str or kind not in ('service', 'timer'):
+        T.fail('SYSTEMD_SNAPSHOT')
+    expected = PROPERTIES if kind == 'service' else TIMER_PROPERTIES
     if type(raw) is not bytes or len(raw) > 4096: T.fail('SYSTEMD_SNAPSHOT')
     try:
         pairs = [line.split('=', 1) for line in raw.decode('ascii').splitlines()]
         if any(len(pair) != 2 for pair in pairs): T.fail('SYSTEMD_SNAPSHOT')
         value = unique(pairs)
-        if (set(value) != set(PROPERTIES)
+        if (set(value) != set(expected)
                 or any(any(ord(c) < 32 for c in x) for x in value.values())
-                or re.fullmatch('0|[1-9][0-9]{0,2}', value['ExecMainStatus']) is None
-                or int(value['ExecMainStatus']) > 255):
+                or (kind == 'service' and
+                    (re.fullmatch('0|[1-9][0-9]{0,2}', value['ExecMainStatus']) is None
+                     or int(value['ExecMainStatus']) > 255))):
             T.fail('SYSTEMD_SNAPSHOT')
         invocation = value['InvocationID']
         if invocation not in ('', '0' * 32): T.operation(invocation)
@@ -164,8 +169,10 @@ class Systemd:
 
     def show(self, unit):
         if unit not in self.units: T.fail('SYSTEMD_UNIT')
+        kind = 'timer' if unit == T.OLD_TIMER else 'service'
+        properties = TIMER_PROPERTIES if kind == 'timer' else PROPERTIES
         return snapshot(self._run(['/usr/bin/systemctl', 'show', unit] +
-                                  ['--property=' + p for p in PROPERTIES]))
+                                  ['--property=' + p for p in properties]), kind=kind)
 
     def original_preflight(self):
         self.mask_search_path()
@@ -219,7 +226,7 @@ class Systemd:
         for unit in (T.OLD_COORDINATOR, T.OLD_READER):
             value = self.show(unit)
             if (value['LoadState'] != 'masked' or value['DropInPaths']
-                    or value['FragmentPath'] != '/dev/null'
+                    or value['FragmentPath'] != MASK_ROOT + '/' + unit
                     or value['UnitFileState'] != 'masked-runtime' or not idle(value)):
                 T.fail('ORIGINAL_NOT_MASKED_IDLE')
 

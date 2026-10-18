@@ -146,7 +146,7 @@ class CurrentGuard:
             if invocation is not None and invocation != latest: T.fail('CURRENT_FAILURE_CHANGED')
             invocation = latest
         elif (invocation is None or before['LoadState'] != 'masked'
-                or before['FragmentPath'] != '/dev/null'
+                or before['FragmentPath'] != S.MASK_ROOT + '/' + T.OLD_READER
                 or before['UnitFileState'] != 'masked-runtime'):
             T.fail('CURRENT_FAILURE_UNIT')
         elif before['InvocationID'] not in ('', '0' * 32, invocation):

@@ -1,4 +1,4 @@
-name: Market diagnostic systemd property schema observation
+name: Market diagnostic transition isolated Linux qualification
 
 on:
   push:
@@ -15,13 +15,13 @@ jobs:
   empty-linux-systemd:
     if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-market-diagnostic-transition-linux-20261018'
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 8
     steps:
       - name: Checkout exact qualification commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Observe fixed unit property names on a disposable empty hosted VM
+      - name: Qualify only a disposable empty hosted VM
         shell: bash
         run: |
           set -euo pipefail
@@ -32,8 +32,8 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/transition-linux/source-sha.txt"
           sudo unshare --net -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 \
             "GITHUB_ACTIONS=$GITHUB_ACTIONS" "RUNNER_ENVIRONMENT=$RUNNER_ENVIRONMENT" "RUNNER_OS=$RUNNER_OS" \
-            /usr/bin/python3 -B backend/tools/naver_market_diagnostic_transition/snapshot_schema_fixture.py \
-            --confirm github-hosted-empty-snapshot-schema-only-v1 \
+            /usr/bin/python3 -B backend/tools/naver_market_diagnostic_transition/linux_root_fixture.py \
+            --confirm github-hosted-empty-vm-only-v1 \
             | tee "$RUNNER_TEMP/transition-linux/result.closed.json"
       - name: Retain only closed fixture result and source SHA
         if: always()

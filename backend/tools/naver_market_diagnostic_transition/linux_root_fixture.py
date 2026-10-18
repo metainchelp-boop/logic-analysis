@@ -25,11 +25,11 @@ MODULES = {
     'transition': 'acd5636795506381c89ac0aa8657c7ea1b4f6a26985f50b0297fba62c7d5591a',
     'journal': '27e2ec8c7b332951151dcb19bd60ec527eb768d1b1711f40069b8dd1ac191333',
     'preflight': '0a48d024d352bb2d32cfa920ee530501001bb889d32219ff8b14dcca0984b7c3',
-    'systemd_boundary': '2dc4e18e855a504cac6acd5c1df2be9ac30436a6d8755a7a10205661b304283c',
+    'systemd_boundary': '3f96d25bacb7555cee39af4a6d8b73e4148a9587eb15411c728fd12eac839444',
     'publication': 'da60c15bca0dc48c9dda794ade7e87877f5fec13678a908a3f58657bb34be8a1',
     'host_port': 'f4ed31a5e40db1593358295d30119b95e5ce2d8b3bc3cc97680f94e724562500',
     'provisioning': '651927b4a93bc68f57dfac3645bd9a2c4fbdf4a0f0ec32beef94389e40a19ad0',
-    'current_guard': '4d906c81f98d73ed93be7fe5bd5bc68b3a3f52fd44925c1a339b765ee069f3c7',
+    'current_guard': '670f62086a89134f66117541bad5537a21c5c15cd2fcef5478b3792a99d62eb7',
     'entrypoint': 'b24302665afb5623b8c466f563b3c50c236dfbbabcebc6a3be3519d77df7c162',
 }
 SOURCES = {
