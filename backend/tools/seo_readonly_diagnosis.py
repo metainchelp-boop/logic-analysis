@@ -128,7 +128,7 @@ def _timestamp(value):
         return None
     try:
         return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
 
 
@@ -164,15 +164,30 @@ def _json(result):
         return None
 
 
-def _container(value):
+def _container_issues(value):
+    """Only fixed schema-field codes; never copy an input key or value."""
     if not isinstance(value, dict):
+        return ["json_object_required"]
+    checks = (
+        ("container_id", lambda item: isinstance(item, str) and bool(re.fullmatch(r"[a-f0-9]{64}", item))),
+        ("image_id", lambda item: isinstance(item, str) and bool(re.fullmatch(r"sha256:[a-f0-9]{64}", item))),
+        ("started_at", lambda item: _timestamp(item) is not None),
+        ("restart_count", lambda item: type(item) is int and item >= 0),
+    )
+    issues = []
+    for field, valid in checks:
+        if field not in value:
+            issues.append(field + "_missing")
+        elif not valid(value[field]):
+            issues.append(field + "_invalid")
+    return issues
+
+
+def _container(value):
+    if _container_issues(value):
         return None
-    cid, image = value.get("container_id"), value.get("image_id")
-    started, restarts = _timestamp(value.get("started_at")), value.get("restart_count")
-    if (not isinstance(cid, str) or not re.fullmatch(r"[a-f0-9]{64}", cid)
-            or not isinstance(image, str) or not re.fullmatch(r"sha256:[a-f0-9]{64}", image)
-            or started is None or type(restarts) is not int or restarts < 0):
-        return None
+    cid, image = value["container_id"], value["image_id"]
+    started, restarts = _timestamp(value["started_at"]), value["restart_count"]
     rotation = value.get("rotation")
     rotation = rotation if isinstance(rotation, dict) else {}
     size, files = rotation.get("max-size"), rotation.get("max-file")
@@ -183,6 +198,41 @@ def _container(value):
     return {"name": "logic-analysis", "container_id": cid, "image_id": image,
             **_times("started", started), "restart_count": restarts,
             "log_driver": driver, "rotation": safe_rotation}
+
+
+def _inspect_boundary(result):
+    """Expose the failed stage, not Docker's potentially sensitive error text."""
+    value, parsed = None, False
+    try:
+        value, parsed = json.loads(result.output), True
+    except (ValueError, UnicodeError, RecursionError):
+        pass
+    issues = _container_issues(value) if parsed else []
+    if result.state == "timeout":
+        failure = "inspect_timeout"
+    elif result.state == "byte_limit":
+        failure = "inspect_byte_limit"
+    elif result.state != "complete":
+        error = result.output.lower()
+        if any(marker in error for marker in (b"permission denied", b"access is denied", b"operation not permitted")):
+            failure = "permission_denied"
+        elif b"no such container" in error or b"no such object" in error:
+            failure = "no_such_container"
+        else:
+            failure = "command_failed" if result.returncode is not None else "inspect_read_failed"
+    elif not parsed:
+        failure = "invalid_json"
+    elif not isinstance(value, dict):
+        failure = "json_not_object"
+    elif issues:
+        failure = "field_validation_failed"
+    else:
+        failure = "none"
+    returncode = result.returncode
+    return {"inspect_state": result.state,
+            "returncode": returncode if type(returncode) is int and -255 <= returncode <= 255 else None,
+            "output_bytes": len(result.output), "json_parse_ok": parsed,
+            "failure_code": failure, "field_validation_failures": issues}
 
 
 def _runtime(value):
@@ -292,9 +342,12 @@ def diagnose(*, runner=run_command, now=None):
               "limitations": ["retained_first_is_not_incident_start", "provider_response_is_not_business_success",
                               "unlogged_key_missing_and_timeouts_unverified", "only_retained_logs_observed"],
               "reasons": [], "container": None, "runtime": _runtime(None),
+              "source_inspection": None, "final_source_inspection": None,
               "logs": _summarize(CommandResult(b"", "read_failed", None), started)}
     inspect_command = ["docker", "inspect", "--format", INSPECT_FORMAT, "logic-analysis"]
-    before = _container(_json(_read(runner, inspect_command)))
+    initial_inspect = _read(runner, inspect_command)
+    report["source_inspection"] = _inspect_boundary(initial_inspect)
+    before = _container(_json(initial_inspect))
     if before is None:
         report["reasons"].append("container_source_unverified")
         return report
@@ -309,7 +362,9 @@ def diagnose(*, runner=run_command, now=None):
     report["logs"] = _summarize(logs, started)
     if report["logs"]["read_state"] != "complete":
         report["reasons"].append("logs_read_partial")
-    after = _container(_json(_read(runner, inspect_command)))
+    final_inspect = _read(runner, inspect_command)
+    report["final_source_inspection"] = _inspect_boundary(final_inspect)
+    after = _container(_json(final_inspect))
     report["container_stable"] = before == after if after is not None else None
     if report["container_stable"] is not True:
         report["reasons"].append("container_changed_or_unverified")

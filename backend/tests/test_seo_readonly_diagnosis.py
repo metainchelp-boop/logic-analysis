@@ -261,6 +261,69 @@ class ReadonlyDiagnosisTests(unittest.TestCase):
         self.assertEqual(result.state, "complete")
         self.assertEqual(sorted(result.output.splitlines()), [b"error-line", b"first-done"])
 
+    def test_inspect_failure_boundary_reports_only_closed_codes_then_stops(self):
+        cases = (
+            ("read_failed", 1, b"permission denied while trying to connect " + CANARY.encode(), "permission_denied", False),
+            ("read_failed", 1, b"Error: No such object: logic-analysis " + CANARY.encode(), "no_such_container", False),
+            ("read_failed", 1, b"Error response from daemon: No such container: " + CANARY.encode(), "no_such_container", False),
+            ("read_failed", 1, b"template parsing error: " + CANARY.encode(), "command_failed", False),
+            ("timeout", None, CANARY.encode(), "inspect_timeout", False),
+            ("byte_limit", None, CANARY.encode(), "inspect_byte_limit", False),
+            ("complete", 0, CANARY.encode(), "invalid_json", False),
+            ("complete", 0, b"[]", "json_not_object", True),
+        )
+        for state, returncode, body, failure, parsed in cases:
+            with self.subTest(failure=failure):
+                calls = []
+                def runner(command, **limits):
+                    calls.append((command, limits))
+                    return diagnosis.CommandResult(body, state, returncode)
+                result = diagnosis.diagnose(runner=runner, now="2026-10-18T00:00:00Z")
+                boundary = result["source_inspection"]
+                self.assertEqual(boundary["inspect_state"], state)
+                self.assertEqual(boundary["returncode"], returncode)
+                self.assertEqual(boundary["output_bytes"], len(body))
+                self.assertEqual(boundary["json_parse_ok"], parsed)
+                self.assertEqual(boundary["failure_code"], failure)
+                self.assertEqual(result["state"], "unverified")
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0][0][0:2], ["docker", "inspect"])
+                self.assertGreater(calls[0][1]["max_bytes"], 0)
+                self.assertGreater(calls[0][1]["timeout"], 0)
+                self.assertNotIn(CANARY, json.dumps(result))
+
+    def test_inspect_container_validation_names_only_never_field_values(self):
+        for field in ("container_id", "image_id", "started_at", "restart_count"):
+            for missing in (True, False):
+                with self.subTest(field=field, missing=missing):
+                    value = dict(INSPECT)
+                    if missing:
+                        del value[field]
+                    else:
+                        value[field] = CANARY
+                    calls = []
+                    def runner(command, **limits):
+                        calls.append(command)
+                        return diagnosis.CommandResult(json.dumps(value).encode(), "complete", 0)
+                    result = diagnosis.diagnose(runner=runner, now="2026-10-18T00:00:00Z")
+                    boundary = result["source_inspection"]
+                    self.assertEqual(boundary["failure_code"], "field_validation_failed")
+                    self.assertEqual(boundary["json_parse_ok"], True)
+                    self.assertEqual(boundary["field_validation_failures"], [field + ("_missing" if missing else "_invalid")])
+                    self.assertEqual(len(calls), 1)
+                    self.assertNotIn(CANARY, json.dumps(result))
+
+    def test_valid_inspect_reports_safe_metadata_before_and_after(self):
+        result = diagnosis.diagnose(runner=FakeDocker(), now="2026-10-18T00:00:00Z")
+        for field in ("source_inspection", "final_source_inspection"):
+            boundary = result[field]
+            self.assertEqual(boundary["inspect_state"], "complete")
+            self.assertEqual(boundary["returncode"], 0)
+            self.assertEqual(boundary["output_bytes"], len(json.dumps(INSPECT).encode()))
+            self.assertEqual(boundary["json_parse_ok"], True)
+            self.assertEqual(boundary["failure_code"], "none")
+            self.assertEqual(boundary["field_validation_failures"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
