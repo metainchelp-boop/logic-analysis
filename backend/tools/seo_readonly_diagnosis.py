@@ -33,7 +33,7 @@ INSPECT_FORMAT = ('{"container_id":{{json .Id}},"image_id":{{json .Image}},'
 PROBE_CODE = '''import ast, hashlib, json, os
 allowed_models = MODELS_LITERAL
 result = {"key_configured": bool(os.environ.get("CLAUDE_API_KEY")),
-          "model": "unverified", "model_state": "unverified",
+          "model": "unverified", "model_state": "unverified", "model_source": "default",
           "source_sha256": None, "read_state": "partial"}
 try:
     with open("/app/seo_generate.py", "rb") as source_file:
@@ -41,7 +41,12 @@ try:
     if len(source) <= 1048576:
         result["source_sha256"] = hashlib.sha256(source).hexdigest()
         result["read_state"] = "complete"
-        model = os.environ.get("CLAUDE_MODEL")
+        seo_model = os.environ.get("SEO_CLAUDE_MODEL", "").strip()
+        model = seo_model or os.environ.get("CLAUDE_MODEL")
+        if seo_model:
+            result["model_source"] = "SEO_CLAUDE_MODEL"
+        elif os.environ.get("CLAUDE_MODEL"):
+            result["model_source"] = "CLAUDE_MODEL"
         if model is None:
             for node in ast.parse(source).body:
                 if (isinstance(node, ast.Assign) and
@@ -247,6 +252,7 @@ def _runtime(value):
     key = value.get("key_configured")
     return {"key_configured": key if type(key) is bool else None, "model": model,
             "model_state": "verified" if model != "unverified" else "unverified",
+            "model_source": value.get("model_source") if value.get("model_source") in ("SEO_CLAUDE_MODEL", "CLAUDE_MODEL", "default") else "unverified",
             "source_sha256": source_hash,
             "read_state": "complete" if value.get("read_state") == "complete" and source_hash and type(key) is bool and model != "unverified" else "partial"}
 

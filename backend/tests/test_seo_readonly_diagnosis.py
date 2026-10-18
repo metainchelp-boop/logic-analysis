@@ -354,6 +354,21 @@ class ReadonlyDiagnosisTests(unittest.TestCase):
                 self.assertIn("2026-10-10T00:00:00." + normalized + "+00:00", received)
                 self.assertNotIn(CANARY, json.dumps(result))
 
+    def test_probe_reports_seo_override_instead_of_unmodified_shared_chat_model(self):
+        source = b'import os\nCLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")\n'
+        for override in ("claude-sonnet-4-6", " claude-sonnet-4-6 ", "   ", ""):
+            with self.subTest(override=override):
+                output = io.StringIO()
+                with mock.patch.dict(os.environ, {"CLAUDE_API_KEY": CANARY, "CLAUDE_MODEL": "claude-sonnet-4-20250514",
+                                                 "SEO_CLAUDE_MODEL": override}, clear=True), \
+                     mock.patch("builtins.open", mock.mock_open(read_data=source)), contextlib.redirect_stdout(output):
+                    exec(compile(diagnosis.PROBE_CODE, "<isolated-readonly-probe>", "exec"), {})
+                value = json.loads(output.getvalue())
+                self.assertEqual(value["model"], override.strip() or "claude-sonnet-4-20250514")
+                self.assertEqual(value["model_source"], "SEO_CLAUDE_MODEL" if override.strip() else "CLAUDE_MODEL")
+                self.assertEqual(value["read_state"], "complete")
+                self.assertNotIn(CANARY, output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
