@@ -1,0 +1,45 @@
+name: Market diagnostic transition isolated Linux qualification
+
+on:
+  push:
+    branches: [codex/naver-market-diagnostic-transition-linux-20261018]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-diagnostic-transition-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  empty-linux-systemd:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-market-diagnostic-transition-linux-20261018'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact qualification commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Qualify only a disposable empty hosted VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = Linux
+          mkdir -m 700 "$RUNNER_TEMP/transition-linux"
+          git rev-parse HEAD > "$RUNNER_TEMP/transition-linux/source-sha.txt"
+          sudo unshare --net -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 \
+            "GITHUB_ACTIONS=$GITHUB_ACTIONS" "RUNNER_ENVIRONMENT=$RUNNER_ENVIRONMENT" "RUNNER_OS=$RUNNER_OS" \
+            /usr/bin/python3 -B backend/tools/naver_market_diagnostic_transition/linux_root_fixture.py \
+            --confirm github-hosted-empty-vm-only-v1 \
+            | tee "$RUNNER_TEMP/transition-linux/result.closed.json"
+      - name: Retain only closed fixture result and source SHA
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: market-diagnostic-transition-linux-${{ github.run_id }}
+          path: ${{ runner.temp }}/transition-linux/
+          retention-days: 7
+          if-no-files-found: error
