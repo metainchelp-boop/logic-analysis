@@ -11,7 +11,7 @@ import time
 import types
 import uuid
 
-CORE_SHA256 = 'b03caa1cb0b886e3098b1446dd70c953f05da90abbc449a901ffd74b7449f8e1'
+CORE_SHA256 = '53f796f21b93af0d41566ad521f33e834eb7e0866edcfcdb947421d33582e801'
 CONFIRM = 'github-hosted-empty-operation-invocation-v1'
 CHECKS = ('hosted_root_gate', 'fixed_core_pin', 'unit_paths_initially_absent',
     'exact_created_files', 'two_single_start_attempts', 'pid1_metadata_without_message',
@@ -85,10 +85,20 @@ def _gate():
             raise ValueError('fixture_directory')
 
 
+def _closed_refusal(error, module):
+    refused = getattr(module, 'Refused', None)
+    allowed = getattr(module, 'REFUSALS', frozenset())
+    if (type(allowed) is frozenset and type(error) is refused and len(error.args) == 1
+            and type(error.args[0]) is str and error.args[0] in allowed
+            and error.args[0] != 'none'):
+        return error.args[0]
+    return 'unavailable'
+
+
 def run():
     checks = dict.fromkeys(CHECKS, False)
     stage, created, module, prior = 'hosted_root_gate', {}, None, None
-    result = dict(version=1, status='failed', stage=stage, checks=checks,
+    result = dict(version=1, status='failed', stage=stage, checks=checks, refusal='none',
         core_sha256=CORE_SHA256, operating_observed=False, database_opened=False,
         message_requested=False, fixture_units_started=0)
     try:
@@ -158,8 +168,9 @@ def run():
         encoded = module.closed_json(observed)
         checks[stage] = all(value not in encoded for value in units.values()) and all(observed[k] is False for k in module.FLAGS)
         if not checks[stage]: raise ValueError('fixture_output')
-    except Exception:
+    except Exception as error:
         result['stage'] = stage
+        result['refusal'] = _closed_refusal(error, module)
     finally:
         if prior is not None: module.UNITS, module.START_US, module.END_US = prior
         cleanup = True
@@ -179,6 +190,7 @@ def run():
     if all(checks.values()): result.update(status='passed', stage='complete')
     elif not checks['owned_cleanup'] and all(checks[k] for k in CHECKS if k != 'owned_cleanup'):
         result['stage'] = 'owned_cleanup'
+        result['refusal'] = 'unavailable'
     elif result['stage'] == 'hosted_root_gate' and checks['hosted_root_gate']:
         result['stage'] = stage
     return result

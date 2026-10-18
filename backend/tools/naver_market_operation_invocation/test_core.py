@@ -234,4 +234,96 @@ class FixtureBoundaryTests(unittest.TestCase):
             self.assertFalse(path.exists())
 
 
+class SequenceEnvelopeTests(unittest.TestCase):
+    @staticmethod
+    def sequenced(row, number=1):
+        return dict(row, __SEQNUM=str(number), __SEQNUM_ID='d' * 32)
+
+    def reject(self, *rows, code=None):
+        with self.assertRaises(C.Refused) as caught: C.parse(raw(*rows))
+        if code is not None: self.assertEqual(caught.exception.args, (code,))
+
+    def test_v255_paired_envelope_accepts_and_stays_private(self):
+        a = self.sequenced(record(), 10)
+        b = self.sequenced(record('coordinator', index=2), 12)
+        value = C.parse(raw(a, b))
+        self.assertEqual(value, C.parse(raw(record(), record('coordinator', index=2))))
+        encoded = C.closed_json(value)
+        self.assertNotIn('__SEQNUM', encoded)
+        self.assertNotIn('d' * 32, encoded)
+
+    def test_legacy_four_field_envelope_preserved(self):
+        value = C.parse(raw(record()))
+        self.assertEqual(value['roles']['reader']['state'], 'unit_success')
+        self.assertEqual(C.parse(b'')['roles']['reader']['state'], 'not_observed')
+
+    def test_partial_sequence_pair_rejected(self):
+        for key in C.SEQUENCE:
+            row = self.sequenced(record()); del row[key]
+            with self.subTest(key=key): self.reject(row, code='schema')
+
+    def test_unsigned_64_decimal_exact_types_and_bounds(self):
+        for bad in [True, 1, 1.0, None, [], ['1'], '-1', '+1', '01', '1.0', str(1 << 64)]:
+            row = self.sequenced(record()); row['__SEQNUM'] = bad
+            with self.subTest(bad=bad): self.reject(row, code='schema')
+        for good in [0, (1 << 64) - 1]:
+            self.assertEqual(C.parse(raw(self.sequenced(record(), good)))['status'], 'observed')
+
+    def test_sequence_id_exact_lowerhex_nonzero(self):
+        for bad in [True, [], None, '', '0' * 32, 'D' * 32, 'd' * 31, 'd' * 33]:
+            row = self.sequenced(record()); row['__SEQNUM_ID'] = bad
+            with self.subTest(bad=bad): self.reject(row, code='schema')
+
+    def test_one_observation_sequence_identity_and_order(self):
+        a = self.sequenced(record(), 10)
+        b = self.sequenced(record('coordinator', index=2), 11)
+        b['__SEQNUM_ID'] = 'e' * 32; self.reject(a, b, code='provenance')
+        for number in [9, 10]:
+            with self.subTest(number=number):
+                self.reject(a, self.sequenced(record('coordinator', index=2), number), code='order')
+
+    def test_mixed_envelope_presence_rejected(self):
+        self.reject(record(), self.sequenced(record('coordinator', index=2)), code='provenance')
+        self.reject(self.sequenced(record()), record('coordinator', index=2), code='provenance')
+
+    def test_other_extra_and_duplicate_field_guards_preserved(self):
+        row = self.sequenced(record()); row['__UNKNOWN'] = 'x'; self.reject(row, code='schema')
+        row = self.sequenced(record()); row['MESSAGE'] = 'PRIVATE'; self.reject(row, code='schema')
+        body = raw(self.sequenced(record())).replace(b'"__SEQNUM":"1"', b'"__SEQNUM":"1","__SEQNUM":"1"')
+        with self.assertRaises(C.Refused) as caught: C.parse(body)
+        self.assertEqual(caught.exception.args, ('duplicate',))
+
+    def test_fixture_preserves_exact_refused_enum_only(self):
+        f = FixtureBoundaryTests.fixture()
+        for code in C.REFUSALS - {'none'}:
+            with self.subTest(code=code):
+                self.assertEqual(f._closed_refusal(C.Refused(code), C), code)
+        for error in [C.Refused('PRIVATE'), C.Refused('none'), C.Refused(True),
+                      C.Refused('schema', 'PRIVATE'), ValueError('PRIVATE')]:
+            self.assertEqual(f._closed_refusal(error, C), 'unavailable')
+        class Child(C.Refused): pass
+        self.assertEqual(f._closed_refusal(Child('schema'), C), 'unavailable')
+        self.assertEqual(f._closed_refusal(C.Refused('schema'), None), 'unavailable')
+
+    def test_fixture_partial_module_failure_stays_closed(self):
+        import types
+        f = FixtureBoundaryTests.fixture()
+        for partial in [types.ModuleType('empty'),
+                        types.SimpleNamespace(Refused=C.Refused),
+                        types.SimpleNamespace(REFUSALS=C.REFUSALS)]:
+            for error in [C.Refused('schema'), ValueError('PRIVATE')]:
+                self.assertEqual(f._closed_refusal(error, partial), 'unavailable')
+        self.assertEqual(f._closed_refusal(C.Refused('schema'), C), 'schema')
+
+    def test_fixture_generic_failure_shape_remains_closed(self):
+        f = FixtureBoundaryTests.fixture()
+        with patch.object(f.sys, 'argv', ['fixture']), patch.object(f, '_command') as command:
+            value = f.run()
+        command.assert_not_called()
+        self.assertEqual(value['refusal'], 'unavailable')
+        self.assertEqual(value['status'], 'failed')
+        self.assertNotIn('PRIVATE', json.dumps(value))
+        self.assertEqual(f.CORE_SHA256, f._hash((HERE / 'core.py').read_bytes()))
+
+
 if __name__ == '__main__': unittest.main()

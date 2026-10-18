@@ -36,6 +36,7 @@ RESULTS = frozenset(('resources', 'protocol', 'timeout', 'exit-code', 'signal',
 FIELDS = ('_PID', '_UID', '_COMM', '_TRANSPORT', 'UNIT', 'INVOCATION_ID',
           'MESSAGE_ID', 'UNIT_RESULT', 'EXIT_CODE', 'EXIT_STATUS')
 ADDRESS = frozenset(('__CURSOR', '__REALTIME_TIMESTAMP', '__MONOTONIC_TIMESTAMP', '_BOOT_ID'))
+SEQUENCE = frozenset(('__SEQNUM', '__SEQNUM_ID'))
 COMMON = frozenset(FIELDS[:7]) | ADDRESS
 MAX_BYTES, MAX_ROWS, TIMEOUT = 32768, 32, 8
 REFUSALS = frozenset(('none', 'platform', 'command_failed', 'command_limit',
@@ -163,13 +164,17 @@ def parse(raw):
              for k in UNITS}
     roles_by_unit = {v: k for k, v in UNITS.items()}
     cursors, boot, last_real, last_mono = set(), None, -1, -1
+    sequence_mode, sequence_id, last_sequence = None, None, -1
     for line in lines:
         record = _decode(line)
         if type(record) is not dict or not COMMON <= set(record): fail('schema')
         message = record['MESSAGE_ID']
         extra = ({'UNIT_RESULT'} if message == FAILURE else
                  {'EXIT_CODE', 'EXIT_STATUS'} if message == EXIT else set())
-        if message not in MESSAGE_IDS or set(record) != COMMON | extra: fail('schema')
+        present_sequence = set(record) & SEQUENCE
+        if present_sequence and present_sequence != SEQUENCE: fail('schema')
+        if message not in MESSAGE_IDS or set(record) != COMMON | extra | present_sequence:
+            fail('schema')
         if any(type(v) is not str or len(v) > 512 or any(ord(c) < 32 for c in v)
                for v in record.values()): fail('schema')
         if (record['_PID'] != '1' or record['_UID'] != '0' or
@@ -178,6 +183,16 @@ def parse(raw):
                 not _hex(record['INVOCATION_ID'])): fail('provenance')
         if boot is not None and boot != record['_BOOT_ID']: fail('provenance')
         boot = record['_BOOT_ID']
+        has_sequence = bool(present_sequence)
+        if sequence_mode is not None and sequence_mode != has_sequence: fail('provenance')
+        sequence_mode = has_sequence
+        if has_sequence:
+            current_id = record['__SEQNUM_ID']
+            if not _hex(current_id): fail('schema')
+            current_sequence = _number(record['__SEQNUM'], (1 << 64) - 1)
+            if sequence_id is not None and sequence_id != current_id: fail('provenance')
+            if current_sequence <= last_sequence: fail('order')
+            sequence_id, last_sequence = current_id, current_sequence
         real = _number(record['__REALTIME_TIMESTAMP'], (1 << 63) - 1)
         mono = _number(record['__MONOTONIC_TIMESTAMP'], (1 << 63) - 1)
         if not START_US <= real <= END_US: fail('time_window')
