@@ -319,7 +319,7 @@ def run(confirm):
 
 
 if __name__ == '__main__':
-    expected = [__file__, '--confirm', CONFIRM]
-    result = run(CONFIRM if sys.argv == expected else 'invalid-confirmation')
+    expected = ['--confirm', CONFIRM]
+    result = run(CONFIRM if sys.argv[1:] == expected else 'invalid-confirmation')
     sys.stdout.buffer.write(canonical(result) + b'\n')
     raise SystemExit(0 if result['status'] == 'passed' else 1)
