@@ -22,10 +22,10 @@ import types
 
 CONFIRM = 'github-hosted-empty-vm-only-v1'
 MODULES = {
-    'transition': 'acd5636795506381c89ac0aa8657c7ea1b4f6a26985f50b0297fba62c7d5591a',
+    'transition': '89ab4f61004846a90ec75a147b398d5f17eae016a268e375e7c44433143c3a92',
     'journal': '27e2ec8c7b332951151dcb19bd60ec527eb768d1b1711f40069b8dd1ac191333',
     'preflight': '0a48d024d352bb2d32cfa920ee530501001bb889d32219ff8b14dcca0984b7c3',
-    'systemd_boundary': '3f96d25bacb7555cee39af4a6d8b73e4148a9587eb15411c728fd12eac839444',
+    'systemd_boundary': 'a0559bdca3bee319a8bc3d37425a6854185ec06245b69ec494a4513221fe72ac',
     'publication': 'da60c15bca0dc48c9dda794ade7e87877f5fec13678a908a3f58657bb34be8a1',
     'host_port': 'f4ed31a5e40db1593358295d30119b95e5ce2d8b3bc3cc97680f94e724562500',
     'provisioning': '651927b4a93bc68f57dfac3645bd9a2c4fbdf4a0f0ec32beef94389e40a19ad0',
@@ -40,12 +40,14 @@ SOURCES = {
 }
 EMPTY_ROOTS = ('/root/logic-analysis-deploy', '/opt/metainc', '/var/lib/metainc', '/srv/metainc')
 OLD_NAMES = ('naver-market-export.service', 'naver-market-export-reader.service', 'naver-market-export.timer')
-FIXTURE_IDS = (('1'*32, '2'*32), ('3'*32, '4'*32), ('5'*32, '6'*32))
+FIXTURE_IDS = (('1'*32, '2'*32), ('3'*32, '4'*32), ('5'*32, '6'*32), ('7'*32, '8'*32))
 CHECKS = ('empty_host_gate', 'exact_public_pins', 'real_uid_gid', 'unitpath_control_precedence',
     'persistent_natural_activation', 'original_failure_bound', 'compiled_unit_sandbox',
     'apply_source_limit_cell', 'owned_runtime_masks', 'paired_rollback',
     'partial_unit_publication_rollback', 'cached_active_removal_refused',
-    'original_files_and_db_preserved', 'private_ids_not_emitted')
+    'original_files_and_db_preserved', 'private_ids_not_emitted',
+    'completed_invocation_retained', 'completed_observation_not_export_success',
+    'completed_pair_stopped_and_restored')
 FAILURES = frozenset(('SYSTEMD_UNIT_PATH', 'SYSTEMD_COMMAND_FAILED', 'SYSTEMD_SNAPSHOT',
     'SYSTEMD_COMMAND_AMBIGUOUS', 'SYSTEMD_COMMAND_LIMIT', 'SYSTEMD_COMMAND_UNAVAILABLE',
     'ORIGINAL_TIMER', 'ORIGINAL_UNIT', 'ORIGINAL_NOT_MASKED_IDLE', 'DIAGNOSTIC_NOT_IDLE',
@@ -353,6 +355,50 @@ CREATE TABLE collected_serp(keyword,collected_date,total,products_json,meta_json
         done[stage] = True
         stage = 'original_files_and_db_preserved'
         baseline(None); done[stage] = True
+        # A separate success lifecycle on the same disposable fixture only.
+        # The prior stages proved no unexpected main DB changes. Deliberately
+        # replace only the synthetic over-limit keyword, then rebind its expected
+        # main hash; no operating/source data is read and original files stay fixed.
+        stage = 'completed_invocation_retained'
+        require(all(done.values()) is False)
+        with replaced(B, 'collect', baseline), replaced(G.CurrentGuard, '_deployment', deployment):
+            command(['/usr/bin/systemctl', 'start', T.OLD_COORDINATOR], accept=(0,1), timeout=75)
+            require(type(G.CurrentGuard(proofs).capture()['invocation_id']) is str)
+            conn = sqlite3.connect(database)
+            try:
+                conn.execute('UPDATE clients SET main_keywords=?', ('fixture',))
+                conn.commit()
+            finally: conn.close()
+            initial_database = sha(database.read_bytes())
+            complete_plan, complete_files = T.compile_plan(
+                apply_id=FIXTURE_IDS[3][0], rollback_id=FIXTURE_IDS[3][1],
+                sources=sources, previous=proofs)
+            complete_systemd = S.Systemd(complete_plan, complete_files, sources=sources)
+            complete = action('apply', FIXTURE_IDS[3])
+            retained = {key: complete_systemd.show(complete_plan[key])
+                        for key in ('coordinator', 'reader')}
+            require(all(S.completed(value) for value in retained.values()))
+            require(all(value['FragmentPath'] == T.UNIT_ROOT + '/' + complete_plan[key]
+                        and not value['DropInPaths'] and value['LoadState'] == 'loaded'
+                        for key, value in retained.items()))
+            # A reload and subsequent snapshot must preserve the completed ID;
+            # this is real manager behavior, not a fake snapshot seam.
+            complete_systemd.reload()
+            require(all(T.same(value, complete_systemd.show(complete_plan[key]))
+                        for key, value in retained.items()))
+            done[stage] = True
+            stage = 'completed_observation_not_export_success'
+            require(complete['result']['observation'] == dict(
+                status='diagnostic_unavailable', limit_issue=None, exit_status=0))
+            require(complete['result']['product_export_verified'] is False)
+            done[stage] = True
+            stage = 'completed_pair_stopped_and_restored'
+            require(action('rollback', FIXTURE_IDS[3])['result']['restored'] is True)
+            complete_systemd.cleanup_idle()
+            require(all(not Path(path).exists() for path in complete_files))
+            require(complete_systemd.show(T.OLD_TIMER)['ActiveState'] == 'active')
+            baseline(None)
+            done[stage] = True
         require(all(done.values()))
         return dict(schema='diagnostic-empty-linux-vm-qualification-v1', status='passed', checks=done,
             operating_host_access=False, production_receipt_verified=False,

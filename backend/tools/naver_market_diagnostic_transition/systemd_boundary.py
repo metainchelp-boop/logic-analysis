@@ -109,6 +109,16 @@ def idle(value):
             (('inactive', 'dead'), ('failed', 'failed')))
 
 
+def completed(value):
+    # active/exited is a completed retained oneshot, never an executing unit.
+    return (value['Job'] in ('', '0')
+            and value['UnitFileState'] in ('static', 'disabled')
+            and (value['ActiveState'], value['SubState']) == ('active', 'exited')
+            and value['Result'] == 'success' and value['ExecMainStatus'] == '0'
+            and re.fullmatch('[0-9a-f]{32}', value['InvocationID']) is not None
+            and value['InvocationID'] != '0' * 32)
+
+
 def exact_failure(raw, *, unit, invocation):
     """Accept one exact exporter JSON result in one exact invocation only.
 
@@ -239,21 +249,39 @@ class Systemd:
                     or value['FragmentPath'] != T.UNIT_ROOT + '/' + unit
                     or not idle(value)): T.fail('DIAGNOSTIC_NOT_IDLE')
 
+    def _cleanup_idle_snapshot(self, unit, value):
+        if value['LoadState'] == 'not-found':
+            return (not value['FragmentPath'] and not value['DropInPaths'] and idle(value)
+                    and value['UnitFileState'] in ('', 'not-found'))
+        return (value['LoadState'] == 'loaded' and not value['DropInPaths']
+                and value['UnitFileState'] in ('static', 'disabled')
+                and value['FragmentPath'] == T.UNIT_ROOT + '/' + unit and idle(value))
+
     def cleanup_idle(self):
-        # Partial installation or a resumed removal may have only one/no unit
-        # file. Inspect both manager units, including cached active ones.
-        for key in ('coordinator', 'reader'):
-            unit = self.plan[key]
-            value = self.show(unit)
-            if value['LoadState'] == 'not-found':
-                if (value['FragmentPath'] or value['DropInPaths'] or not idle(value)
-                        or value['UnitFileState'] not in ('', 'not-found')):
-                    T.fail('DIAGNOSTIC_NOT_IDLE')
-            elif (value['LoadState'] != 'loaded' or value['DropInPaths']
-                    or value['UnitFileState'] not in ('static', 'disabled')
+        # The HostPort verifies paired publication ownership before this step.
+        # Partial installation and interrupted cleanup still permit idle missing
+        # units. Only completed retained operation units can receive stop.
+        states = [(self.plan[key], self.show(self.plan[key]))
+                  for key in ('coordinator', 'reader')]
+        retained = []
+        for unit, value in states:
+            if self._cleanup_idle_snapshot(unit, value): continue
+            if (value['LoadState'] != 'loaded' or value['DropInPaths']
                     or value['FragmentPath'] != T.UNIT_ROOT + '/' + unit
-                    or not idle(value)):
+                    or not completed(value)):
                 T.fail('DIAGNOSTIC_NOT_IDLE')
+            retained.append(unit)
+        if retained:
+            # Refuse changed/contradictory snapshots before any stop command.
+            for unit, before in states:
+                if not T.same(before, self.show(unit)):
+                    T.fail('DIAGNOSTIC_CONTEXT_CHANGED')
+            self._run(['/usr/bin/systemctl', 'stop'] + retained)
+            # Never remove an active or running unit, including after a timeout
+            # or a partially effective stop. Original idle rules remain final.
+            for unit, _ in states:
+                if not self._cleanup_idle_snapshot(unit, self.show(unit)):
+                    T.fail('DIAGNOSTIC_NOT_IDLE')
 
     def start_once(self):
         if self.start_attempted: T.fail('DIAGNOSTIC_START_REPLAY')
@@ -270,7 +298,8 @@ class Systemd:
         unit = self.plan['reader']
         before = self.show(unit)
         if (before['FragmentPath'] != T.UNIT_ROOT + '/' + unit or before['DropInPaths']
-                or before['LoadState'] != 'loaded' or not idle(before)):
+                or before['LoadState'] != 'loaded'
+                or not (idle(before) or completed(before))):
             T.fail('DIAGNOSTIC_CONTEXT')
         invocation = T.operation(before['InvocationID'])
         raw = self._run(['/usr/bin/journalctl', '--output=json', '--no-pager', '-n', '32',
