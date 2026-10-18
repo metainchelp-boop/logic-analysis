@@ -16,7 +16,7 @@ BASE = "backend/tools/naver_market_diagnostic_transition/"
 DEPENDENCY_PINS = {'fixed_actions_api': 'fa5b25f8a64ad98b1bad2f9008003654eef98f03976c7c4992a0be3909f4befc',
  'native_contract': '7c157b45c150f3597e9e126b0d6a2348d9fb90421976c534591426d268f2303a',
  'portable_ci': '476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c',
- 'portable_contract': 'c38c07520c81ef443a0875ac36e8feb26f9b3265499309401655dd40464653cb',
+ 'portable_contract': '72729ec6a93668c43755275c171444bf46f737631baee0ded9c099cd46cb342e',
  'workflow_delivery': 'ffe5e94bd54e2beb3c0d6855cc2048a6cef3e7a7070c6c2da8f80888b9c03e81'}
 SOURCE_REGISTRY = {'bootstrap': {'bytes': 3974,
                'path': 'backend/tools/naver_market_diagnostic_transition/bootstrap.py',
@@ -24,9 +24,9 @@ SOURCE_REGISTRY = {'bootstrap': {'bytes': 3974,
  'current_guard': {'bytes': 10836,
                    'path': 'backend/tools/naver_market_diagnostic_transition/current_guard.py',
                    'sha256': '6a9377b6ed3d511e054c1234b0b830314331ddadad3b5887b79a8c36e611e5d8'},
- 'delivery': {'bytes': 8446,
+ 'delivery': {'bytes': 8477,
               'path': 'backend/tools/naver_market_diagnostic_transition/delivery.py',
-              'sha256': '3026d83baa140cd45b0e9361c40a50274fd41bd914885aa46011f904a99b7bcc'},
+              'sha256': '93f7b0fedd713e5be03a2df2501bc57e825ef41564accf9bc5ea6d4590c30504'},
  'diagnostic_exporter': {'bytes': 19540,
                          'path': 'backend/tools/naver_market_diagnostic_transition/diagnostic_market_export.py',
                          'sha256': '9bb25d4acda4edca44aa71c238a6bf53be7dab5e093bc4f0c69d45c0d0891851'},
@@ -68,7 +68,7 @@ SOURCE_REGISTRY = {'bootstrap': {'bytes': 3974,
                  'sha256': 'da60c15bca0dc48c9dda794ade7e87877f5fec13678a908a3f58657bb34be8a1'},
  'strict_receiver': {'bytes': 13955,
                      'path': 'backend/tools/naver_market_diagnostic_transition/strict_receiver.py',
-                     'sha256': '30ed12d72c185df61a69494d7368b1f80030c53a6958ed213b067d99653d29c7'},
+                     'sha256': '4c732380f5718d93e334e3e854f1a18535eae9799f89a7b048f82d7dacd9147b'},
  'systemd_boundary': {'bytes': 15655,
                       'path': 'backend/tools/naver_market_diagnostic_transition/systemd_boundary.py',
                       'sha256': 'a0559bdca3bee319a8bc3d37425a6854185ec06245b69ec494a4513221fe72ac'},
@@ -77,7 +77,7 @@ SOURCE_REGISTRY = {'bootstrap': {'bytes': 3974,
                 'sha256': '89ab4f61004846a90ec75a147b398d5f17eae016a268e375e7c44433143c3a92'}}
 DEPENDENCY_ORDER = ('native_contract','workflow_delivery','portable_contract','portable_ci','fixed_actions_api')
 NATIVE_WORKFLOW_SHA256 = 'd6f504478e5141d7861a278013fd26f99a73347f26a829dcbc7568f41fc40289'
-PORTABLE_WORKFLOW_SHA256 = 'bd1186ce5fcced4d174d90da5ba570440e68d18ccdec18d91d77e251f5eb0fde'
+PORTABLE_WORKFLOW_SHA256 = '7d6875595125f15cd455bb9db5cf52e05bbdea9333c5fa54790ff5b02cfd1da5'
 LINUX_MANIFEST_SHA256 = 'de94b30c23e97e6f8b047e01b6a7d0dd78c0fc93aff1e82efe74c06e8175b96b'
 # Registered exact completed 17-check Linux result; future runs are not evidence.
 LINUX_QUALIFICATION_SHA256 = '08a199f9eb53bad06223e594f2de794b5b858f021afa5c5d3a5ffc66647db5cf'

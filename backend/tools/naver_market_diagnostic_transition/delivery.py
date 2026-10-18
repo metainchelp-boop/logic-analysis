@@ -14,15 +14,17 @@ import re
 import sys
 import types
 
-MODULE_PINS = {'current_guard': '6a9377b6ed3d511e054c1234b0b830314331ddadad3b5887b79a8c36e611e5d8',
- 'entrypoint': 'b24302665afb5623b8c466f563b3c50c236dfbbabcebc6a3be3519d77df7c162',
- 'host_port': 'f4ed31a5e40db1593358295d30119b95e5ce2d8b3bc3cc97680f94e724562500',
- 'journal': '27e2ec8c7b332951151dcb19bd60ec527eb768d1b1711f40069b8dd1ac191333',
- 'preflight': '0a48d024d352bb2d32cfa920ee530501001bb889d32219ff8b14dcca0984b7c3',
- 'provisioning': '651927b4a93bc68f57dfac3645bd9a2c4fbdf4a0f0ec32beef94389e40a19ad0',
- 'publication': 'da60c15bca0dc48c9dda794ade7e87877f5fec13678a908a3f58657bb34be8a1',
- 'systemd_boundary': 'a0559bdca3bee319a8bc3d37425a6854185ec06245b69ec494a4513221fe72ac',
- 'transition': '89ab4f61004846a90ec75a147b398d5f17eae016a268e375e7c44433143c3a92'}
+MODULE_PINS = {
+    'transition': '89ab4f61004846a90ec75a147b398d5f17eae016a268e375e7c44433143c3a92',
+    'journal': '27e2ec8c7b332951151dcb19bd60ec527eb768d1b1711f40069b8dd1ac191333',
+    'preflight': '0a48d024d352bb2d32cfa920ee530501001bb889d32219ff8b14dcca0984b7c3',
+    'systemd_boundary': 'a0559bdca3bee319a8bc3d37425a6854185ec06245b69ec494a4513221fe72ac',
+    'publication': 'da60c15bca0dc48c9dda794ade7e87877f5fec13678a908a3f58657bb34be8a1',
+    'host_port': 'f4ed31a5e40db1593358295d30119b95e5ce2d8b3bc3cc97680f94e724562500',
+    'current_guard': '6a9377b6ed3d511e054c1234b0b830314331ddadad3b5887b79a8c36e611e5d8',
+    'provisioning': '651927b4a93bc68f57dfac3645bd9a2c4fbdf4a0f0ec32beef94389e40a19ad0',
+    'entrypoint': 'b24302665afb5623b8c466f563b3c50c236dfbbabcebc6a3be3519d77df7c162',
+}
 SOURCE_PINS = {
     'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed',
     'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737',

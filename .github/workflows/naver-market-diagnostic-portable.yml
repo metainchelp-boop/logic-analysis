@@ -26,7 +26,7 @@ jobs:
           test "$(id -u)" -ne 0
           sha256sum --check <<'PINNED_SOURCES'
           476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
-          c38c07520c81ef443a0875ac36e8feb26f9b3265499309401655dd40464653cb  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          72729ec6a93668c43755275c171444bf46f737631baee0ded9c099cd46cb342e  backend/tools/naver_market_diagnostic_transition/portable_contract.py
           PINNED_SOURCES
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
@@ -37,7 +37,7 @@ jobs:
           test "$(id -u)" -ne 0
           sha256sum --check <<'PINNED_SOURCES'
           476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
-          c38c07520c81ef443a0875ac36e8feb26f9b3265499309401655dd40464653cb  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          72729ec6a93668c43755275c171444bf46f737631baee0ded9c099cd46cb342e  backend/tools/naver_market_diagnostic_transition/portable_contract.py
           PINNED_SOURCES
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
@@ -48,7 +48,7 @@ jobs:
           test "$(id -u)" -ne 0
           sha256sum --check <<'PINNED_SOURCES'
           476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
-          c38c07520c81ef443a0875ac36e8feb26f9b3265499309401655dd40464653cb  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          72729ec6a93668c43755275c171444bf46f737631baee0ded9c099cd46cb342e  backend/tools/naver_market_diagnostic_transition/portable_contract.py
           PINNED_SOURCES
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
@@ -59,7 +59,7 @@ jobs:
           test "$(id -u)" -ne 0
           sha256sum --check <<'PINNED_SOURCES'
           476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
-          c38c07520c81ef443a0875ac36e8feb26f9b3265499309401655dd40464653cb  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          72729ec6a93668c43755275c171444bf46f737631baee0ded9c099cd46cb342e  backend/tools/naver_market_diagnostic_transition/portable_contract.py
           PINNED_SOURCES
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
@@ -70,7 +70,7 @@ jobs:
           test "$(id -u)" -ne 0
           sha256sum --check <<'PINNED_SOURCES'
           476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
-          c38c07520c81ef443a0875ac36e8feb26f9b3265499309401655dd40464653cb  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          72729ec6a93668c43755275c171444bf46f737631baee0ded9c099cd46cb342e  backend/tools/naver_market_diagnostic_transition/portable_contract.py
           PINNED_SOURCES
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
@@ -81,7 +81,7 @@ jobs:
           test "$(id -u)" -ne 0
           sha256sum --check <<'PINNED_SOURCES'
           476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
-          c38c07520c81ef443a0875ac36e8feb26f9b3265499309401655dd40464653cb  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          72729ec6a93668c43755275c171444bf46f737631baee0ded9c099cd46cb342e  backend/tools/naver_market_diagnostic_transition/portable_contract.py
           PINNED_SOURCES
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
@@ -92,7 +92,7 @@ jobs:
           test "$(id -u)" -ne 0
           sha256sum --check <<'PINNED_SOURCES'
           476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
-          c38c07520c81ef443a0875ac36e8feb26f9b3265499309401655dd40464653cb  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          72729ec6a93668c43755275c171444bf46f737631baee0ded9c099cd46cb342e  backend/tools/naver_market_diagnostic_transition/portable_contract.py
           PINNED_SOURCES
           sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
             env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
