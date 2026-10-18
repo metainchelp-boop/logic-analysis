@@ -20,8 +20,8 @@ LINUX_BRANCH = 'codex/naver-market-diagnostic-transition-linux-20261018'
 WORKFLOW = '.github/workflows/naver-market-diagnostic-transition.yml'
 NATIVE_WORKFLOW = '.github/workflows/naver-product-export-tests.yml'
 LINUX_WORKFLOW = '.github/workflows/naver-market-transition-linux.yml'
-PAIR = ('f82dc65cfe3c4de89864916cc0b687fd', 'f4e00eb5d5574fd787739b158e6e17d3')
-PAIR_RECEIPT_SHA256 = '949a2ebe55b90359c401a7e29e96552ca4205f2b8ae1817194882000d604b4d1'
+PAIR = ('7abd8b3965ed4b51a3b071cd218e024f', '4aa3189c384847178ecafbfa34eb060e')
+PAIR_RECEIPT_SHA256 = '625233b7e1adebcfefd9a9f73e60182e41775d4969c12bb1741d7d9f587981ad'
 CONFIRMS = {'APPLY_MARKET_DIAGNOSTIC_ONCE': 'apply',
             'ROLLBACK_MARKET_DIAGNOSTIC_PAIR': 'rollback'}
 MAX_ZIP, MAX_MEMBER = 4*1024*1024, 2*1024*1024
@@ -34,7 +34,7 @@ MODULE_PINS = {
     'systemd_boundary': '3f96d25bacb7555cee39af4a6d8b73e4148a9587eb15411c728fd12eac839444',
     'publication': 'da60c15bca0dc48c9dda794ade7e87877f5fec13678a908a3f58657bb34be8a1',
     'host_port': 'f4ed31a5e40db1593358295d30119b95e5ce2d8b3bc3cc97680f94e724562500',
-    'current_guard': '670f62086a89134f66117541bad5537a21c5c15cd2fcef5478b3792a99d62eb7',
+    'current_guard': '6a9377b6ed3d511e054c1234b0b830314331ddadad3b5887b79a8c36e611e5d8',
     'provisioning': '651927b4a93bc68f57dfac3645bd9a2c4fbdf4a0f0ec32beef94389e40a19ad0',
     'entrypoint': 'b24302665afb5623b8c466f563b3c50c236dfbbabcebc6a3be3519d77df7c162',
 }

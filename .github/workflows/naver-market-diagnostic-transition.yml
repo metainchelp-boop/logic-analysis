@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           python3 -I -B - <<'PYCODE'
           import hashlib,os,pathlib,stat,sys,types
-          EXPECTED_QUALIFICATION_SHA256 = 'a26bd732825b77456358a80ae3e57ea005bd47f98c7f39d6ac2f798e5ea36bbf'
+          EXPECTED_QUALIFICATION_SHA256 = 'da4a810d61381695608464f2e2abd1b1c3d24a0f4591283c87ae7a86e5a5afec'
           path=pathlib.Path('backend/tools/naver_market_diagnostic_transition/qualification.py')
           try:
               if any(part.is_symlink() for part in (path,*path.parents)):

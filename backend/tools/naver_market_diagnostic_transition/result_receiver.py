@@ -15,6 +15,7 @@ import qualification as Q
 BUILD_MARKER=b'NAVER_MARKET_DIAGNOSTIC_QUALIFICATION_V1='
 RESULT_MARKER=b'NAVER_MARKET_DIAGNOSTIC_TRANSITION_V1='
 MAX_LOG=524288
+BUILD_WRAPPER='Build appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262'
 STEPS=('Checkout exact source','Python 3.12','Validate exact qualifications and build fixed script','Execute one fixed diagnostic action')
 
 
@@ -101,13 +102,15 @@ def receive(root, registry, fixed, dispatch_run_id):
         job=jobs['jobs'][0];wanted_job=dict(run_id=dispatch_run_id,head_sha=registry['head_sha'],run_attempt=1,
             name='qualified-one-shot',status='completed',conclusion='success')
         Q.need(type(job) is dict and Q.exact({k:job.get(k) for k in wanted_job},wanted_job) and Q.positive(job.get('id')),'RESULT_JOB')
-        steps=job.get('steps');Q.need(type(steps) is list and len(steps)<=12,'RESULT_STEPS');selected={};numbers=[]
+        steps=job.get('steps');Q.need(type(steps) is list and len(steps)<=12,'RESULT_STEPS');selected={};numbers=[];build_seen=False
         for step in steps:
             Q.need(type(step) is dict and Q.positive(step.get('number')) and step.get('status')=='completed'
                 and step.get('conclusion')=='success' and type(step.get('name')) is str,'RESULT_STEPS')
             numbers.append(step['number'])
             if step['name'] in STEPS:
                 Q.need(step['name'] not in selected,'RESULT_STEPS');selected[step['name']]=step
+            elif step['name']==BUILD_WRAPPER:
+                Q.need(not build_seen and not selected,'RESULT_STEPS');build_seen=True
             else:Q.need(step['name'] in ('Set up job','Post Python 3.12','Post Checkout exact source','Complete job'),'RESULT_STEPS')
         Q.need(len(numbers)==len(set(numbers)) and numbers==sorted(numbers) and tuple(selected)==STEPS,'RESULT_STEPS')
         native=A.run(exp['native_run_id']);observed=[]

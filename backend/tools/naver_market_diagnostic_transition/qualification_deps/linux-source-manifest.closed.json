@@ -21,21 +21,21 @@
       "sha256": "42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59"
     }
   },
-  "created_at": "2026-10-18T01:57:32.270977+00:00",
+  "created_at": "2026-10-18T03:05:12.757094+00:00",
   "exports_binding_executed_in_linux": false,
-  "full_linux_result_verified": false,
-  "head_sha": "88aafee06c7869fd226ef750a0d35efe5b610003",
+  "full_linux_result_verified": true,
+  "head_sha": "9d4555b144153600b221ffc68b762ec0db489061",
   "linux_fixture": {
     "bytes": 22910,
     "path": "backend/tools/naver_market_diagnostic_transition/linux_root_fixture.py",
-    "sha256": "2af5de8f58cea0cbb0bd1841c585ec61950d1cce5a9497a51aaee94fd1195c0d"
+    "sha256": "07ce1d72c2e59e5f3caf6f6a331696466b83ac86c523016feadeb7445338c62b"
   },
-  "run_id": 39088172949,
+  "run_id": 39092068912,
   "runtime": {
     "current_guard": {
       "bytes": 10836,
       "path": "backend/tools/naver_market_diagnostic_transition/current_guard.py",
-      "sha256": "670f62086a89134f66117541bad5537a21c5c15cd2fcef5478b3792a99d62eb7"
+      "sha256": "6a9377b6ed3d511e054c1234b0b830314331ddadad3b5887b79a8c36e611e5d8"
     },
     "entrypoint": {
       "bytes": 4181,
