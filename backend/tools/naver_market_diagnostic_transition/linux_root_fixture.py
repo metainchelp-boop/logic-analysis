@@ -366,10 +366,83 @@ CREATE TABLE collected_serp(keyword,collected_date,total,products_json,meta_json
                     checks=done, operating_host_access=False)
 
 
+# Empty hosted-VM fixture only; never imported by a production entrypoint.
+def secure_fixture_opt():
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open('/opt', flags)
+    changed = False
+    try:
+        before = os.fstat(fd)
+        current = os.stat('/opt', follow_symlinks=False)
+        require(stat.S_ISDIR(before.st_mode) and (before.st_uid, before.st_gid) == (0, 0))
+        require((before.st_dev, before.st_ino) == (current.st_dev, current.st_ino))
+        mode = stat.S_IMODE(before.st_mode)
+        require(mode in (0o755, 0o777))
+        if mode == 0o777:
+            os.fchmod(fd, 0o755)
+            changed = True
+            os.fsync(fd)
+        checked = os.fstat(fd)
+        require(stat.S_IMODE(checked.st_mode) == 0o755
+                and (checked.st_dev, checked.st_ino, checked.st_uid, checked.st_gid)
+                == (before.st_dev, before.st_ino, 0, 0))
+        return (fd, before.st_dev, before.st_ino, mode)
+    except BaseException:
+        if changed:
+            restore_fixture_opt((fd, before.st_dev, before.st_ino, mode))
+        else:
+            os.close(fd)
+        raise
+
+
+def restore_fixture_opt(saved):
+    fd, dev, ino, mode = saved
+    try:
+        current, opened = os.stat('/opt', follow_symlinks=False), os.fstat(fd)
+        require(all(stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino, info.st_uid, info.st_gid)
+                    == (dev, ino, 0, 0) and stat.S_IMODE(info.st_mode) == 0o755
+                    for info in (current, opened)))
+        if mode == 0o777:
+            os.fchmod(fd, mode)
+            os.fsync(fd)
+        require(stat.S_IMODE(os.fstat(fd).st_mode) == mode)
+    finally:
+        os.close(fd)
+
+
+def qualify_hosted_fixture(confirm):
+    # Normalization is permitted only after the original empty hosted gate.
+    # Production provisioning remains byte-identical and still rejects 0777.
+    try:
+        gate(confirm)
+        saved = secure_fixture_opt()
+    except BaseException:
+        return dict(schema='diagnostic-empty-linux-vm-qualification-v1', status='failed',
+                    failed_stage='fixture_opt_prepare', failure_code='fixture_unavailable',
+                    checks={key: False for key in CHECKS}, operating_host_access=False)
+    body_failed = restore_failed = False
+    result = None
+    try:
+        result = run(confirm)
+    except BaseException:
+        body_failed = True
+    finally:
+        try:
+            restore_fixture_opt(saved)
+        except BaseException:
+            restore_failed = True
+    if body_failed or restore_failed:
+        return dict(schema='diagnostic-empty-linux-vm-qualification-v1', status='failed',
+                    failed_stage='fixture_opt_restore' if restore_failed else 'fixture_body',
+                    failure_code='fixture_unavailable', checks={key: False for key in CHECKS},
+                    operating_host_access=False)
+    return result
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--confirm', required=True, choices=[CONFIRM])
     args = parser.parse_args()
-    result = run(args.confirm)
+    result = qualify_hosted_fixture(args.confirm)
     sys.stdout.buffer.write(canonical(result) + b'\n')
     raise SystemExit(0 if result['status'] == 'passed' else 1)
