@@ -1,0 +1,114 @@
+name: Market diagnostic portable schema candidate
+on:
+  push:
+    branches: [codex/naver-claude-reference-ops-20261011]
+permissions:
+  contents: read
+jobs:
+  portable-candidate:
+    name: Portable schema candidate (not operating qualification)
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011' && github.event_name == 'push' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Verify portable source registry
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sha256sum --check <<'PINNED_SOURCES'
+          476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
+          5aa493545f3f5476cff625d0068fface5b3c939c2d375c81a63ddd1867d17949  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          PINNED_SOURCES
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
+            python3 -B backend/tools/naver_market_diagnostic_transition/portable_ci.py inventory
+      - name: Portable core 134
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sha256sum --check <<'PINNED_SOURCES'
+          476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
+          5aa493545f3f5476cff625d0068fface5b3c939c2d375c81a63ddd1867d17949  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          PINNED_SOURCES
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
+            python3 -B backend/tools/naver_market_diagnostic_transition/portable_ci.py core
+      - name: Portable transport 33
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sha256sum --check <<'PINNED_SOURCES'
+          476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
+          5aa493545f3f5476cff625d0068fface5b3c939c2d375c81a63ddd1867d17949  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          PINNED_SOURCES
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
+            python3 -B backend/tools/naver_market_diagnostic_transition/portable_ci.py transport
+      - name: Portable producer 36
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sha256sum --check <<'PINNED_SOURCES'
+          476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
+          5aa493545f3f5476cff625d0068fface5b3c939c2d375c81a63ddd1867d17949  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          PINNED_SOURCES
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
+            python3 -B backend/tools/naver_market_diagnostic_transition/portable_ci.py producer
+      - name: Portable consumer 11
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sha256sum --check <<'PINNED_SOURCES'
+          476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
+          5aa493545f3f5476cff625d0068fface5b3c939c2d375c81a63ddd1867d17949  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          PINNED_SOURCES
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
+            python3 -B backend/tools/naver_market_diagnostic_transition/portable_ci.py consumer
+      - name: Portable resolver 6
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sha256sum --check <<'PINNED_SOURCES'
+          476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
+          5aa493545f3f5476cff625d0068fface5b3c939c2d375c81a63ddd1867d17949  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          PINNED_SOURCES
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
+            python3 -B backend/tools/naver_market_diagnostic_transition/portable_ci.py resolver
+      - name: Portable schema adaptation 4
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          sha256sum --check <<'PINNED_SOURCES'
+          476100202174cba63358fee0f15ff3fce42657d80255d7177f99693a4e59fd0c  backend/tools/naver_market_diagnostic_transition/portable_ci.py
+          5aa493545f3f5476cff625d0068fface5b3c939c2d375c81a63ddd1867d17949  backend/tools/naver_market_diagnostic_transition/portable_contract.py
+          PINNED_SOURCES
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 \
+            python3 -B backend/tools/naver_market_diagnostic_transition/portable_ci.py adaptation
+      - name: Store closed portable evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: market-diagnostic-portable-candidate
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            portable-candidate-evidence/core.json
+            portable-candidate-evidence/transport.json
+            portable-candidate-evidence/producer.json
+            portable-candidate-evidence/consumer.json
+            portable-candidate-evidence/resolver.json
+            portable-candidate-evidence/adaptation.json
+            portable-candidate-evidence/source-sha.txt
+            portable-candidate-evidence/source-manifest.json

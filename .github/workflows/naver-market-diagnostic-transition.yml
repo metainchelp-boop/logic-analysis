@@ -1,0 +1,93 @@
+name: Fixed market diagnostic transition (qualification required)
+on:
+  push:
+    branches: [codex/naver-claude-reference-ops-20261011]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'One fixed diagnostic apply or its paired cleanup; not product deployment.'
+        required: true
+        type: choice
+        options: [APPLY_MARKET_DIAGNOSTIC_ONCE, ROLLBACK_MARKET_DIAGNOSTIC_PAIR]
+      native_run_id:
+        description: 'Exact completed native qualification run'
+        required: true
+        type: string
+      portable_run_id:
+        description: 'Exact completed portable qualification run for this checkout'
+        required: true
+        type: string
+      linux_run_id:
+        description: 'Exact completed full isolated Linux qualification run'
+        required: true
+        type: string
+      registry_sha256:
+        description: 'Canonical reviewed qualification registry SHA256'
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: deploy-logic-analysis
+  cancel-in-progress: false
+jobs:
+  qualified-one-shot:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && (inputs.confirm == 'APPLY_MARKET_DIAGNOSTIC_ONCE' || inputs.confirm == 'ROLLBACK_MARKET_DIAGNOSTIC_PAIR')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Validate exact qualifications and build fixed script
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIAG_CONFIRM: ${{ inputs.confirm }}
+          DIAG_NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+          DIAG_PORTABLE_RUN_ID: ${{ inputs.portable_run_id }}
+          DIAG_LINUX_RUN_ID: ${{ inputs.linux_run_id }}
+          DIAG_REGISTRY_SHA256: ${{ inputs.registry_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 -I -B - <<'PYCODE'
+          import hashlib,os,pathlib,stat,sys,types
+          EXPECTED_QUALIFICATION_SHA256 = '27f814dbcdbac3d1cea24ef235a06ab3507db85bc6757692542c097a2e5887c1'
+          path=pathlib.Path('backend/tools/naver_market_diagnostic_transition/qualification.py')
+          try:
+              if any(part.is_symlink() for part in (path,*path.parents)):
+                  raise ValueError('SOURCE_PATH')
+              fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+              try:
+                  st=os.fstat(fd)
+                  if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or not 0<st.st_size<=131072:
+                      raise ValueError('SOURCE_FILE')
+                  with os.fdopen(fd,'rb',closefd=False) as stream:raw=stream.read(131073)
+              finally:os.close(fd)
+              if len(raw)>131072 or hashlib.sha256(raw).hexdigest()!=EXPECTED_QUALIFICATION_SHA256:
+                  raise ValueError('SOURCE_PIN')
+              module=types.ModuleType('qualification');module.__file__=str(path.absolute())
+              sys.modules['qualification']=module
+              exec(compile(raw,'<exact-qualification>','exec'),module.__dict__)
+              sys.argv=['qualification.py','build'];module.main()
+          except Exception:
+              raise SystemExit('QUALIFICATION_REFUSED') from None
+          PYCODE
+      - name: Execute one fixed diagnostic action
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 2m
+          script: ${{ steps.build.outputs.script }}
+      # This Docker action has no declared outputs. A separate read-only
+      # result_receiver.py waits for completed metadata and consumes bounded logs in
+      # RAM. No raw log/artifact upload or always() rollback occurs here.
