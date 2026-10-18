@@ -126,6 +126,9 @@ def run_command(command, *, timeout, max_bytes):
 def _timestamp(value):
     if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-]\d\d:\d\d)", value):
         return None
+    # Docker emits nanoseconds; older Python accepts only microsecond precision.
+    # Pad short fractions and truncate (never round) sub-microsecond digits.
+    value = re.sub(r"\.(\d{1,9})", lambda match: "." + match.group(1).ljust(6, "0")[:6], value)
     try:
         return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
     except (ValueError, OverflowError):

@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import unittest
 from unittest import mock
@@ -323,6 +324,35 @@ class ReadonlyDiagnosisTests(unittest.TestCase):
             self.assertEqual(boundary["json_parse_ok"], True)
             self.assertEqual(boundary["failure_code"], "none")
             self.assertEqual(boundary["field_validation_failures"], [])
+
+    def test_docker_fraction_is_normalized_for_older_python_through_public_diagnose(self):
+        real_datetime = diagnosis.dt.datetime
+        for fraction, normalized in (("1", "100000"), ("123", "123000"),
+                                     ("123456", "123456"), ("123456789", "123456")):
+            with self.subTest(fraction_digits=len(fraction)):
+                received = []
+                class OlderDatetime:
+                    @staticmethod
+                    def fromisoformat(value):
+                        received.append(value)
+                        digits = re.search(r"\.(\d+)", value)
+                        if digits and len(digits.group(1)) != 6:
+                            raise ValueError("older Python rejects unsupported fraction precision")
+                        return real_datetime.fromisoformat(value)
+                fake = FakeDocker()
+                def runner(command, **limits):
+                    if command[1] == "inspect":
+                        value = dict(INSPECT, started_at="2026-10-10T00:00:00." + fraction + "Z")
+                        return diagnosis.CommandResult(json.dumps(value).encode(), "complete", 0)
+                    return fake(command, **limits)
+                with mock.patch.object(diagnosis.dt, "datetime", OlderDatetime):
+                    result = diagnosis.diagnose(runner=runner, now="2026-10-18T00:00:00Z")
+                self.assertEqual(result["state"], "complete")
+                self.assertEqual(result["source_inspection"]["failure_code"], "none")
+                self.assertEqual(result["container"]["started_utc"], "2026-10-10T00:00:00Z")
+                self.assertEqual(result["logs"]["events"]["provider_error"]["count"], 2)
+                self.assertIn("2026-10-10T00:00:00." + normalized + "+00:00", received)
+                self.assertNotIn(CANARY, json.dumps(result))
 
 
 if __name__ == "__main__":
