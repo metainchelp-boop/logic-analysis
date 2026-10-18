@@ -24,8 +24,9 @@ RESTORED_APPLY = 'fe01f9ef77664899845a10f45b614a61'
 RESTORED_ROLLBACK = '89b2fcf8da264c16b3287b58d17735a1'
 RESTORED_PLAN = '7981ededcf45a943fed04f5c6192878a4b0f8b20ce923dd2df0fcade4645428f'
 START = ['/usr/bin/systemctl', 'start', T.OLD_COORDINATOR]
-NEXT = ['/usr/bin/systemctl', '--timestamp=unix', 'show', T.OLD_TIMER,
-        '--property=NextElapseUSecRealtime']
+NEXT = ['/usr/bin/busctl', 'get-property', 'org.freedesktop.systemd1',
+        '/org/freedesktop/systemd1/unit/naver_2dmarket_2dexport_2etimer',
+        'org.freedesktop.systemd1.Timer', 'NextElapseUSecRealtime']
 # Safety interval, not a relaxation of S.bounded's 75s/32768B limits.
 SAFETY_SECONDS = 300
 EXPORT_CODES = frozenset(('EXPORT_BUNDLE_INVALID EXPORT_BUNDLE_STALE EXPORT_COMMAND_FAILED '
@@ -59,12 +60,14 @@ def request(value):
 
 
 def next_epoch(raw):
-    # No human-date/timezone inference, zero/infinity or alternate key accepted.
+    # Fixed D-Bus uint64 microseconds, no human date or display-format inference.
     if type(raw) is not bytes or len(raw) > 128:
         fail('REFRESH_TIMER_NEXT')
-    match = re.fullmatch(rb'NextElapseUSecRealtime=@([1-9][0-9]{0,11})(?:\.([0-9]{1,6}))?\n', raw)
+    match = re.fullmatch(rb't ([1-9][0-9]{0,19})\n', raw)
     if match is None: fail('REFRESH_TIMER_NEXT')
-    return int(match[1]) + (int(match[2]) / 10**len(match[2]) if match[2] else 0)
+    microseconds = int(match[1])
+    if microseconds >= (1 << 64) - 1: fail('REFRESH_TIMER_NEXT')
+    return microseconds / 1_000_000
 
 
 def validate(value):

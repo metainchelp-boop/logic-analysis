@@ -25,7 +25,7 @@ import types
 
 CONFIRM = 'github-hosted-empty-vm-only-v1'
 SCHEMA = 'original-market-refresh-empty-linux-vm-v1'
-CORE_PIN = '3f4b4576b45ac689d96b209163233cc5d5aa4992d1adc200fbc9accf1ccdd1ba'
+CORE_PIN = '8b999336179d1fcec89bd7b8f066909ca6b106854843c843a3b96035d66c1a33'
 MODULES = {
     'transition': '89ab4f61004846a90ec75a147b398d5f17eae016a268e375e7c44433143c3a92',
     'journal': '27e2ec8c7b332951151dcb19bd60ec527eb768d1b1711f40069b8dd1ac191333',
@@ -330,6 +330,8 @@ CREATE TABLE collected_serp(keyword,collected_date,total,products_json,meta_json
         for kind in ('product', 'market'):
             command(['/usr/bin/systemctl', 'enable', '--now', 'naver-' + kind + '-export.timer'])
         done[stage] = True
+        # Historical check name retained: the pinned core now queries typed
+        # busctl uint64 epoch microseconds; this fixture does not rewrite output.
         stage = 'timer_unix_output'
         code, raw = real_bounded(C.NEXT, limit=128, timeout=8)
         require(code == 0 and C.next_epoch(raw) - time.time() > 300)

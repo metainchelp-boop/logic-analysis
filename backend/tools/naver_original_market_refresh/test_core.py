@@ -117,7 +117,7 @@ class RefreshTests(unittest.TestCase):
         if argv == C.NEXT:
             n = sum(x == tuple(C.NEXT) for x in self.calls)
             epoch = self.next_at + (1 if self.next_shift and n > 1 else 0)
-            return 0, ('NextElapseUSecRealtime=@%d\n' % epoch).encode()
+            return 0, ('t %d\n' % (epoch * 1_000_000)).encode()
         if argv == C.START:
             folder = self.root/('refresh-'+self.refresh_id)
             intent = json.loads((folder/'intent.json').read_bytes())
@@ -165,12 +165,18 @@ class RefreshTests(unittest.TestCase):
         self.assertFalse(out['original_export_success_verified']); self.assertEqual(self.starts(), 1)
 
     def test_next_timestamp_strict_forms_and_types(self):
-        self.assertEqual(C.next_epoch(b'NextElapseUSecRealtime=@100.000001\n'), 100.000001)
-        for raw in (b'NextElapseUSecRealtime=0\n', b'NextElapseUSecRealtime=infinity\n',
-                    b'NextElapseUSecRealtime=@0\n', b'NextElapseUSecRealtime=@01\n',
-                    b'NextElapseUSecRealtime=@100.1234567\n', b'NextElapseUSecRealtime=@10\nX=1\n',
-                    b'NextElapseUSecRealtime=@1e3\n', 'NextElapseUSecRealtime=@100\n', True):
-            with self.subTest(raw=raw), self.assertRaises(T.Invalid): C.next_epoch(raw)
+        self.assertEqual(C.NEXT, ['/usr/bin/busctl','get-property','org.freedesktop.systemd1',
+            '/org/freedesktop/systemd1/unit/naver_2dmarket_2dexport_2etimer',
+            'org.freedesktop.systemd1.Timer','NextElapseUSecRealtime'])
+        self.assertEqual(C.next_epoch(b't 100000001\n'),100.000001)
+        self.assertEqual(C.next_epoch(b't 1\n'),0.000001)
+        self.assertEqual(C.next_epoch(b't 18446744073709551614\n'),((1<<64)-2)/1_000_000)
+        for raw in (b't 0\n',b't 18446744073709551615\n',b't 18446744073709551616\n',
+                    b't -1\n',b't +1\n',b't 01\n',b't 1.0\n',b't 1e6\n',b't  1\n',
+                    b'x 100000001\n',b't 1\nt 2\n',b't 1 extra\n',b't 1\r\n',
+                    b'NextElapseUSecRealtime=@100\n',b't 1',b't '+b'1'*129+b'\n',
+                    't 100000001\n',True,bytearray(b't 1\n')):
+            with self.subTest(raw=raw),self.assertRaises(T.Invalid):C.next_epoch(raw)
 
     def test_timer_imminent_or_changed_never_starts(self):
         self.next_at = int(time.time())+100
@@ -249,7 +255,7 @@ class RefreshTests(unittest.TestCase):
             attempt.start()
         self.assertFalse(attempt.started)
         attempt.clock = types.SimpleNamespace(now=lambda: (1_000.0, 10.0))
-        with patch.object(attempt, 'command', return_value=(0,b'NextElapseUSecRealtime=@2000\n')):
+        with patch.object(attempt, 'command', return_value=(0,b't 2000000000\n')):
             _, checked_mono = attempt.next()
         attempt.deadline = checked_mono + C.SAFETY_SECONDS
         attempt.clock = types.SimpleNamespace(now=lambda: (1_290.0, 300.0))
