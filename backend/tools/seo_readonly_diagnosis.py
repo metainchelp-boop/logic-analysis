@@ -62,29 +62,44 @@ print(json.dumps(result, sort_keys=True))
 
 def run_command(command, *, timeout, max_bytes):
     """Capture both pipes in bounded RAM, without a shell or raw error output."""
-    output = bytearray()
+    outputs = [bytearray(), bytearray()]
+    total_bytes = 0
     state = "complete"
     process = None
+
+    def captured(read_state, returncode):
+        # Keep streams separate until collection ends: app stdout/stderr may each
+        # end a read in the middle of a log line. Interleaving corrupts evidence.
+        output = bytes(outputs[0])
+        if outputs[1]:
+            if output and not output.endswith(b"\n"):
+                output += b"\n"
+            output += bytes(outputs[1])
+        if len(output) > max_bytes:
+            output, read_state = output[:max_bytes], "byte_limit"
+        return CommandResult(output, read_state, returncode)
+
     try:
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, shell=False)
         deadline = time.monotonic() + timeout
         with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ)
-            selector.register(process.stderr, selectors.EVENT_READ)
+            selector.register(process.stdout, selectors.EVENT_READ, 0)
+            selector.register(process.stderr, selectors.EVENT_READ, 1)
             while selector.get_map():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     state = "timeout"
                     break
                 for key, _ in selector.select(min(remaining, 0.2)):
-                    chunk = key.fileobj.read1(min(65536, max_bytes - len(output) + 1))
+                    chunk = key.fileobj.read1(min(65536, max_bytes - total_bytes + 1))
                     if not chunk:
                         selector.unregister(key.fileobj)
                     else:
-                        output.extend(chunk)
-                        if len(output) > max_bytes:
-                            del output[max_bytes:]
+                        available = max_bytes - total_bytes
+                        outputs[key.data].extend(chunk[:available])
+                        total_bytes += min(len(chunk), available)
+                        if len(chunk) > available:
                             state = "byte_limit"
                             break
                 if state != "complete":
@@ -94,11 +109,11 @@ def run_command(command, *, timeout, max_bytes):
         returncode = process.wait(timeout=max(0.1, deadline - time.monotonic()))
         if returncode != 0 and state == "complete":
             state = "read_failed"
-        return CommandResult(bytes(output), state, returncode)
+        return captured(state, returncode)
     except subprocess.TimeoutExpired:
-        return CommandResult(bytes(output), "timeout", None)
+        return captured("timeout", None)
     except Exception:
-        return CommandResult(bytes(output), "read_failed", None)
+        return captured("read_failed", None)
     finally:
         if process is not None:
             if process.poll() is None:

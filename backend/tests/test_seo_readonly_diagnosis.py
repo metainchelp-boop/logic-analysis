@@ -254,6 +254,13 @@ class ReadonlyDiagnosisTests(unittest.TestCase):
         self.assertIsNone(result["logs"]["range"]["first_retained_utc"])
         self.assertNotIn(CANARY, json.dumps(result))
 
+    def test_subprocess_stdout_and_stderr_do_not_splice_partial_log_lines(self):
+        code = ("import os,time; os.write(1,b'first-'); time.sleep(0.02); "
+                "os.write(2,b'error-line\\n'); time.sleep(0.02); os.write(1,b'done\\n')")
+        result = diagnosis.run_command([sys.executable, "-I", "-B", "-c", code], timeout=3, max_bytes=100)
+        self.assertEqual(result.state, "complete")
+        self.assertEqual(sorted(result.output.splitlines()), [b"error-line", b"first-done"])
+
 
 if __name__ == "__main__":
     unittest.main()
