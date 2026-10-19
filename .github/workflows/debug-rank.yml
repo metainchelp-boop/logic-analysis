@@ -697,6 +697,25 @@ jobs:
                 out(f"[비교] 다 모은 자료(어제·오늘) {len(rows)}건 · 상품 수: {buckets(fs)} · total 칸 있음 {sum(1 for r in rows if r[1])}건")
             except Exception as e:
                 out(f"[비교] 다 모은 자료 조회 실패(못 쟀다): {type(e).__name__}")
+            # 수집 대상 전체 기준 — 보고서가 채워지는 키워드 수(1페이지 목록 10개 이상만 셈)
+            try:
+                import sys as _s
+                _s.path.insert(0, "/app")
+                from collector import _keyword_universe
+                U = set(_keyword_universe(c))
+            except Exception as e:
+                U = None
+                out("[대상] 유니버스 조회 실패(못 쟀다): " + type(e).__name__)
+            if U is not None:
+                full = {r[0] for r in c.execute("SELECT DISTINCT keyword FROM collected_serp WHERE collected_date >= date('now','localtime','-1 day')")}
+                for label, days in (("어제·오늘", 1), ("최근 3일", 2), ("최근 7일", 6)):
+                    part = set()
+                    for k, pj in c.execute(f"SELECT keyword, products_json FROM collector_observations WHERE collected_date >= date('now','localtime','-{days} day') AND status='partial'"):
+                        try:
+                            if len(json.loads(pj or "[]")) >= 10: part.add(k)
+                        except Exception: pass
+                    a = len(U & full); b = len((U & part) - full); n = len(U)
+                    out(f"[대상] {label} 1페이지 자료까지 쓰면 — 대상 {n}개 중 다 모음 {a}({round(a*100/max(n,1))}%) · 1페이지로 채움 {b} · 합계 {a+b}({round((a+b)*100/max(n,1))}%) · 빈 채로 {n-a-b}")
             PY
       - name: 🧾 보고서 빈칸 원인 (report_gap=해시 · 읽기 전용)
         if: ${{ github.event.inputs.report_gap != '' }}
