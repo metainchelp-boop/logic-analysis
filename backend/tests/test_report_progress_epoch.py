@@ -10,6 +10,8 @@ DEPLOY=TOOLS
 C7='c7b552d0415d1962263ab66f756339004af2a078'
 B00='b00d6bf805b43b282c04dd95970ae9ccb7d8247d'
 PATH='naver_engine/inspection_store.py'
+# 711a245 keeps c7b552d's inspection_store.py bytes (same size and sha256) and adds four report files.
+TARGET_PATHS={'backend/naver_page/operations-ui.js',PATH,'naver_engine/strategy_validation.py','naver_runtime/claude_provider.py','naver_runtime/report_output_schema.py'}
 def load(path):
  m=types.ModuleType('synthetic_epoch');m.__file__=str(path);exec(compile(path.read_bytes(),str(path),'exec'),m.__dict__);return m
 def prior_raw(name):
@@ -30,7 +32,10 @@ class EpochTest(unittest.TestCase):
  def test_manifest_baseline_b00_and_exact_one_target_file(self):
   c=bound();old=load_prior('naver_report_progress_patch.py');old.bind_base(c.BASE)
   self.assertEqual(c.OLD_MANIFEST,old.TARGET_MANIFEST);self.assertEqual(len(c.TARGET_MANIFEST),166)
-  self.assertEqual({n for n in c.OLD_MANIFEST if c.OLD_MANIFEST[n]!=c.TARGET_MANIFEST[n]},{PATH})
+  self.assertEqual({n for n in c.OLD_MANIFEST if c.OLD_MANIFEST[n]!=c.TARGET_MANIFEST[n]},TARGET_PATHS)
+  self.assertEqual(c.TARGET_MANIFEST[PATH],(420,62048,'7e4d6990f0bf44900e334574784da817e8df3bb2e5fba00cde4c9da9ec289de2'))
+  self.assertEqual({k for k in c.REPORT_ASSETS if c.REPORT_ASSETS[k]!=c.OLD_REPORT_ASSETS[k]},{'/naver/operations-ui.js'})
+  self.assertEqual(c.REPORT_ASSETS['/naver/operations-ui.js'][:2],(35766,'30961f52726507a6302db7159788d2661f7b5ab1554fd86f0b80837cf6587cf9'))
   self.assertEqual(c.STORE_SHA256['old'],c.STORE_SHA256['target']);self.assertEqual(c.OLD_SCHEMA,c.TARGET_SCHEMA)
  def test_historical_pins_tamper_rejected(self):
   for key,value in [('E21_R','38852615205'),('E21_O','0'*32),('B00_M','0'*64),('B00_D',{})]:

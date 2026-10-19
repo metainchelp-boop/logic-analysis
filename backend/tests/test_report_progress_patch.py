@@ -10,8 +10,9 @@ CP='naver_engine/inspection_store.py'
 SCHEMA='naver_engine/collection_diagnostics.py'
 JS='backend/naver_page/operations-ui.js'
 WEB='naver_engine/web.py'
-PYTHON_PATHS=frozenset(('naver_engine/inspection_catalog.py', 'naver_engine/inspection_store.py', 'naver_engine/store.py'))
-PATHS=frozenset(('naver_engine/inspection_store.py',))
+PYTHON_PATHS=frozenset(('naver_engine/inspection_catalog.py', 'naver_engine/inspection_store.py', 'naver_engine/store.py', 'naver_engine/strategy_validation.py', 'naver_runtime/claude_provider.py', 'naver_runtime/report_output_schema.py'))
+PATHS=frozenset(('backend/naver_page/operations-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/strategy_validation.py', 'naver_runtime/claude_provider.py', 'naver_runtime/report_output_schema.py'))
+PY_TARGETS=frozenset(name for name in PATHS if name.endswith('.py'))
 
 def load(name):
  spec=importlib.util.spec_from_file_location(name,TOOLS/(name+'.py'));module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
@@ -92,7 +93,7 @@ class ProductBasisPatchTests(unittest.TestCase):
   self.assertEqual({k for k in p.OLD_MANIFEST if p.OLD_MANIFEST[k]!=p.TARGET_MANIFEST[k]},PATHS)
   self.assertEqual(p.manifest_digest(p.OLD_MANIFEST),'e62ff0f086e63b6c4e771ba8013af0b360bdc1a472fca4baa3f4468d3ff1eaeb');self.assertEqual(p.K_M,'744bc24aadadd683dec7fa4b99d33669996d0b92eae78b654884cf3f9f404950');self.assertEqual(p.I_M,'9de931063d86a011682a0e38568de36532d2fb47077f50cca0ddfe24ad2f1d9f')
   self.assertEqual(p.H_M,'51620b5091b7374d6739ff022f3eed09088751c6e3bcd21277e12d96d61d8fc5')
-  self.assertEqual(p.STORE_SHA256['old'],p.STORE_SHA256['target']);self.assertEqual(p.ROLLBACK_COMMIT,p.OLD_COMMIT);self.assertEqual(set(p.OLD_REPORT_ASSETS),set(p.REPORT_ASSETS));self.assertEqual({key for key in p.REPORT_ASSETS if p.REPORT_ASSETS[key]!=p.OLD_REPORT_ASSETS[key]}, set())
+  self.assertEqual(p.STORE_SHA256['old'],p.STORE_SHA256['target']);self.assertEqual(p.ROLLBACK_COMMIT,p.OLD_COMMIT);self.assertEqual(set(p.OLD_REPORT_ASSETS),set(p.REPORT_ASSETS));self.assertEqual({key for key in p.REPORT_ASSETS if p.REPORT_ASSETS[key]!=p.OLD_REPORT_ASSETS[key]}, {'/naver/operations-ui.js'})
  def test_all_old_history_and_new_c200_layer_and_receipt_pairs_cannot_mutate(self):
   for name,value in [('H_M','a'*64),('H_A','a'*64),('H_C','a'*40),('H_S','a'*64),('H_R','12345678901'),('H_O','a'*32),('H_D',{}),('Z_M','a'*64),('Z_A','a'*64),('Z_C','a'*40),('Z_S','a'*64),('Z_R','12345678901'),('Z_O','a'*32),('Z_D',{}),('F','a'*64),('G','a'*64),('A','a'*40),('B','a'*64),('C','12345678901'),('D','a'*32),('E',{}),('I_M','a'*64),('I_A','a'*64),('I_C','a'*40),('I_S','a'*64),('I_R','12345678901'),('I_O','a'*32),('I_D',{}),('K_C','a'*40),('K_S','a'*64),('K_R','12345678901'),('K_O','a'*32),('K_D',{}),('K_M','a'*64),('K_A','a'*64),('U_C','a'*40),('U_S','a'*64),('U_R','12345678901'),('U_O','a'*32),('U_D',{}),('U_M','a'*64),('U_A','a'*64),('W_C','a'*40),('W_S','a'*64),('W_R','12345678901'),('W_O','a'*32),('W_D',{}),('W_M','a'*64),('W_A','a'*64),('X_C','a'*40),('X_S','a'*64),('X_R','12345678901'),('X_O','a'*32),('X_D',{}),('X_M','a'*64),('X_A','a'*64),('Y_C','a'*40),('Y_S','a'*64),('Y_R','12345678901'),('Y_O','a'*32),('Y_D',{}),('Y_M','a'*64),('Y_A','a'*64),('SR_C','a'*40),('SR_S','a'*64),('SR_R','12345678901'),('SR_O','a'*32),('SR_D',{}),('SR_M','a'*64),('SR_A','a'*64),('BASE_PREPARE_RUN','38523201246'),('BASE_APPLY_OPERATION','a'*32)]:
    p=pinned();setattr(p,name,value)
@@ -102,7 +103,7 @@ class ProductBasisPatchTests(unittest.TestCase):
    p=pinned();setattr(p,name,value)
    with self.subTest(name=name),self.assertRaises(ValueError):p.require_pins()
  def test_exact_scope_field_shape_and_unapproved_ABI_remain_closed(self):
-  p=pinned();self.assertEqual(set(p.APPROVED_AST_SCOPE),PATHS)
+  p=pinned();self.assertEqual(set(p.APPROVED_AST_SCOPE),PY_TARGETS)
   for mutation in (lambda x:x.pop(CP),lambda x:x.update({'unapproved.py':{}}),lambda x:x[CP].update(optional_abi={'chosen':('bypass',)})):
    scope=deepcopy(p.APPROVED_AST_SCOPE);mutation(scope)
    with self.assertRaises(ValueError):p.validate_ast_scope(scope)
@@ -169,7 +170,7 @@ class ProductBasisPatchTests(unittest.TestCase):
  def test_both_approved_paths_reach_strict_AST_and_then_final_inventory(self):
   p,reader,before,after=fixture()
   with patch.object(p,'python_contract',wraps=p.python_contract)as contract,patch.object(p,'compatible_code_scope')as inventory:p.compatible_source(Path('/old'),Path('/new'),reader)
-  self.assertEqual({call.args for call in contract.call_args_list},{(name,before[name],after[name])for name in PATHS if name!='naver_engine/store.py'})
+  self.assertEqual({call.args for call in contract.call_args_list},{(name,before[name],after[name])for name in PY_TARGETS if name!='naver_engine/store.py'})
   inventory.assert_called_once_with(Path('/old'),Path('/new'),reader)
  def test_unrelated_infrastructure_and_store_changes_remain_refused(self):
   for name in ('compose.naver-engine.yml','Dockerfile.naver-engine','backend/requirements.txt','naver_engine/store.py'):

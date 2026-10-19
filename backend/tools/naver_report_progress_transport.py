@@ -21,7 +21,7 @@ MAX_CIPHERTEXT=3*1024*1024
 MAX_PAYLOAD=4*1024*1024
 MAX_BOOTSTRAP_B64=32768
 MAX_SSH=131072
-# Public scaffold aliases remain available for deterministic template checks.
+# Public aliases for deterministic template checks.
 MAX_JSON_BYTES=MAX_JSON
 MAX_WIRE_BYTES=MAX_WIRE
 MAX_SOURCE_BYTES=MAX_SOURCE
@@ -30,21 +30,20 @@ MAX_CIPHERTEXT_BYTES=MAX_CIPHERTEXT
 MAX_PAYLOAD_BYTES=MAX_PAYLOAD
 MAX_BOOTSTRAP_B64_BYTES=MAX_BOOTSTRAP_B64
 MAX_SSH_BYTES=MAX_SSH
-TARGET_SOURCE = 'c7b552d0415d1962263ab66f756339004af2a078'
-CODE_PATHS = ('naver_engine/inspection_store.py',)
-# An external, independently verified template supplies this self-source hash.
-# It must never be embedded by rewriting this module with its own hash.
+TARGET_SOURCE = '711a245ea14b590a83eb6746b760ce53275b6602'
+CODE_PATHS = ('backend/naver_page/operations-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/strategy_validation.py', 'naver_runtime/claude_provider.py', 'naver_runtime/report_output_schema.py')
+# An externally verified template supplies this self-source hash; never self-embed it.
 TRANSPORT_RAW_SHA256=None
-EXPECTED_TARGET_SOURCE = 'c7b552d0415d1962263ab66f756339004af2a078'
-EXPECTED_CODE_PATHS = ('naver_engine/inspection_store.py',)
+EXPECTED_TARGET_SOURCE = TARGET_SOURCE
+EXPECTED_CODE_PATHS = CODE_PATHS
 FUNCTIONS={'preview-report-progress-prepare':'prepare','preview-report-progress-apply':'apply','preview-report-progress-rollback':'rollback'}
 SOURCE_FILES = {'host': 'naver_erp_tunnel_service_install.py', 'release': 'naver_preview_release.py', 'lifecycle': 'naver_preview_lifecycle.py', 'upgrade': 'naver_preview_upgrade.py', 'exports_binding': 'naver_completion_exports.py', 'exports_helper': 'naver_saved_exports.py', 'product_exporter': '../naver_product_export.py', 'market_exporter': '../naver_market_export.py', 'controller': 'naver_preview_completion_release.py', 'patch': 'naver_report_progress_patch.py'}
-# Exact raw and AST-equivalent compact sources match the reviewed target proof.
-SOURCE_SHA256 = {'patch': '2f655743d3a09257ceba5791ddd79305fc709675091335e12825a2e71fb94579', 'controller': '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'lifecycle': '4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4', 'upgrade': '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28', 'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
-COMPACT_SHA256 = {'host': '4e95c24f9da93d814cc90e919ffb9fdfb6113667f16205f382406b7369085b95', 'release': 'd9b4456ecd3de6bfe9fa12430616cf6b9cedadf4ba4dbe28582ad3ea22f84367', 'lifecycle': '0c3ffaa303ad066f23117b304b8f9289e0e3bc78a9c59a8dced8d58e54f498bd', 'upgrade': 'e4dd1f3c29c04439321bff785d803a12356d56e2b83986cf81f286d4dce46f60', 'exports_binding': '2c7f944b2b992eead34508ba671422c50d9becbc5ae5ff39933ab00a5958f32f', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8', 'controller': '4d937e6c55c36853f6d9e6b0f7557558e074a66910ab03c8b43aae92c5ef3fba', 'patch': 'f8a04cea0d8c6f18950dc9ac85e9ea42932c3170c740061dd1aaaa9b40a5e148'}
+# Raw and compact sources match the reviewed proof.
+SOURCE_SHA256 = {'patch': '4c2f4c91ab0b25debac9a9a23580e84d3ebe7aba6ce252fec46a6720e083095c', 'controller': '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'lifecycle': '4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4', 'upgrade': '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28', 'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
+COMPACT_SHA256 = {'host': '4e95c24f9da93d814cc90e919ffb9fdfb6113667f16205f382406b7369085b95', 'release': 'd9b4456ecd3de6bfe9fa12430616cf6b9cedadf4ba4dbe28582ad3ea22f84367', 'lifecycle': '0c3ffaa303ad066f23117b304b8f9289e0e3bc78a9c59a8dced8d58e54f498bd', 'upgrade': 'e4dd1f3c29c04439321bff785d803a12356d56e2b83986cf81f286d4dce46f60', 'exports_binding': '2c7f944b2b992eead34508ba671422c50d9becbc5ae5ff39933ab00a5958f32f', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8', 'controller': '4d937e6c55c36853f6d9e6b0f7557558e074a66910ab03c8b43aae92c5ef3fba', 'patch': 'bd6675a8177fb09b66e347609c99f7567c0b8616a17506937a6bd6d39db339c7'}
 
 
-# Compatibility alias; both public views must agree with the pinned map.
+# Alias; both views must equal the pinned map.
 COMPACT_SOURCE_SHA256=COMPACT_SHA256
 
 
@@ -57,7 +56,7 @@ def require_pins():
             raise ValueError('DETAIL_AI_PINS_PENDING')
     if (COMPACT_SOURCE_SHA256!=COMPACT_SHA256 or not digest(TRANSPORT_RAW_SHA256)
         or type(TARGET_SOURCE)is not str or len(TARGET_SOURCE)!=40 or TARGET_SOURCE!=EXPECTED_TARGET_SOURCE or type(CODE_PATHS) is not tuple
-        or len(CODE_PATHS)!=1 or set(CODE_PATHS)!=set(EXPECTED_CODE_PATHS)):
+        or len(CODE_PATHS)!=5 or set(CODE_PATHS)!=set(EXPECTED_CODE_PATHS)):
         raise ValueError('DETAIL_AI_PINS_PENDING')
 
 
@@ -333,8 +332,7 @@ def execute(value=None,*,incoming=False):
             return P.prepare(package,host,wrapped,m['lifecycle'],m['upgrade'],approved_config_operation_id=P.APPROVED_CONFIG_OPERATION_ID)
         return getattr(P,FUNCTIONS[operation])(package,host,wrapped,m['lifecycle'],m['upgrade'])
     except Exception as error:
-        # The workflow uses a separate pristine reporter module. Carry only its
-        # closed enums, never traceback, environment, paths, or service output.
+        # Carry only closed enums; never traceback, environment, paths or output.
         report=P.failure_report(error)
         details=getattr(error,'failure_details',{})
         saved={k:v for k,v in report.items() if k not in ('stage','error_kind','error_code')}
