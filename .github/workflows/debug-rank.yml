@@ -1,17 +1,17 @@
 name: Debug Rank Batch (읽기 전용 진단)
 
 # 진단 전용 갈래 diag/naver-engine-health — main 에 합치지 않는다.
-# 네이버 관제 엔진 상태 점검 1회: 컨테이너·서비스 상태 + 24시간 오류 표식 개수 + 엔진 DB 읽기 전용 집계.
+# 네이버 관제 읽기 전용 점검 1회: 엔진 상태(naver_engine_health) 또는 저장 공간 원인(naver_engine_storage).
 # 업체명·계정번호·원문 오류 미출력. 운영 변경 0 (DB 는 컨테이너 안에서 mode=ro·query_only·쓰기 거부로만 연다).
 
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: '네이버 관제 엔진 상태 읽기 전용 점검 1회'
+        description: '네이버 관제 읽기 전용 점검 1회 — 엔진 상태 / 저장 공간 원인'
         required: true
         type: choice
-        options: [READ_ONLY_NAVER_ENGINE_HEALTH]
+        options: [READ_ONLY_NAVER_ENGINE_HEALTH, READ_ONLY_NAVER_STORAGE]
 
 permissions:
   contents: read
@@ -22,20 +22,22 @@ concurrency:
 
 jobs:
   naver-engine-health:
-    if: github.ref == 'refs/heads/diag/naver-engine-health' && inputs.confirm == 'READ_ONLY_NAVER_ENGINE_HEALTH'
+    if: github.ref == 'refs/heads/diag/naver-engine-health' && (inputs.confirm == 'READ_ONLY_NAVER_ENGINE_HEALTH' || inputs.confirm == 'READ_ONLY_NAVER_STORAGE')
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - name: Build fixed read-only script
+        env:
+          TOOL: ${{ inputs.confirm == 'READ_ONLY_NAVER_STORAGE' && 'diag/naver_engine_storage.py' || 'diag/naver_engine_health.py' }}
         run: |
           set -eu
-          python3 -I -B -c "import ast,pathlib;ast.parse(pathlib.Path('diag/naver_engine_health.py').read_text())"
+          python3 -I -B -c "import ast,os,pathlib;ast.parse(pathlib.Path(os.environ['TOOL']).read_text())"
           python3 -I -B - <<'PY'
           import base64,hashlib,os,pathlib
-          raw=pathlib.Path('diag/naver_engine_health.py').read_bytes()
+          raw=pathlib.Path(os.environ['TOOL']).read_bytes()
           print('HEALTH_SOURCE_SHA256='+hashlib.sha256(raw).hexdigest())
           with open(os.environ['GITHUB_ENV'],'a') as f:
               f.write('HEALTH_B64='+base64.b64encode(raw).decode()+'\n')
@@ -51,7 +53,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           envs: HEALTH_B64,HEALTH_SHA
-          command_timeout: 5m
+          command_timeout: 8m
           script: |
             set -eu
             /usr/bin/python3 -I -B -c "import base64,hashlib,os;raw=base64.b64decode(os.environ['HEALTH_B64'],validate=True);assert hashlib.sha256(raw).hexdigest()==os.environ['HEALTH_SHA'];g={'__name__':'__main__'};exec(compile(raw,'naver_engine_health','exec'),g)"
