@@ -96,20 +96,45 @@ def services():
     return out
 
 
+VERBS = ('compose', 'up', 'run', 'exec', 'logs', 'events', 'stats', 'ps', 'inspect', 'start', 'stop', 'restart', 'wait',
+         'attach', 'version', 'info', 'cp', 'build', 'buildx', 'builder', 'image', 'images', 'pull', 'load', 'rmi', 'tag',
+         'push', 'save', 'commit', 'system', 'create', 'down', 'rm', 'prune', 'import')
+# 이미지·빌드 캐시를 만들거나 지우는 동작만 정리와 겹친다. 서비스를 띄워 두는 compose up 등은 늘 떠 있으므로 막지 않는다.
+MUTATING = frozenset(('build', 'buildx', 'builder', 'image', 'pull', 'load', 'rmi', 'tag', 'push', 'save', 'commit',
+                      'system', 'create', 'down', 'rm', 'prune', 'import'))
+
+
+def ancestors():
+    out, pid = set(), os.getpid()
+    while pid > 1 and pid not in out:
+        out.add(pid)
+        with open('/proc/%d/stat' % pid) as f:
+            pid = int(f.read().rsplit(')', 1)[1].split()[1])
+    return out
+
+
 def other_docker_clients():
-    mine = {os.getpid(), os.getppid()}
-    busy = 0
+    mine = ancestors()
+    verbs, busy, deploy = {}, 0, 0
     for pid in os.listdir('/proc'):
         if not pid.isdigit() or int(pid) in mine:
             continue
         try:
             with open('/proc/' + pid + '/cmdline', 'rb') as f:
-                argv = f.read().split(b'\0')
+                raw = f.read()
         except OSError:
             continue
+        argv = raw.split(b'\0')
+        if b'exec(compile(' in raw or b'ad-deploy-staging' in raw:
+            deploy += 1
         if argv and os.path.basename(argv[0].decode('utf-8', 'replace')) in ('docker', 'docker-compose', 'docker-buildx'):
-            busy += 1
-    return busy
+            words = [t.decode('utf-8', 'replace') for t in argv[1:]]
+            found = [w for w in words if w in VERBS]
+            key = '+'.join(found[:2]) or 'OTHER'
+            verbs[key] = verbs.get(key, 0) + 1
+            if MUTATING.intersection(found) or os.path.basename(argv[0].decode('utf-8', 'replace')) == 'docker-buildx':
+                busy += 1
+    return dict(verbs=verbs, busy=busy, deploy_tool=deploy)
 
 
 def unique_sizes():
@@ -158,10 +183,12 @@ def main():
                 if ref not in before['tags']:
                     raise ValueError('PROTECTED_IMAGE_MISSING')
                 protected[ref] = before['tags'][ref]
-        busy = other_docker_clients()
-        result['other_docker_clients'] = busy
-        if busy:
+        clients = other_docker_clients()
+        result['other_docker_clients'] = clients
+        if clients['busy']:
             raise ValueError('DOCKER_CLIENT_BUSY')
+        if clients['deploy_tool']:
+            raise ValueError('DEPLOY_TOOL_RUNNING')
         sizes = unique_sizes()
         plan, skipped = [], {}
         for commit in TARGETS:
@@ -190,9 +217,13 @@ def main():
             except Exception:
                 failed += 1
         result['remove_failed'] = failed
-        text = run(['docker', 'builder', 'prune', '-f', '--filter', CACHE_KEEP], timeout=300)
-        m = re.search(r'Total(?: reclaimed space)?:\s*([0-9.]+\s*[kKMGT]?B)', text)
-        result['cache_reclaimed_mb'] = size_mb(m.group(1)) if m else None
+        again = other_docker_clients()
+        if again['busy'] or again['deploy_tool']:
+            result['cache_skipped'] = 'BUSY'
+        else:
+            text = run(['docker', 'builder', 'prune', '-f', '--filter', CACHE_KEEP], timeout=300)
+            m = re.search(r'Total(?: reclaimed space)?:\s*([0-9.]+\s*[kKMGT]?B)', text)
+            result['cache_reclaimed_mb'] = size_mb(m.group(1)) if m else None
         after = state()
         result['after'] = dict(free_gb=after['free_gb'], docker=after['docker'], naver_tags=len(after['tags']),
                                receipts=after['receipts'], releases=after['releases'])
