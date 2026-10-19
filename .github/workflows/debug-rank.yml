@@ -58,6 +58,10 @@ on:
         description: "보고서 빈칸 원인 — 키워드 SHA-256 해시(쉼표로 여러 개 · 빈칸이면 안 돈다 · 읽기 전용 · 키워드·업체명 미출력)"
         required: false
         default: ""
+      page1_sizes:
+        description: "1페이지 자료 크기 — 부분 수집 관측의 상품 수 분포·멈춘 이유·전체 수 유무(on 이면 · 읽기 전용 · 숫자만)"
+        required: false
+        default: "off"
       death_window:
         description: "워커 재시작 직전 60초에 처리하던 요청 종류·상세분석 단계 (on 이면 실행 · 읽기 전용 · 주소 앞부분·상태·건수만 · IP·키워드·업체명 미출력)"
         required: false
@@ -632,6 +636,68 @@ jobs:
                 print("  기계 신호 조회 실패(못 쟀다):", type(e).__name__)
             PY
 
+      - name: 📄 1페이지 자료 크기 (page1_sizes=on · 읽기 전용 · 숫자만)
+        if: ${{ github.event.inputs.page1_sizes == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 120s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, json, collections
+            def out(s): print(s, flush=True)
+            try:
+                c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True, timeout=10)
+            except Exception as e:
+                out("DB 못 열었다(못 쟀다): " + type(e).__name__); raise SystemExit
+            def buckets(ns):
+                b = collections.Counter()
+                for n in ns:
+                    k = "0" if n == 0 else "1-9" if n < 10 else "10-19" if n < 20 else "20-29" if n < 30 else "30-39" if n < 40 else "40-79" if n < 80 else "80+"
+                    b[k] += 1
+                order = ["0", "1-9", "10-19", "20-29", "30-39", "40-79", "80+"]
+                return " · ".join(f"{k}:{b[k]}" for k in order if b[k])
+            for label, cond in (("어제·오늘", "collected_date >= date('now','localtime','-1 day')"),
+                                ("최근 7일", "collected_date >= date('now','localtime','-6 day')")):
+                try:
+                    rows = c.execute(f"SELECT keyword, status, reason, products_json, meta_json FROM collector_observations WHERE {cond}").fetchall()
+                except Exception as e:
+                    out(f"[{label}] 관측 원장 조회 실패(못 쟀다): {type(e).__name__}"); continue
+                part = [(k, r, pj, mj) for k, s, r, pj, mj in rows if s == "partial"]
+                sizes, per_kw, reasons, has_total, min_rank_max = [], {}, collections.Counter(), 0, collections.Counter()
+                for k, r, pj, mj in part:
+                    try: ps = json.loads(pj or "[]")
+                    except Exception: ps = []
+                    n = len(ps); sizes.append(n)
+                    per_kw[k] = max(per_kw.get(k, 0), n)
+                    reasons[(r or "")[:20]] += 1
+                    try:
+                        m = json.loads(mj or "{}")
+                        if any(x in m for x in ("total", "totalCount", "productCount")): has_total += 1
+                    except Exception: pass
+                    rk = [p.get("rank") for p in ps if isinstance(p, dict) and isinstance(p.get("rank"), int)]
+                    if rk:
+                        mx = max(rk)
+                        min_rank_max["~40" if mx <= 40 else "41~80" if mx <= 80 else "81+"] += 1
+                out(f"[{label}] 관측 {len(rows)}건 · 부분 수집 {len(part)}건 · 키워드 {len(per_kw)}개")
+                out(f"[{label}] 부분 수집 1건당 상품 수: {buckets(sizes)}")
+                out(f"[{label}] 키워드별 가장 큰 1페이지 목록: {buckets(per_kw.values())}")
+                out(f"[{label}] 목록 안 가장 큰 순위: {dict(min_rank_max)}")
+                out(f"[{label}] 멈춘 이유 상위: {reasons.most_common(6)}")
+                out(f"[{label}] meta 에 전체 수가 있는 부분 수집: {has_total}/{len(part)}")
+            try:
+                rows = c.execute("SELECT keyword, total, products_json FROM collected_serp WHERE collected_date >= date('now','localtime','-1 day')").fetchall()
+                fs = []
+                for k, tot, pj in rows:
+                    try: fs.append(len(json.loads(pj or "[]")))
+                    except Exception: fs.append(0)
+                out(f"[비교] 다 모은 자료(어제·오늘) {len(rows)}건 · 상품 수: {buckets(fs)} · total 칸 있음 {sum(1 for r in rows if r[1])}건")
+            except Exception as e:
+                out(f"[비교] 다 모은 자료 조회 실패(못 쟀다): {type(e).__name__}")
+            PY
       - name: 🧾 보고서 빈칸 원인 (report_gap=해시 · 읽기 전용)
         if: ${{ github.event.inputs.report_gap != '' }}
         uses: appleboy/ssh-action@v1.0.3
