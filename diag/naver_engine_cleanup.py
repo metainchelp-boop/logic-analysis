@@ -124,10 +124,16 @@ def other_docker_clients():
                 raw = f.read()
         except OSError:
             continue
-        argv = raw.split(b'\0')
-        if b'exec(compile(' in raw or b'ad-deploy-staging' in raw:
+        argv = [t for t in raw.split(b'\0') if t]
+        if not argv:
+            continue
+        base = os.path.basename(argv[0].decode('utf-8', 'replace'))
+        # 배포 도구(코덱스 배포 갈래)는 python3 -I -B - 로 표준입력 실행, 진단 도구는 exec(compile( 로 실행한다.
+        # 늘 떠 있는 compose up 은 배포 폴더 경로를 품고 있으므로 docker 프로그램은 여기서 세지 않는다.
+        if base not in ('docker', 'docker-compose', 'docker-buildx') and (
+                (base.startswith('python') and argv[1:] == [b'-I', b'-B', b'-']) or b'exec(compile(' in raw):
             deploy += 1
-        if argv and os.path.basename(argv[0].decode('utf-8', 'replace')) in ('docker', 'docker-compose', 'docker-buildx'):
+        if base in ('docker', 'docker-compose', 'docker-buildx'):
             words = [t.decode('utf-8', 'replace') for t in argv[1:]]
             found = [w for w in words if w in VERBS]
             key = '+'.join(found[:2]) or 'OTHER'
