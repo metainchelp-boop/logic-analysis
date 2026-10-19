@@ -221,6 +221,39 @@ def backups():
         return dict(available=False)
 
 
+def largest_files(root, limit=20, minimum=5 * 1048576):
+    from datetime import datetime, timezone, timedelta
+    kst = timezone(timedelta(hours=9))
+    rows = []
+    try:
+        for base, dirs, names in os.walk(root):
+            for name in names:
+                path = os.path.join(base, name)
+                st = os.lstat(path)
+                if st.st_size >= minimum:
+                    rel = os.path.relpath(path, root)
+                    safe = rel if re.fullmatch(r'[A-Za-z0-9_./@+-]{1,200}', rel) else 'OTHER'
+                    rows.append((st.st_size, safe, datetime.fromtimestamp(st.st_mtime, kst).strftime('%Y-%m-%d %H:%M')))
+    except Exception:
+        return dict(root=root, available=False)
+    rows.sort(reverse=True)
+    return dict(root=root, files_over_5mb=len(rows), total_mb=mb(sum(r[0] for r in rows)),
+                top=[dict(path=p, mb=mb(s), modified=m) for s, p, m in rows[:limit]])
+
+
+def backup_state():
+    path = '/var/backups/metainc/naver-engine/state.json'
+    try:
+        with open(path) as f:
+            state = json.load(f)
+        keep = ('code', 'last_offsite_day', 'last_offsite_at', 'last_local_day', 'pending_day', 'last_attempt_at')
+        return {k: (state.get(k) if isinstance(state.get(k), (str, type(None))) and re.fullmatch(r'[A-Za-z0-9_:.+ -]{0,40}', state.get(k) or '') else 'OTHER') for k in keep}
+    except FileNotFoundError:
+        return dict(available=False, reason='missing')
+    except Exception as error:
+        return dict(available=False, reason=type(error).__name__)
+
+
 def journal():
     try:
         text = run(['journalctl', '--disk-usage'], timeout=30).decode()
@@ -252,6 +285,11 @@ def main():
         result['docker'] = docker_summary()
         result['images'] = images()
         result['journal'] = journal()
+        if os.environ.get('STORAGE_DETAIL') != '0':
+            result['large_files'] = [largest_files('/srv/metainc/ad-deploy-staging'), largest_files('/var/backups/metainc/naver-engine')]
+            result['backup_state'] = backup_state()
+            print('NAVER_ENGINE_STORAGE_DETAIL_V1=' + json.dumps(result, sort_keys=True, ensure_ascii=True, separators=(',', ':')))
+            return
         result['du'] = [du('/srv/metainc/ad-deploy-staging', 2), du('/root', 2), du('/var/backups/metainc/naver-engine', 1)]
         result['backups'] = backups()
         result['engine_db'] = engine_db()
