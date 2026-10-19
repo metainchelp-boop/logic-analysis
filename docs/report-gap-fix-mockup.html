@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>보고서 빈칸 고침 시안</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  /* 실제 화면(frontend/css/report-theme.css)의 토큰·클래스를 그대로 옮겼다 — 밝은 테마 고정 */
+  :root {
+    --rt-ind:#4f46e5; --rt-ink:#0f172a; --rt-sub:#64748b; --rt-line:#e8edf3; --rt-bg:#f1f5f9;
+    --rt-ok:#16a34a; --rt-okbg:#dcfce7; --rt-est:#d97706; --rt-estbg:#fef3c7;
+    --blue:#3b82f6; --blue-ink:#1d4ed8; --blue-bg:#eff6ff;
+    --p1:#4338ca; --p1bg:#e0e7ff;          /* 새 배지 「1페이지 기준」 */
+    --nbg:#eef2f7; --n:#64748b;            /* 기존 b-n(결측·중립) */
+    --warn:#b45309; --warnbg:#fffbeb; --warnline:#fde68a;
+    --bad:#b91c1c; --badbg:#fef2f2; --badline:#fecaca;
+    --card:#ffffff;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--rt-bg); color:var(--rt-ink);
+         font-family:'Noto Sans KR',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+         font-size:14px; line-height:1.6; }
+  .wrap { max-width:1040px; margin:0 auto; padding:24px 16px 64px; display:flex; flex-direction:column; gap:20px; }
+  h1 { font-size:24px; font-weight:900; margin:0; letter-spacing:-.5px; text-wrap:balance; }
+  h2 { font-size:17px; font-weight:900; margin:0 0 10px; letter-spacing:-.3px; }
+  .stamp { display:inline-block; font-size:12px; font-weight:700; color:var(--blue-ink); background:var(--blue-bg);
+           border-radius:999px; padding:3px 10px; }
+  .lede { color:var(--rt-sub); margin:6px 0 0; max-width:68ch; }
+  .panel { background:var(--card); border:1px solid var(--rt-line); border-radius:18px; padding:20px 22px;
+           box-shadow:0 4px 18px rgba(15,23,42,.05); }
+  .facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  .fact { border:1px solid var(--rt-line); border-radius:14px; padding:14px; background:#f8fafc; }
+  .fact .k { font-size:12px; color:var(--rt-sub); font-weight:700; }
+  .fact .v { font-size:22px; font-weight:900; letter-spacing:-.5px; font-variant-numeric:tabular-nums; margin-top:4px; }
+  .fact .s { font-size:12px; color:var(--rt-sub); margin-top:2px; }
+  .bar { display:flex; height:14px; border-radius:999px; overflow:hidden; margin:12px 0 6px; background:var(--nbg); }
+  .bar i { display:block; height:100%; }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--rt-sub); }
+  .legend b { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+
+  /* 상태 바꿔 보기 */
+  .seg { display:flex; gap:6px; flex-wrap:wrap; background:#e2e8f0; padding:4px; border-radius:12px; width:fit-content; max-width:100%; }
+  .seg button { font:inherit; font-size:13px; font-weight:700; border:0; background:transparent; color:#334155;
+                padding:8px 14px; border-radius:9px; cursor:pointer; }
+  .seg button[aria-selected="true"] { background:#fff; color:var(--blue-ink); box-shadow:0 1px 3px rgba(15,23,42,.12); }
+  .seg button:focus-visible, .opt:focus-visible, .copy:focus-visible { outline:3px solid #93c5fd; outline-offset:2px; }
+  .state-note { font-size:12.5px; color:var(--rt-sub); margin:10px 0 0; }
+
+  /* ── 실제 보고서 모양 ── */
+  .report { display:flex; flex-direction:column; gap:14px; margin-top:16px; }
+  .card { background:#fff; border:1px solid var(--rt-line); border-radius:18px; box-shadow:0 4px 18px rgba(15,23,42,.05); padding:18px 20px; }
+  .rt-h3 { margin:0 0 4px; font-size:15.5px; font-weight:800; color:var(--rt-ink); display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .rt-hic { width:32px; height:32px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center;
+            background:linear-gradient(135deg,#eef2ff,#e0e7ff); font-size:16px; }
+  .rt-desc { color:var(--rt-sub); font-size:12px; margin:2px 0 12px; }
+  .badge { font-size:11px; font-weight:800; padding:3px 9px; border-radius:999px; display:inline-block; }
+  .b-ok { background:var(--rt-okbg); color:var(--rt-ok); }
+  .b-est { background:var(--rt-estbg); color:var(--rt-est); }
+  .b-n { background:var(--nbg); color:var(--n); }
+  .b-p1 { background:var(--p1bg); color:var(--p1); }
+  .new { outline:2px dashed #93c5fd; outline-offset:3px; border-radius:6px; }
+  .grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+  .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .kpi { background:linear-gradient(135deg,#f8fafc,#f1f5f9); border:1px solid #e8edf3; border-radius:14px; padding:13px 14px; min-width:0; }
+  .kpi .k { font-size:12px; color:var(--rt-sub); font-weight:700; margin-bottom:5px; }
+  .kpi .v { font-size:21px; font-weight:900; letter-spacing:-.8px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .kpi .v small { font-size:12px; font-weight:700; color:var(--rt-sub); margin-left:2px; }
+  .kpi .v.none { font-size:15px; color:var(--n); letter-spacing:0; }
+  .kpi .h { font-size:11.5px; color:var(--rt-sub); margin-top:3px; line-height:1.45; }
+  .head-row { display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  .thumb { width:56px; height:56px; border-radius:12px; background:#e2e8f0; flex:0 0 auto; }
+  .pname { font-weight:700; font-size:15px; }
+  .pmeta { font-size:13px; color:var(--rt-sub); }
+  .pill-box { text-align:center; padding:9px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; min-width:86px; }
+  .pill-box .big { font-size:18px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .pill-box .lab { font-size:11px; color:#94a3b8; font-weight:600; }
+  .note { font-size:12.5px; border-radius:9px; padding:9px 11px; line-height:1.55; }
+  .note.warn { background:var(--warnbg); border:1px solid var(--warnline); color:#78350f; }
+  .note.bad { background:var(--badbg); border:1px solid var(--badline); color:#7f1d1d; }
+  .note.info { background:var(--blue-bg); border:1px solid #bfdbfe; color:#1e3a8a; }
+  .note.none { background:#f8fafc; border:1px dashed #cbd5e1; color:#475569; }
+  .tbl-wrap { overflow-x:auto; border:1px solid #eef2f7; border-radius:10px; }
+  table { border-collapse:collapse; width:100%; min-width:560px; font-size:13px; }
+  th { color:var(--rt-sub); font-size:11.5px; font-weight:800; text-align:left; padding:9px 12px; border-bottom:2px solid #e2e8f0; }
+  td { padding:9px 12px; border-bottom:1px solid #eef2f7; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  ul.lines { margin:6px 0 0; padding-left:18px; }
+  ul.lines li { margin:3px 0; }
+  .strike { text-decoration:line-through; text-decoration-color:#ef4444; color:#94a3b8; }
+  .banner { display:flex; gap:10px; align-items:flex-start; }
+
+  /* 결정 */
+  .dec { border:1px solid var(--rt-line); border-radius:14px; padding:14px 16px; margin-top:10px; }
+  .dec h3 { margin:0 0 4px; font-size:14.5px; font-weight:800; }
+  .dec .why { font-size:12.5px; color:var(--rt-sub); margin:0 0 8px; }
+  .opts { display:flex; flex-direction:column; gap:6px; }
+  .opt { text-align:left; font:inherit; font-size:13px; border:1px solid #e2e8f0; background:#fff; border-radius:10px; padding:9px 12px; cursor:pointer; color:var(--rt-ink); }
+  .opt[aria-pressed="true"] { border-color:var(--blue); background:var(--blue-bg); }
+  .opt .rec { font-size:11px; font-weight:800; color:#fff; background:var(--blue); border-radius:999px; padding:1px 7px; margin-left:6px; }
+  .answer { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:14px; background:#0f172a; color:#fff; border-radius:12px; padding:12px 14px; }
+  .answer code { font-family:inherit; font-size:15px; font-weight:800; }
+  .copy { font:inherit; font-size:12.5px; font-weight:700; border:0; border-radius:8px; padding:6px 12px; background:var(--blue); color:#fff; cursor:pointer; margin-left:auto; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .two ul { margin:6px 0 0; padding-left:18px; }
+  .two li { margin:3px 0; }
+  .log { font-size:12.5px; color:var(--rt-sub); }
+  .log li { margin:2px 0; }
+  [hidden] { display:none !important; }
+  @media (max-width:760px) {
+    .grid4 { grid-template-columns:repeat(2,1fr); }
+    .grid3 { grid-template-columns:1fr; }
+    .two { grid-template-columns:1fr; }
+    .panel, .card { padding:16px 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <span class="stamp">업데이트 2026-10-19 · v1 · 대표 결정 3건 대기</span>
+    <h1 style="margin-top:8px">로직분석 보고서 빈칸 고침 — 시안</h1>
+    <p class="lede">영업팀 신고(「보고서 여러 칸에 데이터가 안 나온다」)를 고치는 화면입니다. 위쪽은 왜 비었는지, 가운데는 지금 화면과 바뀐 뒤 화면을 눌러서 비교하는 곳, 아래는 대표님께서 정하실 3가지입니다. 상품명·판매처·가격은 모두 <b>예시 값</b>입니다(검색량 14,050만 신고 화면 값).</p>
+  </header>
+
+  <!-- 1. 왜 비었나 -->
+  <section class="panel" aria-labelledby="why">
+    <h2 id="why">왜 비었나 — 실측(10/19 · 읽기 전용)</h2>
+    <p class="lede" style="margin-top:0">보고서는 <b>300위까지 다 모은 날(어제·오늘)</b>의 자료만 씁니다. 그런데 2페이지 넘김이 막혀(10/14 이후 넘김 0번) 다 모으는 키워드가 하루 50~60개뿐입니다. 1페이지만 모은 자료는 서버에 있는데 <b>보고서가 안 쓰고 있습니다.</b></p>
+    <div class="facts">
+      <div class="fact"><div class="k">신고 키워드(김부각) 최근 21일</div><div class="v">다 모음 0번</div><div class="s">1페이지만 모음 12번 — 보고서엔 안 쓰임</div></div>
+      <div class="fact"><div class="k">요청 큐(직원이 조회한 키워드)</div><div class="v">392건 밀림</div><div class="s">시험 상한 때문에 처리 안 함(10/19)</div></div>
+      <div class="fact"><div class="k">빈 칸 대신 나오는 문장</div><div class="v">0원 · - · 50점</div><div class="s">비어 있는데 「✅ 실측」 배지도 붙음</div></div>
+      <div class="fact"><div class="k">1페이지 자료의 크기(어제·오늘 282개 키워드)</div><div class="v">80%가 20개↑</div><div class="s">상품 30개 이상 57% · 10개 미만 5%</div></div>
+    </div>
+    <div class="bar" role="img" aria-label="오늘 수집 대상 742개 중 다 모음 9퍼센트, 1페이지만 35퍼센트, 없음 55퍼센트">
+      <i style="width:9%;background:#16a34a"></i><i style="width:35%;background:#818cf8"></i><i style="width:56%;background:#cbd5e1"></i>
+    </div>
+    <div class="legend">
+      <span><b style="background:#16a34a"></b>다 모음 68개(9%) — 지금 보고서에 나옴</span>
+      <span><b style="background:#818cf8"></b>1페이지만 263개(35%) — 고치면 나옴</span>
+      <span><b style="background:#cbd5e1"></b>아무것도 없음 411개(55%) — 「자료 없음」으로</span>
+    </div>
+    <p class="state-note">오늘(10/19) 수집 대상 742개 · 어제·오늘 자료 기준. <b>지금은 1번 기계가 10/14부터 멈춰</b> 그 몫(394개)이 거의 비어 있습니다. 두 대가 돌던 10/14에는 다 모음 18% · 1페이지만 58% · 없음 24%였습니다.<br>
+    고치면 채워지는 키워드: <b>어제·오늘 자료만 쓰면 9% → 45%</b> · <b>최근 7일까지 쓰면 9% → 70%</b>(오늘 실측) · 1번 기계가 다시 돌면 어제·오늘만으로 약 76%(10/14 실측 기준 · 추정).</p>
+  </section>
+
+  <!-- 2. 화면 비교 -->
+  <section class="panel" aria-labelledby="cmp">
+    <h2 id="cmp">화면 비교 — 눌러서 바꿔 보기</h2>
+    <div class="seg" role="tablist" aria-label="보고서 상태">
+      <button role="tab" aria-selected="true" aria-controls="st-now" id="t-now">지금</button>
+      <button role="tab" aria-selected="false" aria-controls="st-p1" id="t-p1">바뀐 뒤 · 1페이지만 있는 키워드</button>
+      <button role="tab" aria-selected="false" aria-controls="st-none" id="t-none">바뀐 뒤 · 자료가 전혀 없는 키워드</button>
+    </div>
+
+    <!-- 지금 -->
+    <div id="st-now" role="tabpanel" aria-labelledby="t-now">
+      <p class="state-note">신고 화면을 그대로 옮긴 모양입니다. 빨간 줄은 틀린 말·오해를 부르는 곳입니다.</p>
+      <div class="report">
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🎯</span>광고주 진입 전략</h3>
+          <div class="head-row" style="margin-top:10px">
+            <div class="thumb" aria-hidden="true"></div>
+            <div style="flex:1;min-width:200px">
+              <div class="pname" style="color:#b45309">상품 정보를 불러오지 못했습니다</div>
+              <div class="note warn" style="margin-top:4px"><b>네이버가 쇼핑 검색 API 를 종료해(2026-07-31) 아직 수집되지 않은 키워드는 상품 정보를 가져올 수 없습니다.</b><br>기다려도 채워지지 않습니다.</div>
+            </div>
+            <div class="pill-box"><div class="big" style="color:#ef4444">미노출</div><div class="lab">현재 순위</div></div>
+            <div class="pill-box"><div class="big" style="color:#d97706">50</div><div class="lab">종합 점수</div></div>
+          </div>
+          <div class="note bad" style="margin-top:10px">❌ 「미노출」은 틀린 말입니다 — 순위를 <b>못 잰 것</b>이지 노출이 안 된 것이 아닙니다. 「50」점은 자료 없이 붙는 <b>기본값</b>입니다.</div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">📊</span>종합 요약</h3>
+          <div class="grid4" style="margin-top:10px">
+            <div class="kpi"><div class="k">월간 검색량</div><div class="v">14,050<small>회</small></div></div>
+            <div class="kpi"><div class="k">등록 상품 수</div><div class="v">0<small>개</small></div></div>
+            <div class="kpi"><div class="k">골든 키워드</div><div class="v">0<small>개</small></div></div>
+            <div class="kpi"><div class="k">경쟁 강도</div><div class="v">-</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">💰</span>가격 포지셔닝 &amp; 소구점</h3>
+          <ul class="lines">
+            <li>상품 가격 정보를 확인할 수 없습니다. 1페이지 평균가는 <b style="color:#b91c1c">0원</b>입니다.</li>
+            <li>경쟁 상품 가격대(<b style="color:#b91c1c">0~0원</b>)를 참고해 포지셔닝을 결정하세요.</li>
+            <li>TOP10 평균가(<b style="color:#b91c1c">0원</b>) 이하로 진입하면 초기 클릭률 확보에 유리합니다.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🏆</span>경쟁사 비교표 (상위 노출 80개 중)<span class="badge b-ok">✅ 실측</span></h3>
+          <div class="note bad">❌ 지금은 이 칸이 <b>통째로 사라집니다</b>(자료가 0개면 화면에 안 그림) — 비었다는 것도 알 수 없습니다.</div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">👑</span>골든 키워드 <span class="badge b-ok">✅ 실측</span></h3>
+          <div class="note none" style="text-align:center">지금은 저경쟁 골든 키워드가 발견되지 않았습니다</div>
+          <div class="note bad" style="margin-top:8px">❌ 검색광고 API 조회가 <b>실패해도</b> 같은 문장과 「✅ 실측」이 나옵니다 — 「없다」와 「못 불러왔다」를 못 가립니다.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 바뀐 뒤 · 1페이지 -->
+    <div id="st-p1" role="tabpanel" aria-labelledby="t-p1" hidden>
+      <p class="state-note">어제·오늘 1페이지만 모은 키워드입니다. 파란 점선은 새로 생기는 것입니다. 칸마다 「📄 1페이지 기준」 배지로 <b>어디까지 본 숫자인지</b> 밝힙니다.</p>
+      <div class="report">
+        <div class="note info new">📄 이 보고서의 시장 자료는 <b>1페이지(상위 38개) 기준</b>입니다 — 10/17 수집 · 2일 전. 2페이지 아래(41위~)는 아직 확인하지 못했습니다.</div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🎯</span>광고주 진입 전략 <span class="badge b-p1 new">📄 1페이지 기준</span></h3>
+          <div class="head-row" style="margin-top:10px">
+            <div class="thumb" aria-hidden="true"></div>
+            <div style="flex:1;min-width:200px">
+              <div class="pname">[예시] 바삭한 수제 김부각 120g 3봉</div>
+              <div class="pmeta">판매처: 예시상회 · 가격: 13,900원</div>
+            </div>
+            <div class="pill-box"><div class="big">17위</div><div class="lab">현재 순위 · 1페이지</div></div>
+            <div class="pill-box"><div class="big" style="color:#16a34a">72</div><div class="lab">종합 점수</div></div>
+          </div>
+          <div class="note none new" style="margin-top:10px">내 상품이 1페이지에 없으면 <b>「1페이지(약 40위) 안에 없음 — 41위 아래는 아직 확인 못 함」</b>으로 적습니다(「미노출」·「300위 밖」이라고 쓰지 않습니다).</div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">📊</span>종합 요약</h3>
+          <div class="grid4" style="margin-top:10px">
+            <div class="kpi"><div class="k">월간 검색량 <span class="badge b-ok">✅ 실측</span></div><div class="v">14,050<small>회</small></div></div>
+            <div class="kpi new"><div class="k">등록 상품 수 <span class="badge b-p1">📄 1페이지</span></div><div class="v">8,420<small>개</small></div><div class="h">네이버가 1페이지에 함께 준 전체 수</div></div>
+            <div class="kpi"><div class="k">골든 키워드 <span class="badge b-ok">✅ 실측</span></div><div class="v">3<small>개</small></div></div>
+            <div class="kpi new"><div class="k">경쟁 강도 <span class="badge b-p1">📄 1페이지</span></div><div class="v">보통</div><div class="h">전체 상품 수가 있을 때만 계산</div></div>
+          </div>
+          <div class="note warn new" style="margin-top:10px">⚠️ <b>배포 전에 모은 1페이지 자료</b>에는 「전체 상품 수」가 저장돼 있지 않습니다 → 그 키워드는 등록 상품 수·경쟁 강도가 <b>「확인 못 함」</b>으로 나옵니다. 배포 다음 날 모은 것부터 채워집니다.</div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">💰</span>가격 포지셔닝 &amp; 소구점 <span class="badge b-p1 new">📄 1페이지 기준</span></h3>
+          <div class="grid3" style="margin:10px 0">
+            <div class="kpi"><div class="k">1P 평균가</div><div class="v">12,800<small>원</small></div></div>
+            <div class="kpi"><div class="k">가격대</div><div class="v" style="font-size:17px">4,900~29,800<small>원</small></div></div>
+            <div class="kpi"><div class="k">주요 카테고리</div><div class="v" style="font-size:15px">식품 › 과자 › 스낵</div></div>
+          </div>
+          <ul class="lines">
+            <li>현재 가격(13,900원)이 1페이지 평균(12,800원)과 비슷한 적정가 구간입니다.</li>
+            <li>같은 가격이면 「무료배송」·「당일출고」·「사은품」이 클릭률을 좌우합니다.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🏆</span>경쟁사 비교표 <span class="new">(1페이지 상위 38개 중)</span><span class="badge b-p1 new">📄 1페이지 기준</span></h3>
+          <div class="rt-desc">10/17 수집 · 2일 전 · 광고 제외</div>
+          <div class="tbl-wrap">
+            <table>
+              <thead><tr><th style="width:56px">순위</th><th>상품명</th><th style="width:110px">판매처</th><th style="width:100px;text-align:right">가격</th></tr></thead>
+              <tbody>
+                <tr><td>🥇1</td><td>[예시] 전통 찹쌀 김부각 대용량</td><td>예시상회 A</td><td class="num">15,900원</td></tr>
+                <tr><td>🥈2</td><td>[예시] 바삭 김부각 선물세트</td><td>예시상회 B</td><td class="num">24,000원</td></tr>
+                <tr><td>🥉3</td><td>[예시] 국내산 수제 김부각 80g</td><td>예시상회 C</td><td class="num">7,900원</td></tr>
+                <tr><td>4</td><td>[예시] 간식 김부각 소포장 10봉</td><td>예시상회 D</td><td class="num">12,500원</td></tr>
+                <tr><td colspan="4" style="color:#94a3b8">… 10위까지</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">👑</span>골든 키워드 <span class="badge b-ok">✅ 실측</span></h3>
+          <div class="pmeta" style="margin-top:6px">검색광고 자료라 수집과 무관합니다 — 지금처럼 나옵니다.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 바뀐 뒤 · 자료 없음 -->
+    <div id="st-none" role="tabpanel" aria-labelledby="t-none" hidden>
+      <p class="state-note">1페이지도 모은 적이 없는 키워드입니다. 칸을 지우지 않고 <b>「자료 없음」</b>으로 밝히며, 0원·「-」·기본 점수 같은 가짜 값은 내지 않습니다.</p>
+      <div class="report">
+        <div class="note warn new banner"><span aria-hidden="true">⚠️</span><span><b>이 보고서는 시장 자료(경쟁 상품·가격·카테고리)가 비어 있습니다.</b> 이 키워드는 아직 수집되지 않았습니다 — 수집되면 다시 분석하세요. 검색량·연관 키워드는 정상입니다.</span></div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🎯</span>광고주 진입 전략 <span class="badge b-n new">자료 없음</span></h3>
+          <div class="head-row" style="margin-top:10px">
+            <div class="thumb" aria-hidden="true"></div>
+            <div style="flex:1;min-width:200px">
+              <div class="pname" style="color:#475569">상품 정보 — 수집 대기</div>
+              <div class="pmeta">이 키워드의 네이버쇼핑 목록을 아직 모으지 못했습니다.</div>
+            </div>
+            <div class="pill-box new"><div class="big" style="color:#64748b">—</div><div class="lab">현재 순위 · 못 잼</div></div>
+            <div class="pill-box new"><div class="big" style="color:#64748b">—</div><div class="lab">종합 점수 · 계산 불가</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">📊</span>종합 요약</h3>
+          <div class="grid4" style="margin-top:10px">
+            <div class="kpi"><div class="k">월간 검색량 <span class="badge b-ok">✅ 실측</span></div><div class="v">14,050<small>회</small></div></div>
+            <div class="kpi new"><div class="k">등록 상품 수</div><div class="v none">자료 없음</div></div>
+            <div class="kpi"><div class="k">골든 키워드 <span class="badge b-ok">✅ 실측</span></div><div class="v">3<small>개</small></div></div>
+            <div class="kpi new"><div class="k">경쟁 강도</div><div class="v none">자료 없음</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">💰</span>가격 포지셔닝 &amp; 소구점 <span class="badge b-n new">자료 없음</span></h3>
+          <ul class="lines">
+            <li class="strike">1페이지 평균가는 0원입니다.</li>
+            <li class="strike">경쟁 상품 가격대(0~0원)를 참고해…</li>
+          </ul>
+          <div class="note none new" style="margin-top:8px">경쟁 상품 가격을 아직 모으지 못해 가격 비교 문장을 만들지 않았습니다.</div>
+        </div>
+        <div class="card new">
+          <h3 class="rt-h3"><span class="rt-hic">🏆</span>경쟁사 비교표 <span class="badge b-n">자료 없음</span></h3>
+          <div class="note none">이 키워드의 경쟁 상품을 아직 모으지 못했습니다. 칸을 숨기지 않고 비어 있다고 알려 드립니다.</div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">👑</span>골든 키워드 <span class="badge b-n new">불러오지 못함</span></h3>
+          <div class="note none new">검색광고 자료를 불러오지 못했습니다(네이버 응답 오류). 잠시 뒤 다시 분석하면 나옵니다.</div>
+          <div class="pmeta" style="margin-top:6px">조회에 성공했는데 0개일 때만 「발견되지 않았습니다」 + 「✅ 실측」을 씁니다.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 바뀌는 것 / 안 바뀌는 것 -->
+  <section class="panel" aria-labelledby="scope">
+    <h2 id="scope">무엇이 바뀌고 무엇은 그대로인가</h2>
+    <div class="two">
+      <div>
+        <b>바뀌는 것</b>
+        <ul>
+          <li>어제·오늘 <b>다 모은 자료가 없으면</b> ②에서 정한 기간 안의 <b>가장 최근 1페이지 자료</b>로 보고서 칸을 채우고 「📄 1페이지 기준 · 수집 날짜」를 붙입니다.</li>
+          <li>1페이지만 모을 때도 네이버가 주는 <b>전체 상품 수</b>를 저장합니다(배포 다음 날부터 경쟁 강도 계산).</li>
+          <li>자료가 없으면 0원·「-」·기본 점수 50·「미노출」 대신 <b>「자료 없음」·「못 잼」</b>.</li>
+          <li>경쟁사 비교표가 비면 사라지지 않고 「자료 없음」 칸으로 남습니다.</li>
+          <li>골든 키워드: <b>조회 실패</b>와 <b>0개</b>를 나눠 적습니다.</li>
+        </ul>
+      </div>
+      <div>
+        <b>그대로인 것</b>
+        <ul>
+          <li><b>순위 기록(08:00 배치·추적 상품·업체 순위)</b>에는 1페이지 대체 자료를 쓰지 않습니다 — 지금처럼 다 모은 자료와 수집기가 직접 찾은 순위만 적습니다.</li>
+          <li>수집기(확장)·수집 속도·시험 상한은 손대지 않습니다.</li>
+          <li>다 모은 자료가 있는 키워드(18%)는 지금과 똑같이 나옵니다.</li>
+          <li>검색량·연관 키워드·데이터랩 칸은 무변경.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="state-note">범위: 로직분석 서버 + 화면 · 표 추가 없음(칸 하나 더함) · 배포는 대표님 「배포하자」 뒤 · 약 1~1.5일.</p>
+  </section>
+
+  <!-- 4. 결정 -->
+  <section class="panel" aria-labelledby="dec">
+    <h2 id="dec">대표님께서 정하실 3가지</h2>
+    <p class="lede" style="margin-top:0">고르시면 맨 아래 답이 바뀝니다. 그대로 복사해 보내 주시면 됩니다. 추천은 파란 표시입니다.</p>
+
+    <div class="dec" data-q="1">
+      <h3>① 1페이지 자료를 어디까지 쓸까요?</h3>
+      <p class="why">직원 분석 화면 말고도, 매일 08:30 자동으로 만드는 업체 보고서(광고주가 공개 주소로 보는 것)가 같은 자료를 씁니다.</p>
+      <div class="opts">
+        <button class="opt" data-v="ⓐ" aria-pressed="true">ⓐ 직원 분석 화면 + 08:30 자동 보고서 둘 다(「1페이지 기준」 표시)<span class="rec">추천</span></button>
+        <button class="opt" data-v="ⓑ" aria-pressed="false">ⓑ 직원 분석 화면만 — 자동 보고서는 지금처럼(빈 칸은 「자료 없음」)</button>
+      </div>
+    </div>
+
+    <div class="dec" data-q="2">
+      <h3>② 며칠 지난 1페이지 자료까지 쓸까요?</h3>
+      <p class="why">길게 잡을수록 더 채워지지만, 그만큼 지난 가격·경쟁 상품이 섞입니다. 경쟁 상품 목록·평균가는 며칠 사이 크게 바뀌지 않아, 날짜를 밝히면 7일까지는 쓸 만하다고 봅니다(추정).</p>
+      <div class="opts">
+        <button class="opt" data-v="ⓐ" aria-pressed="false">ⓐ 어제·오늘(다 모은 자료와 같은 기준) — 지금 9% → 45% · 1번 기계가 돌면 약 76%</button>
+        <button class="opt" data-v="ⓑ" aria-pressed="true">ⓑ 최근 7일 — 지금 9% → 70% · 칸마다 「10/15 수집 · 4일 전」처럼 날짜를 함께 표시<span class="rec">추천</span></button>
+      </div>
+    </div>
+
+    <div class="dec" data-q="3">
+      <h3>③ 자료가 전혀 없을 때, 광고주에게 가는 보고서는요?</h3>
+      <p class="why">직원 화면에는 언제나 「자료 없음」을 보여 드립니다. 광고주가 보는 보고서(공개 주소·내려받기)에서만 다르게 할지 정합니다.</p>
+      <div class="opts">
+        <button class="opt" data-v="ⓐ" aria-pressed="false">ⓐ 광고주 보고서에도 「자료 없음」 그대로</button>
+        <button class="opt" data-v="ⓑ" aria-pressed="true">ⓑ 광고주 보고서에서는 빈 칸을 빼고 보여 줌(직원 화면에만 「자료 없음」)<span class="rec">추천</span></button>
+      </div>
+    </div>
+
+    <div class="answer" aria-live="polite">
+      <span>답:</span><code id="ans">보고서 빈칸 — ①ⓐ ②ⓑ ③ⓑ</code>
+      <button class="copy" id="copy" type="button">복사</button>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="log">
+    <h2 id="log">변경 이력</h2>
+    <ul class="log">
+      <li>2026-10-19 · v1 — 첫 시안(대표 「영업팀 보고서 빈칸 고침 진행해」). 원인 실측(오늘 · 읽기 전용: 채움 비율 2일/7일 · 1페이지 목록 크기) · 지금/바뀐 뒤 화면 3종 · 결정 3건.</li>
+    </ul>
+  </section>
+
+</div>
+<script>
+(function () {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+  function show(t) {
+    tabs.forEach(function (x) {
+      var on = x === t;
+      x.setAttribute('aria-selected', on ? 'true' : 'false');
+      document.getElementById(x.getAttribute('aria-controls')).hidden = !on;
+    });
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { show(t); });
+    t.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        var n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+        n.focus(); show(n);
+      }
+    });
+  });
+  var ans = document.getElementById('ans');
+  function update() {
+    var parts = Array.prototype.map.call(document.querySelectorAll('.dec'), function (d) {
+      var p = d.querySelector('.opt[aria-pressed="true"]');
+      return ['①', '②', '③'][Number(d.getAttribute('data-q')) - 1] + (p ? p.getAttribute('data-v') : '?');
+    });
+    ans.textContent = '보고서 빈칸 — ' + parts.join(' ');
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.dec'), function (d) {
+    var opts = d.querySelectorAll('.opt');
+    Array.prototype.forEach.call(opts, function (o) {
+      o.addEventListener('click', function () {
+        Array.prototype.forEach.call(opts, function (x) { x.setAttribute('aria-pressed', x === o ? 'true' : 'false'); });
+        update();
+      });
+    });
+  });
+  document.getElementById('copy').addEventListener('click', function () {
+    var b = this, txt = ans.textContent;
+    function done() { b.textContent = '복사했습니다'; setTimeout(function () { b.textContent = '복사'; }, 1500); }
+    try {
+      if (navigator.clipboard) { navigator.clipboard.writeText(txt).then(done, done); return; }
+    } catch (e) {}
+    done();
+  });
+})();
+</script>
+</body>
+</html>
