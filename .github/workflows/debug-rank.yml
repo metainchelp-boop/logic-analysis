@@ -7,6 +7,10 @@ name: Debug Rank Batch (읽기 전용 진단)
 # 배포 도구가 참조하지 않는 옛 엔진·중계 이미지 12개 판만. DB·백업·배포 기록·지금/직전 판·참조 판은 손대지 않는다.
 # APPLY_NAVER_RECLAIM(대표 「여기서 완수하자」 2026-10-20): 배포 도구가 확인하지 않는 옛 이미지 34판 삭제 · 옛 릴리스 폴더와
 # 배포 전 DB 사본은 압축 보관(같은 바이트로 복원 가능) 뒤 원본 삭제. 배포 도구가 확인하는 36판·엔진 DB·백업은 손대지 않는다.
+# APPLY_NAVER_RESTORE_DRILL(대표 「배포하자」 2026-10-20 후속): 최근 밤 백업을 네트워크 없는 일회용 컨테이너에서 옛/새 판으로 복원 검증.
+# 임시 폴더에만 쓰고 끝나면 지운다. 운영 DB·백업·엔진 불변.
+# APPLY_NAVER_ENVELOPE_RENEW(대표 「배포 봉투 인증서 갱신 … 진행해」 2026-10-20): 서버 전용 열쇠쌍 새로 생성(RSA 4096 · 365일),
+# 봉인→복호 왕복 시험 통과 시에만 자리 교체, 옛 쌍은 같은 권한으로 이름만 바꿔 보관. 개인키 미출력.
 
 on:
   workflow_dispatch:
@@ -15,7 +19,7 @@ on:
         description: '네이버 관제 점검 1회 — 엔진 상태 / 저장 공간 원인 / 정리 미리보기 / 정리 실행'
         required: true
         type: choice
-        options: [READ_ONLY_NAVER_ENGINE_HEALTH, READ_ONLY_NAVER_STORAGE, READ_ONLY_NAVER_CLEANUP_PREVIEW, APPLY_NAVER_SAFE_CLEANUP, READ_ONLY_NAVER_DB_GROWTH, READ_ONLY_NAVER_RECLAIM_PREVIEW, APPLY_NAVER_RECLAIM, READ_ONLY_NAVER_RELEASE_FACTS]
+        options: [READ_ONLY_NAVER_ENGINE_HEALTH, READ_ONLY_NAVER_STORAGE, READ_ONLY_NAVER_CLEANUP_PREVIEW, APPLY_NAVER_SAFE_CLEANUP, READ_ONLY_NAVER_DB_GROWTH, READ_ONLY_NAVER_RECLAIM_PREVIEW, APPLY_NAVER_RECLAIM, READ_ONLY_NAVER_RELEASE_FACTS, APPLY_NAVER_RESTORE_DRILL, READ_ONLY_NAVER_ENVELOPE_PREVIEW, APPLY_NAVER_ENVELOPE_RENEW]
 
 permissions:
   contents: read
@@ -45,6 +49,8 @@ jobs:
             READ_ONLY_NAVER_DB_GROWTH) TOOL=diag/naver_engine_dbgrowth.py ;;
             READ_ONLY_NAVER_RECLAIM_PREVIEW|APPLY_NAVER_RECLAIM) TOOL=diag/naver_engine_reclaim.py ;;
             READ_ONLY_NAVER_RELEASE_FACTS) TOOL=diag/naver_release_facts.py ;;
+            APPLY_NAVER_RESTORE_DRILL) TOOL=diag/naver_restore_drill.py ;;
+            READ_ONLY_NAVER_ENVELOPE_PREVIEW|APPLY_NAVER_ENVELOPE_RENEW) TOOL=diag/naver_envelope_renew.py ;;
             *) echo 'unknown confirm'; exit 1 ;;
           esac
           export TOOL
@@ -62,7 +68,7 @@ jobs:
         env:
           HEALTH_B64: ${{ env.HEALTH_B64 }}
           HEALTH_SHA: ${{ env.HEALTH_SHA }}
-          CLEANUP_APPLY: ${{ (inputs.confirm == 'APPLY_NAVER_SAFE_CLEANUP' || inputs.confirm == 'APPLY_NAVER_RECLAIM') && '1' || '0' }}
+          CLEANUP_APPLY: ${{ (inputs.confirm == 'APPLY_NAVER_SAFE_CLEANUP' || inputs.confirm == 'APPLY_NAVER_RECLAIM' || inputs.confirm == 'APPLY_NAVER_ENVELOPE_RENEW') && '1' || '0' }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
