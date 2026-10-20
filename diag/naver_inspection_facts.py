@@ -20,7 +20,7 @@ import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 
-MODE = 'naver-inspection-facts-v2'
+MODE = 'naver-inspection-facts-v3'
 LOCAL = '/var/backups/metainc/naver-engine/local'
 DRILL = '/var/backups/metainc/restore-drill'
 IMAGE = 'metainc/naver-engine:382f143ad72a5fb0389d79ba0fac199566016e8b'
@@ -226,7 +226,7 @@ try:
     t=time.perf_counter()
     scopes=st._inspection_continuity_scopes(c,st.account_catalog(),NOW,{r['customer_id'] for r in rows})
     probe['scope_seconds']=round(time.perf_counter()-t,2);probe['scope_accounts']=len(scopes)
-    why=collections.Counter();resum=collections.Counter()
+    why=collections.Counter();resum=collections.Counter();cache={'scopes':scopes}
     for r in rows:
         proof=st._inspection_read_proof(c,IC.checkpoint_key(r['job_key']),4096)
         bridge=st._inspection_read_proof(c,IC.continuity_key(r['job_key']),4096)
@@ -250,7 +250,7 @@ try:
         job=dict(r)
         try:
             job['snapshot_at']=datetime.fromisoformat(r['snapshot_at'])
-            ok=st._inspection_resumable(c,r,job,r['possibility_id'],NOW,cat)
+            ok=st._inspection_resumable(c,r,job,r['possibility_id'],NOW,cat,continuity_cache=cache)
         except Exception as e:
             ok=type(e).__name__
         resum[str(ok)]+=1
@@ -258,6 +258,16 @@ try:
 except Exception as e:
     probe['error']=type(e).__name__
 out['resume_probe']=probe
+# N. 어제 동기화 기록(종류·결과·시간대별 개수) — 조직 동기화가 「수락」이 아닌 동안에는 이어주기 범위를 만들지 못한다
+sync=collections.Counter()
+try:
+    for k,o,h,n in q("SELECT kind,outcome,substr(at,12,2),count(*) FROM naver_auto_sync_log WHERE substr(at,1,10)=? GROUP BY 1,2,3",(D,)):
+        sync[code(k)+'/'+code(o)+'/'+(h if isinstance(h,str) and re.fullmatch(r'\d\d',h) else 'xx')]+=n
+    last=q("SELECT kind,outcome,substr(at,1,16) FROM naver_auto_sync_log WHERE sync_id IN (SELECT MAX(sync_id) FROM naver_auto_sync_log GROUP BY kind)")
+    out['sync_last']={code(k):[code(o),t if isinstance(t,str) and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d',t) else None] for k,o,t in last}
+except sqlite3.Error as e:
+    sync['error_'+type(e).__name__]+=1
+out['sync_by_hour']=dict(sorted(sync.items()))
 c.close()
 print(json.dumps(out,sort_keys=True,ensure_ascii=True,separators=(',',':')))
 '''
@@ -341,7 +351,7 @@ def main():
             shutil.rmtree(DRILL, ignore_errors=True)
         result['drill_dir_removed'] = not os.path.lexists(DRILL)
         result['free_gb_after'] = free_gb()
-        print('NAVER_INSPECTION_FACTS_V2=' + json.dumps(result, sort_keys=True, ensure_ascii=True, separators=(',', ':')))
+        print('NAVER_INSPECTION_FACTS_V3=' + json.dumps(result, sort_keys=True, ensure_ascii=True, separators=(',', ':')))
 
 
 if __name__ == '__main__':
