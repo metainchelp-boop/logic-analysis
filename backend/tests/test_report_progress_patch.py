@@ -1,5 +1,5 @@
 """One-file backup restore cap epoch over 711a245; synthetic fixtures do not claim actual source CI."""
-import ast,hashlib,importlib.util
+import ast,hashlib,importlib.util,json
 from pathlib import Path
 from copy import deepcopy
 import tempfile
@@ -287,4 +287,45 @@ def fixture():
    else:body=common
    return body+b'\n# unauthorized mutation\n'if target and name==self.mutation else body
  return p,Reader(),before,after
+# The 117 pure-literal `NAME != <literal>` re-pins of require_pins' final guard as written at 4ed89c6; the guard
+# now pins their canonical digest. Runtime-built structural comparisons stay explicit clauses.
+FOLDED_PINS={'E21_C':'21cd739cf171c066b84683b24e3340feda495858','E21_S':'4aaa36508961e88f2c02df193bb869f9fb89cac32bd3d44bee8dfac072f2023c','E21_R':'38852615204','E21_O':'b934741699a949a0856ad4114d7bc11a','B00_D':{'naver_engine/inspection_catalog.py': (420, 13862, '7f6bdc58d716dd2d5b559d944211682c81f0efad9024c8f147861ecb5e977103'), 'naver_engine/inspection_store.py': (420, 60758, '49066bc37e04ac23e1cc60724b044593bb8888b04fb093c99d3cc39227ee9ad7'), 'naver_engine/store.py': (420, 465680, '4d7baab1808777b2a4cc86d4761d5a89fdea3d5f6f075c3277733ccae3a28129')},'B00_M':'e62ff0f086e63b6c4e771ba8013af0b360bdc1a472fca4baa3f4468d3ff1eaeb','B0_C':'b00d6bf805b43b282c04dd95970ae9ccb7d8247d','B0_S':'60af02472770f2c0e6eb340375fe75a18d3b6dd593cf714a7a64d012be27d212','B0_R':'39108589825','B0_O':'a29c6a8810a748d2b5bff766a507ec05','T7_M':'75bd071b1e5513c6a33c8d9219434a867fda4b344a11ae5b580bd535fc4695cb','OLD_COMMIT':'711a245ea14b590a83eb6746b760ce53275b6602','OLD_SOURCE_SHA256':'987b042ba4cc9cd44ea720dbe7a60c12c5ef8916bf6b5bbde51175a9ad6cd2b7','BASE_PREPARE_RUN':'39259799686','BASE_APPLY_OPERATION':'e50d76775650a9382a52bfae563af893','I_C':'1fc2c92a18ea50dfef4e0b3da9ddd973f4017715','I_S':'00ed6d3e8e65996bd926c3943a9b5f60f8259b63acfb5154eb1a99ac2465efc6','I_R':'38543952683','I_O':'10469ee6378f4e36bc314f81cebb1d7d','A':'c20089be6c2e397bedea913a8ba9448f44a03de8','B':'586a70f70dee551e260b685ca05cff1847c575db1355b27874fe97d59afcc18d','C':'38531626583','D':'e5864b94306c4736a5ecadd10b16d998','Z_C':'7f138a8d42bb292567ccb3e117bd0305efc42ad7','Z_S':'c6730d64ae25f234bface0cbf2f8de4536953d524a7c1f84e2dc03400f00f0ac','Z_R':'38523201246','Z_O':'56e0a8bbfcf04b1e82129cdeffa28811','H_C':'7b61f64223cbd386c6971b8bc93b9ab17c11f34f','H_S':'f3c18012b4944b7ac505badcd72e0fd4f9c20bb3600eb899652de0924298dfe1','H_R':'38509559215','H_O':'47d10b22631c4e158ad1697e27eaec08','F_C':'53926862e3263097b6ed5cb7b9bc0bb7617ff1c5','F_S':'02305d8fd11856b8662843345a402c0155e5c155eb0b7e76ea6e3d9e42bfbabe','F_R':'38498058014','F_O':'f9a32b991e354b10a4f26385e5570b96','Q_C':'07890f1da91f09aca87f2b093852f46778971ba1','Q_S':'b9eaca9a2617c94c616bf090f0249aa19544a4b36f4c0636c1883615848fff2c','Q_R':'38484358780','Q_O':'fd9ff1f12a104778bc24ee2b92649ea9','R_COMMIT':'d59977f778a9a80d0c2b3e73bdcdddcceea57855','R_ARCHIVE':'05fc68d92c1ca9ddf75b8c687a4ea7b5fce611e5683cef97c7298361b6fd96e0','R_RUN':'38474886210','R_OP':'835eb5a028cd48efbf50d6a199cef37d','PD_C':'8876a77e194732bfe15bcc4ae5227c54c9eb7e1f','PD_S':'65aac7dce6df1a62cb1e903eb3fb7dfb7289f7eb7f7d72219ebbb2e884bd5473','PD_R':'38463775741','PD_O':'8813978cf71f4b7da951e4b81e5d4013','WR_C':'be97e432ecb39e91cc54b03f9f26f2fb133ec8d0','WR_S':'1826a2c854ff59df47f7c19f12d83dd9810563710e4cce6f826fa7593f219541','WR_R':'38426078105','WR_O':'897f67bd025b41808b0429483a1e55b7','RD_C':'7d9b8e05ff847fabc74fdc6f1cd01fd63d77e06b','RD_S':'6b26f03b7bc57ad6ce7fe2ea36b7d56d68f97769909eb079254eef8f8f9ba958','RD_R':'38407045540','RD_O':'7de2f547c965425388825527b0d7bf43','CY':'38a4d36e2528e4fc9ba4a6c9767fe93fdd197eeb','CZ':'d300cd6bc7c4600e49e29a6dc20ec771adfeaa483e61e38370319bbfee72059a','DA':'38358198135','DB':'aa0abf0c44c4446199fa1077e3fc1d00','CR':'fd9132c07031cae7162fb8af2a5131a8b1aeaba0','CS':'a089de0912b34352ca21b998640c858d9f86d7e63d3d5b2db33d37d33a8c9a3b','CT':'38338518726','CU':'0c867a2aed8d43d091b4c0be5e198c58','CD':'4d5802360c1ba23aa801b1145ca8483db3edd35f','CE':'1db45b8e54e562bd83c12b4cf53c791426ea45fccd85162bfb0e5f27179873fe','CF':'38313890510','CG':'93a3d17df45942068faf936ee71c57b9','BW':'32878e8ecec616772b619c23e796931d44f0bee1','BX':'240d2afaba63d1ada075a565ab2dc1174bc00dbde98ed152181abac7dd8ad60c','BY':'38302658575','BZ':'d5b43a4d776e4ef8826fc71083255064','BJ':'dc168ff8cf8dac519ea38597305a0d9dd6f6c843','BK':'38258857593','BL':'8137805c235747ca8a155711034e7d82','BC':'15f3a23c2255de98cba3670fce3b489309698e1f','BD':'38247492655','BE':'66a3ac90ed9c4db6a38aee0cca626f42','I_A':'ff0774988bba001633b0fa9971ed2482e3ead9c39672d5a425e05cd6387d7f2a','K_C':'621c5efeaf607b8227898bdf65d3ef040d1740fa','K_S':'63005380eacbf0c91f79c07b18d211e6ed3f3e07bb2a2004b015c8cbc830c345','K_R':'38553360666','K_O':'029616671477434c85f452206e09ecd0','K_M':'744bc24aadadd683dec7fa4b99d33669996d0b92eae78b654884cf3f9f404950','K_A':'f883c9ee4ddc5fda89fb5bf95b7078187a06b7a94f06d545b4b0cd3496f4430d','U_C':'114dde8a45e1753ade0ff871f024c7e5880546c5','U_S':'3d251b39659e505711d747bb59d49d1e5617eda9fd18792107bdf5dfbb3252ec','U_R':'38708112912','U_O':'dfdd1a4c72ed4cafa57e2bbe7af6d370','U_M':'6dcd809ac49ba3d8ba78f9fdcb3cf43980d0550ee0a873770e9535bb6d663780','U_A':'1089862847a38e278bc46e9c528cc7053b68a95b2e9791e7114344f10f23ac19','W_C':'b5e40fa01e6432ab0a62541c330652e1cb4fae2c','W_S':'1d3857f19aa8d4eeff573b267cd4a7229df32c58ed1c063e501d3676a64e3a89','W_R':'38726899460','W_O':'9e72159e3ce146a6ba2846396a6ce4b4','W_M':'dd9bcaa4103e8a38ab91dda0a4810144c01345671387c0829f19d41b0663e746','W_A':'1089862847a38e278bc46e9c528cc7053b68a95b2e9791e7114344f10f23ac19','X_C':'9379023a7a13b0d71b79a57ebf8979591b574f9f','X_S':'e4bfb3a3377f6eaa0260dda587dde58e4e9d5449c797f2e45a57e4fdc4955a93','X_R':'38789089753','X_O':'e70966984fa04ac0b9ee046f6fd7b917','X_M':'9a124a3157842f483251d5a7c7b88712cedffc45a5ce5460b6f44547cf1ddd3f','X_A':'18bc47ab2bde675f97f7db6541bda9160c5fd12569985cc8f63af8561dad1ace','Y_C':'70045db75473407591d79c3bfa4e69cbb217f6b9','Y_S':'8edea16d4695eb37d9d00a58ab360936603f1af1d5289eb7d063709cd09ea379','Y_R':'38838921412','Y_O':'efe877fb1b314df897e1b4c9ca2cd998','Y_M':'fe006d69ffebae1b303e9914b139417f7f1ad461881e864b4951fa60253b486a','Y_A':'494a31e411ccdc2cbb2fc4d2967cf87e401654ff8c3707fd35404d87b3e03d74','SR_C':'513e52eaee4d1bb722461961639cd588df9080cd','SR_S':'8e19ef262e728994aebc80e3703618b57bc913a1cb479c164fc2c842a8a7d432','SR_R':'38847877253','SR_O':'0cf4c00158704aa5988365314c56312b','SR_M':'a4ac729ebe7ad9e0e2c41af46c351178c3a27996cd65430dec205de1c62ad0e7','SR_A':'494a31e411ccdc2cbb2fc4d2967cf87e401654ff8c3707fd35404d87b3e03d74','G':'ff0774988bba001633b0fa9971ed2482e3ead9c39672d5a425e05cd6387d7f2a','Z_A':'ff0774988bba001633b0fa9971ed2482e3ead9c39672d5a425e05cd6387d7f2a','H_A':'ff0774988bba001633b0fa9971ed2482e3ead9c39672d5a425e05cd6387d7f2a'}
+RUNTIME_CLAUSES=("OLD_MANIFEST != EW","manifest_digest(OLD_MANIFEST) != T7_M","TARGET_MANIFEST != {**EW, **TARGET_DELTA}","REPORT_ASSETS != FG","manifest_digest(OLD_REPORT_ASSETS) != '8e90a424115d54bf6f996927533fc94890ceee99d47dd7c0b434c85c28f83502'","STORE_SHA256 != {'old': EW['naver_engine/store.py'][2], 'target': TARGET_MANIFEST['naver_engine/store.py'][2]}","ROLLBACK_COMMIT != OLD_COMMIT")
+
+class FoldedLiteralPinTests(unittest.TestCase):
+ def guard(self):
+  tree=ast.parse((TOOLS/'naver_report_progress_patch.py').read_bytes());rp=next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='require_pins')
+  fold,guard=rp.body[-2:];self.assertIsInstance(fold,ast.Try);self.assertIsInstance(guard,ast.If)
+  self.assertEqual(ast.dump(guard.body[0]),ast.dump(ast.parse("raise ValueError('PATCH_SCOPE')").body[0]))
+  return fold,guard
+ def test_digest_pin_is_recomputed_from_the_exact_literal_pins(self):
+  fold,guard=self.guard()
+  self.assertEqual(ast.dump(fold.handlers[0]),ast.dump(ast.parse("try:pass\nexcept Exception:\n PV = None").body[0].handlers[0]))
+  call=fold.body[0].value;self.assertEqual((fold.body[0].targets[0].id,call.func.id,len(fold.body)),('PV','manifest_digest',1))
+  names=[node.id for node in call.args[0].elts];self.assertEqual(names,list(FOLDED_PINS))
+  first,rows=guard.test.values[:2];pin=first.comparators[0].value
+  self.assertEqual((first.left.id,type(first.ops[0])),('PV',ast.NotEq))
+  self.assertEqual(ast.dump(rows),ast.dump(ast.parse('any(not valid_row(row) for row in B00_D.values())',mode='eval').body))
+  self.assertEqual(pin,hashlib.sha256(json.dumps(list(FOLDED_PINS.values()),sort_keys=True,separators=(',',':')).encode()).hexdigest())
+  p=pinned();self.assertEqual(p.manifest_digest([getattr(p,name)for name in names]),pin)
+  for name,value in FOLDED_PINS.items():
+   with self.subTest(name=name):self.assertIs(type(getattr(p,name)),type(value));self.assertEqual(getattr(p,name),value)
+  self.assertTrue(all(type(row)is tuple for row in p.B00_D.values()));p.require_pins()
+ def test_runtime_built_structural_comparisons_stay_explicit(self):
+  _,guard=self.guard();clauses=[ast.unparse(value)for value in guard.test.values]
+  for clause in RUNTIME_CLAUSES:self.assertIn(clause,clauses)
+  self.assertEqual(len(clauses),2+13)
+  self.assertFalse({'TARGET_MANIFEST','STORE_SHA256','OLD_MANIFEST','REPORT_ASSETS','OLD_REPORT_ASSETS','TARGET_DELTA','EW','FG'}&set(FOLDED_PINS))
+ def test_mutating_any_single_folded_pin_still_raises_patch_scope(self):
+  class Opaque:pass
+  p=pinned();p.require_pins();count=0
+  for name,value in FOLDED_PINS.items():
+   if type(value)is str:mutations=(value[:-1]+('1'if value[-1]=='0'else'0'),value+'0',value[:-1],int(value)if value.isdigit()else value.upper(),None,Opaque(),b'0')
+   else:mutations=({},{**value,'unapproved.py':(420,1,'0'*64)},*({**value,key:list(row)}for key,row in value.items()),*({**value,key:(row[0],float(row[1]),row[2])}for key,row in value.items()))
+   for mutation in mutations:
+    setattr(p,name,mutation);count+=1
+    try:
+     with self.subTest(name=name,mutation=repr(mutation)[:48]),self.assertRaisesRegex(ValueError,'^PATCH_SCOPE$'):p.require_pins()
+    finally:setattr(p,name,value)
+  p.require_pins();self.assertGreaterEqual(count,7*116+8)
 if __name__=='__main__':unittest.main()
