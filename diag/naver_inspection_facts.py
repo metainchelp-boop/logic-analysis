@@ -5,6 +5,8 @@
    어제(백업 날짜 전날, 하루 전체) 상세점검·구조·구매 작업의 상태·진행 깊이·방문 횟수·완주 계정 크기를 세고,
    엔진 코드 그대로 ERP 업체 목록 지문 계산·계정 권한 확인 한 번에 드는 시간과 그 안의 지문 계산 횟수를 잰다
    (읽기만 · 기준 시각 = 백업 1분 전, 곧 어제 마지막 순간).
+   v2: 어제 끝나지 못한 작업마다 「다음 방문 때 이어읽을 수 있는가」를 엔진 코드 그대로 판정하고, 막히는 조건(증명 묶음 ·
+   업체 목록 내용 · 이어주기 다리 · 범위 지문)을 개수로 센다.
 3) 임시 폴더를 지운다. 출력은 상태 코드·숫자·시간대만 — 업체명·계정번호·고객번호·본문 미출력.
 엔진 컨테이너의 CPU·메모리 몫을 쓰지 않는다(별도 컨테이너). 진단 전용 갈래 — main 에 합치지 않는다.
 """
@@ -18,7 +20,7 @@ import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 
-MODE = 'naver-inspection-facts-v1'
+MODE = 'naver-inspection-facts-v2'
 LOCAL = '/var/backups/metainc/naver-engine/local'
 DRILL = '/var/backups/metainc/restore-drill'
 IMAGE = 'metainc/naver-engine:382f143ad72a5fb0389d79ba0fac199566016e8b'
@@ -208,6 +210,54 @@ try:
 except Exception as e:
     timing['error']=type(e).__name__
 out['timing']=timing
+# M. 다음 방문 때 이어읽을 수 있나 — 엔진 코드 그대로(읽기만 · 기준 시각 = 어제 마지막 순간)
+probe={}
+try:
+    from naver_engine import inspection_catalog as IC, inspection_store as ISM
+    cat=st._inspection_catalog_proof(NOW)
+    raw_cp=q("SELECT value FROM naver_auto_meta WHERE key=?",(IC.CATALOG_KEY,))
+    cp=json.loads(raw_cp[0][0]) if raw_cp else None
+    if isinstance(cp,dict):
+        probe['catalog_generated_at']=cp.get('generated_at') if isinstance(cp.get('generated_at'),str) and len(cp['generated_at'])<40 else None
+        probe['catalog_stable_content_at']=cp.get('stable_content_at') if isinstance(cp.get('stable_content_at'),str) and len(cp['stable_content_at'])<40 else None
+    org=st.org_current()
+    probe['org_epoch_valid']=org is not None and IC.org_continuity_epoch(st._inspection_read_proof(c,IC.ORG_CONTINUITY_KEY,4096),org['body']) is not None
+    rows=S._rows(c.execute("SELECT * FROM naver_auto_inspection_job WHERE kind='daily' AND cycle_day=? AND status IN ('partial','retry','limited','reading') ORDER BY job_key",(D,)))
+    t=time.perf_counter()
+    scopes=st._inspection_continuity_scopes(c,st.account_catalog(),NOW,{r['customer_id'] for r in rows})
+    probe['scope_seconds']=round(time.perf_counter()-t,2);probe['scope_accounts']=len(scopes)
+    why=collections.Counter();resum=collections.Counter()
+    for r in rows:
+        proof=st._inspection_read_proof(c,IC.checkpoint_key(r['job_key']),4096)
+        bridge=st._inspection_read_proof(c,IC.continuity_key(r['job_key']),4096)
+        why['proof_'+('none' if proof is None else str(proof.get('role')) if isinstance(proof,dict) else 'odd')]+=1
+        why['bridge_'+('none' if bridge is None else 'present')]+=1
+        if isinstance(proof,dict) and cat is not None:
+            try:
+                binding_same=IC._dump(proof.get('binding'))==IC._dump(IC._binding(r,ISM._ERROR_CODES))
+            except Exception:
+                binding_same=None
+            why['binding_'+str(binding_same)]+=1
+            why['catalog_same_'+str(all(proof.get(k)==cat.get(k) for k in ('content_digest','content_epoch','stable_content_at')))]+=1
+            why['context_ok_'+str(IC.context(proof,r,NOW,cat,ISM._ERROR_CODES) is not None)]+=1
+        if isinstance(bridge,dict):
+            why['bridge_scope_same_'+str(bridge.get('scope_hash')==scopes.get(r['customer_id']))]+=1
+            why['bridge_scope_now_'+('none' if scopes.get(r['customer_id']) is None else 'present')]+=1
+            try:
+                why['bridge_matches_'+str(bool(IC.continuity_matches(bridge,proof,cat,scopes.get(r['customer_id']))))]+=1
+            except Exception as e:
+                why['bridge_matches_'+type(e).__name__]+=1
+        job=dict(r)
+        try:
+            job['snapshot_at']=datetime.fromisoformat(r['snapshot_at'])
+            ok=st._inspection_resumable(c,r,job,r['possibility_id'],NOW,cat)
+        except Exception as e:
+            ok=type(e).__name__
+        resum[str(ok)]+=1
+    probe['rows']=len(rows);probe['reasons']=dict(sorted(why.items()));probe['resumable']=dict(resum)
+except Exception as e:
+    probe['error']=type(e).__name__
+out['resume_probe']=probe
 c.close()
 print(json.dumps(out,sort_keys=True,ensure_ascii=True,separators=(',',':')))
 '''
@@ -291,7 +341,7 @@ def main():
             shutil.rmtree(DRILL, ignore_errors=True)
         result['drill_dir_removed'] = not os.path.lexists(DRILL)
         result['free_gb_after'] = free_gb()
-        print('NAVER_INSPECTION_FACTS_V1=' + json.dumps(result, sort_keys=True, ensure_ascii=True, separators=(',', ':')))
+        print('NAVER_INSPECTION_FACTS_V2=' + json.dumps(result, sort_keys=True, ensure_ascii=True, separators=(',', ':')))
 
 
 if __name__ == '__main__':
