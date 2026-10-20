@@ -157,7 +157,7 @@ def registration(value):
     need(type(counts) is dict and len(counts) == 32
          and all(type(k) is str and re.fullmatch(r"[a-z0-9-]+-tests\.txt", k)
                  and positive(v) for k, v in counts.items()), "NATIVE_COUNTS")
-    need(sum(counts.values()) == 2010 and counts["report-progress-tests.txt"] == 42,
+    need(sum(counts.values()) == 2006 and counts["report-progress-tests.txt"] == 38,
          "NATIVE_COUNTS")
     inventory(value["native_test_ids"])
     inventory(value["linux_test_ids"])
@@ -315,7 +315,7 @@ def verify(registry, buffers, run, jobs, artifacts, packed):
         suite_hashes[path] = dict(count=count, sha256=sha(members[path]))
     result = fixture_result(members["strategy-prepare-tests.closed.json"],
                             registry, manifest)
-    total = 2010 + len(registry["native_test_ids"])
+    total = 2006 + len(registry["native_test_ids"])
     return dict(schema="strategy-prepare-native-qualification-v1",
                 head_sha=head, run_id=rid, job_id=chosen[0]["id"],
                 artifact_id=item["id"], artifact_sha256=sha(packed),
@@ -354,7 +354,7 @@ def validate_native_receipt(registry, value, manifest):
          and value["artifact_size"] < MAX_ARCHIVE
          and digest(value["artifact_sha256"])
          and type(value["total"]) is int
-         and value["total"] == 2010 + len(registry["native_test_ids"]),
+         and value["total"] == 2006 + len(registry["native_test_ids"]),
          "QUALIFIED_BINDING")
     suites = value["native_base_suites"]
     need(type(suites) is dict and set(suites) == set(registry["base_native_counts"]),

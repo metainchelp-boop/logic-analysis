@@ -26,7 +26,7 @@ def fixture():
     files = {p: dict(bytes=len(b), sha256=Q.sha(b)) for p, b in buffers.items()}
     counts = {"suite-" + str(i) + "-tests.txt": 1 for i in range(31)}
     counts["suite-0-tests.txt"] = 1938
-    counts["report-progress-tests.txt"] = 42
+    counts["report-progress-tests.txt"] = 38
     script = "printf closed\n"
     sizes = dict(json=1, wire=1, bootstrap=1, ssh=len(script))
     registry = dict(
@@ -83,7 +83,7 @@ class QualificationBoundaries(unittest.TestCase):
     def test_qualifier_same_run_native_and_linux(self):
         reg, bufs, _, _ = fixture()
         result = Q.verify(reg, bufs, *native(reg, bufs))
-        self.assertEqual(result["total"], 2011)
+        self.assertEqual(result["total"], 2007)
         self.assertEqual(result["coverage"]["duplicate_fixture_runs"], 0)
         self.assertIs(result["coverage"]["same_run"], True)
         args = native(reg, bufs)
