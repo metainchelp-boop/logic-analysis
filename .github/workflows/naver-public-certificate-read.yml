@@ -1,0 +1,192 @@
+name: Read fixed existing public certificate
+
+on:
+  push:
+    branches:
+      - codex/naver-public-certificate-read-v2-20261020
+    paths:
+      - .github/workflows/naver-public-certificate-read.yml
+
+jobs:
+  public-certificate-read:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/naver-public-certificate-read-v2-20261020' && github.run_attempt == 1 }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Fixed repository branch event and first attempt only
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -I -B - <<'PY'
+          """Only the fixed first push on the dedicated public-certificate branch."""
+          import os
+          import sys
+
+          EXPECTED = {
+              "GITHUB_EVENT_NAME": "push",
+              "GITHUB_REF": "refs/heads/codex/naver-public-certificate-read-v2-20261020",
+              "GITHUB_REPOSITORY": "metainchelp-boop/logic-analysis",
+              "GITHUB_RUN_ATTEMPT": "1",
+          }
+
+
+          def validate(environment):
+              if any(type(environment.get(key)) is not str or environment.get(key) != value
+                     for key, value in EXPECTED.items()):
+                  raise ValueError("CONTEXT")
+
+
+          if __name__ == "__main__":
+              try:
+                  validate(os.environ)
+              except Exception:
+                  print("NAVER_PUBLIC_CERTIFICATE_CONTEXT_REFUSED_V1")
+                  sys.exit(1)
+          PY
+      - name: Read existing pinned public certificate only
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30s
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            """Read only the fixed, pinned public certificate; emit no private material."""
+            import base64
+            from datetime import datetime, timezone
+            import hashlib
+            import os
+            import re
+            import stat
+            import subprocess
+            import sys
+            import time
+
+            EXPECTED = "be3be40b315457bd0635acab68d05a89c111ee097ec957b590a84d8174a40ffd"
+            PARENTS = ("etc", "metainc", "naver-deploy-envelope")
+            FILENAME = "recipient.pem"
+            LIMIT = 4096
+            MARKER = "NAVER_PUBLIC_CERTIFICATE_READ_V1="
+            ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
+
+
+            def directory_info(info):
+                if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+                        or stat.S_IMODE(info.st_mode) & 0o022):
+                    raise ValueError("DIRECTORY")
+
+
+            def file_info(info):
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                        or stat.S_IMODE(info.st_mode) & 0o022
+                        or not 0 < info.st_size <= LIMIT):
+                    raise ValueError("FILE")
+
+
+            def identity(info):
+                return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_size,
+                        info.st_mtime_ns, info.st_ctime_ns)
+
+
+            def read_public_bytes():
+                if os.geteuid() != 0:
+                    raise ValueError("ROOT")
+                directory = None
+                certificate = None
+                try:
+                    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NOATIME
+                    directory = os.open("/", flags)
+                    directory_info(os.fstat(directory))
+                    for part in PARENTS:
+                        next_directory = os.open(part, flags, dir_fd=directory)
+                        try:
+                            directory_info(os.fstat(next_directory))
+                        except Exception:
+                            os.close(next_directory)
+                            raise
+                        os.close(directory)
+                        directory = next_directory
+                    certificate = os.open(
+                        FILENAME,
+                        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOATIME,
+                        dir_fd=directory,
+                    )
+                    before = os.fstat(certificate)
+                    file_info(before)
+                    body = b""
+                    while len(body) <= LIMIT:
+                        chunk = os.read(certificate, LIMIT + 1 - len(body))
+                        if not chunk:
+                            break
+                        body += chunk
+                    after = os.fstat(certificate)
+                    if identity(before) != identity(after) or len(body) != before.st_size or len(body) > LIMIT:
+                        raise ValueError("FILE_CHANGED")
+                    return body
+                finally:
+                    if certificate is not None:
+                        os.close(certificate)
+                    if directory is not None:
+                        os.close(directory)
+
+
+            def validate_public_bytes(body):
+                if (type(body) is not bytes or not 0 < len(body) <= LIMIT
+                        or hashlib.sha256(body).hexdigest() != EXPECTED
+                        or re.fullmatch(
+                            rb"-----BEGIN CERTIFICATE-----\n(?:[A-Za-z0-9+/=]+\n){1,64}"
+                            rb"-----END CERTIFICATE-----\n", body) is None):
+                    raise ValueError("CERTIFICATE_PIN")
+
+
+            def validate_dates(raw, now):
+                if type(raw) is not bytes or len(raw) > 512:
+                    raise ValueError("CERTIFICATE_DATES")
+                dates = {}
+                for line in raw.decode("ascii", errors="strict").splitlines():
+                    if line.startswith(("notBefore=", "notAfter=")):
+                        key, value = line.split("=", 1)
+                        if key in dates:
+                            raise ValueError("CERTIFICATE_DATES")
+                        dates[key] = datetime.strptime(value, "%b %d %H:%M:%S %Y GMT").replace(
+                            tzinfo=timezone.utc).timestamp()
+                if set(dates) != {"notBefore", "notAfter"} or not dates["notBefore"] <= now < dates["notAfter"] - 86400:
+                    raise ValueError("CERTIFICATE_DATES")
+
+
+            def inspect_certificate(body):
+                validate_public_bytes(body)
+                checked = subprocess.run(
+                    ["/usr/bin/openssl", "x509", "-noout", "-dates", "-checkend", "86400"],
+                    input=body, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    timeout=5, env=ENVIRONMENT,
+                )
+                if checked.returncode != 0:
+                    raise ValueError("CERTIFICATE_X509")
+                validate_dates(checked.stdout, time.time())
+                return MARKER + base64.b64encode(body).decode("ascii")
+
+
+            def main():
+                os.environ.clear()
+                os.environ.update(ENVIRONMENT)
+                try:
+                    line = inspect_certificate(read_public_bytes())
+                except Exception:
+                    print("NAVER_PUBLIC_CERTIFICATE_READ_REFUSED_V1")
+                    return 1
+                print(line)
+                return 0
+
+
+            if __name__ == "__main__":
+                sys.exit(main())
+            PY
