@@ -15,7 +15,7 @@ import sqlite3
 import sys
 import time
 
-PROFILE_SHA256 = "df48451e12d4dced2a4e3abaae9e7144ebedc2854791ae777d85ada03a4d5040"
+PROFILE_SHA256='54e766af6e6227fd59572cdbef130bbc18bc042ccc317fb530ab09a1ad555031'
 SOURCE = "382f143ad72a5fb0389d79ba0fac199566016e8b"
 OPERATION = "98dc5ca60ef2a65f9c9399b8cad1f7d9"
 MODE = "foodin-strategy-prepare-382f-once-v1"
@@ -171,20 +171,72 @@ def error_kind(error, store_module):
     return "internal"
 
 
+def exception_chain(error, store_module, profile):
+    sites = {(p, f, n): code for p, f, n, code in profile["trace_sites"]}
+    sites.update({("naver_engine/setup_strategy_evidence.py", f, n): "CONTEXT_"+str(n)
+                  for f, lines in profile["context_sites"].items() for n in lines})
+    chain, seen, truncated = [], set(), False
+    while error is not None and id(error) not in seen and len(chain) < 4:
+        seen.add(id(error))
+        node, frames = error.__traceback__, []
+        while node is not None and len(frames) < 8:
+            code = node.tb_frame.f_code
+            path = code.co_filename
+            path = path.removeprefix(str(ROOT)+"/") if path.startswith(str(ROOT)+"/") else None
+            frames.append(sites.get((path, code.co_name, node.tb_lineno), "UNREGISTERED"))
+            node = node.tb_next
+        truncated = truncated or node is not None
+        chain.append([error_kind(error, store_module), frames])
+        error = error.__cause__ if error.__cause__ is not None else error.__context__
+    return chain, truncated or error is not None
+
+
+@contextlib.contextmanager
+def observe_setup_return(reader, capture, account):
+    previous = sys.getprofile()
+    need(previous is None, "OUTPUT")
+    target = reader.setup_observation.__func__.__code__
+    caller = reader._setup_strategy_source.__func__.__code__
+    def observe(frame, event, value):
+        if (event == "return" and frame.f_code is target and frame.f_back is not None
+                and frame.f_back.f_code is caller):
+            try:
+                capture["returns"] += 1
+                if type(value) is dict and type(value.get("customer_id")) is int and hashlib.sha256(str(value["customer_id"]).encode("ascii")).hexdigest() == account and len(value) <= 18:
+                    capture["proof_present"] = "campaign_budget_proof" in value
+                elif value is not None:
+                    capture["returns"] = 2
+            except Exception:
+                capture["returns"] = 2
+    sys.setprofile(observe)
+    try:
+        yield
+    finally:
+        sys.setprofile(previous)
+        need(sys.getprofile() is previous and capture["returns"] <= 1, "OUTPUT")
+
+
 def probe_once(reader, store_module, jobs_module, profile, now, deadline):
     """The sole product prepare call; no retry and no mutation-capable API."""
     request = profile["request"]
     check_deadline(deadline)
+    need(sys.getprofile() is None, "OUTPUT")
+    capture = dict(returns=0, proof_present=None)
     try:
-        prepared = reader.prepare_learning_strategy(
-            request["report_id"], request["account_key"], request["revision_fingerprint"],
-            profile["actor"], now, request["expected_version"], narrowed=profile["narrowed"],
-        )
+        with observe_setup_return(reader, capture, request["account_key"]):
+            prepared = reader.prepare_learning_strategy(
+                request["report_id"], request["account_key"], request["revision_fingerprint"],
+                profile["actor"], now, request["expected_version"], narrowed=profile["narrowed"],
+            )
+    except ProbeRefused:
+        raise
     except Exception as error:
         prepare_site, leaf_site = exception_sites(error, profile)
+        chain, truncated = exception_chain(error, store_module, profile)
         return dict(outcome="prepare-failed", prepare_calls=1, phase="prepare",
                     prepare_site=prepare_site, leaf_site=leaf_site,
                     error_kind=error_kind(error, store_module),
+                    exception_chain=chain, chain_truncated=truncated, setup_return=capture,
                     global_active_count=None, retry_identity_equal=None)
     del prepared
     check_deadline(deadline)
@@ -204,33 +256,49 @@ def probe_once(reader, store_module, jobs_module, profile, now, deadline):
         count = sum(row["state"] in jobs_module.ACTIVE for row in rows)
         return dict(outcome="prepare-passed", prepare_calls=1, phase="metadata",
                     prepare_site=None, leaf_site=None, error_kind=None,
+                    exception_chain=[], chain_truncated=False, setup_return=capture,
                     global_active_count=count, retry_identity_equal=same)
     except Exception as error:
         _, leaf_site = exception_sites(error, profile)
+        chain, truncated = exception_chain(error, store_module, profile)
         return dict(outcome="metadata-failed", prepare_calls=1, phase="metadata",
                     prepare_site=None, leaf_site=leaf_site,
                     error_kind=error_kind(error, store_module),
+                    exception_chain=chain, chain_truncated=truncated, setup_return=capture,
                     global_active_count=None, retry_identity_equal=None)
 
 
 def validate_result(result, profile):
     names = {"outcome", "prepare_calls", "phase", "prepare_site", "leaf_site",
-             "error_kind", "global_active_count", "retry_identity_equal"}
+             "error_kind", "global_active_count", "retry_identity_equal",
+             "exception_chain", "chain_truncated", "setup_return"}
     need(type(result) is dict and set(result) == names
          and type(result["prepare_calls"]) is int and result["prepare_calls"] == 1, "OUTPUT")
     need(type(result["outcome"]) is str and result["outcome"] in {"prepare-failed", "prepare-passed", "metadata-failed"}
          and type(result["phase"]) is str and result["phase"] in {"prepare", "metadata"}, "OUTPUT")
     leaves = {item[3] for item in profile["trace_sites"]} | {"UNREGISTERED"}
     callers = set(profile["prepare_sites"].values()) | {"UNOBSERVED", "UNREGISTERED"}
+    chain, capture = result["exception_chain"], result["setup_return"]
+    sites = leaves | {"CONTEXT_"+str(n) for lines in profile["context_sites"].values() for n in lines}
+    kinds = {"store-refused", "sqlite-busy", "sqlite-interrupted", "sqlite-error", "shape", "internal"}
+    need(type(chain) is list and len(chain) <= 4 and type(result["chain_truncated"]) is bool
+         and all(type(row) is list and len(row) == 2 and type(row[0]) is str and row[0] in kinds
+                 and type(row[1]) is list and len(row[1]) <= 8
+                 and all(type(site) is str and site in sites for site in row[1]) for row in chain), "OUTPUT")
+    need(type(capture) is dict and set(capture) == {"returns", "proof_present"}
+         and type(capture["returns"]) is int and 0 <= capture["returns"] <= 1
+         and (capture["proof_present"] is None or type(capture["proof_present"]) is bool)
+         and (capture["returns"] == 1 or capture["proof_present"] is None), "OUTPUT")
     if result["outcome"] == "prepare-passed":
+        need(not chain and result["chain_truncated"] is False, "OUTPUT")
         need(result["phase"] == "metadata" and all(result[k] is None for k in ("prepare_site", "leaf_site", "error_kind"))
              and type(result["global_active_count"]) is int and 0 <= result["global_active_count"] <= 100
              and type(result["retry_identity_equal"]) is bool, "OUTPUT")
     else:
+        need(1 <= len(chain) <= 4, "OUTPUT")
         need(result["global_active_count"] is None and result["retry_identity_equal"] is None
              and type(result["leaf_site"]) is str and result["leaf_site"] in leaves
-             and type(result["error_kind"]) is str and result["error_kind"] in {
-                 "store-refused", "sqlite-busy", "sqlite-interrupted", "sqlite-error", "shape", "internal"},
+             and type(result["error_kind"]) is str and result["error_kind"] in kinds,
              "OUTPUT")
         need((result["outcome"] == "prepare-failed" and result["phase"] == "prepare"
               and type(result["prepare_site"]) is str and result["prepare_site"] in callers)

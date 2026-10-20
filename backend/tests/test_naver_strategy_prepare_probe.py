@@ -67,6 +67,12 @@ class FakeReader:
             raise self.outcome
         return {"unexported_body": SENTINEL}
 
+    def setup_observation(self, *args):
+        return getattr(self, "observation", None)
+
+    def _setup_strategy_source(self):
+        return self.setup_observation()
+
     def learning_strategy_jobs(self):
         self.scans += 1
         return self.rows
@@ -86,6 +92,7 @@ def function_text(path, name):
 def success():
     return dict(outcome="prepare-passed", prepare_calls=1, phase="metadata",
                 prepare_site=None, leaf_site=None, error_kind=None,
+                exception_chain=[], chain_truncated=False, setup_return=dict(returns=0, proof_present=None),
                 global_active_count=0, retry_identity_equal=False)
 
 
@@ -190,6 +197,60 @@ class ProbeBoundary(unittest.TestCase):
         self.assertEqual(result["error_kind"], "store-refused")
         self.assertNotIn(SENTINEL, json.dumps(R.validate_result(result, PROFILE)))
 
+        # New context probe scenarios remain subcases of this existing test ID.
+        fixed = {**PROFILE, "request": {**PROFILE["request"], "account_key": hashlib.sha256(b"1030001").hexdigest()}}
+        class Returning(FakeReader):
+            direct = False
+            repeats = 1
+            def prepare_learning_strategy(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                for _ in range(self.repeats):
+                    self.setup_observation() if self.direct else self._setup_strategy_source()
+                raise Refused(SENTINEL)
+        def read(fake):
+            return R.probe_once(fake, types.SimpleNamespace(StoreRefused=Refused), Jobs, fixed, NOW, time.monotonic()+5)
+        for label, observation, expected in (
+                ("proof", {"customer_id":1030001,"campaign_budget_proof":SENTINEL}, True),
+                ("no-proof", {"customer_id":1030001}, False), ("unwind-none", None, None)):
+            with self.subTest(context_return=label):
+                fake = Returning(); fake.observation = observation
+                result = read(fake)
+                self.assertEqual(result["setup_return"], {"returns":1,"proof_present":expected})
+                self.assertEqual(len(fake.calls), 1); self.assertEqual(fake.scans, 0)
+                self.assertNotIn(SENTINEL, json.dumps(R.validate_result(result, fixed)))
+                self.assertIsNone(sys.getprofile())
+        class DictSubclass(dict):
+            pass
+        for observation in ({"customer_id":1030002}, {"customer_id":True}, {"customer_id":"1030001"},
+                            DictSubclass(customer_id=1030001), [], {"customer_id":1030001, **{str(i):0 for i in range(18)}}):
+            with self.subTest(rejected_return_type=type(observation).__name__):
+                fake = Returning(); fake.observation = observation
+                with self.assertRaises(R.ProbeRefused): read(fake)
+                self.assertIsNone(sys.getprofile()); self.assertEqual(fake.scans, 0)
+        for mode in ("duplicate", "different-caller", "existing-profiler", "callback-error", "restore-check"):
+            with self.subTest(profiler_boundary=mode):
+                fake = Returning(); fake.observation = {"customer_id":1030001}
+                if mode == "duplicate":
+                    fake.repeats = 2
+                    with self.assertRaises(R.ProbeRefused): read(fake)
+                elif mode == "different-caller":
+                    fake.direct = True
+                    self.assertEqual(read(fake)["setup_return"], {"returns":0,"proof_present":None})
+                elif mode == "existing-profiler":
+                    prior = lambda *args: None
+                    sys.setprofile(prior)
+                    try:
+                        with self.assertRaises(R.ProbeRefused): read(fake)
+                        self.assertIs(sys.getprofile(), prior); self.assertEqual(fake.calls, [])
+                    finally: sys.setprofile(None)
+                elif mode == "callback-error":
+                    with mock.patch.object(R.hashlib, "sha256", side_effect=ValueError(SENTINEL)):
+                        with self.assertRaises(R.ProbeRefused): read(fake)
+                else:
+                    with mock.patch.object(R.sys, "getprofile", side_effect=[None,None,object()]):
+                        with self.assertRaises(R.ProbeRefused): read(fake)
+                self.assertIsNone(sys.getprofile()); self.assertEqual(fake.scans, 0)
+
     def test_global_active_count_and_retry_identity(self):
         q = PROFILE["request"]
         target = dict(job_id=q["retry_job_id"], actor=0, narrowed=False, report_id=q["report_id"],
@@ -243,6 +304,43 @@ class ProbeBoundary(unittest.TestCase):
                                    if path == "naver_engine/store.py" and fn == "prepare_learning_strategy" and n == line))
         self.assertNotIn(SENTINEL, caller+leaf)
 
+        # Preserve the original outer leaf while observing suppressed context.
+        space = {"Refused": Refused, "EvidenceInvalid": type("EvidenceInvalid", (ValueError,), {})}
+        evidence = "\n"*55+"def _bad():\n raise EvidenceInvalid('"+SENTINEL+"')\n"
+        evidence += "\n"*(287-len(evidence.splitlines()))+"def _model_source():\n _bad()\n"
+        exec(compile(evidence, str(R.ROOT/"naver_engine/setup_strategy_evidence.py"), "exec"), space)
+        wrapped = "\n"*3664+"def _setup_strategy_source():\n try: _model_source()\n except ValueError:\n  pass\n  raise Refused('"+SENTINEL+"') from None\n"
+        exec(compile(wrapped, str(R.ROOT/"naver_engine/store.py"), "exec"), space)
+        try:
+            space["_setup_strategy_source"]()
+        except Refused as error:
+            with self.subTest(chain="suppressed-context"):
+                self.assertTrue(error.__suppress_context__)
+                self.assertEqual(R.exception_sites(error, PROFILE)[1], "LEAF_194")
+                chain, truncated = R.exception_chain(error, types.SimpleNamespace(StoreRefused=Refused), PROFILE)
+                self.assertEqual(chain[-1][0], "shape"); self.assertIn("CONTEXT_289", chain[-1][1])
+                self.assertEqual(chain[-1][1][-1], "LEAF_176"); self.assertFalse(truncated)
+                self.assertNotIn(SENTINEL, json.dumps(chain))
+        for mode in ("depth", "cycle", "cause-preferred", "frame-bound"):
+            with self.subTest(chain=mode):
+                first = Refused(SENTINEL)
+                cursor = first
+                for _ in range(5):
+                    cursor.__context__ = ValueError(SENTINEL); cursor = cursor.__context__
+                if mode == "cycle": first.__context__ = first
+                if mode == "cause-preferred": first.__cause__ = KeyError(SENTINEL)
+                if mode == "frame-bound":
+                    def recursive(n):
+                        if n: return recursive(n-1)
+                        raise first
+                    try: recursive(12)
+                    except Refused: pass
+                chain, truncated = R.exception_chain(first, types.SimpleNamespace(StoreRefused=Refused), PROFILE)
+                self.assertLessEqual(len(chain), 4); self.assertTrue(all(len(x[1]) <= 8 for x in chain))
+                if mode == "cause-preferred": self.assertEqual(len(chain), 2); self.assertFalse(truncated)
+                else: self.assertTrue(truncated)
+                self.assertNotIn(SENTINEL, json.dumps(chain))
+
     def test_unknown_leaf_not_promoted_to_known_caller(self):
         def unknown():
             raise Refused(SENTINEL)
@@ -268,6 +366,19 @@ class ProbeBoundary(unittest.TestCase):
             with self.subTest(field=key):
                 with self.assertRaises(R.ProbeRefused):
                     R.validate_result({**success(), key: value}, PROFILE)
+
+        for capture in ({"returns":True,"proof_present":None}, {"returns":1.0,"proof_present":None},
+                        {"returns":2,"proof_present":None}, {"returns":0,"proof_present":False},
+                        {"returns":1,"proof_present":0}, {"returns":1,"proof_present":None,"raw":SENTINEL}):
+            with self.subTest(capture_schema=tuple(capture)):
+                with self.assertRaises(R.ProbeRefused): R.validate_result({**success(),"setup_return":capture}, PROFILE)
+        for chain in ([["shape",[SENTINEL]]], [["shape",["UNREGISTERED"]*9]], [["shape",[]]]*5,
+                      [["shape",{}]], [[{},[]]], ("shape",[])):
+            with self.subTest(chain_schema=type(chain).__name__):
+                value = {**success(), "outcome":"prepare-failed", "phase":"prepare", "prepare_site":"UNOBSERVED",
+                         "leaf_site":"UNREGISTERED", "error_kind":"shape", "global_active_count":None,
+                         "retry_identity_equal":None, "exception_chain":chain}
+                with self.assertRaises(R.ProbeRefused): R.validate_result(value, PROFILE)
 
     def test_output_unknown_or_unhashable_enum_rejected(self):
         for value in (SENTINEL, [], {}):
