@@ -433,6 +433,35 @@ class TransportBoundary(unittest.TestCase):
         self.assertLessEqual(len(source), 98304)
         self.assertNotIn(b"create_learning_strategy", source)
         self.assertNotIn(b"_submit_learning_strategy", source)
+        self.assertEqual(C.READER_FAILURE_CODES, R.FAILURES)
+        suffix = source[len(C.READER_SOURCE.encode()):]
+        def project(value):
+            namespace = dict(run_probe=lambda _: value, json=json, MODE=R.MODE,
+                             SOURCE=R.SOURCE, OPERATION=R.OPERATION, FAILURES=R.FAILURES)
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream):
+                exec(compile(suffix, "<synthetic-child-projection>", "exec"), namespace)
+            raw = stream.getvalue()
+            self.assertNotIn(SENTINEL, raw)
+            return json.loads(raw)
+        base = dict(ok=False, mode=R.MODE, source_commit=R.SOURCE, apply_operation=R.OPERATION,
+                    database_opened=False, mutations=0, provider_calls=0, error_code="OUTPUT")
+        for code in sorted(R.FAILURES):
+            for opened in (False, True):
+                with self.subTest(reader_code=code, database_opened=opened):
+                    value = project(dict(base, error_code=code, database_opened=opened))
+                    self.assertEqual(value, {"failure": "SOURCE_DIAGNOSTICS_READER_"+code+("_OPEN" if opened else "_CLOSED")})
+                    self.assertIn(value["failure"], C.READ_FAILURE_CODES)
+        malformed = [None, [], {**base, "raw": SENTINEL}, {k:v for k,v in base.items() if k!="mutations"}]
+        malformed += [dict(base, **{key:value}) for key,value in (
+            ("ok",0), ("mode",SENTINEL), ("source_commit",SENTINEL), ("apply_operation",SENTINEL),
+            ("error_code",SENTINEL), ("error_code",[]), ("database_opened",0),
+            ("database_opened",1), ("database_opened",None), ("mutations",False),
+            ("mutations",0.0), ("mutations",1), ("provider_calls",False), ("provider_calls",0.0),
+            ("provider_calls",1))]
+        for index,value in enumerate(malformed):
+            with self.subTest(malformed_child=index):
+                self.assertEqual(project(value), {"failure":"SOURCE_DIAGNOSTICS_READ_FAILED"})
 
     def test_old_package_refused_before_host(self):
         class NoHost:
@@ -506,6 +535,21 @@ class TransportBoundary(unittest.TestCase):
         failure = T.failure(ValueError(SENTINEL))
         self.assertEqual(failure["error_code"], "UNRECOGNIZED")
         self.assertNotIn(SENTINEL, json.dumps(failure))
+        closed = {k:result[k] for k in ("ok","mode","source_commit","mutations","collection_completion_verified")}
+        closed["ok"] = False
+        for code in sorted(C.READER_FAILURE_CODES):
+            for opened in (False, True):
+                with self.subTest(reader_code=code, database_opened=opened):
+                    primary = "SOURCE_DIAGNOSTICS_READER_"+code+("_OPEN" if opened else "_CLOSED")
+                    value = dict(closed, failure=dict(primary_code=primary, post_engine_code=None,
+                                                      post_legacy_baseline_code=None))
+                    self.assertEqual(T.project_result(value, C), value)
+        for primary in ("SOURCE_DIAGNOSTICS_READER_"+SENTINEL+"_OPEN",
+                        "SOURCE_DIAGNOSTICS_READER_OUTPUT_"+SENTINEL, [], True):
+            with self.subTest(unregistered_reader_code=type(primary).__name__):
+                with self.assertRaises(ValueError):
+                    T.project_result(dict(closed, failure=dict(primary_code=primary, post_engine_code=None,
+                                                               post_legacy_baseline_code=None)), C)
 
 
 if __name__ == "__main__":
