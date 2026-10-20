@@ -52,9 +52,9 @@ class ProductBasisTransportTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'PATCH_ENCODING'):t.decode(t.PREFIX+'A'*(t.MAX_WIRE+1-len(t.PREFIX)))
    decompress.assert_not_called()
  def test_two_exact_existing_paths_oversize_and_foreign_scope_remain_closed(self):
-  t,value=pinned();self.assertEqual(t.CODE_PATHS,('backend/naver_page/operations-ui.js', 'naver_engine/inspection_store.py', 'naver_engine/strategy_validation.py', 'naver_runtime/claude_provider.py', 'naver_runtime/report_output_schema.py'));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
+  t,value=pinned();self.assertEqual(t.CODE_PATHS,('naver_engine/backup.py',));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
   with self.assertRaises(ValueError):t.encode({**value,'sources':{**value['sources'],'patch':'a'*(t.MAX_SOURCE+1)}})
-  for scope in ((),('unapproved.py',),('naver_runtime/claude_provider.py','extra.py'),('naver_runtime/claude_provider.py','naver_runtime/report_output_schema.py','extra.py'),t.CODE_PATHS[:-1],t.CODE_PATHS+('extra.py',)):
+  for scope in ((),('unapproved.py',),('naver_engine/backup.py','extra.py'),('naver_runtime/claude_provider.py',),('naver_engine/backup.py','naver_engine/backup.py'),t.CODE_PATHS[:-1],t.CODE_PATHS+('extra.py',)):
    t.CODE_PATHS=scope
    with self.subTest(scope=scope),self.assertRaises(ValueError):t.require_pins()
  def test_nine_dependency_raw_and_compact_hashes_remain_the_actual_existing_files(self):

@@ -5,19 +5,19 @@ from unittest.mock import patch
 HERE=Path(__file__).resolve().parent
 ROOT=HERE.parents[1]
 TOOLS=ROOT/'backend/tools'
-BASE_HEAD='a37187f684d78c7bb762fb70bf79ab821eef67d8'
+BASE_HEAD='4522a8bbcfed7a17cd3cb044737f24226d697978'
 DEPLOY=TOOLS
-C7='c7b552d0415d1962263ab66f756339004af2a078'
-B00='b00d6bf805b43b282c04dd95970ae9ccb7d8247d'
-PATH='naver_engine/inspection_store.py'
-# 711a245 keeps c7b552d's inspection_store.py bytes (same size and sha256) and adds four report files.
-TARGET_PATHS={'backend/naver_page/operations-ui.js',PATH,'naver_engine/strategy_validation.py','naver_runtime/claude_provider.py','naver_runtime/report_output_schema.py'}
+T711='711a245ea14b590a83eb6746b760ce53275b6602'
+R1='382f143ad72a5fb0389d79ba0fac199566016e8b'
+PATH='naver_engine/backup.py'
+# 382f143 changes only the backup restore cap constant over the running 711a245.
+TARGET_PATHS={PATH}
 def load(path):
  m=types.ModuleType('synthetic_epoch');m.__file__=str(path);exec(compile(path.read_bytes(),str(path),'exec'),m.__dict__);return m
 def prior_raw(name):
  return subprocess.run(['git','show',BASE_HEAD+':backend/tools/'+name],cwd=ROOT,check=True,capture_output=True,timeout=10).stdout
 def load_prior(name):
- raw=prior_raw(name);expected={'naver_report_progress_patch.py':'6c5428889dbe342acdce3777891db994ee9824dd679b8f2201bec53ab2b3a7a3','naver_report_progress_transport.py':'9199f710b50db07f3635d0b3230f47f3ad9c2e63d3f95ed1732c540efe9b50b0'}
+ raw=prior_raw(name);expected={'naver_report_progress_patch.py':'4c2f4c91ab0b25debac9a9a23580e84d3ebe7aba6ce252fec46a6720e083095c','naver_report_progress_transport.py':'0456361b2e5ba5125119990019e7ae93de2818d6b9e3930b26b977b5ee3b3173'}
  if hashlib.sha256(raw).hexdigest()!=expected[name]:raise AssertionError('historical public source')
  m=types.ModuleType('historical_public');exec(compile(raw,'<historical-public>','exec'),m.__dict__);return m
 def source(commit,path):
@@ -26,25 +26,27 @@ def source(commit,path):
  raise AssertionError('fixed public fixture only')
 def bound():
  c=load(TOOLS/'naver_report_progress_patch.py');c.bind_base(load(DEPLOY/'naver_preview_completion_release.py'));return c
-# Exact approved function excerpts; surrounding inventory/source hashes are checked separately.
-SOURCE_FUNCTION_FIXTURES = {'b00d6bf805b43b282c04dd95970ae9ccb7d8247d': b'class InspectionStorage:\n\n    def _inspection_continuity_scopes(self, c, catalog, now, customers):\n        """Bounded hashes only; actual matching sees the full current catalog.\n\n        Deliberately conservative: account snapshot, organization semantic epoch,\n        every ID claim and policy event remain exact. Only unrelated company\n        content may vary when the actual target match and full target row agree.\n        """\n        from dataclasses import asdict\n        from . import inventory as I, management_store as MS, sync as Y\n        from app.naver_auto import org_snapshot as O\n        S = _storage()\n        try:\n            snapshot = self.inventory_snapshot(now)\n            organization, sync = (self.org_current(), self.last_sync(S.SYNC_ORG))\n            if catalog is None or snapshot is None or organization is None or (sync is None) or (sync[\'outcome\'] != S.SYNC_ACCEPTED) or (not O.allows_raising(Y.org_freshness(self, now))):\n                return {}\n            accounts = {row[\'customer_id\']: row for row in self.accounts()}\n            states = self.management_states()\n            matches = MS.matching_result(self, accounts, self.current_decisions(), catalog, I.automatic_evidence(self))[0]\n            pairs = {pair.customer_id: pair for pair in matches.pairs}\n            companies = {row[\'possibility_id\']: row for row in catalog[\'items\']}\n            org_epoch = IC.org_continuity_epoch(self._inspection_read_proof(c, IC.ORG_CONTINUITY_KEY, 4096), organization[\'body\'])\n            if org_epoch is None:\n                return {}\n            common = dict(snapshot=S._kst_text(snapshot, \'\xea\xb3\x84\xec\xa0\x95 \xec\x9b\x90\xec\xb2\x9c\'), org_epoch=org_epoch, matching=self.decision_fingerprint(), claims=IC._hash(sorted(catalog[\'ids\'], key=IC._dump)), companies=sorted(companies))\n            common_hash = IC._hash(common)\n            result = {}\n            for cid in customers:\n                pair, state, account = (pairs.get(cid), states.get(cid), accounts.get(cid))\n                if not pair or not state or (not account) or (account[\'present\'] != 1) or (pair.possibility_id != state[\'possibility_id\']):\n                    continue\n                company = companies.get(pair.possibility_id)\n                if company is None or not company[\'stage_known\'] or company[\'stage_hidden\']:\n                    continue\n                event = c.execute(\'SELECT MAX(event_id) FROM naver_auto_management_event WHERE customer_id=?\', (cid,)).fetchone()[0]\n                result[cid] = IC._hash(dict(common_hash=common_hash, account=account, company=company, pair=asdict(pair), policy=state, policy_event=event))\n            return result\n        except (KeyError, TypeError, ValueError, OverflowError, RecursionError, S.StoreRefused):\n            return {}\n', 'c7b552d0415d1962263ab66f756339004af2a078': b'class InspectionStorage:\n\n    def _inspection_continuity_scopes(self, c, catalog, now, customers):\n        """Bounded hashes only; actual matching sees the full current catalog.\n\n        Account snapshot, organization semantic epoch, global human decisions,\n        target-related raw ID claims and policy events remain exact. Full catalog\n        matching still sees every company and ID row before target scopes form.\n        """\n        from dataclasses import asdict\n        from . import inventory as I, management_store as MS, sync as Y\n        from app.naver_auto import org_snapshot as O\n        S = _storage()\n        try:\n            snapshot = self.inventory_snapshot(now)\n            organization, sync = (self.org_current(), self.last_sync(S.SYNC_ORG))\n            if catalog is None or snapshot is None or organization is None or (sync is None) or (sync[\'outcome\'] != S.SYNC_ACCEPTED) or (not O.allows_raising(Y.org_freshness(self, now))):\n                return {}\n            accounts = {row[\'customer_id\']: row for row in self.accounts()}\n            states = self.management_states()\n            matches = MS.matching_result(self, accounts, self.current_decisions(), catalog, I.automatic_evidence(self))[0]\n            pairs = {pair.customer_id: pair for pair in matches.pairs}\n            companies = {row[\'possibility_id\']: row for row in catalog[\'items\']}\n            org_epoch = IC.org_continuity_epoch(self._inspection_read_proof(c, IC.ORG_CONTINUITY_KEY, 4096), organization[\'body\'])\n            if org_epoch is None:\n                return {}\n            common = dict(snapshot=S._kst_text(snapshot, \'\xea\xb3\x84\xec\xa0\x95 \xec\x9b\x90\xec\xb2\x9c\'), org_epoch=org_epoch, matching=self.decision_fingerprint())\n            claims_by_pid, claims_by_customer = ({}, {})\n            ad_owners = {str(row[\'ad_account_no\']): cid for cid, row in accounts.items() if row[\'present\'] == 1}\n            for index, claim in enumerate(catalog[\'ids\']):\n                claims_by_pid.setdefault(claim[\'possibility_id\'], set()).add(index)\n                if claim[\'vendor\'] != I.M.VENDOR_NAVER:\n                    continue\n                claimed, _ = I.M.parse_customer_id(claim[\'customer_id_raw\'])\n                targets = {claimed} if claimed in accounts else set()\n                explicit = claim[\'ad_account_no_raw\'] not in (None, \'\')\n                by_number = ad_owners.get(claim[\'ad_account_no_raw\'] if explicit else str(claimed))\n                if by_number is not None:\n                    targets.add(by_number)\n                for target in targets:\n                    claims_by_customer.setdefault(target, set()).add(index)\n            common_hash = IC._hash(common)\n            result = {}\n            for cid in customers:\n                pair, state, account = (pairs.get(cid), states.get(cid), accounts.get(cid))\n                if not pair or not state or (not account) or (account[\'present\'] != 1) or (pair.possibility_id != state[\'possibility_id\']):\n                    continue\n                company = companies.get(pair.possibility_id)\n                if company is None or not company[\'stage_known\'] or company[\'stage_hidden\']:\n                    continue\n                event = c.execute(\'SELECT MAX(event_id) FROM naver_auto_management_event WHERE customer_id=?\', (cid,)).fetchone()[0]\n                indices = claims_by_pid.get(pair.possibility_id, set()) | claims_by_customer.get(cid, set())\n                claims = sorted((catalog[\'ids\'][index] for index in indices), key=IC._dump)\n                result[cid] = IC._hash(dict(common_hash=common_hash, account=account, company=company, pair=asdict(pair), policy=state, policy_event=event, claims=IC._hash(claims)))\n            return result\n        except (KeyError, TypeError, ValueError, OverflowError, RecursionError, S.StoreRefused):\n            return {}\n'}
+# Exact module-level excerpts of naver_engine/backup.py (everything above class BackupError) at each commit;
+# the full files are pinned separately by the manifest rows (16760 B 1bc2561e... -> 17027 B d783dea4...).
+SOURCE_FUNCTION_FIXTURES = {T711: '"""S14 백업 파일 처리. DB/암호화 실행/전송은 주입한 함수만 사용한다.\n\n로컬 압축본과 보내는 암호문은 다른 private 폴더에 둔다. READY는 전송 성공이\n아니다. 수신 영수증의 파일 해시와 길이가 맞아야 OFFSITE_OK가 된다.\n"""\nfrom __future__ import annotations\n\nimport hashlib\nimport json\nimport os\nimport pathlib\nimport re\nimport shutil\nimport stat\nimport tempfile\nimport uuid\nimport zipfile\nfrom dataclasses import dataclass, field, replace\nfrom datetime import date, datetime, timedelta, timezone\nfrom typing import Callable, Mapping, Optional\n\nNAME = re.compile(r"naver-(\\d{8}T\\d{6}Z)-[0-9a-f]{32}\\.(zip|cms)\\Z")\nMAX_BYTES = 2 * 1024 * 1024 * 1024\nUTC = timezone.utc\nKST = timezone(timedelta(hours=9))\nSTATUS_CODES = frozenset({"NEVER", "IN_PROGRESS", "LOCAL_FAILED", "ENCRYPTION_FAILED", "READY",\n                          "LOCAL_READY", "UPLOAD_FAILED", "OFFSITE_OK", "RETENTION_FAILED"})\n\n\n'.encode(),
+ R1: '"""S14 백업 파일 처리. DB/암호화 실행/전송은 주입한 함수만 사용한다.\n\n로컬 압축본과 보내는 암호문은 다른 private 폴더에 둔다. READY는 전송 성공이\n아니다. 수신 영수증의 파일 해시와 길이가 맞아야 OFFSITE_OK가 된다.\n"""\nfrom __future__ import annotations\n\nimport hashlib\nimport json\nimport os\nimport pathlib\nimport re\nimport shutil\nimport stat\nimport tempfile\nimport uuid\nimport zipfile\nfrom dataclasses import dataclass, field, replace\nfrom datetime import date, datetime, timedelta, timezone\nfrom typing import Callable, Mapping, Optional\n\nNAME = re.compile(r"naver-(\\d{8}T\\d{6}Z)-[0-9a-f]{32}\\.(zip|cms)\\Z")\n# 복원 검증이 받는 snapshot.sqlite 상한. 운영 DB 가 2 GiB 를 넘어(2026-10-20 실측 2.18 GiB) 밤 백업이\n# 정상으로 만들어져도 복원 검증이 거절하던 것을 막는다. 압축본 자체 상한(restore_check)도 이 값을 따른다.\nMAX_BYTES = 16 * 1024 * 1024 * 1024\nUTC = timezone.utc\nKST = timezone(timedelta(hours=9))\nSTATUS_CODES = frozenset({"NEVER", "IN_PROGRESS", "LOCAL_FAILED", "ENCRYPTION_FAILED", "READY",\n                          "LOCAL_READY", "UPLOAD_FAILED", "OFFSITE_OK", "RETENTION_FAILED"})\n\n\n'.encode()}
 class EpochTest(unittest.TestCase):
- def test_manifest_baseline_b00_and_exact_one_target_file(self):
+ def test_manifest_baseline_711_and_exact_one_target_file(self):
   c=bound();old=load_prior('naver_report_progress_patch.py');old.bind_base(c.BASE)
   self.assertEqual(c.OLD_MANIFEST,old.TARGET_MANIFEST);self.assertEqual(len(c.TARGET_MANIFEST),166)
   self.assertEqual({n for n in c.OLD_MANIFEST if c.OLD_MANIFEST[n]!=c.TARGET_MANIFEST[n]},TARGET_PATHS)
-  self.assertEqual(c.TARGET_MANIFEST[PATH],(420,62048,'7e4d6990f0bf44900e334574784da817e8df3bb2e5fba00cde4c9da9ec289de2'))
-  self.assertEqual({k for k in c.REPORT_ASSETS if c.REPORT_ASSETS[k]!=c.OLD_REPORT_ASSETS[k]},{'/naver/operations-ui.js'})
-  self.assertEqual(c.REPORT_ASSETS['/naver/operations-ui.js'][:2],(35766,'30961f52726507a6302db7159788d2661f7b5ab1554fd86f0b80837cf6587cf9'))
+  self.assertEqual(c.TARGET_MANIFEST[PATH],(420,17027,'d783dea45821e22be8ac1ea6a677bc1fc8929523c21ebfcd4b00e0e11416913d'))
+  self.assertEqual(c.REPORT_ASSETS,c.OLD_REPORT_ASSETS)
+  self.assertEqual((c.OLD_COMMIT,c.ROLLBACK_COMMIT,c.BASE_PREPARE_RUN,c.BASE_APPLY_OPERATION),(T711,T711,'39259799686','e50d76775650a9382a52bfae563af893'))
   self.assertEqual(c.STORE_SHA256['old'],c.STORE_SHA256['target']);self.assertEqual(c.OLD_SCHEMA,c.TARGET_SCHEMA)
  def test_historical_pins_tamper_rejected(self):
-  for key,value in [('E21_R','38852615205'),('E21_O','0'*32),('B00_M','0'*64),('B00_D',{})]:
+  for key,value in [('E21_R','38852615205'),('E21_O','0'*32),('B00_M','0'*64),('B00_D',{}),('B0_C','0'*40),('B0_S','0'*64),('B0_R','39108589826'),('B0_O','0'*32),('T7_M','0'*64),('T7_D',{}),('BASE_PREPARE_RUN','39259799687'),('BASE_APPLY_OPERATION','0'*32)]:
    with self.subTest(key=key):
     c=bound();setattr(c,key,value)
     with self.assertRaisesRegex(ValueError,'PATCH_SCOPE'):c.require_pins()
  def fixture(self,c):
   f={'/synthetic-secret/sentinel':'synthetic-digest-only'}
-  commits=[(c.E21_C,c.E21_S,c.E21_R,c.SR_C,c.E21_O),(c.OLD_COMMIT,c.OLD_SOURCE_SHA256,c.BASE_PREPARE_RUN,c.E21_C,c.BASE_APPLY_OPERATION)]
+  commits=[(c.E21_C,c.E21_S,c.E21_R,c.SR_C,c.E21_O),(c.B0_C,c.B0_S,c.B0_R,c.E21_C,c.B0_O),(c.OLD_COMMIT,c.OLD_SOURCE_SHA256,c.BASE_PREPARE_RUN,c.B0_C,c.BASE_APPLY_OPERATION)]
   prepared={};started={};seen=[]
   for commit,archive,run,previous,op in commits:
    prepared[commit]={'package':{'source_tar_gz_sha256':archive,'run_id':run,'baseline':c.EXPECTED_BASELINE},'runtime_environment_preserved':True,'config_operation_id':c.APPROVED_CONFIG_OPERATION_ID,'runtime_flags_verified':True,'inventory_enabled':True,'execution_enabled':False,'files':dict(f)}
@@ -66,10 +68,10 @@ class EpochTest(unittest.TestCase):
  def test_both_receipt_epochs_contribute_to_chain(self):
   c=bound();r,u,p,s,seen=self.fixture(c);_,receipt,chain=c.base_success(r,u)
   expected=b'prior-chain'
-  for commit in (c.E21_C,c.OLD_COMMIT):expected=hashlib.sha256(expected+b'\0'+json.dumps(s[commit],sort_keys=True).encode()).digest()
-  self.assertEqual(chain,expected);self.assertIs(receipt,p[c.OLD_COMMIT]);self.assertEqual(seen,[c.E21_C,c.OLD_COMMIT])
+  for commit in (c.E21_C,c.B0_C,c.OLD_COMMIT):expected=hashlib.sha256(expected+b'\0'+json.dumps(s[commit],sort_keys=True).encode()).digest()
+  self.assertEqual(chain,expected);self.assertIs(receipt,p[c.OLD_COMMIT]);self.assertEqual(seen,[c.E21_C,c.B0_C,c.OLD_COMMIT])
  def test_new_baseline_wrong_prepare_operation_and_guards_rejected(self):
-  changes=[('package','run_id','38949191130'),('started','operation_id','0'*32),('started','previous_commit','0'*40),('prepared','config_operation_id','0'*32),('started','execution_enabled',True),('started','database_schema',True),('prepared','runtime_environment_preserved',False)]
+  changes=[('package','run_id','39108589825'),('started','operation_id','0'*32),('started','previous_commit','0'*40),('prepared','config_operation_id','0'*32),('started','execution_enabled',True),('started','database_schema',True),('prepared','runtime_environment_preserved',False)]
   for area,key,value in changes:
    with self.subTest(area=area,key=key):
     c=bound();r,u,p,s,_=self.fixture(c)
@@ -80,13 +82,16 @@ class EpochTest(unittest.TestCase):
   c=bound();r,u,p,s,seen=self.fixture(c);s[c.E21_C]['operation_id']=c.BASE_APPLY_OPERATION
   with self.assertRaisesRegex(ValueError,'PATCH_BASELINE'):c.base_success(r,u)
   self.assertEqual(seen,[c.E21_C])
+  c=bound();r,u,p,s,seen=self.fixture(c);s[c.B0_C]['operation_id']=c.BASE_APPLY_OPERATION
+  with self.assertRaisesRegex(ValueError,'PATCH_BASELINE'):c.base_success(r,u)
+  self.assertEqual(seen,[c.E21_C,c.B0_C])
  def test_one_function_scope_and_unrelated_edit_refusal(self):
-  c=bound();before=source(B00,PATH);after=source(C7,PATH);c.python_contract(PATH,before,after)
+  c=bound();before=source(T711,PATH);after=source(R1,PATH);c.python_contract(PATH,before,after)
   wrong=after+b'\nEXTRA_UNAPPROVED_CONSTANT = 1\n'
   with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):c.python_contract(PATH,before,wrong)
   with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):c.python_contract(PATH,before,before)
  def test_store_identical_and_original_protection_functions_unchanged(self):
-  c=bound();before=source(B00,'naver_engine/store.py');after=source(C7,'naver_engine/store.py')
+  c=bound();before=source(T711,'naver_engine/store.py');after=source(R1,'naver_engine/store.py')
   self.assertEqual(before,after);self.assertEqual(c.STORE_SHA256['old'],c.STORE_SHA256['target']);c.STORE_SHA256={k:hashlib.sha256(before).hexdigest() for k in ('old','target')};c.migration_contract(before,after)
   names={'_receipt_step','historical_success','preserve_approved_config','current_state','migration_contract','_store_runtime_contract','python_contract','compatible_source','prepare','apply','rollback'}
   def functions(raw):return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(raw).body if isinstance(n,ast.FunctionDef)}
