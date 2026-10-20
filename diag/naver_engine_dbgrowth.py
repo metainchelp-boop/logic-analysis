@@ -40,7 +40,7 @@ try:
     if c.execute('PRAGMA query_only').fetchone()!=(1,):
         raise ValueError('READER_MODE')
     c.set_authorizer(auth)
-    deadline=time.monotonic()+240
+    deadline=time.monotonic()+900
     def limit(seconds):
         q=time.monotonic()+seconds
         c.set_progress_handler(lambda:time.monotonic()>=q or time.monotonic()>=deadline,2000)
@@ -57,7 +57,7 @@ try:
                           auto_vacuum=c.execute('PRAGMA auto_vacuum').fetchone()[0])
         stage='report_days'
         T='naver_auto_report_snapshot'
-        rows=run('SELECT substr(generated_at,1,10) d,count(*),sum(length(CAST(payload_json AS BLOB))) FROM '+T+' GROUP BY d ORDER BY d DESC LIMIT 25',seconds=90)
+        rows=run('SELECT substr(generated_at,1,10) d,count(*),sum(length(CAST(payload_json AS BLOB))) FROM '+T+' GROUP BY d ORDER BY d DESC LIMIT 25',seconds=300)
         out['report_by_day']=rows if rows=='interrupted' else [[d if isinstance(d,str) and DAY.fullmatch(d) else 'OTHER',n,b] for d,n,b in rows]
         stage='report_pairs'
         rows=run('SELECT count(*),max(report_id) FROM '+T+' GROUP BY possibility_id,period_key',seconds=40)
@@ -77,7 +77,7 @@ try:
         stage='report_superseded'
         rows=run("SELECT substr(s.generated_at,1,10) d,count(*),sum(length(CAST(s.payload_json AS BLOB))) FROM "+T+" s"
             " JOIN (SELECT possibility_id p,period_key k,max(report_id) m FROM "+T+" GROUP BY possibility_id,period_key) x"
-            " ON s.possibility_id=x.p AND s.period_key=x.k AND s.report_id<x.m GROUP BY d ORDER BY d DESC LIMIT 25",seconds=120)
+            " ON s.possibility_id=x.p AND s.period_key=x.k AND s.report_id<x.m GROUP BY d ORDER BY d DESC LIMIT 25",seconds=400)
         out['report_superseded_by_day']=rows if rows=='interrupted' else [[d if isinstance(d,str) and DAY.fullmatch(d) else 'OTHER',n,b] for d,n,b in rows]
         stage='report_status'
         rows=run('SELECT status,review_status,count(*) FROM '+T+' GROUP BY 1,2',seconds=40)
@@ -88,7 +88,7 @@ try:
             cols=[r[1] for r in c.execute('SELECT * FROM pragma_table_info(?)',(t,))]
             big=[x for x in ('progress_json','reasons_json','campaigns_json') if x in cols]
             expr=','.join('sum(coalesce(length(CAST("'+x+'" AS BLOB)),0))' for x in big)
-            rows=run('SELECT cycle_day,status,count(*),'+expr+' FROM "'+t+'" GROUP BY cycle_day,status ORDER BY cycle_day DESC',seconds=60)
+            rows=run('SELECT cycle_day,status,count(*),'+expr+' FROM "'+t+'" GROUP BY cycle_day,status ORDER BY cycle_day DESC',seconds=200)
             if rows=='interrupted':
                 jobs[t]='interrupted';continue
             per={}
@@ -112,6 +112,32 @@ except Exception as e:
 '''
 
 
+def backup_verify():
+    """가장 최근 로컬 백업 압축본을 풀지 않고 흘려 읽어 snapshot.sqlite 의 sha256 이 manifest 와 같은지 본다(디스크 쓰기 0)."""
+    import hashlib
+    import zipfile
+    local = '/var/backups/metainc/naver-engine/local'
+    names = sorted(n for n in os.listdir(local) if re.fullmatch(r'naver-\d{8}T\d{6}Z-[0-9a-f]{32}\.zip', n))
+    if not names:
+        return dict(available=False)
+    path = os.path.join(local, names[-1])
+    out = dict(archive=names[-1][6:22], archive_bytes=os.path.getsize(path))
+    with zipfile.ZipFile(path) as archive:
+        out['members'] = sorted(archive.namelist()) == ['manifest.json', 'snapshot.sqlite']
+        info = archive.getinfo('snapshot.sqlite')
+        out['snapshot_bytes'] = info.file_size
+        out['over_restore_cap'] = info.file_size > 2 * 1024 ** 3
+        manifest = json.loads(archive.read('manifest.json'))
+        out['manifest_version'] = manifest.get('version')
+        out['manifest_tables'] = len(manifest.get('row_counts') or {})
+        digest = hashlib.sha256()
+        with archive.open('snapshot.sqlite') as member:
+            for chunk in iter(lambda: member.read(4 * 1024 * 1024), b''):
+                digest.update(chunk)
+        out['sha256_match'] = digest.hexdigest() == manifest.get('sha256')
+    return out
+
+
 def run(args, timeout=60, data=None, limit=8 * 1024 * 1024):
     result = subprocess.run(args, input=data, capture_output=True, timeout=timeout)
     if result.returncode != 0:
@@ -132,12 +158,16 @@ def main():
                 files['engine.db' + suffix] = None
         result['files'] = files
         result['restore_cap_bytes'] = 2 * 1024 ** 3
+        try:
+            result['backup'] = backup_verify()
+        except Exception as error:
+            result['backup'] = dict(available=False, error=type(error).__name__)
         cid = run(['docker', 'ps', '--no-trunc', '--filter', 'label=com.docker.compose.project=naver-engine',
                    '--filter', 'label=com.docker.compose.service=naver-engine', '--format', '{{.ID}}']).decode().split()
         if len(cid) != 1:
             raise ValueError('ENGINE_NOT_FOUND')
         raw = run(['docker', 'exec', '-i', '--user', '10001:10001', cid[0], 'python', '-I', '-B', '-'],
-                  data=READER.encode(), timeout=300, limit=512 * 1024)
+                  data=READER.encode(), timeout=1000, limit=512 * 1024)
         result['db'] = json.loads(raw.decode().strip().splitlines()[-1])
         result['ok'] = 'failure' not in result['db']
     except Exception as error:
