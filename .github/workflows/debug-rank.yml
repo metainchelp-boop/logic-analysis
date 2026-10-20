@@ -5,6 +5,8 @@ name: Debug Rank Batch (읽기 전용 진단)
 # 업체명·계정번호·원문 오류 미출력. 운영 변경 0 (DB 는 컨테이너 안에서 mode=ro·query_only·쓰기 거부로만 연다).
 # 예외: APPLY_NAVER_SAFE_CLEANUP 만 지운다 — 대표 지시(2026-10-19 「정리는 네가 해」)로 48시간 넘게 안 쓴 도커 빌드 임시 저장분과
 # 배포 도구가 참조하지 않는 옛 엔진·중계 이미지 12개 판만. DB·백업·배포 기록·지금/직전 판·참조 판은 손대지 않는다.
+# APPLY_NAVER_RECLAIM(대표 「여기서 완수하자」 2026-10-20): 배포 도구가 확인하지 않는 옛 이미지 34판 삭제 · 옛 릴리스 폴더와
+# 배포 전 DB 사본은 압축 보관(같은 바이트로 복원 가능) 뒤 원본 삭제. 배포 도구가 확인하는 36판·엔진 DB·백업은 손대지 않는다.
 
 on:
   workflow_dispatch:
@@ -13,7 +15,7 @@ on:
         description: '네이버 관제 점검 1회 — 엔진 상태 / 저장 공간 원인 / 정리 미리보기 / 정리 실행'
         required: true
         type: choice
-        options: [READ_ONLY_NAVER_ENGINE_HEALTH, READ_ONLY_NAVER_STORAGE, READ_ONLY_NAVER_CLEANUP_PREVIEW, APPLY_NAVER_SAFE_CLEANUP]
+        options: [READ_ONLY_NAVER_ENGINE_HEALTH, READ_ONLY_NAVER_STORAGE, READ_ONLY_NAVER_CLEANUP_PREVIEW, APPLY_NAVER_SAFE_CLEANUP, READ_ONLY_NAVER_DB_GROWTH, READ_ONLY_NAVER_RECLAIM_PREVIEW, APPLY_NAVER_RECLAIM]
 
 permissions:
   contents: read
@@ -24,18 +26,27 @@ concurrency:
 
 jobs:
   naver-engine-health:
-    if: github.ref == 'refs/heads/diag/naver-engine-health' && (inputs.confirm == 'READ_ONLY_NAVER_ENGINE_HEALTH' || inputs.confirm == 'READ_ONLY_NAVER_STORAGE' || inputs.confirm == 'READ_ONLY_NAVER_CLEANUP_PREVIEW' || inputs.confirm == 'APPLY_NAVER_SAFE_CLEANUP')
+    if: github.ref == 'refs/heads/diag/naver-engine-health'
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - name: Build fixed read-only script
         env:
-          TOOL: ${{ inputs.confirm == 'READ_ONLY_NAVER_STORAGE' && 'diag/naver_engine_storage.py' || (inputs.confirm == 'READ_ONLY_NAVER_ENGINE_HEALTH' && 'diag/naver_engine_health.py' || 'diag/naver_engine_cleanup.py') }}
+          CONFIRM: ${{ inputs.confirm }}
         run: |
           set -eu
+          case "$CONFIRM" in
+            READ_ONLY_NAVER_ENGINE_HEALTH) TOOL=diag/naver_engine_health.py ;;
+            READ_ONLY_NAVER_STORAGE) TOOL=diag/naver_engine_storage.py ;;
+            READ_ONLY_NAVER_CLEANUP_PREVIEW|APPLY_NAVER_SAFE_CLEANUP) TOOL=diag/naver_engine_cleanup.py ;;
+            READ_ONLY_NAVER_DB_GROWTH) TOOL=diag/naver_engine_dbgrowth.py ;;
+            READ_ONLY_NAVER_RECLAIM_PREVIEW|APPLY_NAVER_RECLAIM) TOOL=diag/naver_engine_reclaim.py ;;
+            *) echo 'unknown confirm'; exit 1 ;;
+          esac
+          export TOOL
           python3 -I -B -c "import ast,os,pathlib;ast.parse(pathlib.Path(os.environ['TOOL']).read_text())"
           python3 -I -B - <<'PY'
           import base64,hashlib,os,pathlib
@@ -50,13 +61,13 @@ jobs:
         env:
           HEALTH_B64: ${{ env.HEALTH_B64 }}
           HEALTH_SHA: ${{ env.HEALTH_SHA }}
-          CLEANUP_APPLY: ${{ inputs.confirm == 'APPLY_NAVER_SAFE_CLEANUP' && '1' || '0' }}
+          CLEANUP_APPLY: ${{ (inputs.confirm == 'APPLY_NAVER_SAFE_CLEANUP' || inputs.confirm == 'APPLY_NAVER_RECLAIM') && '1' || '0' }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           envs: HEALTH_B64,HEALTH_SHA,CLEANUP_APPLY
-          command_timeout: 8m
+          command_timeout: 25m
           script: |
             set -eu
             /usr/bin/python3 -I -B -c "import base64,hashlib,os;raw=base64.b64decode(os.environ['HEALTH_B64'],validate=True);assert hashlib.sha256(raw).hexdigest()==os.environ['HEALTH_SHA'];g={'__name__':'__main__'};exec(compile(raw,'naver_engine_health','exec'),g)"
