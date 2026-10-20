@@ -1,58 +1,14 @@
 name: Fixed Foodin strategy prepare read once
 on:
-  workflow_dispatch:
-    inputs:
-      confirm:
-        description: Read one fixed Foodin strategy prepare without writes
-        required: true
-        type: choice
-        options: [READ_FOODIN_STRATEGY_PREPARE_ONCE]
-      qualified_registry:
-        description: Independently reviewed canonical closed native registry
-        required: true
-        type: string
-      registry_sha256:
-        description: Exact reviewed registry SHA256
-        required: true
-        type: string
-permissions:
-  contents: read
-  actions: read
-concurrency:
-  group: deploy-logic-analysis
-  cancel-in-progress: false
+  push:
+    branches:
+      - codex/naver-strategy-prepare-register-20261020
+permissions: {}
 jobs:
-  observe-once:
-    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-strategy-prepare-readonly-20261020' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1
+  register-only:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-strategy-prepare-register-20261020' && github.event_name == 'push' && github.run_attempt == 1
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
-      - name: Checkout exact source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Python 3.12
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: '3.12'
-      - name: Validate closed native registry and build exact script
-        id: build
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PROBE_CONFIRM: ${{ inputs.confirm }}
-          PROBE_QUALIFIED_REGISTRY: ${{ inputs.qualified_registry }}
-          PROBE_REGISTRY_SHA256: ${{ inputs.registry_sha256 }}
-        run: |
-          set -euo pipefail
-          python3 -I -B backend/tools/naver_strategy_prepare_probe/ci_wrapper.py observe-build
-      - name: Read fixed Foodin strategy prepare once
-        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 2m
-          script: ${{ steps.build.outputs.script }}
-      # Root owns a durable exclusive intent before dispatch.
-      # No artifact ZIP download, fixture rerun, retry, cleanup or deployment here.
+      - name: Register workflow path
+        run: ':'
