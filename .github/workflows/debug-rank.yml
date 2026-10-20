@@ -15,7 +15,7 @@ on:
         description: '네이버 관제 점검 1회 — 엔진 상태 / 저장 공간 원인 / 정리 미리보기 / 정리 실행'
         required: true
         type: choice
-        options: [READ_ONLY_NAVER_ENGINE_HEALTH, READ_ONLY_NAVER_STORAGE, READ_ONLY_NAVER_CLEANUP_PREVIEW, APPLY_NAVER_SAFE_CLEANUP, READ_ONLY_NAVER_DB_GROWTH, READ_ONLY_NAVER_RECLAIM_PREVIEW, APPLY_NAVER_RECLAIM]
+        options: [READ_ONLY_NAVER_ENGINE_HEALTH, READ_ONLY_NAVER_STORAGE, READ_ONLY_NAVER_CLEANUP_PREVIEW, APPLY_NAVER_SAFE_CLEANUP, READ_ONLY_NAVER_DB_GROWTH, READ_ONLY_NAVER_RECLAIM_PREVIEW, APPLY_NAVER_RECLAIM, READ_ONLY_NAVER_RELEASE_FACTS]
 
 permissions:
   contents: read
@@ -44,6 +44,7 @@ jobs:
             READ_ONLY_NAVER_CLEANUP_PREVIEW|APPLY_NAVER_SAFE_CLEANUP) TOOL=diag/naver_engine_cleanup.py ;;
             READ_ONLY_NAVER_DB_GROWTH) TOOL=diag/naver_engine_dbgrowth.py ;;
             READ_ONLY_NAVER_RECLAIM_PREVIEW|APPLY_NAVER_RECLAIM) TOOL=diag/naver_engine_reclaim.py ;;
+            READ_ONLY_NAVER_RELEASE_FACTS) TOOL=diag/naver_release_facts.py ;;
             *) echo 'unknown confirm'; exit 1 ;;
           esac
           export TOOL
