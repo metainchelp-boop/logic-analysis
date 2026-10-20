@@ -7416,7 +7416,7 @@ jobs:
           PYTHONPATH=backend/tools:backend/tests python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
           PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_report_progress_patch test_report_progress_transport test_report_progress_epoch test_naver_completion_download test_naver_saved_exports test_naver_saved_exports_inspect test_naver_completion_export_diagnostics test_naver_completion_failed_apply_recovery -q
           python3 - <<'PYCODE'
-          import base64,hashlib,json,os,pathlib,re,sys,types;expected_transport_sha='63e9b3663d5bba1ba3035e6d67596af7c64ae5c5b0e594a64eec5af1d51c852d';expected_core_sha='2763d5f10c4d0973e394abd503a98e0681a1d8e7c98fc0ad49bbfae27c4a677d'
+          import base64,hashlib,json,os,pathlib,re,sys,types;expected_transport_sha='4a1174a05fa86d02c9e0095bcacfb1bd55ed3d21cd1420aa4ff159031735c750';expected_core_sha='fa550a4820f83b62abd4e83ef1dd0485b349236b05c80d972840eed3b1f85c76'
           if any(re.fullmatch('[0-9a-f]{64}',value)is None for value in(expected_transport_sha,expected_core_sha)):raise ValueError('REPORT_PROGRESS_PINS_PENDING')
           transport_path=pathlib.Path('backend/tools/naver_report_progress_transport.py');core_path=pathlib.Path('backend/tools/naver_report_progress_patch.py')
           if transport_path.is_symlink()or not transport_path.is_file()or not 0<transport_path.stat().st_size<=24576:raise ValueError('COMPLETION_TRANSPORT_SOURCE')
@@ -7482,7 +7482,7 @@ jobs:
              wire=os.environ['P22_WIRE'];source=os.environ['P22_BOOT']
              if len(source)>32768:raise ValueError('COMPLETION_TRANSPORT_SIZE')
              raw=base64.b64decode(source,validate=True)
-             if hashlib.sha256(raw).hexdigest()!='63e9b3663d5bba1ba3035e6d67596af7c64ae5c5b0e594a64eec5af1d51c852d':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+             if hashlib.sha256(raw).hexdigest()!='4a1174a05fa86d02c9e0095bcacfb1bd55ed3d21cd1420aa4ff159031735c750':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
              transport=types.ModuleType('approved_completion_transport');exec(raw,transport.__dict__)
              verified_transport_sha=hashlib.sha256(raw).hexdigest()
              if transport.TRANSPORT_RAW_SHA256 is not None:raise ValueError('COMPLETION_TRANSPORT_PROFILE')
@@ -7530,7 +7530,7 @@ jobs:
              wire=os.environ['P22_WIRE'];source=os.environ['P22_BOOT']
              if len(source)>32768:raise ValueError('COMPLETION_TRANSPORT_SIZE')
              raw=base64.b64decode(source,validate=True)
-             if hashlib.sha256(raw).hexdigest()!='63e9b3663d5bba1ba3035e6d67596af7c64ae5c5b0e594a64eec5af1d51c852d':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+             if hashlib.sha256(raw).hexdigest()!='4a1174a05fa86d02c9e0095bcacfb1bd55ed3d21cd1420aa4ff159031735c750':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
              transport=types.ModuleType('approved_completion_transport');exec(raw,transport.__dict__)
              verified_transport_sha=hashlib.sha256(raw).hexdigest()
              if transport.TRANSPORT_RAW_SHA256 is not None:raise ValueError('COMPLETION_TRANSPORT_PROFILE')

@@ -1,4 +1,4 @@
-"""Backup restore cap release over the running 711a245 epoch."""
+"""Job checkpoint compaction release over the running 382f143 epoch."""
 E21_C = '21cd739cf171c066b84683b24e3340feda495858'
 E21_S = '4aaa36508961e88f2c02df193bb869f9fb89cac32bd3d44bee8dfac072f2023c'
 E21_R = '38852615204'
@@ -11,6 +11,12 @@ B0_R = '39108589825'
 B0_O = 'a29c6a8810a748d2b5bff766a507ec05'
 T7_D = {'backend/naver_page/operations-ui.js': (420, 35766, '30961f52726507a6302db7159788d2661f7b5ab1554fd86f0b80837cf6587cf9'), 'naver_engine/inspection_store.py': (420, 62048, '7e4d6990f0bf44900e334574784da817e8df3bb2e5fba00cde4c9da9ec289de2'), 'naver_engine/strategy_validation.py': (420, 5260, 'df64567b9bd5810a95e619a2c76038618c9ee306cf956aecc0c63c8f04f4ba22'), 'naver_runtime/claude_provider.py': (420, 46871, '174c06df00abcc89ffcda8efc4e7a08f175a0775025a6762d8fe4f159917dd73'), 'naver_runtime/report_output_schema.py': (420, 6388, 'd711e189f3e72bcb5834d111e147e2df088a8a8ed8b1f2c1b2cf3150f7ad8731')}
 T7_M = '75bd071b1e5513c6a33c8d9219434a867fda4b344a11ae5b580bd535fc4695cb'
+T7_C = '711a245ea14b590a83eb6746b760ce53275b6602'
+T7_S = '987b042ba4cc9cd44ea720dbe7a60c12c5ef8916bf6b5bbde51175a9ad6cd2b7'
+T7_R = '39259799686'
+T7_O = 'e50d76775650a9382a52bfae563af893'
+R1_D = {'naver_engine/backup.py': (420, 17027, 'd783dea45821e22be8ac1ea6a677bc1fc8929523c21ebfcd4b00e0e11416913d')}
+R1_M = '04e7ed15957866bc6297f20479c455719540a80554f41a17bb375465f20e9dea'
 SR_C='513e52eaee4d1bb722461961639cd588df9080cd'
 SR_S='8e19ef262e728994aebc80e3703618b57bc913a1cb479c164fc2c842a8a7d432'
 SR_R='38847877253'
@@ -63,28 +69,28 @@ K_O = '029616671477434c85f452206e09ecd0'
 K_D = {'backend/naver_page/operations-ui.js': (420, 25975, '7375f34883e4aeb7fe4f5678fc48509f4ac41b534b15e4ee03a785028dca517f'), 'naver_engine/inspection_store.py': (420, 42449, 'c1cba3cd090f6d5fb4f32a4f266576e6f2710b27fda58ad118ba9b830919cd7c'), 'naver_engine/observation_store.py': (420, 23095, '944e37477ab74f91dc7534ac1784c97a396db4f4e2c6c9ee84ecf738f2cb854f')}
 K_M = '744bc24aadadd683dec7fa4b99d33669996d0b92eae78b654884cf3f9f404950'
 K_A = 'f883c9ee4ddc5fda89fb5bf95b7078187a06b7a94f06d545b4b0cd3496f4430d'
-OLD_COMMIT = '711a245ea14b590a83eb6746b760ce53275b6602'
+OLD_COMMIT = '382f143ad72a5fb0389d79ba0fac199566016e8b'
 BASE_PREVIOUS_COMMIT = '737a65952f2ddbc05a235cf2b139a4a11f4e7673'
-BASE_PREPARE_RUN = '39259799686'
-BASE_APPLY_OPERATION = 'e50d76775650a9382a52bfae563af893'
+BASE_PREPARE_RUN = '39373903231'
+BASE_APPLY_OPERATION = '98dc5ca60ef2a65f9c9399b8cad1f7d9'
 BASE_CONTROLLER_SHA256 = '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 APPROVED_CONFIG_OPERATION_ID = '74c912dddf824fae99012849bc4c19a5'
 OLD_SCHEMA = TARGET_SCHEMA = 21
 ROLLBACK_COMMIT = OLD_COMMIT
-EXPECTED_CODE_PATHS = frozenset({'naver_engine/backup.py'})
+EXPECTED_CODE_PATHS = frozenset({'naver_engine/inspection_store.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py'})
 CODE_PATHS = EXPECTED_CODE_PATHS
 NEW_PATHS = frozenset()
-TARGET_COMMIT = '382f143ad72a5fb0389d79ba0fac199566016e8b'
-TARGET_SOURCE_SHA256 = '2fa09f9395862bde22a5c328c0825b16a4b17ffffd44ce2c2d12e7003c29a903'
-TARGET_CANONICAL_SHA256 = '059f24bc7f626acc2d39075964effb6918ad4e7b0e2ad66e7530f829854786a7'
-EXPECTED_TARGET_DELTA = {'naver_engine/backup.py': (420, 17027, 'd783dea45821e22be8ac1ea6a677bc1fc8929523c21ebfcd4b00e0e11416913d')}
+TARGET_COMMIT = '537f3fa765966b506df2cb98818fa6064493318b'
+TARGET_SOURCE_SHA256 = '905019596117438e13d009ad3cd38be8832ab3a072e68fae08cab5e93fceebb0'
+TARGET_CANONICAL_SHA256 = 'c5ab56b043e412f7da426e5a8681511f619785182d41875e3e85565ee285ffb8'
+EXPECTED_TARGET_DELTA = {'naver_engine/inspection_store.py': (420, 67514, '55fce36b6b2ffb2d21d09e160e65912ba095d47509ea70e7f4eb5829d58f9e3e'), 'naver_runtime/scheduler.py': (420, 40363, '406a26c1c60912d07e10f05cfbff835e954984073974cf769751a428c295d8d5'), 'naver_runtime/writer.py': (420, 16024, 'c1287e1652bae0d9a151969cc48c4830e3d94b274b417aadf6bdfed213cbc537')}
 TARGET_DELTA = EXPECTED_TARGET_DELTA
 TARGET_MANIFEST = None
 REPORT_ASSETS = None
-CI_PROOF = {'source_commit': TARGET_COMMIT, 'tooling_head': 'b01e30040aa8050d672cd6f5d1db18bcc1fd8133', 'run_id': '39367456878', 'receipt_sha256': TARGET_CANONICAL_SHA256}
+CI_PROOF = {'source_commit': TARGET_COMMIT, 'tooling_head': 'a0fa28ae8394b3060e83f4eddcaa38d8558696f4', 'run_id': '39417554719', 'receipt_sha256': TARGET_CANONICAL_SHA256}
 BASE = None
-OLD_SOURCE_SHA256 = '987b042ba4cc9cd44ea720dbe7a60c12c5ef8916bf6b5bbde51175a9ad6cd2b7'
+OLD_SOURCE_SHA256 = '2fa09f9395862bde22a5c328c0825b16a4b17ffffd44ce2c2d12e7003c29a903'
 OLD_MANIFEST = None
 OLD_REPORT_ASSETS = None
 STORE_SHA256 = None
@@ -152,7 +158,7 @@ CN = 'c40a1dbd0132043ce5b6a6a5565c7786699b60c0'
 CO = 'afc1547c598502032fc0d34737e524627d4d7b1fd834b5204b4c11e6a4f3031a'
 CP = '38329975429'
 CQ = 'ee474c9b697e411ab3748f185728f56d'
-APPROVED_AST_SCOPE = {'naver_engine/backup.py': {'added': (), 'changed': ('MAX_BYTES',), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}}
+APPROVED_AST_SCOPE = {'naver_engine/inspection_store.py': {'added': ('InspectionStorage.compact_job_checkpoints', '_COMPACT_INSPECTION_PROGRESS', '_COMPACT_STRUCTURE_PROGRESS', '_COMPACT_STRUCTURE_REASONS'), 'changed': (), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_runtime/scheduler.py': {'added': ('COMPACTION_BATCH', 'COMPACTION_END', 'COMPACTION_SECONDS', 'COMPACTION_START', 'Scheduler._compaction'), 'changed': ('Scheduler.__init__', 'Scheduler._tick'), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_runtime/writer.py': {'added': (), 'changed': ('DIAGNOSTIC_PHASE_IDS', 'METHODS'), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}}
 EXPECTED_AST_SCOPE = APPROVED_AST_SCOPE
 CR = 'fd9132c07031cae7162fb8af2a5131a8b1aeaba0'
 CS = 'a089de0912b34352ca21b998640c858d9f86d7e63d3d5b2db33d37d33a8c9a3b'
@@ -246,7 +252,7 @@ def require_target_pins():
     GT = (TARGET_COMMIT, TARGET_DELTA, TARGET_SOURCE_SHA256, TARGET_CANONICAL_SHA256, CI_PROOF, APPROVED_TARGET_COMMIT, EXPECTED_TARGET_DELTA, APPROVED_CI_PROOF, APPROVED_CANONICAL_SHA256, APPROVED_TARGET_SOURCE_SHA256, APPROVED_AST_SCOPE, EXPECTED_AST_SCOPE)
     if any((value is None for value in GT)):
         raise ValueError('DETAIL_AI_PINS_PENDING')
-    if type(TARGET_COMMIT) is not str or re.fullmatch('[0-9a-f]{40}', TARGET_COMMIT) is None or TARGET_COMMIT != APPROVED_TARGET_COMMIT or (TARGET_COMMIT in (OLD_COMMIT, B0_C, E21_C, SR_C, Y_C, X_C, W_C, U_C, K_C, I_C, A, Z_C, CY, CN, CD, BW, BP, BJ, BC, AV, AO, AA, AK, BASE_PREVIOUS_COMMIT, RD_C, WR_C, R_COMMIT, Q_C)) or (TARGET_SOURCE_SHA256 != APPROVED_TARGET_SOURCE_SHA256) or (TARGET_CANONICAL_SHA256 != APPROVED_CANONICAL_SHA256) or any((type(v) is not str or re.fullmatch('[0-9a-f]{64}', v) is None for v in (TARGET_SOURCE_SHA256, TARGET_CANONICAL_SHA256))) or (type(CI_PROOF) is not dict) or (set(CI_PROOF) != {'source_commit', 'tooling_head', 'run_id', 'receipt_sha256'}) or (CI_PROOF != APPROVED_CI_PROOF) or (CI_PROOF['source_commit'] != TARGET_COMMIT) or (CI_PROOF['receipt_sha256'] != TARGET_CANONICAL_SHA256) or (type(CI_PROOF['tooling_head']) is not str) or (re.fullmatch('[0-9a-f]{40}', CI_PROOF['tooling_head']) is None) or (type(CI_PROOF['run_id']) is not str) or (re.fullmatch('[0-9]{6,20}', CI_PROOF['run_id']) is None) or (CODE_PATHS != EXPECTED_CODE_PATHS) or (NEW_PATHS != frozenset()) or (type(TARGET_DELTA) is not dict) or (TARGET_DELTA != EXPECTED_TARGET_DELTA) or (set(TARGET_DELTA) != CODE_PATHS) or any((not valid_row(row) for row in TARGET_DELTA.values())) or (APPROVED_AST_SCOPE != EXPECTED_AST_SCOPE):
+    if type(TARGET_COMMIT) is not str or re.fullmatch('[0-9a-f]{40}', TARGET_COMMIT) is None or TARGET_COMMIT != APPROVED_TARGET_COMMIT or (TARGET_COMMIT in (OLD_COMMIT, T7_C, B0_C, E21_C, SR_C, Y_C, X_C, W_C, U_C, K_C, I_C, A, Z_C, CY, CN, CD, BW, BP, BJ, BC, AV, AO, AA, AK, BASE_PREVIOUS_COMMIT, RD_C, WR_C, R_COMMIT, Q_C)) or (TARGET_SOURCE_SHA256 != APPROVED_TARGET_SOURCE_SHA256) or (TARGET_CANONICAL_SHA256 != APPROVED_CANONICAL_SHA256) or any((type(v) is not str or re.fullmatch('[0-9a-f]{64}', v) is None for v in (TARGET_SOURCE_SHA256, TARGET_CANONICAL_SHA256))) or (type(CI_PROOF) is not dict) or (set(CI_PROOF) != {'source_commit', 'tooling_head', 'run_id', 'receipt_sha256'}) or (CI_PROOF != APPROVED_CI_PROOF) or (CI_PROOF['source_commit'] != TARGET_COMMIT) or (CI_PROOF['receipt_sha256'] != TARGET_CANONICAL_SHA256) or (type(CI_PROOF['tooling_head']) is not str) or (re.fullmatch('[0-9a-f]{40}', CI_PROOF['tooling_head']) is None) or (type(CI_PROOF['run_id']) is not str) or (re.fullmatch('[0-9]{6,20}', CI_PROOF['run_id']) is None) or (CODE_PATHS != EXPECTED_CODE_PATHS) or (NEW_PATHS != frozenset()) or (type(TARGET_DELTA) is not dict) or (TARGET_DELTA != EXPECTED_TARGET_DELTA) or (set(TARGET_DELTA) != CODE_PATHS) or any((not valid_row(row) for row in TARGET_DELTA.values())) or (APPROVED_AST_SCOPE != EXPECTED_AST_SCOPE):
         raise ValueError('PATCH_NOT_PINNED')
     validate_ast_scope(APPROVED_AST_SCOPE)
 
@@ -394,6 +400,9 @@ def bind_base(base):
     if type(T7_D) is not dict or set(T7_D) != {'naver_runtime/report_output_schema.py', 'backend/naver_page/operations-ui.js', 'naver_engine/strategy_validation.py', 'naver_runtime/claude_provider.py', 'naver_engine/inspection_store.py'} or any(not valid_row(row) or name not in old or old[name] == row for name,row in T7_D.items()):raise ValueError('PATCH_BASELINE')
     old = {**old, **T7_D}
     if manifest_digest(old) != T7_M or len(old) != 166:raise ValueError('PATCH_BASELINE')
+    if type(R1_D) is not dict or set(R1_D) != {'naver_engine/backup.py'} or any(not valid_row(row) or name not in old or old[name] == row for name,row in R1_D.items()):raise ValueError('PATCH_BASELINE')
+    old = {**old, **R1_D}
+    if manifest_digest(old) != R1_M or len(old) != 166:raise ValueError('PATCH_BASELINE')
     if CODE_PATHS != EXPECTED_CODE_PATHS or set(TARGET_DELTA) - set(old) != NEW_PATHS or any((TARGET_DELTA[name] == old[name] for name in CODE_PATHS - NEW_PATHS)):
         raise ValueError('PATCH_SCOPE')
     BASE = base
@@ -413,7 +422,7 @@ def require_pins():
     chain = {**BASE.TARGET_MANIFEST, **AD}
     if manifest_digest(chain) != AE:
         raise ValueError('PATCH_SCOPE')
-    for delta, digest in (({'naver_runtime/claude_provider.py': AI}, AJ), (AR, AS), (AY, AZ), (BF, BG), (BM, BN), (BT, BU), (CA, CB), (CH, CI), (CK, CL), (CV, CW), (RD_D, RD_M), (WR_D, WR_M), (PD_D, PD_M), (CR_D, CR_M), (E_DELTA, E_MANIFEST), (F_D, F_M), (P_D, P_M), (H_D, H_M), (Z_D, Z_M), (E, F), (I_D, I_M), (K_D, K_M), (U_D, U_M), (W_D, W_M), (X_D, X_M), (Y_D, Y_M), (SR_D, SR_M), (B00_D, B00_M), (T7_D, T7_M)):
+    for delta, digest in (({'naver_runtime/claude_provider.py': AI}, AJ), (AR, AS), (AY, AZ), (BF, BG), (BM, BN), (BT, BU), (CA, CB), (CH, CI), (CK, CL), (CV, CW), (RD_D, RD_M), (WR_D, WR_M), (PD_D, PD_M), (CR_D, CR_M), (E_DELTA, E_MANIFEST), (F_D, F_M), (P_D, P_M), (H_D, H_M), (Z_D, Z_M), (E, F), (I_D, I_M), (K_D, K_M), (U_D, U_M), (W_D, W_M), (X_D, X_M), (Y_D, Y_M), (SR_D, SR_M), (B00_D, B00_M), (T7_D, T7_M), (R1_D, R1_M)):
         chain = {**chain, **delta}
         if manifest_digest(chain) != digest:
             raise ValueError('PATCH_SCOPE')
@@ -421,10 +430,10 @@ def require_pins():
     FQ = EXPECTED_CODE_PATHS
     FG = {route: (TARGET_MANIFEST['backend/naver_page/' + route.removeprefix('/naver/')][1], TARGET_MANIFEST['backend/naver_page/' + route.removeprefix('/naver/')][2], row[2]) for route, row in BASE.REPORT_ASSETS.items()}
     try:
-        PV = manifest_digest([E21_C, E21_S, E21_R, E21_O, B00_D, B00_M, B0_C, B0_S, B0_R, B0_O, T7_M, OLD_COMMIT, OLD_SOURCE_SHA256, BASE_PREPARE_RUN, BASE_APPLY_OPERATION, I_C, I_S, I_R, I_O, A, B, C, D, Z_C, Z_S, Z_R, Z_O, H_C, H_S, H_R, H_O, F_C, F_S, F_R, F_O, Q_C, Q_S, Q_R, Q_O, R_COMMIT, R_ARCHIVE, R_RUN, R_OP, PD_C, PD_S, PD_R, PD_O, WR_C, WR_S, WR_R, WR_O, RD_C, RD_S, RD_R, RD_O, CY, CZ, DA, DB, CR, CS, CT, CU, CD, CE, CF, CG, BW, BX, BY, BZ, BJ, BK, BL, BC, BD, BE, I_A, K_C, K_S, K_R, K_O, K_M, K_A, U_C, U_S, U_R, U_O, U_M, U_A, W_C, W_S, W_R, W_O, W_M, W_A, X_C, X_S, X_R, X_O, X_M, X_A, Y_C, Y_S, Y_R, Y_O, Y_M, Y_A, SR_C, SR_S, SR_R, SR_O, SR_M, SR_A, G, Z_A, H_A])
+        PV = manifest_digest([E21_C, E21_S, E21_R, E21_O, B00_D, B00_M, B0_C, B0_S, B0_R, B0_O, T7_M, T7_C, T7_S, T7_R, T7_O, R1_M, OLD_COMMIT, OLD_SOURCE_SHA256, BASE_PREPARE_RUN, BASE_APPLY_OPERATION, I_C, I_S, I_R, I_O, A, B, C, D, Z_C, Z_S, Z_R, Z_O, H_C, H_S, H_R, H_O, F_C, F_S, F_R, F_O, Q_C, Q_S, Q_R, Q_O, R_COMMIT, R_ARCHIVE, R_RUN, R_OP, PD_C, PD_S, PD_R, PD_O, WR_C, WR_S, WR_R, WR_O, RD_C, RD_S, RD_R, RD_O, CY, CZ, DA, DB, CR, CS, CT, CU, CD, CE, CF, CG, BW, BX, BY, BZ, BJ, BK, BL, BC, BD, BE, I_A, K_C, K_S, K_R, K_O, K_M, K_A, U_C, U_S, U_R, U_O, U_M, U_A, W_C, W_S, W_R, W_O, W_M, W_A, X_C, X_S, X_R, X_O, X_M, X_A, Y_C, Y_S, Y_R, Y_O, Y_M, Y_A, SR_C, SR_S, SR_R, SR_O, SR_M, SR_A, G, Z_A, H_A])
     except Exception:
         PV = None
-    if PV != '58cc703d74fe10a2a9b6996df33301a07d0b0b0a507464390da0d855357007b3' or any(not valid_row(row) for row in B00_D.values()) or (CODE_PATHS != FQ) or (NEW_PATHS != frozenset()) or (OLD_MANIFEST != EW) or (manifest_digest(OLD_MANIFEST) != T7_M) or (TARGET_MANIFEST != {**EW, **TARGET_DELTA}) or (len(TARGET_MANIFEST) != 166) or (set(TARGET_MANIFEST) - set(OLD_MANIFEST) != NEW_PATHS) or (set(OLD_MANIFEST) - set(TARGET_MANIFEST)) or ({name for name in OLD_MANIFEST if OLD_MANIFEST[name] != TARGET_MANIFEST[name]} != CODE_PATHS - NEW_PATHS) or (REPORT_ASSETS != FG) or (manifest_digest(OLD_REPORT_ASSETS) != '8e90a424115d54bf6f996927533fc94890ceee99d47dd7c0b434c85c28f83502') or (STORE_SHA256 != {'old': EW['naver_engine/store.py'][2], 'target': TARGET_MANIFEST['naver_engine/store.py'][2]}) or (ROLLBACK_COMMIT != OLD_COMMIT):
+    if PV != 'c6c3339db19aa5947c9061c4fb94379e350d90239dfb27cc979027bc6c5b01f9' or any(not valid_row(row) for row in B00_D.values()) or (CODE_PATHS != FQ) or (NEW_PATHS != frozenset()) or (OLD_MANIFEST != EW) or (manifest_digest(OLD_MANIFEST) != R1_M) or (TARGET_MANIFEST != {**EW, **TARGET_DELTA}) or (len(TARGET_MANIFEST) != 166) or (set(TARGET_MANIFEST) - set(OLD_MANIFEST) != NEW_PATHS) or (set(OLD_MANIFEST) - set(TARGET_MANIFEST)) or ({name for name in OLD_MANIFEST if OLD_MANIFEST[name] != TARGET_MANIFEST[name]} != CODE_PATHS - NEW_PATHS) or (REPORT_ASSETS != FG) or (manifest_digest(OLD_REPORT_ASSETS) != '8e90a424115d54bf6f996927533fc94890ceee99d47dd7c0b434c85c28f83502') or (STORE_SHA256 != {'old': EW['naver_engine/store.py'][2], 'target': TARGET_MANIFEST['naver_engine/store.py'][2]}) or (ROLLBACK_COMMIT != OLD_COMMIT):
         raise ValueError('PATCH_SCOPE')
 
 def require_bound_pins():
@@ -573,8 +582,11 @@ def current_binding_success(release,upgrade):
 def b00_success(release,upgrade):
     return _receipt_step(release,upgrade,current_binding_success,B0_C,B0_S,B0_R,E21_C,B0_O)
 
+def t7_success(release,upgrade):
+    return _receipt_step(release,upgrade,b00_success,T7_C,T7_S,T7_R,B0_C,T7_O)
+
 def base_success(release, upgrade):
-    return _receipt_step(release,upgrade,b00_success,OLD_COMMIT,OLD_SOURCE_SHA256,BASE_PREPARE_RUN,B0_C,BASE_APPLY_OPERATION)
+    return _receipt_step(release,upgrade,t7_success,OLD_COMMIT,OLD_SOURCE_SHA256,BASE_PREPARE_RUN,T7_C,BASE_APPLY_OPERATION)
 
 def preserve_approved_config(files, operation_id, active, release, upgrade):
     if operation_id != APPROVED_CONFIG_OPERATION_ID:

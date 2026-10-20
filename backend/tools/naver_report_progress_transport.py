@@ -28,15 +28,15 @@ MAX_CIPHERTEXT_BYTES=MAX_CIPHERTEXT
 MAX_PAYLOAD_BYTES=MAX_PAYLOAD 
 MAX_BOOTSTRAP_B64_BYTES=MAX_BOOTSTRAP_B64 
 MAX_SSH_BYTES=MAX_SSH 
-TARGET_SOURCE='382f143ad72a5fb0389d79ba0fac199566016e8b'
-CODE_PATHS=('naver_engine/backup.py',)
+TARGET_SOURCE='537f3fa765966b506df2cb98818fa6064493318b'
+CODE_PATHS=('naver_engine/inspection_store.py','naver_runtime/scheduler.py','naver_runtime/writer.py')
 TRANSPORT_RAW_SHA256=None 
 EXPECTED_TARGET_SOURCE=TARGET_SOURCE 
 EXPECTED_CODE_PATHS=CODE_PATHS 
 FUNCTIONS={'preview-report-progress-prepare':'prepare','preview-report-progress-apply':'apply','preview-report-progress-rollback':'rollback'}
 SOURCE_FILES={'host':'naver_erp_tunnel_service_install.py','release':'naver_preview_release.py','lifecycle':'naver_preview_lifecycle.py','upgrade':'naver_preview_upgrade.py','exports_binding':'naver_completion_exports.py','exports_helper':'naver_saved_exports.py','product_exporter':'../naver_product_export.py','market_exporter':'../naver_market_export.py','controller':'naver_preview_completion_release.py','patch':'naver_report_progress_patch.py'}
-SOURCE_SHA256={'patch':'2763d5f10c4d0973e394abd503a98e0681a1d8e7c98fc0ad49bbfae27c4a677d','controller':'3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2','host':'236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a','release':'7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84','lifecycle':'4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4','upgrade':'6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28','exports_binding':'1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed','exports_helper':'062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737','product_exporter':'42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59','market_exporter':'d491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
-COMPACT_SHA256={'host':'4e95c24f9da93d814cc90e919ffb9fdfb6113667f16205f382406b7369085b95','release':'d9b4456ecd3de6bfe9fa12430616cf6b9cedadf4ba4dbe28582ad3ea22f84367','lifecycle':'0c3ffaa303ad066f23117b304b8f9289e0e3bc78a9c59a8dced8d58e54f498bd','upgrade':'e4dd1f3c29c04439321bff785d803a12356d56e2b83986cf81f286d4dce46f60','exports_binding':'2c7f944b2b992eead34508ba671422c50d9becbc5ae5ff39933ab00a5958f32f','exports_helper':'062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737','product_exporter':'42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59','market_exporter':'d491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8','controller':'4d937e6c55c36853f6d9e6b0f7557558e074a66910ab03c8b43aae92c5ef3fba','patch':'39984ad0d423e97e81b6d6fc5beefeccf2ac6a67bcb45fb63ccde4432704eb8c'}
+SOURCE_SHA256={'patch':'fa550a4820f83b62abd4e83ef1dd0485b349236b05c80d972840eed3b1f85c76','controller':'3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2','host':'236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a','release':'7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84','lifecycle':'4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4','upgrade':'6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28','exports_binding':'1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed','exports_helper':'062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737','product_exporter':'42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59','market_exporter':'d491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
+COMPACT_SHA256={'host':'4e95c24f9da93d814cc90e919ffb9fdfb6113667f16205f382406b7369085b95','release':'d9b4456ecd3de6bfe9fa12430616cf6b9cedadf4ba4dbe28582ad3ea22f84367','lifecycle':'0c3ffaa303ad066f23117b304b8f9289e0e3bc78a9c59a8dced8d58e54f498bd','upgrade':'e4dd1f3c29c04439321bff785d803a12356d56e2b83986cf81f286d4dce46f60','exports_binding':'2c7f944b2b992eead34508ba671422c50d9becbc5ae5ff39933ab00a5958f32f','exports_helper':'062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737','product_exporter':'42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59','market_exporter':'d491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8','controller':'4d937e6c55c36853f6d9e6b0f7557558e074a66910ab03c8b43aae92c5ef3fba','patch':'8fd099c1a29107c4eb1d91582b065352748af4bf0fe841ecde8d64d02b0d98e5'}
 COMPACT_SOURCE_SHA256=COMPACT_SHA256 
 def require_pins():
  def digest(value):
@@ -44,7 +44,7 @@ def require_pins():
  for pins in(SOURCE_SHA256,COMPACT_SHA256,COMPACT_SOURCE_SHA256):
   if(type(pins)is not dict or set(pins)!=set(SOURCE_FILES)or any(not digest(value)for value in pins.values())):
    raise ValueError('DETAIL_AI_PINS_PENDING')
- if(COMPACT_SOURCE_SHA256!=COMPACT_SHA256 or not digest(TRANSPORT_RAW_SHA256)or type(TARGET_SOURCE)is not str or len(TARGET_SOURCE)!=40 or TARGET_SOURCE!=EXPECTED_TARGET_SOURCE or type(CODE_PATHS)is not tuple or len(CODE_PATHS)!=1 or set(CODE_PATHS)!=set(EXPECTED_CODE_PATHS)):
+ if(COMPACT_SOURCE_SHA256!=COMPACT_SHA256 or not digest(TRANSPORT_RAW_SHA256)or type(TARGET_SOURCE)is not str or len(TARGET_SOURCE)!=40 or TARGET_SOURCE!=EXPECTED_TARGET_SOURCE or type(CODE_PATHS)is not tuple or len(CODE_PATHS)!=3 or set(CODE_PATHS)!=set(EXPECTED_CODE_PATHS)):
   raise ValueError('DETAIL_AI_PINS_PENDING')
 def extra_arguments(args,kwargs):
  if args or kwargs:raise ValueError('PATCH_BUNDLE')
