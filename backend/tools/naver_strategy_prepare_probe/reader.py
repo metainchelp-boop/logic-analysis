@@ -1,8 +1,4 @@
-"""Fixed 382f/Foodin prepare probe. No writer, worker, HTTP or provider calls.
-
-The host controller must prove the current image and operation before invoking
-this source on stdin as uid 10001, Python -I -B, with a 30-second outer timeout.
-"""
+"""Fixed readonly prepare probe."""
 import contextlib
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -31,7 +27,7 @@ RUNTIME_EXCLUDED = frozenset((
 ))
 FAILURES = frozenset((
     "PROFILE", "IDENTITY", "CODE_PIN", "SOURCE_IMPORT", "DATABASE",
-    "SCHEMA", "DEADLINE", "MUTATION", "OUTPUT", "NETWORK_FORBIDDEN",
+    "SCHEMA", "DEADLINE", "DEADLINE_BEFORE", "DEADLINE_AFTER", "DEADLINE_PROBE", "MUTATION", "OUTPUT", "NETWORK_FORBIDDEN",
     "PROCESS_FORBIDDEN", "UNEXPECTED",
 ))
 
@@ -49,9 +45,8 @@ class ProbeRefused(Exception):
     pass
 
 
-def check_deadline(deadline):
-    if time.monotonic() >= deadline:
-        raise ValueError('SOURCE_DIAGNOSTICS_DEADLINE')
+def check_deadline(deadline, code):
+    need(time.monotonic() < deadline, code)
 
 
 def readonly_authorizer(action, arg1, arg2, database, source):
@@ -105,8 +100,8 @@ def profile_valid(profile):
 
 
 def runtime_pins(profile):
-    # Dockerfile.naver-engine has exactly these four COPY source paths.
-    # Preserve all 115 archive pins; only its 109 image Python files exist here.
+
+
     all_pins = profile["code_pins"]
     selected = {name: pin for name, pin in all_pins.items()
                 if name.startswith(("naver_engine/", "naver_runtime/", "backend/app/naver_auto/"))
@@ -131,7 +126,7 @@ def deny_network(*args, **kwargs):
 
 
 def audit_boundary(event, args):
-    # The reader never launches an external process or creates/connects a socket.
+
     if event.startswith("socket."):
         raise ProbeRefused("NETWORK_FORBIDDEN")
     if event in {"subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.fork"}:
@@ -148,8 +143,8 @@ def exception_sites(error, profile):
         relative = filename.removeprefix(str(ROOT) + "/") if filename.startswith(str(ROOT) + "/") else None
         if relative == "naver_engine/store.py" and code.co_name == "prepare_learning_strategy":
             prepare_site = profile["prepare_sites"].get(str(node.tb_lineno), "UNREGISTERED")
-        # Only the actual innermost frame is considered a leaf. Never upgrade
-        # a known caller to the leaf when an unregistered function raised.
+
+
         leaf_site = sites.get((relative, code.co_name, node.tb_lineno), "UNREGISTERED")
         node = node.tb_next
     return prepare_site, leaf_site
@@ -197,29 +192,47 @@ def observe_setup_return(reader, capture, account):
     need(previous is None, "OUTPUT")
     target = reader.setup_observation.__func__.__code__
     caller = reader._setup_strategy_source.__func__.__code__
-    def observe(frame, event, value):
-        if (event == "return" and frame.f_code is target and frame.f_back is not None
-                and frame.f_back.f_code is caller):
-            try:
+    m, slot = sys.monitoring, 4
+    event = m.events.PY_RETURN
+    need(m.get_tool(slot) is None and m.get_events(slot) == 0
+         and m.get_local_events(slot, target) == 0, "OUTPUT")
+    def observe(code, offset, value):
+        try:
+            frame = sys._getframe(1)
+            if code is not target or frame.f_code is not target:
+                capture["returns"] = 2
+            elif frame.f_back is not None and frame.f_back.f_code is caller:
                 capture["returns"] += 1
                 if type(value) is dict and type(value.get("customer_id")) is int and hashlib.sha256(str(value["customer_id"]).encode("ascii")).hexdigest() == account and len(value) <= 18:
                     capture["proof_present"] = "campaign_budget_proof" in value
                 elif value is not None:
                     capture["returns"] = 2
-            except Exception:
-                capture["returns"] = 2
-    sys.setprofile(observe)
+        except Exception:
+            capture["returns"] = 2
+    m.use_tool_id(slot, "fixed-setup-return")
+    old = None
     try:
+        old = m.register_callback(slot, event, observe)
+        need(old is None, "OUTPUT")
+        m.set_local_events(slot, target, event)
         yield
     finally:
-        sys.setprofile(previous)
-        need(sys.getprofile() is previous and capture["returns"] <= 1, "OUTPUT")
+        try:
+            m.set_local_events(slot, target, 0)
+        finally:
+            try:
+                m.register_callback(slot, event, old)
+            finally:
+                m.free_tool_id(slot)
+        need(sys.getprofile() is previous and capture["returns"] <= 1
+             and m.get_tool(slot) is None and m.get_events(slot) == 0
+             and m.get_local_events(slot, target) == 0, "OUTPUT")
 
 
 def probe_once(reader, store_module, jobs_module, profile, now, deadline):
     """The sole product prepare call; no retry and no mutation-capable API."""
     request = profile["request"]
-    check_deadline(deadline)
+    check_deadline(deadline, "DEADLINE_BEFORE")
     need(sys.getprofile() is None, "OUTPUT")
     capture = dict(returns=0, proof_present=None)
     try:
@@ -239,7 +252,7 @@ def probe_once(reader, store_module, jobs_module, profile, now, deadline):
                     exception_chain=chain, chain_truncated=truncated, setup_return=capture,
                     global_active_count=None, retry_identity_equal=None)
     del prepared
-    check_deadline(deadline)
+    check_deadline(deadline, "DEADLINE_AFTER")
     try:
         rows = reader.learning_strategy_jobs()
         need(type(rows) is list and len(rows) <= jobs_module.LIMIT == 100, "OUTPUT")
@@ -334,7 +347,7 @@ def run_probe(profile):
             need(schema_row is not None and tuple(schema_row) == ("21",), "SCHEMA")
             value = probe_once(reader, S, J, profile, datetime.now(KST), deadline)
             need(connection.total_changes == 0 and connection.in_transaction, "MUTATION")
-            check_deadline(deadline)
+            check_deadline(deadline, "DEADLINE_PROBE")
             validate_result(value, profile)
             connection.execute("ROLLBACK")
         return dict(ok=True, mode=MODE, source_commit=SOURCE, apply_operation=OPERATION,

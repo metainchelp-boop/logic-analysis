@@ -251,6 +251,75 @@ class ProbeBoundary(unittest.TestCase):
                         with self.assertRaises(R.ProbeRefused): read(fake)
                 self.assertIsNone(sys.getprofile()); self.assertEqual(fake.scans, 0)
 
+        # New selective monitoring boundaries, no product method replacement.
+        m, slot, event = sys.monitoring, 4, sys.monitoring.events.PY_RETURN
+        target = FakeReader.setup_observation.__code__
+        for mode in ("occupied", "stale-global", "stale-target", "stale-callback", "stale-other"):
+            with self.subTest(monitoring_boundary=mode):
+                fake = Returning(); fake.observation = {"customer_id":1030001}
+                def other(): return 1
+                prior = lambda *args: None
+                m.use_tool_id(slot, "synthetic-existing")
+                if mode == "stale-global": m.set_events(slot, event)
+                if mode == "stale-target": m.set_local_events(slot, target, event)
+                if mode == "stale-callback": m.register_callback(slot, event, prior)
+                if mode == "stale-other": m.set_local_events(slot, other.__code__, event)
+                if mode != "occupied": m.free_tool_id(slot)
+                try:
+                    if mode == "stale-other":
+                        capture = dict(returns=0, proof_present=None)
+                        if sys.version_info < (3,14):
+                            with self.assertRaises(R.ProbeRefused):
+                                with R.observe_setup_return(fake, capture, fixed["request"]["account_key"]): other()
+                            self.assertEqual(capture["returns"], 2)
+                            self.assertEqual(m.get_local_events(slot, other.__code__), event)
+                        else:
+                            with R.observe_setup_return(fake, capture, fixed["request"]["account_key"]): other()
+                            self.assertEqual(capture["returns"], 0)
+                            self.assertEqual(m.get_local_events(slot, other.__code__), 0)
+                    elif mode in ("stale-global", "stale-callback") and sys.version_info >= (3,14):
+                        # 3.14 free_tool_id clears these before this probe claims it.
+                        self.assertEqual(read(fake)["setup_return"], {"returns":1,"proof_present":False})
+                        self.assertEqual(m.get_events(slot), 0)
+                    else:
+                        with self.assertRaises(R.ProbeRefused): read(fake)
+                        self.assertEqual(fake.calls, [])
+                        if mode == "occupied": self.assertEqual(m.get_tool(slot), "synthetic-existing")
+                        if mode == "stale-global": self.assertEqual(m.get_events(slot), event)
+                        if mode == "stale-target": self.assertEqual(m.get_local_events(slot, target), event)
+                        if mode == "stale-callback":
+                            self.assertIs(m.register_callback(slot, event, prior), prior)
+                finally:
+                    if m.get_tool(slot) is None: m.use_tool_id(slot, "synthetic-cleanup")
+                    m.set_events(slot, 0)
+                    m.set_local_events(slot, target, 0)
+                    m.set_local_events(slot, other.__code__, 0)
+                    m.register_callback(slot, event, None)
+                    m.free_tool_id(slot)
+                self.assertIsNone(m.get_tool(slot)); self.assertIsNone(sys.getprofile())
+        class Unwinds(Returning):
+            def setup_observation(self): raise Refused(SENTINEL)
+        with self.subTest(monitoring_boundary="exception-unwind"):
+            self.assertEqual(read(Unwinds())["setup_return"], {"returns":0,"proof_present":None})
+            self.assertIsNone(m.get_tool(slot))
+        with self.subTest(monitoring_boundary="body-error-cleanup"):
+            fake = Returning(); capture = dict(returns=0, proof_present=None)
+            with self.assertRaises(Refused):
+                with R.observe_setup_return(fake, capture, fixed["request"]["account_key"]):
+                    raise Refused(SENTINEL)
+            self.assertIsNone(m.get_tool(slot))
+            self.assertEqual(m.get_local_events(slot, target), 0)
+            self.assertEqual(m.get_events(slot), 0)
+        with self.subTest(monitoring_boundary="no-other-code-events"):
+            fake = Returning(); fake.observation = {"customer_id":1030001}
+            capture = dict(returns=0, proof_present=None)
+            with R.observe_setup_return(fake, capture, fixed["request"]["account_key"]):
+                self.assertEqual(m.get_local_events(slot, target), event)
+                self.assertEqual(m.get_local_events(slot, Returning.prepare_learning_strategy.__code__), 0)
+                self.assertEqual(m.get_events(slot), 0)
+                fake._setup_strategy_source()
+            self.assertEqual(capture, {"returns":1,"proof_present":False})
+
     def test_global_active_count_and_retry_identity(self):
         q = PROFILE["request"]
         target = dict(job_id=q["retry_job_id"], actor=0, narrowed=False, report_id=q["report_id"],
@@ -278,9 +347,21 @@ class ProbeBoundary(unittest.TestCase):
 
     def test_deadline_before_prepare_zero_calls(self):
         fake = FakeReader()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(R.ProbeRefused) as caught:
             R.probe_once(fake, types.SimpleNamespace(StoreRefused=Refused), Jobs, PROFILE, NOW, 0)
+        self.assertEqual(caught.exception.args, ("DEADLINE_BEFORE",))
         self.assertEqual(fake.calls, [])
+        for code in ("DEADLINE_BEFORE", "DEADLINE_AFTER", "DEADLINE_PROBE"):
+            with self.subTest(deadline_site=code):
+                with self.assertRaises(R.ProbeRefused) as caught: R.check_deadline(0, code)
+                self.assertEqual(caught.exception.args, (code,))
+                self.assertIn(code, R.FAILURES)
+        tree = ast.parse((DRAFT/"reader.py").read_text())
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "check_deadline"]
+        self.assertEqual(sorted(node.args[1].value for node in calls),
+                         ["DEADLINE_AFTER", "DEADLINE_BEFORE", "DEADLINE_PROBE"])
+        self.assertEqual(R.MAX_SECONDS, 20)
 
     def test_deadline_after_prepare_no_scan(self):
         fake = FakeReader()
@@ -289,6 +370,12 @@ class ProbeBoundary(unittest.TestCase):
                 probe(fake)
         self.assertEqual(len(fake.calls), 1)
         self.assertEqual(fake.scans, 0)
+        fake = FakeReader()
+        with self.subTest(deadline_site="actual-after-prepare"):
+            with mock.patch.object(R.time, "monotonic", side_effect=[0,0,6]):
+                with self.assertRaises(R.ProbeRefused) as caught: probe(fake)
+            self.assertEqual(caught.exception.args, ("DEADLINE_AFTER",))
+            self.assertEqual(len(fake.calls), 1); self.assertEqual(fake.scans, 0)
 
     def test_known_prepare_and_leaf_enum_without_values(self):
         line = 3790
