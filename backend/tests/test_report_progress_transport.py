@@ -52,7 +52,7 @@ class ProductBasisTransportTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'PATCH_ENCODING'):t.decode(t.PREFIX+'A'*(t.MAX_WIRE+1-len(t.PREFIX)))
    decompress.assert_not_called()
  def test_two_exact_existing_paths_oversize_and_foreign_scope_remain_closed(self):
-  t,value=pinned();self.assertEqual(t.CODE_PATHS,('naver_engine/setup_strategy_evidence.py',));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
+  t,value=pinned();self.assertEqual(t.CODE_PATHS,('naver_runtime/claude_provider.py', 'naver_runtime/report_output_schema.py'));self.assertEqual(t.EXPECTED_CODE_PATHS,t.CODE_PATHS)
   with self.assertRaises(ValueError):t.encode({**value,'sources':{**value['sources'],'patch':'a'*(t.MAX_SOURCE+1)}})
   for scope in ((),('unapproved.py',),t.CODE_PATHS[:-1]+('extra.py',),('naver_engine/backup.py',),t.CODE_PATHS+t.CODE_PATHS[:1],t.CODE_PATHS[:-1],t.CODE_PATHS+('extra.py',),list(t.CODE_PATHS)):
    t.CODE_PATHS=scope
