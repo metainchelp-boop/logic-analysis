@@ -1,9 +1,11 @@
 """시장 내보내기 실측 — 서버에 설치된 내보내기 코드의 읽기 단계(collect)만 그대로 돌려 시간·글자 수·줄 수를 잰다.
 
 운영 서버(root)에서 한 번 실행한다. 설치본(`/opt/metainc/naver-saved-exports/<ops>/naver_market_export.py`)을
-바이트코드를 쓰지 않고(-B) 불러, 원천 DB 를 `mode=ro` 로 연 뒤 `collect()` 만 부른다. 결과 파일을 쓰는
+바이트코드를 쓰지 않고(-B) 불러, 원천 DB 를 `mode=ro&immutable=1` 로 연 뒤 `collect()` 만 부른다
+(immutable — 잠금·WAL·SHM 을 전혀 쓰지 않아 어떤 곁 파일도 만들지 않고 수집기를 막지 않는다. 대신 아직 WAL 에만 있는
+최근 몇 분 기록은 안 보일 수 있다 — 시간·글자 수 측정에는 영향이 거의 없다). 결과 파일을 쓰는
 `export_database()` 는 부르지 않는다 — 묶음·서비스·타이머·원천 DB 어느 것도 바꾸지 않는다.
-collect() 는 자체 authorizer·query_only 로 읽기만 한다. 원천 DB 는 WAL 이라 읽는 동안 수집기 쓰기를 막지 않는다.
+collect() 는 자체 authorizer·query_only 로 읽기만 한다.
 
 1회차: 시간 상한만 120초로 늘려(다른 한도는 그대로) 실제로 몇 초·몇 바이트가 드는지 잰다.
 2회차: 설치본 기본 한도 그대로 — 지금(캐시가 데워진 상태) 돌리면 통과하는지만 본다.
@@ -70,7 +72,7 @@ def attempt(M, limits):
     stats = instrument(M)
     started = time.monotonic()
     out = dict()
-    c = sqlite3.connect('file:%s?mode=ro' % DATABASE, uri=True, isolation_level=None, timeout=1)
+    c = sqlite3.connect('file:%s?mode=ro&immutable=1' % DATABASE, uri=True, isolation_level=None, timeout=1)
     try:
         bundle = M.collect(c, limits=limits)
         out.update(ok=True, stores=len(bundle['stores']),
@@ -99,8 +101,6 @@ def main():
             head = stream.read(100)
         if head[:16] != b'SQLite format 3\x00' or head[18] != 2 or head[19] != 2:
             raise ValueError('SOURCE_NOT_WAL')
-        if not (os.path.isfile(DATABASE + '-wal') and os.path.isfile(DATABASE + '-shm')):
-            raise ValueError('SOURCE_FILES_MISSING')
         result['stage'] = 'load'
         M = load()
         defaults = M.Limits()
