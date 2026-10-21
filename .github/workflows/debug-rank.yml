@@ -58,7 +58,6 @@ jobs:
       group: deploy-logic-analysis
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    # Code-only forward + rollback reserve: raw224KiB, wire72KiB; bounded decompression/eof/tail checks retained.
     timeout-minutes: ${{ inputs.ad_prepare == 'preview-code-only-rollback' && 65 || inputs.ad_prepare == 'preview-code-only-upgrade' && 65 || inputs.ad_prepare == 'preview-code-upgrade' && 65 || 15 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -7459,7 +7458,7 @@ jobs:
           P.require_pins();inputs=json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())['inputs'];operation=inputs.pop('ad_prepare');package=json.loads(inputs.pop('ad_expected_baseline'))
           assert operation in T.FUNCTIONS and all(v=='off'for v in inputs.values())
           if operation=='preview-report-progress-prepare':from naver_completion_download import download;fields=download(package,'preview-payload');fields.update(run_id=os.environ['RUN_ID'],operation='code-prepare');package=fields
-          wire=T.encode(T.bundle(operation,package,pathlib.Path('backend/tools')));transport=T.bootstrap(transport_raw);assert len(transport)<=32768;require_report_progress_ssh_pressure(wire,transport,pathlib.Path('.github/workflows/debug-rank.yml').read_text(encoding='utf-8'))
+          wire=T.encode(T.bundle(operation,package,pathlib.Path('backend/tools')));transport=T.bootstrap(transport_raw);assert len(transport)<=32768;require_report_progress_ssh_pressure(wire,transport,pathlib.Path('.github/workflows/debug-rank.yml').read_text(encoding='utf-8'));[print('::add-mask::'+x.replace('%','%25'))for x in(wire,transport)]
           with open(os.environ['GITHUB_ENV'],'a')as stream:stream.write('P22_WIRE='+wire+'\n');stream.write('P22_BOOT='+transport+'\n')
           PYCODE
       - name: Incoming
