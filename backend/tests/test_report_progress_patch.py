@@ -7,12 +7,12 @@ import unittest
 from unittest.mock import patch
 TOOLS=Path(__file__).resolve().parents[1]/'tools'
 CP='naver_engine/inspection_store.py'
-SC='naver_runtime/scheduler.py'
+SC = 'naver_engine/setup_strategy_evidence.py'
 SCHEMA='naver_engine/collection_diagnostics.py'
 JS='backend/naver_page/operations-ui.js'
 WEB='naver_engine/web.py'
-PYTHON_PATHS=frozenset(('naver_engine/backup.py', 'naver_engine/inspection_catalog.py', 'naver_engine/inspection_store.py', 'naver_engine/store.py', 'naver_engine/strategy_validation.py', 'naver_runtime/claude_provider.py', 'naver_runtime/report_output_schema.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py'))
-PATHS=frozenset(('naver_engine/inspection_store.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py'))
+PYTHON_PATHS = frozenset(('naver_engine/backup.py', 'naver_engine/inspection_catalog.py', 'naver_engine/inspection_store.py', 'naver_engine/store.py', 'naver_engine/strategy_validation.py', 'naver_runtime/claude_provider.py', 'naver_runtime/report_output_schema.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py', 'naver_engine/setup_strategy_evidence.py'))
+PATHS = frozenset(('naver_engine/setup_strategy_evidence.py',))
 PY_TARGETS=frozenset(name for name in PATHS if name.endswith('.py'))
 
 def load(name):

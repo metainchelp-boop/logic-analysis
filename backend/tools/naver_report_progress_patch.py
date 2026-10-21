@@ -1,4 +1,4 @@
-"""Job checkpoint compaction release over the running 382f143 epoch."""
+"""Optional budget-proof contract release over the running 382f143 epoch."""
 E21_C = '21cd739cf171c066b84683b24e3340feda495858'
 E21_S = '4aaa36508961e88f2c02df193bb869f9fb89cac32bd3d44bee8dfac072f2023c'
 E21_R = '38852615204'
@@ -78,17 +78,17 @@ EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e
 APPROVED_CONFIG_OPERATION_ID = '74c912dddf824fae99012849bc4c19a5'
 OLD_SCHEMA = TARGET_SCHEMA = 21
 ROLLBACK_COMMIT = OLD_COMMIT
-EXPECTED_CODE_PATHS = frozenset({'naver_engine/inspection_store.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py'})
+EXPECTED_CODE_PATHS = frozenset({'naver_engine/setup_strategy_evidence.py'})
 CODE_PATHS = EXPECTED_CODE_PATHS
 NEW_PATHS = frozenset()
-TARGET_COMMIT = '537f3fa765966b506df2cb98818fa6064493318b'
-TARGET_SOURCE_SHA256 = '905019596117438e13d009ad3cd38be8832ab3a072e68fae08cab5e93fceebb0'
-TARGET_CANONICAL_SHA256 = 'c5ab56b043e412f7da426e5a8681511f619785182d41875e3e85565ee285ffb8'
-EXPECTED_TARGET_DELTA = {'naver_engine/inspection_store.py': (420, 67514, '55fce36b6b2ffb2d21d09e160e65912ba095d47509ea70e7f4eb5829d58f9e3e'), 'naver_runtime/scheduler.py': (420, 40363, '406a26c1c60912d07e10f05cfbff835e954984073974cf769751a428c295d8d5'), 'naver_runtime/writer.py': (420, 16024, 'c1287e1652bae0d9a151969cc48c4830e3d94b274b417aadf6bdfed213cbc537')}
+TARGET_COMMIT = '56f4aa957ec27e9d948b47cfa3bf6fc47eaf4130'
+TARGET_SOURCE_SHA256 = '26c370c4dd0e9b7828a9f429f6af4bb3c6dce28917d31454075660a40ac50143'
+TARGET_CANONICAL_SHA256 = 'ab8a81cda007571f29d0bbeb982972bdf53e0cf2dbb0bef95f303542fb8148a7'
+EXPECTED_TARGET_DELTA = {'naver_engine/setup_strategy_evidence.py': (420, 32012, '7a1b5cd328fa326f079a75e91e0a0e983ca13cd5bdd69b6c659ddee71116fdd8')}
 TARGET_DELTA = EXPECTED_TARGET_DELTA
 TARGET_MANIFEST = None
 REPORT_ASSETS = None
-CI_PROOF = {'source_commit': TARGET_COMMIT, 'tooling_head': 'a0fa28ae8394b3060e83f4eddcaa38d8558696f4', 'run_id': '39417554719', 'receipt_sha256': TARGET_CANONICAL_SHA256}
+CI_PROOF = {'source_commit': '56f4aa957ec27e9d948b47cfa3bf6fc47eaf4130', 'tooling_head': 'befc0529ce2f711083e2bae12ee73a745f24bc08', 'run_id': '39536937135', 'receipt_sha256': 'ab8a81cda007571f29d0bbeb982972bdf53e0cf2dbb0bef95f303542fb8148a7'}
 BASE = None
 OLD_SOURCE_SHA256 = '2fa09f9395862bde22a5c328c0825b16a4b17ffffd44ce2c2d12e7003c29a903'
 OLD_MANIFEST = None
@@ -158,7 +158,7 @@ CN = 'c40a1dbd0132043ce5b6a6a5565c7786699b60c0'
 CO = 'afc1547c598502032fc0d34737e524627d4d7b1fd834b5204b4c11e6a4f3031a'
 CP = '38329975429'
 CQ = 'ee474c9b697e411ab3748f185728f56d'
-APPROVED_AST_SCOPE = {'naver_engine/inspection_store.py': {'added': ('InspectionStorage.compact_job_checkpoints', '_COMPACT_INSPECTION_PROGRESS', '_COMPACT_STRUCTURE_PROGRESS', '_COMPACT_STRUCTURE_REASONS'), 'changed': (), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_runtime/scheduler.py': {'added': ('COMPACTION_BATCH', 'COMPACTION_END', 'COMPACTION_SECONDS', 'COMPACTION_START', 'Scheduler._compaction'), 'changed': ('Scheduler.__init__', 'Scheduler._tick'), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}, 'naver_runtime/writer.py': {'added': (), 'changed': ('DIAGNOSTIC_PHASE_IDS', 'METHODS'), 'imports_added': (), 'imports_removed': (), 'optional_abi': {}, 'removed': ()}}
+APPROVED_AST_SCOPE = {'naver_engine/setup_strategy_evidence.py': {'changed': ('_model_source',), 'added': (), 'removed': (), 'optional_abi': {}, 'imports_added': (), 'imports_removed': ()}}
 EXPECTED_AST_SCOPE = APPROVED_AST_SCOPE
 CR = 'fd9132c07031cae7162fb8af2a5131a8b1aeaba0'
 CS = 'a089de0912b34352ca21b998640c858d9f86d7e63d3d5b2db33d37d33a8c9a3b'
