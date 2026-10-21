@@ -1,0 +1,152 @@
+name: Fixed readonly market operation state
+on:
+  push:
+    branches: [codex/naver-claude-reference-ops-20261011]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Read fixed failed pair metadata once; no transition or cleanup'
+        required: true
+        type: choice
+        options: [READ_MARKET_OPERATION_STATE_ONCE]
+      native_run_id:
+        description: 'Exact same-head native 1997 qualification run'
+        required: true
+        type: string
+      audit_run_id:
+        description: 'Exact same-head audit push qualification run'
+        required: true
+        type: string
+      registry_sha256:
+        description: 'Reviewed canonical readonly qualification registry SHA256'
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: deploy-logic-analysis
+  cancel-in-progress: false
+jobs:
+  qualify-readonly:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011' && github.event_name == 'push' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Check readonly transport and core
+        run: |
+          set -euo pipefail
+          python3 -I -B - <<'PYCODE'
+          import hashlib,os,pathlib,stat,sys,types
+          path=pathlib.Path('backend/tools/naver_market_operation_state/qualification.py')
+          try:
+              if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError('SOURCE_PATH')
+              fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+              try:
+                  st=os.fstat(fd)
+                  if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or not 0<st.st_size<=131072:raise ValueError('SOURCE_FILE')
+                  with os.fdopen(fd,'rb',closefd=False) as stream:body=stream.read(131073)
+              finally:os.close(fd)
+              if hashlib.sha256(body).hexdigest()!='42d56016b0a980ce9a2a828defe2eb56fd5096c58174cdd4ffacb3297d30ee7e':raise ValueError('SOURCE_PIN')
+              Q=types.ModuleType('qualification');Q.__file__=str(path.absolute());sys.modules['qualification']=Q
+              exec(compile(body,'<pinned-readonly-qualification>','exec'),Q.__dict__)
+              root=path.absolute().parents[3]
+              raw=Q.read(root,Q.BASE+'ci.py',Q.SOURCE_PINS['ci.py']);m=types.ModuleType('readonly_ci');m.__file__=str(root/Q.BASE/'ci.py');exec(compile(raw,m.__file__,'exec'),m.__dict__);sys.argv=[m.__file__,'tests'];m.main()
+          except BaseException:
+              raise SystemExit('READONLY_WORKFLOW_REFUSED') from None
+          PYCODE
+      - name: Qualify readonly audit on empty Linux root
+        run: |
+          set -euo pipefail
+          sudo -n --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS,GITHUB_EVENT_NAME,GITHUB_REPOSITORY,GITHUB_REF,GITHUB_RUN_ATTEMPT,GITHUB_SHA /usr/bin/python3 -I -B - <<'PYCODE'
+          import hashlib,os,pathlib,stat,sys,types
+          path=pathlib.Path('backend/tools/naver_market_operation_state/qualification.py')
+          try:
+              if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError('SOURCE_PATH')
+              fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+              try:
+                  st=os.fstat(fd)
+                  if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or not 0<st.st_size<=131072:raise ValueError('SOURCE_FILE')
+                  with os.fdopen(fd,'rb',closefd=False) as stream:body=stream.read(131073)
+              finally:os.close(fd)
+              if hashlib.sha256(body).hexdigest()!='42d56016b0a980ce9a2a828defe2eb56fd5096c58174cdd4ffacb3297d30ee7e':raise ValueError('SOURCE_PIN')
+              Q=types.ModuleType('qualification');Q.__file__=str(path.absolute());sys.modules['qualification']=Q
+              exec(compile(body,'<pinned-readonly-qualification>','exec'),Q.__dict__)
+              root=path.absolute().parents[3]
+              raw=Q.read(root,Q.BASE+'ci.py',Q.SOURCE_PINS['ci.py']);m=types.ModuleType('readonly_ci');m.__file__=str(root/Q.BASE/'ci.py');exec(compile(raw,m.__file__,'exec'),m.__dict__);sys.argv=[m.__file__,'fixture'];m.main()
+          except BaseException:
+              raise SystemExit('READONLY_WORKFLOW_REFUSED') from None
+          PYCODE
+      - name: Retain only closed audit qualification
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: naver-market-operation-state-${{ github.run_id }}
+          path: |
+            readonly-audit-evidence/source-sha.txt
+            readonly-audit-evidence/audit.closed.json
+            readonly-audit-evidence/source-manifest.closed.json
+          if-no-files-found: error
+          retention-days: 7
+  observe-once:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.confirm == 'READ_MARKET_OPERATION_STATE_ONCE'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Validate readonly qualifications and build script
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT_CONFIRM: ${{ inputs.confirm }}
+          AUDIT_NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+          AUDIT_AUDIT_RUN_ID: ${{ inputs.audit_run_id }}
+          AUDIT_REGISTRY_SHA256: ${{ inputs.registry_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 -I -B - <<'PYCODE'
+          import hashlib,os,pathlib,stat,sys,types
+          path=pathlib.Path('backend/tools/naver_market_operation_state/qualification.py')
+          try:
+              if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError('SOURCE_PATH')
+              fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+              try:
+                  st=os.fstat(fd)
+                  if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or not 0<st.st_size<=131072:raise ValueError('SOURCE_FILE')
+                  with os.fdopen(fd,'rb',closefd=False) as stream:body=stream.read(131073)
+              finally:os.close(fd)
+              if hashlib.sha256(body).hexdigest()!='42d56016b0a980ce9a2a828defe2eb56fd5096c58174cdd4ffacb3297d30ee7e':raise ValueError('SOURCE_PIN')
+              Q=types.ModuleType('qualification');Q.__file__=str(path.absolute());sys.modules['qualification']=Q
+              exec(compile(body,'<pinned-readonly-qualification>','exec'),Q.__dict__)
+              root=path.absolute().parents[3]
+              sys.argv=[Q.__file__,'build'];Q.main()
+          except BaseException:
+              raise SystemExit('READONLY_WORKFLOW_REFUSED') from None
+          PYCODE
+      - name: Read fixed operation state once
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 2m
+          script: ${{ steps.build.outputs.script }}
+      # No tests, retries or cleanup in dispatch. A separate pinned receiver
+      # consumes completed job metadata and bounded log bytes only in RAM.

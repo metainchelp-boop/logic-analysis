@@ -1,0 +1,174 @@
+name: Fixed original market single refresh
+on:
+  push:
+    branches: [codex/naver-claude-reference-ops-20261011]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Start the original market coordinator once after the exact restored pair'
+        required: true
+        type: choice
+        options: [REFRESH_ORIGINAL_MARKET_ONCE]
+      native_run_id:
+        description: 'Exact same-head native 1997 qualification run'
+        required: true
+        type: string
+      refresh_run_id:
+        description: 'Exact same-head refresh tests and empty Linux qualification run'
+        required: true
+        type: string
+      registry_sha256:
+        description: 'Reviewed canonical refresh qualification registry SHA256'
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ${{ github.event_name == 'push' && 'qualify-original-market-refresh' || 'deploy-logic-analysis' }}
+  cancel-in-progress: false
+jobs:
+  portable-refresh:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011' && github.event_name == 'push' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Check exact refresh core and delivery
+        run: |
+          set -euo pipefail
+          python3 -I -B - <<'PYCODE'
+          import hashlib,os,pathlib,stat,sys,types
+          path=pathlib.Path('backend/tools/naver_original_market_refresh/adapter.py')
+          try:
+              if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError('SOURCE_PATH')
+              fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+              try:
+                  st=os.fstat(fd)
+                  if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or not 0<st.st_size<=65536:raise ValueError('SOURCE_FILE')
+                  with os.fdopen(fd,'rb',closefd=False) as stream:body=stream.read(65537)
+              finally:os.close(fd)
+              if len(body)>65536 or hashlib.sha256(body).hexdigest()!='0196286efa2f0476062c043726693c0ba3373316742b70b315af091126516451':raise ValueError('SOURCE_PIN')
+              m=types.ModuleType('fixed_refresh_adapter');m.__file__=str(path.absolute())
+              exec(compile(body,'<pinned-refresh-adapter>','exec'),m.__dict__)
+              sys.argv=[m.__file__,'tests'];m.main()
+          except BaseException:raise SystemExit('REFRESH_WORKFLOW_REFUSED') from None
+          PYCODE
+      - name: Retain closed refresh tests
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: naver-original-market-refresh-tests-${{ github.run_id }}
+          path: |
+            refresh-tests-evidence/source-sha.txt
+            refresh-tests-evidence/refresh.closed.json
+            refresh-tests-evidence/source-manifest.closed.json
+          if-no-files-found: error
+          retention-days: 7
+  linux-refresh:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011' && github.event_name == 'push' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Qualify refresh on empty Linux root
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = Linux
+          sudo -n unshare --net -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" RUNNER_OS="$RUNNER_OS" GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_REF="$GITHUB_REF" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_SHA="$GITHUB_SHA" /usr/bin/python3 -I -B - <<'PYCODE'
+          import hashlib,os,pathlib,stat,sys,types
+          path=pathlib.Path('backend/tools/naver_original_market_refresh/adapter.py')
+          try:
+              if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError('SOURCE_PATH')
+              fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+              try:
+                  st=os.fstat(fd)
+                  if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or not 0<st.st_size<=65536:raise ValueError('SOURCE_FILE')
+                  with os.fdopen(fd,'rb',closefd=False) as stream:body=stream.read(65537)
+              finally:os.close(fd)
+              if len(body)>65536 or hashlib.sha256(body).hexdigest()!='0196286efa2f0476062c043726693c0ba3373316742b70b315af091126516451':raise ValueError('SOURCE_PIN')
+              m=types.ModuleType('fixed_refresh_adapter');m.__file__=str(path.absolute())
+              exec(compile(body,'<pinned-refresh-adapter>','exec'),m.__dict__)
+              sys.argv=[m.__file__,'fixture'];m.main()
+          except BaseException:raise SystemExit('REFRESH_WORKFLOW_REFUSED') from None
+          PYCODE
+      - name: Retain closed refresh Linux
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: naver-original-market-refresh-linux-${{ github.run_id }}
+          path: |
+            refresh-fixture-evidence/source-sha.txt
+            refresh-fixture-evidence/refresh.closed.json
+            refresh-fixture-evidence/source-manifest.closed.json
+          if-no-files-found: error
+          retention-days: 7
+  refresh-once:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.confirm == 'REFRESH_ORIGINAL_MARKET_ONCE'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Validate refresh qualifications and build fixed script
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REFRESH_CONFIRM: ${{ inputs.confirm }}
+          REFRESH_NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+          REFRESH_REFRESH_RUN_ID: ${{ inputs.refresh_run_id }}
+          REFRESH_REGISTRY_SHA256: ${{ inputs.registry_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 -I -B - <<'PYCODE'
+          import hashlib,os,pathlib,stat,sys,types
+          path=pathlib.Path('backend/tools/naver_original_market_refresh/adapter.py')
+          try:
+              if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError('SOURCE_PATH')
+              fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+              try:
+                  st=os.fstat(fd)
+                  if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or not 0<st.st_size<=65536:raise ValueError('SOURCE_FILE')
+                  with os.fdopen(fd,'rb',closefd=False) as stream:body=stream.read(65537)
+              finally:os.close(fd)
+              if len(body)>65536 or hashlib.sha256(body).hexdigest()!='0196286efa2f0476062c043726693c0ba3373316742b70b315af091126516451':raise ValueError('SOURCE_PIN')
+              m=types.ModuleType('fixed_refresh_adapter');m.__file__=str(path.absolute())
+              exec(compile(body,'<pinned-refresh-adapter>','exec'),m.__dict__)
+              sys.argv=[m.__file__,'build'];m.main()
+          except BaseException:raise SystemExit('REFRESH_WORKFLOW_REFUSED') from None
+          PYCODE
+      - name: Refresh original market once
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 2m
+          script: ${{ steps.build.outputs.script }}
+      # Dispatch contains no tests, retries or cleanup. The fixed receiver reads
+      # completed metadata and one bounded job log in RAM; raw output is never saved.

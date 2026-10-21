@@ -1,0 +1,29 @@
+{
+  "source_commit": "4d5802360c1ba23aa801b1145ca8483db3edd35f",
+  "files": {
+    "reader.py": {
+      "sha256": "de6ff5b9a8bad4306293ae62c8498fe11bbec36f751f7cf3a05b0f580a4fb6a9",
+      "bytes": 55667
+    },
+    "fixtures.py": {
+      "sha256": "61a0e2f91e865b2ba825e3cacc754ff68dd87997cf724c15e13f4f1476185135",
+      "bytes": 16215
+    },
+    "test_reader.py": {
+      "sha256": "b015514a1701ba0ac8fc19181ddad7c547fa5d63f4d6f899c6c986e2a5f233cd",
+      "bytes": 21075
+    }
+  },
+  "tests": {
+    "python312": 42,
+    "python314": 42,
+    "failures": 0,
+    "errors": 0
+  },
+  "event_window": [
+    "2026-10-13T05:28:00+09:00",
+    "2026-10-13T05:29:00+09:00"
+  ],
+  "actual_execution": false,
+  "operating_calls": 0
+}

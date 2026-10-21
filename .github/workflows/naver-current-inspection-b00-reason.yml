@@ -1,0 +1,439 @@
+name: Fixed Foodin daily b00 reason once
+on:
+  push:
+    branches: [codex/naver-claude-reference-ops-20261011]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Read only Foodin 2026-10-18 daily reason once'
+        required: true
+        type: choice
+        options: [READ_FOODIN_20261018_DAILY_REASON_ONCE]
+      native_run_id:
+        description: 'Exact same-head native 1997 qualification run'
+        required: true
+        type: string
+      fixture_run_id:
+        description: 'Exact same-head Linux 8-case push qualification run'
+        required: true
+        type: string
+      registry_sha256:
+        description: 'Reviewed exact qualification registry SHA256'
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ${{ github.event_name == 'push' && 'qualify-foodin-b00-daily-reason' || 'deploy-logic-analysis' }}
+  cancel-in-progress: false
+jobs:
+  qualify-readonly:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011' && github.event_name == 'push' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Check fixed readonly source on Linux
+        run: |
+          set -euo pipefail
+          python3 -I -B - <<'PYCODE'
+          # Source used only to assemble one fixed workflow; not an additional OPS module.
+          import hashlib,json,os,pathlib,re,stat,sys,types
+          ROOT=pathlib.Path.cwd().absolute()
+          REPO='metainchelp-boop/logic-analysis'
+          BRANCH='codex/naver-claude-reference-ops-20261011'
+          WORKFLOW='.github/workflows/naver-current-inspection-b00-reason.yml'
+          CONFIRM='READ_FOODIN_20261018_DAILY_REASON_ONCE'
+          PREFIX='naver-current-inspection-b00-reason-'
+          Q_PATH='backend/tools/naver_market_operation_ledger/qualification.py'
+          Q_PIN='06a302a5744bb24423b1f52703f5432fd2bfd40bf50a27f83eff0f4229ae0058'
+          PINS={'backend/tools/naver_current_inspection_b00_reason.py': '1b9b7b05bb2d600bcaa5a1ca4f9fd82e06d490584c7ed5997d45493c6acdb4a9', 'backend/tools/naver_current_inspection_b00_reason_transport.py': '935cfaab5356410aea11d11d90ef29e70d262835a457281943fdee5403bee713', 'backend/tests/test_naver_current_inspection_b00_reason.py': '24124bb2dbe270c7ac23f2344b0d5fe36920496fa0bacd8c0d3d1f7df254f71b', 'backend/tools/naver_erp_tunnel_service_install.py': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'backend/tools/naver_preview_release.py': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'backend/tools/naver_current_inspection_diagnostics.py': '04fecbd6538524b3b58f9b3a121294ff1d662154360c9346137567cdc49adf1e'}
+          STEPS=('Checkout exact source','Python 3.12','Check fixed readonly source on Linux','Retain closed qualification only')
+          TEST_IDS=('test_sqlite_readonly_authorizer', 'test_old_source_package_refused', 'test_old_receipt_rejected_before_docker', 'test_namespace_target_cannot_expand', 'test_closed_output_rejects_raw_and_alias', 'test_fixed_daily_and_no_writer_calls', 'test_host_guard_function_byte_preserved', 'test_three_source_roundtrip_and_tamper')
+          
+          
+          def initial_read(relative,pin):
+           path=ROOT/relative
+           if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError('SOURCE_PATH')
+           fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+           try:
+            before=os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1 or not 0<before.st_size<=131072:raise ValueError('SOURCE_FILE')
+            body=os.read(fd,131073);after=os.fstat(fd);named=path.stat(follow_symlinks=False)
+            identity=lambda s:(s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_nlink)
+            if identity(before)!=identity(after) or identity(after)!=identity(named) or len(body)!=before.st_size:raise ValueError('SOURCE_CHANGED')
+           finally:os.close(fd)
+           if hashlib.sha256(body).hexdigest()!=pin:raise ValueError('SOURCE_PIN')
+           return body
+          
+          
+          def load_qualifier():
+           body=initial_read(Q_PATH,Q_PIN)
+           m=types.ModuleType('b00_reason_existing_qualification')
+           exec(compile(body,'<pinned-existing-native-qualification>','exec'),m.__dict__)
+           return m
+          
+          
+          def context(Q,event):
+           Q.need(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('GITHUB_REPOSITORY')==REPO
+            and os.environ.get('GITHUB_REF')=='refs/heads/'+BRANCH and os.environ.get('GITHUB_EVENT_NAME')==event
+            and os.environ.get('GITHUB_RUN_ATTEMPT')=='1','CONTEXT')
+           head=os.environ.get('GITHUB_SHA');rid=os.environ.get('GITHUB_RUN_ID')
+           Q.need(Q.digest(head,40) and type(rid) is str and re.fullmatch('[1-9][0-9]{0,18}',rid) is not None and Q.positive(int(rid)),'CONTEXT')
+           return head,int(rid)
+          
+          
+          def registration(Q):
+           bodies={path:Q.read(ROOT,path,pin) for path,pin in PINS.items()}
+           Q.read(ROOT,Q.NATIVE_WORKFLOW,Q.NATIVE_WORKFLOW_PIN)
+           # No self-hash constant: immutable same-head checkout and artifact bind these bytes.
+           workflow=Q.read(ROOT,WORKFLOW)
+           source=dict(schema='foodin-b00-daily-reason-source-v1',sources=dict(PINS),qualifier_sha256=Q_PIN,
+            dependencies=dict(Q.DEPENDENCIES),native_workflow_sha256=Q.NATIVE_WORKFLOW_PIN,workflow_sha256=Q.sha(workflow),
+            target=dict(source='b00d6bf805b43b282c04dd95970ae9ccb7d8247d',kind='daily',day='2026-10-18',namespace='ad_account_no',ad_account_no=1030001,possibility_id=51952),fixture_count=8)
+           return bodies,source
+          
+          
+          def module(body,name,filename):
+           m=types.ModuleType(name);m.__file__=str(ROOT/filename)
+           exec(compile(body,'<pinned-'+name+'>','exec'),m.__dict__)
+           return m
+          
+          
+          def write_closed(Q,name,body):
+           path=ROOT/'foodin-reason-evidence'/name
+           fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o644)
+           try:
+            Q.need(type(body) is bytes and 0<len(body)<=32768,'ARTIFACT_SIZE')
+            with os.fdopen(fd,'wb',closefd=False) as stream:stream.write(body);stream.flush();os.fsync(fd)
+           finally:os.close(fd)
+          
+          
+          def push_check():
+           import platform,unittest
+           Q=load_qualifier();head,_=context(Q,'push');bodies,source=registration(Q)
+           Q.need(platform.system()=='Linux' and os.environ.get('RUNNER_OS')=='Linux'
+            and os.environ.get('RUNNER_ENVIRONMENT')=='github-hosted','HOSTED_LINUX')
+           with Q.dependencies(ROOT):pass  # Exact existing native dependency registry, no API calls.
+           name='backend/tests/test_naver_current_inspection_b00_reason.py'
+           tests=module(bodies[name],'foodin_readonly_tests',name)
+           suite=unittest.defaultTestLoader.loadTestsFromModule(tests)
+           def flatten(value):
+            for item in value:
+             if isinstance(item,unittest.TestSuite):yield from flatten(item)
+             else:yield item
+           ids=[t.id() for t in flatten(suite)]
+           Q.need(len(ids)==8 and sorted(i.rsplit('.',1)[-1] for i in ids)==sorted(TEST_IDS),'FIXTURE_COUNT')
+           result=unittest.TestResult();suite.run(result)
+           failed=[test.id().rsplit('.',1)[-1] for test,_ in (*result.failures,*result.errors)]
+           Q.need(all(name in TEST_IDS for name in failed),'FIXTURE_IDS')
+           counts=dict(run=result.testsRun,failures=len(result.failures),errors=len(result.errors),skips=len(result.skipped))
+           passed=counts==dict(run=8,failures=0,errors=0,skips=0)
+           value=dict(schema='foodin-b00-daily-reason-linux-v1',status='passed' if passed else 'failed',tests=counts,
+            failed_tests=sorted(failed),source_manifest_sha256=Q.sha(Q.canonical(source)),linux=True,
+            operating_host_access=False,production_database_opened=False,service_calls=False)
+           folder=ROOT/'foodin-reason-evidence';folder.mkdir(mode=0o755)
+           write_closed(Q,'source-sha.txt',(head+'\n').encode('ascii'))
+           write_closed(Q,'source-manifest.closed.json',Q.canonical(source))
+           write_closed(Q,'qualification.closed.json',Q.canonical(value))
+           Q.need(passed,'FIXTURE_FAILED')
+           print('FOODIN_REASON_LINUX_QUALIFIED')
+          
+          
+          def fixture_gate(Q,A,G,run_id,head,source):
+           run=Q.run_bound(A.run(run_id),run_id,head,WORKFLOW,'push')
+           job=Q.selected_job(A.jobs(run_id),run_id,head,'push')
+           Q.steps(job,STEPS)
+           item=Q.artifact(A.artifacts(run_id),run_id,head,PREFIX)
+           ref=dict(run_id=run_id,head_sha=head,workflow_id=run['workflow_id'],job_id=job['id'],artifact_id=item['id'],artifact_size=item['size_in_bytes'],artifact_digest=item.get('digest'))
+           packed=A.artifact_zip(item['id'])
+           members=G.unpack(packed,ref,{'source-sha.txt','source-manifest.closed.json','qualification.closed.json'})
+           Q.need(members['source-sha.txt']==(head+'\n').encode('ascii'),'FIXTURE_HEAD')
+           Q.need(Q.same(G.strict(members['source-manifest.closed.json'],16384),source),'FIXTURE_SOURCE')
+           want=dict(schema='foodin-b00-daily-reason-linux-v1',status='passed',tests=dict(run=8,failures=0,errors=0,skips=0),
+            failed_tests=[],source_manifest_sha256=Q.sha(Q.canonical(source)),linux=True,
+            operating_host_access=False,production_database_opened=False,service_calls=False)
+           Q.need(Q.same(G.strict(members['qualification.closed.json'],16384),want),'FIXTURE_RESULT')
+           return dict(ref=ref,artifact_sha256=Q.sha(packed),result=want)
+          
+          
+          def qualify(Q,head,native_id,fixture_id):
+           Q.need(Q.digest(head,40) and Q.positive(native_id) and Q.positive(fixture_id) and native_id!=fixture_id,'INPUT')
+           bodies,source=registration(Q)
+           with Q.dependencies(ROOT) as deps:
+            A,G=deps['fixed_actions_api'],deps['workflow_delivery']
+            native=Q.collect_native(A,G,native_id,head)
+            fixture=fixture_gate(Q,A,G,fixture_id,head,source)
+           registry=dict(schema='foodin-b00-daily-reason-qualified-v1',head_sha=head,source=source,evidence=dict(native=native,fixture=fixture))
+           Q.need(len(Q.canonical(registry))<=32768,'REGISTRY_SIZE')
+           return registry,bodies
+          
+          
+          def render(Q,bodies):
+           import base64
+           path='backend/tools/naver_current_inspection_b00_reason_transport.py'
+           transport=module(bodies[path],'foodin_reason_transport',path)
+           sources={name:transport.compact(bodies['backend/tools/'+filename].decode()) for name,filename in transport.SOURCE_FILES.items()}
+           value=dict(version=1,operation=transport.OPERATION,package=dict(transport.PACKAGE),sources=sources)
+           wire=transport.encode(value);encoded=base64.b64encode(bodies[path]).decode('ascii')
+           Q.need(transport.decode(wire)==value and len(encoded)<=transport.MAX_TRANSPORT_BASE64,'TRANSPORT')
+           script="set -eu\n/usr/bin/python3 -I -B - <<'PYCODE'\nimport base64,hashlib,json,os,sys,types\ntry:\n"
+           script+='    wire='+repr(wire)+'; source='+repr(encoded)+'\n'
+           script+="    if len(source)>32768:raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SIZE')\n    raw=base64.b64decode(source,validate=True)\n"
+           script+='    if hashlib.sha256(raw).hexdigest()!='+repr(PINS[path])+":raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SOURCE')\n"
+           script+="    transport=types.ModuleType('approved_current_inspection_diagnostics_transport');exec(raw,transport.__dict__)\n    bundle=transport.decode(wire)\n    os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')\n    result=transport.execute(bundle)\nexcept BaseException:\n"
+           script+="    result={'ok':False,'mode':'current-inspection-b00-foodin-reason-v1','source_commit':'b00d6bf805b43b282c04dd95970ae9ccb7d8247d','mutations':0,'collection_completion_verified':False,'stage':'bootstrap','error_code':'SOURCE_DIAGNOSTICS_BOOTSTRAP_REFUSED'}\n"
+           script+="print('NAVER_CURRENT_INSPECTION_B00_FOODIN_REASON_V1='+json.dumps(result,sort_keys=True,allow_nan=False));sys.exit(0 if result.get('ok') else 1)\nPYCODE\n"
+           Q.need(script.isascii() and len(script.encode())<131072,'SSH_SIZE')
+           # Reused Q.output has a narrower existing 49152-byte cap; never raise it.
+           Q.need(len(script.encode())<=49152,'OUTPUT_SIZE')
+           return script,dict(wire=len(wire),json=len(json.dumps(value,allow_nan=False,separators=(',',':')).encode()),bootstrap=len(encoded),ssh=len(script.encode()))
+          
+          
+          def dispatch_build():
+           Q=load_qualifier();head,current_id=context(Q,'workflow_dispatch')
+           Q.need(os.environ.get('REASON_CONFIRM')==CONFIRM,'CONFIRM')
+           ids=[]
+           for key in ('REASON_NATIVE_RUN_ID','REASON_FIXTURE_RUN_ID'):
+            raw=os.environ.get(key);Q.need(type(raw) is str and re.fullmatch('[1-9][0-9]{0,18}',raw) is not None and Q.positive(int(raw)),'INPUT_ID');ids.append(int(raw))
+           Q.need(current_id not in ids and ids[0]!=ids[1],'INPUT_ID')
+           expected=os.environ.get('REASON_REGISTRY_SHA256');Q.need(Q.digest(expected),'REGISTRY_INPUT')
+           registry,bodies=qualify(Q,head,*ids)
+           Q.need(Q.sha(Q.canonical(registry))==expected,'REGISTRY_BINDING')
+           script,sizes=render(Q,bodies);Q.output(os.environ.get('GITHUB_OUTPUT'),script)
+           marker=dict(native='PASS',fixture='PASS',head_sha=head,native_run_id=ids[0],fixture_run_id=ids[1],
+            registry_sha256=expected,script_sha256=Q.sha(script.encode()),source_manifest_sha256=Q.sha(Q.canonical(registry['source'])),sizes=sizes)
+           print('NAVER_CURRENT_INSPECTION_B00_FOODIN_QUALIFICATION_V1='+Q.canonical(marker).decode('ascii'))
+          
+          try:
+           push_check()
+          except BaseException:
+           raise SystemExit('FOODIN_REASON_WORKFLOW_REFUSED') from None
+          PYCODE
+      - name: Retain closed qualification only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: naver-current-inspection-b00-reason-${{ github.run_id }}
+          path: |
+            foodin-reason-evidence/source-sha.txt
+            foodin-reason-evidence/source-manifest.closed.json
+            foodin-reason-evidence/qualification.closed.json
+          if-no-files-found: error
+          retention-days: 7
+  observe-once:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.confirm == 'READ_FOODIN_20261018_DAILY_REASON_ONCE'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Validate exact qualifications and build readonly script
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REASON_CONFIRM: ${{ inputs.confirm }}
+          REASON_NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+          REASON_FIXTURE_RUN_ID: ${{ inputs.fixture_run_id }}
+          REASON_REGISTRY_SHA256: ${{ inputs.registry_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 -I -B - <<'PYCODE'
+          # Source used only to assemble one fixed workflow; not an additional OPS module.
+          import hashlib,json,os,pathlib,re,stat,sys,types
+          ROOT=pathlib.Path.cwd().absolute()
+          REPO='metainchelp-boop/logic-analysis'
+          BRANCH='codex/naver-claude-reference-ops-20261011'
+          WORKFLOW='.github/workflows/naver-current-inspection-b00-reason.yml'
+          CONFIRM='READ_FOODIN_20261018_DAILY_REASON_ONCE'
+          PREFIX='naver-current-inspection-b00-reason-'
+          Q_PATH='backend/tools/naver_market_operation_ledger/qualification.py'
+          Q_PIN='06a302a5744bb24423b1f52703f5432fd2bfd40bf50a27f83eff0f4229ae0058'
+          PINS={'backend/tools/naver_current_inspection_b00_reason.py': '1b9b7b05bb2d600bcaa5a1ca4f9fd82e06d490584c7ed5997d45493c6acdb4a9', 'backend/tools/naver_current_inspection_b00_reason_transport.py': '935cfaab5356410aea11d11d90ef29e70d262835a457281943fdee5403bee713', 'backend/tests/test_naver_current_inspection_b00_reason.py': '24124bb2dbe270c7ac23f2344b0d5fe36920496fa0bacd8c0d3d1f7df254f71b', 'backend/tools/naver_erp_tunnel_service_install.py': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'backend/tools/naver_preview_release.py': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'backend/tools/naver_current_inspection_diagnostics.py': '04fecbd6538524b3b58f9b3a121294ff1d662154360c9346137567cdc49adf1e'}
+          STEPS=('Checkout exact source','Python 3.12','Check fixed readonly source on Linux','Retain closed qualification only')
+          TEST_IDS=('test_sqlite_readonly_authorizer', 'test_old_source_package_refused', 'test_old_receipt_rejected_before_docker', 'test_namespace_target_cannot_expand', 'test_closed_output_rejects_raw_and_alias', 'test_fixed_daily_and_no_writer_calls', 'test_host_guard_function_byte_preserved', 'test_three_source_roundtrip_and_tamper')
+          
+          
+          def initial_read(relative,pin):
+           path=ROOT/relative
+           if any(p.is_symlink() for p in (path,*path.parents)):raise ValueError('SOURCE_PATH')
+           fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+           try:
+            before=os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1 or not 0<before.st_size<=131072:raise ValueError('SOURCE_FILE')
+            body=os.read(fd,131073);after=os.fstat(fd);named=path.stat(follow_symlinks=False)
+            identity=lambda s:(s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_nlink)
+            if identity(before)!=identity(after) or identity(after)!=identity(named) or len(body)!=before.st_size:raise ValueError('SOURCE_CHANGED')
+           finally:os.close(fd)
+           if hashlib.sha256(body).hexdigest()!=pin:raise ValueError('SOURCE_PIN')
+           return body
+          
+          
+          def load_qualifier():
+           body=initial_read(Q_PATH,Q_PIN)
+           m=types.ModuleType('b00_reason_existing_qualification')
+           exec(compile(body,'<pinned-existing-native-qualification>','exec'),m.__dict__)
+           return m
+          
+          
+          def context(Q,event):
+           Q.need(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('GITHUB_REPOSITORY')==REPO
+            and os.environ.get('GITHUB_REF')=='refs/heads/'+BRANCH and os.environ.get('GITHUB_EVENT_NAME')==event
+            and os.environ.get('GITHUB_RUN_ATTEMPT')=='1','CONTEXT')
+           head=os.environ.get('GITHUB_SHA');rid=os.environ.get('GITHUB_RUN_ID')
+           Q.need(Q.digest(head,40) and type(rid) is str and re.fullmatch('[1-9][0-9]{0,18}',rid) is not None and Q.positive(int(rid)),'CONTEXT')
+           return head,int(rid)
+          
+          
+          def registration(Q):
+           bodies={path:Q.read(ROOT,path,pin) for path,pin in PINS.items()}
+           Q.read(ROOT,Q.NATIVE_WORKFLOW,Q.NATIVE_WORKFLOW_PIN)
+           # No self-hash constant: immutable same-head checkout and artifact bind these bytes.
+           workflow=Q.read(ROOT,WORKFLOW)
+           source=dict(schema='foodin-b00-daily-reason-source-v1',sources=dict(PINS),qualifier_sha256=Q_PIN,
+            dependencies=dict(Q.DEPENDENCIES),native_workflow_sha256=Q.NATIVE_WORKFLOW_PIN,workflow_sha256=Q.sha(workflow),
+            target=dict(source='b00d6bf805b43b282c04dd95970ae9ccb7d8247d',kind='daily',day='2026-10-18',namespace='ad_account_no',ad_account_no=1030001,possibility_id=51952),fixture_count=8)
+           return bodies,source
+          
+          
+          def module(body,name,filename):
+           m=types.ModuleType(name);m.__file__=str(ROOT/filename)
+           exec(compile(body,'<pinned-'+name+'>','exec'),m.__dict__)
+           return m
+          
+          
+          def write_closed(Q,name,body):
+           path=ROOT/'foodin-reason-evidence'/name
+           fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o644)
+           try:
+            Q.need(type(body) is bytes and 0<len(body)<=32768,'ARTIFACT_SIZE')
+            with os.fdopen(fd,'wb',closefd=False) as stream:stream.write(body);stream.flush();os.fsync(fd)
+           finally:os.close(fd)
+          
+          
+          def push_check():
+           import platform,unittest
+           Q=load_qualifier();head,_=context(Q,'push');bodies,source=registration(Q)
+           Q.need(platform.system()=='Linux' and os.environ.get('RUNNER_OS')=='Linux'
+            and os.environ.get('RUNNER_ENVIRONMENT')=='github-hosted','HOSTED_LINUX')
+           with Q.dependencies(ROOT):pass  # Exact existing native dependency registry, no API calls.
+           name='backend/tests/test_naver_current_inspection_b00_reason.py'
+           tests=module(bodies[name],'foodin_readonly_tests',name)
+           suite=unittest.defaultTestLoader.loadTestsFromModule(tests)
+           def flatten(value):
+            for item in value:
+             if isinstance(item,unittest.TestSuite):yield from flatten(item)
+             else:yield item
+           ids=[t.id() for t in flatten(suite)]
+           Q.need(len(ids)==8 and sorted(i.rsplit('.',1)[-1] for i in ids)==sorted(TEST_IDS),'FIXTURE_COUNT')
+           result=unittest.TestResult();suite.run(result)
+           failed=[test.id().rsplit('.',1)[-1] for test,_ in (*result.failures,*result.errors)]
+           Q.need(all(name in TEST_IDS for name in failed),'FIXTURE_IDS')
+           counts=dict(run=result.testsRun,failures=len(result.failures),errors=len(result.errors),skips=len(result.skipped))
+           passed=counts==dict(run=8,failures=0,errors=0,skips=0)
+           value=dict(schema='foodin-b00-daily-reason-linux-v1',status='passed' if passed else 'failed',tests=counts,
+            failed_tests=sorted(failed),source_manifest_sha256=Q.sha(Q.canonical(source)),linux=True,
+            operating_host_access=False,production_database_opened=False,service_calls=False)
+           folder=ROOT/'foodin-reason-evidence';folder.mkdir(mode=0o755)
+           write_closed(Q,'source-sha.txt',(head+'\n').encode('ascii'))
+           write_closed(Q,'source-manifest.closed.json',Q.canonical(source))
+           write_closed(Q,'qualification.closed.json',Q.canonical(value))
+           Q.need(passed,'FIXTURE_FAILED')
+           print('FOODIN_REASON_LINUX_QUALIFIED')
+          
+          
+          def fixture_gate(Q,A,G,run_id,head,source):
+           run=Q.run_bound(A.run(run_id),run_id,head,WORKFLOW,'push')
+           job=Q.selected_job(A.jobs(run_id),run_id,head,'push')
+           Q.steps(job,STEPS)
+           item=Q.artifact(A.artifacts(run_id),run_id,head,PREFIX)
+           ref=dict(run_id=run_id,head_sha=head,workflow_id=run['workflow_id'],job_id=job['id'],artifact_id=item['id'],artifact_size=item['size_in_bytes'],artifact_digest=item.get('digest'))
+           packed=A.artifact_zip(item['id'])
+           members=G.unpack(packed,ref,{'source-sha.txt','source-manifest.closed.json','qualification.closed.json'})
+           Q.need(members['source-sha.txt']==(head+'\n').encode('ascii'),'FIXTURE_HEAD')
+           Q.need(Q.same(G.strict(members['source-manifest.closed.json'],16384),source),'FIXTURE_SOURCE')
+           want=dict(schema='foodin-b00-daily-reason-linux-v1',status='passed',tests=dict(run=8,failures=0,errors=0,skips=0),
+            failed_tests=[],source_manifest_sha256=Q.sha(Q.canonical(source)),linux=True,
+            operating_host_access=False,production_database_opened=False,service_calls=False)
+           Q.need(Q.same(G.strict(members['qualification.closed.json'],16384),want),'FIXTURE_RESULT')
+           return dict(ref=ref,artifact_sha256=Q.sha(packed),result=want)
+          
+          
+          def qualify(Q,head,native_id,fixture_id):
+           Q.need(Q.digest(head,40) and Q.positive(native_id) and Q.positive(fixture_id) and native_id!=fixture_id,'INPUT')
+           bodies,source=registration(Q)
+           with Q.dependencies(ROOT) as deps:
+            A,G=deps['fixed_actions_api'],deps['workflow_delivery']
+            native=Q.collect_native(A,G,native_id,head)
+            fixture=fixture_gate(Q,A,G,fixture_id,head,source)
+           registry=dict(schema='foodin-b00-daily-reason-qualified-v1',head_sha=head,source=source,evidence=dict(native=native,fixture=fixture))
+           Q.need(len(Q.canonical(registry))<=32768,'REGISTRY_SIZE')
+           return registry,bodies
+          
+          
+          def render(Q,bodies):
+           import base64
+           path='backend/tools/naver_current_inspection_b00_reason_transport.py'
+           transport=module(bodies[path],'foodin_reason_transport',path)
+           sources={name:transport.compact(bodies['backend/tools/'+filename].decode()) for name,filename in transport.SOURCE_FILES.items()}
+           value=dict(version=1,operation=transport.OPERATION,package=dict(transport.PACKAGE),sources=sources)
+           wire=transport.encode(value);encoded=base64.b64encode(bodies[path]).decode('ascii')
+           Q.need(transport.decode(wire)==value and len(encoded)<=transport.MAX_TRANSPORT_BASE64,'TRANSPORT')
+           script="set -eu\n/usr/bin/python3 -I -B - <<'PYCODE'\nimport base64,hashlib,json,os,sys,types\ntry:\n"
+           script+='    wire='+repr(wire)+'; source='+repr(encoded)+'\n'
+           script+="    if len(source)>32768:raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SIZE')\n    raw=base64.b64decode(source,validate=True)\n"
+           script+='    if hashlib.sha256(raw).hexdigest()!='+repr(PINS[path])+":raise ValueError('SOURCE_DIAGNOSTICS_TRANSPORT_SOURCE')\n"
+           script+="    transport=types.ModuleType('approved_current_inspection_diagnostics_transport');exec(raw,transport.__dict__)\n    bundle=transport.decode(wire)\n    os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')\n    result=transport.execute(bundle)\nexcept BaseException:\n"
+           script+="    result={'ok':False,'mode':'current-inspection-b00-foodin-reason-v1','source_commit':'b00d6bf805b43b282c04dd95970ae9ccb7d8247d','mutations':0,'collection_completion_verified':False,'stage':'bootstrap','error_code':'SOURCE_DIAGNOSTICS_BOOTSTRAP_REFUSED'}\n"
+           script+="print('NAVER_CURRENT_INSPECTION_B00_FOODIN_REASON_V1='+json.dumps(result,sort_keys=True,allow_nan=False));sys.exit(0 if result.get('ok') else 1)\nPYCODE\n"
+           Q.need(script.isascii() and len(script.encode())<131072,'SSH_SIZE')
+           # Reused Q.output has a narrower existing 49152-byte cap; never raise it.
+           Q.need(len(script.encode())<=49152,'OUTPUT_SIZE')
+           return script,dict(wire=len(wire),json=len(json.dumps(value,allow_nan=False,separators=(',',':')).encode()),bootstrap=len(encoded),ssh=len(script.encode()))
+          
+          
+          def dispatch_build():
+           Q=load_qualifier();head,current_id=context(Q,'workflow_dispatch')
+           Q.need(os.environ.get('REASON_CONFIRM')==CONFIRM,'CONFIRM')
+           ids=[]
+           for key in ('REASON_NATIVE_RUN_ID','REASON_FIXTURE_RUN_ID'):
+            raw=os.environ.get(key);Q.need(type(raw) is str and re.fullmatch('[1-9][0-9]{0,18}',raw) is not None and Q.positive(int(raw)),'INPUT_ID');ids.append(int(raw))
+           Q.need(current_id not in ids and ids[0]!=ids[1],'INPUT_ID')
+           expected=os.environ.get('REASON_REGISTRY_SHA256');Q.need(Q.digest(expected),'REGISTRY_INPUT')
+           registry,bodies=qualify(Q,head,*ids)
+           Q.need(Q.sha(Q.canonical(registry))==expected,'REGISTRY_BINDING')
+           script,sizes=render(Q,bodies);Q.output(os.environ.get('GITHUB_OUTPUT'),script)
+           marker=dict(native='PASS',fixture='PASS',head_sha=head,native_run_id=ids[0],fixture_run_id=ids[1],
+            registry_sha256=expected,script_sha256=Q.sha(script.encode()),source_manifest_sha256=Q.sha(Q.canonical(registry['source'])),sizes=sizes)
+           print('NAVER_CURRENT_INSPECTION_B00_FOODIN_QUALIFICATION_V1='+Q.canonical(marker).decode('ascii'))
+          
+          try:
+           dispatch_build()
+          except BaseException:
+           raise SystemExit('FOODIN_REASON_WORKFLOW_REFUSED') from None
+          PYCODE
+      - name: Read fixed Foodin daily reason once
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 2m
+          script: ${{ steps.build.outputs.script }}
+      # No tests, retries or cleanup in dispatch. Root owns the exclusive intent.

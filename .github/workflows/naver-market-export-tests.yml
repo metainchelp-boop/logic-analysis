@@ -1,0 +1,46 @@
+name: 저장 검색표본 내보내기 개발 검증 (배포 없음)
+
+on:
+  push:
+    branches: [codex/naver-claude-reference-ops-20261011]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: naver-market-export-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-market-export:
+    if: github.ref == 'refs/heads/codex/naver-claude-reference-ops-20261011'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: 개발 소스 받기 (배포 자격 없음)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: 합성 SQLite·파일 검사 (외부망 차단)
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/market-tests" "$RUNNER_TEMP/market-home"
+          git rev-parse HEAD > "$RUNNER_TEMP/market-tests/source-sha.txt"
+          sudo unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            env -i "PATH=$PATH" "HOME=$RUNNER_TEMP/market-home" "TMPDIR=$RUNNER_TEMP/market-home" \
+            LANG=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            python -m unittest discover -s backend/tests -p 'test_naver_*_export.py' -v \
+            2>&1 | tee "$RUNNER_TEMP/market-tests/export-tests.txt"
+      - name: 소스·합성 결과 보관 (운영 자료 없음)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: naver-market-export-tests-${{ github.run_id }}
+          path: ${{ runner.temp }}/market-tests/
+          retention-days: 7
+          if-no-files-found: error

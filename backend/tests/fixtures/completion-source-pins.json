@@ -1,0 +1,1459 @@
+{
+  "branch": "refs/heads/codex/naver-completion-release-20261012",
+  "canonical": {
+    "file_count": 161,
+    "gzip_bytes": 2112812,
+    "gzip_sha256": "7d02a455ff2b8b2e2bbcd598b71f5e06ffe8e9d2099f08a2e87a8ea10cbae872",
+    "raw_bytes": 5447680,
+    "raw_sha256": "db8b649cfaa70c91e9daa886a5909e382d79e256f62c5abd90d91f4b0cfbea65"
+  },
+  "manifest": {
+    ".dockerignore": [
+      420,
+      408,
+      "ba16cad53840bc35b7c174d5cc143a83e7a56cc63acad2c2d14fab17ab30d1a6"
+    ],
+    "Dockerfile.naver-engine": [
+      420,
+      1134,
+      "f838c3da2687e8b800046005ef5bd39b1fc3e3454cecdbe291a233ee00004edc"
+    ],
+    "Dockerfile.naver-engine.dockerignore": [
+      420,
+      374,
+      "4b3d1a3f35e7f84a6db89382a1b27358ed1a8f2ee9d3b0112c87ded1f468f43d"
+    ],
+    "Dockerfile.naver-relay": [
+      420,
+      1421,
+      "c05ec8ced0554c9237718e3c37c265c615d86461d3f5b23df30f23bf113da77d"
+    ],
+    "Dockerfile.naver-relay.dockerignore": [
+      420,
+      462,
+      "ae83e68adcc2b2b9cc987dc81e92a3fa42c91542309d9467033a69f59590fb59"
+    ],
+    "backend/app/__init__.py": [
+      420,
+      0,
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    "backend/app/naver_auto/__init__.py": [
+      420,
+      927,
+      "64020d9148504885f294af924dcea4d2f312df8b6014d646f98b9e5221a4f164"
+    ],
+    "backend/app/naver_auto/checks.py": [
+      420,
+      16435,
+      "79e61753a0c16f1a8106e7bec2ed89404688eb6ff9a67f8783f47d13409b0b4c"
+    ],
+    "backend/app/naver_auto/issues.py": [
+      420,
+      14469,
+      "b47ab19a490c5035cec0e59d19e5720edb03d0c103fe4e1cce3abe2dace9556a"
+    ],
+    "backend/app/naver_auto/matching.py": [
+      420,
+      27050,
+      "6be28f0bcf2e86ff1a2d799063c3ac5caca81a33ac3572ed7f754aef14bb3eb0"
+    ],
+    "backend/app/naver_auto/org_snapshot.py": [
+      420,
+      33415,
+      "34da0635ee7d071c3dd02bf4001343f2c42001ebc70d7e5548e692d687920f97"
+    ],
+    "backend/app/naver_auto/scope.py": [
+      420,
+      35601,
+      "fd25fae418f27e6bd9b01415489164eb85241a5151a3e5fa1ad085edec7b3cd7"
+    ],
+    "backend/app/naver_auto/thresholds.py": [
+      420,
+      3789,
+      "6b5259480f85d0c397fac1ee7884a4beb14e0ee60da02669c104b21131498aa7"
+    ],
+    "backend/app/naver_auto/verdict.py": [
+      420,
+      11797,
+      "b8ff947d92e9dd0e0ceafd6b1da2e7dc3841875811417e83ae387ba0074809ec"
+    ],
+    "backend/app/naver_entry.py": [
+      420,
+      457,
+      "21aaf8ace7ca7b650e42cf1a32848cf00696680b68c6624a6ca9cbab7c891c08"
+    ],
+    "backend/app/naver_relay.py": [
+      420,
+      25944,
+      "e9d7d38d572a21af77e220199bd34988908d3c636c3a834071fec35bd3065e61"
+    ],
+    "backend/app/routers/__init__.py": [
+      420,
+      0,
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    "backend/app/routers/naver.py": [
+      420,
+      5619,
+      "cac5dfc32757f7472f86387447e93cb178de60771cf2bf699aa8ad4cf6bf8069"
+    ],
+    "backend/naver_page/README.md": [
+      420,
+      824,
+      "6ea9866e718da69999ffc5ce878aaa71e29bb9a6b8f65e4cf53a59c7fb779212"
+    ],
+    "backend/naver_page/app.css": [
+      420,
+      59087,
+      "296efe6a624ada65affaf2397d2dd55356917bcdc540f6f4f4eddfacee17a5dd"
+    ],
+    "backend/naver_page/app.js": [
+      420,
+      223505,
+      "8a4daa3a0dbaa9ae61434c8dac223bdb47a3ed0b9106c7c324b4aa8260f25ab3"
+    ],
+    "backend/naver_page/automation-ui.js": [
+      420,
+      46840,
+      "2997ab9abd54474c913e56189e8c7bbcf0a5a9e6fb8550e331b9dd338bee03f8"
+    ],
+    "backend/naver_page/execution-ui.js": [
+      420,
+      54585,
+      "a6febc90e4fda776a1a4f5f666304993484edb540b82f059335221edfeb6a6d1"
+    ],
+    "backend/naver_page/experiments-ui.js": [
+      420,
+      62774,
+      "043d513b2611ecc620bbfe7143231d4c4951a52a2ddac9150e36b49f3ba69d4e"
+    ],
+    "backend/naver_page/favicon.svg": [
+      420,
+      188,
+      "008a5b8b00e9602ceb35ea244f5ecef6110d8ad0067ac9d993f992a9525c9c5c"
+    ],
+    "backend/naver_page/index.html": [
+      420,
+      28388,
+      "cd24b8f51b94103204bc11ec87cfb488db1a9cb9122f2ac427cb1b81f16dd4f6"
+    ],
+    "backend/naver_page/learning-ui.js": [
+      420,
+      51105,
+      "28dcb6b7f923048d90ae5ef86e0664c4bfbc7d2b127bc41f2e46ee0a79c0f340"
+    ],
+    "backend/naver_page/operations-ui.js": [
+      420,
+      12286,
+      "02b756eaa66ec7e5d8a0939473953ec7a639d59e3e23f4dd8c34715b43880008"
+    ],
+    "backend/naver_page/randomized-experiments-ui.js": [
+      420,
+      36703,
+      "c3b0096f8e36cc41136f5b9fd0cb21c4b66a19e4b6765c15c92092e81a7b7f1a"
+    ],
+    "backend/naver_page/report-pdf.js": [
+      420,
+      40388,
+      "03445e5236b80669395d48cc1ebef52dafaf372e84bade035193496c7d6e3867"
+    ],
+    "backend/naver_page/report-schedule-ui.js": [
+      420,
+      15440,
+      "84beb5cdf5368a706dc85ee20f2666f7108e83724b131c5f7d43bd62ece94b99"
+    ],
+    "backend/naver_page/report-ui.js": [
+      420,
+      102575,
+      "f9121aa9fe2d4a82bfcc3d7712d81e0fd043447210ab08ac726a4f2be65cbed8"
+    ],
+    "backend/naver_page/sales-ui.js": [
+      420,
+      17774,
+      "00553781030990970c88dcd6d86c11730cf9c60cf9ce7a7963f2b091cd5aa2ff"
+    ],
+    "backend/naver_page/sales.css": [
+      420,
+      5905,
+      "f27843cb1e1e63a41d85f5f794035f47c62ec72dda5971f95dd9ed58226ba09d"
+    ],
+    "backend/naver_page/sso-bootstrap.js": [
+      420,
+      4588,
+      "b32369913287c49fa43fa210db73742f51c203066273b0334b4d6ebbb335b289"
+    ],
+    "backend/naver_page/vendor/report-pdf/Apache-2.0.txt": [
+      420,
+      11358,
+      "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    ],
+    "backend/naver_page/vendor/report-pdf/NanumGothic-OFL.txt": [
+      420,
+      4532,
+      "90f6a909ffb2af7f6422ea20042a26180fe5520cba80bbbf75a5e660320d7924"
+    ],
+    "backend/naver_page/vendor/report-pdf/NanumGothic-Regular.ttf.gz": [
+      420,
+      697020,
+      "72d1bf88a642ede8ff7da422031106fc697ea4c79b1cfd2994bffc57df4dab07"
+    ],
+    "backend/naver_page/vendor/report-pdf/THIRD-PARTY-NOTICES.txt": [
+      420,
+      12147,
+      "33588a8c88e8c3f6535dc653bf65840b08dd75b7e7f2beec69d6f5a3542ffa67"
+    ],
+    "backend/naver_page/vendor/report-pdf/fontkit-1.1.1.umd.min.js": [
+      420,
+      758440,
+      "d8df561b9fba98e24f2e5130e40948809281bbbc55a20c412359f1a0a5eb35a6"
+    ],
+    "backend/naver_page/vendor/report-pdf/fontkit-LICENSE.txt": [
+      420,
+      1462,
+      "3b839fbef51e4721ff85ba6c6c79e0d37738f28c28bf90c744d7c4bf9f0eb1a0"
+    ],
+    "backend/naver_page/vendor/report-pdf/js-sha256-LICENSE.txt": [
+      420,
+      1076,
+      "2153bd2978793748fbe0eb8f838ae2ae19f03f9d4ee5473dd1628a0c0790e4ab"
+    ],
+    "backend/naver_page/vendor/report-pdf/manifest.json": [
+      420,
+      3008,
+      "d7b047f71ecf086d422031b4fba80d708a3987fe6635c78e16de82979aa2f3de"
+    ],
+    "backend/naver_page/vendor/report-pdf/pako-LICENSE.txt": [
+      420,
+      1104,
+      "a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539"
+    ],
+    "backend/naver_page/vendor/report-pdf/pdf-lib-1.17.1.min.js": [
+      420,
+      525099,
+      "0f9a5cad07941f0826586c94e089d89b918c46e5c17cf2d5a3c6f666e3bc694f"
+    ],
+    "backend/naver_page/vendor/report-pdf/pdf-lib-LICENSE.txt": [
+      420,
+      1070,
+      "f2c9fc00fdb66eb99ac156ba52d734af66d8d309f65753ae809ad34ee2883bcb"
+    ],
+    "backend/naver_page/vendor/report-pdf/sha256-1.0.0.min.js": [
+      420,
+      8156,
+      "a050d794e170699bd1a69d33908d0942c68901cb88347016064b60b240f0067e"
+    ],
+    "backend/naver_page/vendor/report-pdf/standard-fonts-LICENSE.txt": [
+      420,
+      1070,
+      "45cc2bb9957ed43f5c7f5eb1912f9f670730394d614079510477cae626194649"
+    ],
+    "backend/naver_page/vendor/report-pdf/upng-LICENSE.txt": [
+      420,
+      1065,
+      "c1fb8861eca211bf5aea574358aba7039396c0c1824c2a1477cc126d398efd89"
+    ],
+    "backend/requirements.txt": [
+      420,
+      144,
+      "0264b07e26f94bc31522b7fcf4801318f21b0d86d74793e6fd9608f8a64ca67c"
+    ],
+    "compose.naver-engine.yml": [
+      420,
+      2697,
+      "62e33c3d2815579a28031973b956cd36031171f26ead4e21ad2d72adfe2a5ef7"
+    ],
+    "compose.naver-relay.yml": [
+      420,
+      1514,
+      "00404b84a4377fcb74afc883feff6d2a434b1fca92f0be7b2d399a72ba05da66"
+    ],
+    "deploy/naver-backup-receiver.py": [
+      420,
+      11383,
+      "ac324dab4e868477c5c5aceef641e26a2359d45bdde6ac884331de09a208205c"
+    ],
+    "deploy/naver-engine-ad-api.override.yml": [
+      420,
+      598,
+      "961eddbd2bfe607ac0fe90dc056a7cd09de2a065b942ee0e6c0cc205e1f432fd"
+    ],
+    "deploy/naver-engine-backup.override.yml": [
+      420,
+      971,
+      "bfbe6cc3b2a5988071ba067d2b599929deea2ef7d6b8c8644d2aefd236b65a78"
+    ],
+    "deploy/naver-engine-nginx.conf": [
+      420,
+      2599,
+      "b26a13f1b7b4f7b5d6ca154333f91b3a92b80348a164544ded2d6e3b8e78e025"
+    ],
+    "deploy/naver-erp-tunnel/OPERATIONS.md": [
+      420,
+      8186,
+      "ee50a7dc794d1168b53dff435577595fafb90f11dd2771e77a0e8209aaac37be"
+    ],
+    "deploy/naver-erp-tunnel/ad-ssh.conf": [
+      420,
+      1385,
+      "1c37f158c26a988973707c36b2f4ccade561c6e1fa93334a12ece8abaf9df0aa"
+    ],
+    "deploy/naver-erp-tunnel/ad-tunnel.service": [
+      420,
+      1245,
+      "d6f4698a5aaf53e87bb47e07826503801d4ef49a9a12213d419b1208e33eb35a"
+    ],
+    "deploy/naver-erp-tunnel/authorized_keys.template": [
+      420,
+      138,
+      "3fab1b741f766435b317325799e50dab985c9f368041b16ca435ed82c1903c3b"
+    ],
+    "deploy/naver-erp-tunnel/be-nginx.conf": [
+      420,
+      2966,
+      "0c8b4d959203b37892346bcc9796518f95377eaee7e56ff26dee8b01c547d891"
+    ],
+    "deploy/naver-erp-tunnel/be-sshd.conf": [
+      420,
+      835,
+      "4440431dd03fc52171ee3a8abd9d9ce45500ece0c88e853dfe5537bd30992fc3"
+    ],
+    "deploy/naver-erp-tunnel/test.Dockerfile": [
+      420,
+      588,
+      "0fa260ab2000c9ea9d7d45330c8256060f7912e3d296bf554c2f4e3fc73b1ee0"
+    ],
+    "deploy/naver-erp-tunnel/test.Dockerfile.dockerignore": [
+      420,
+      250,
+      "4b7c07b25bf9724ea79620e03d7b40b69ce548dcfe01f478ada8c02c9c2c755a"
+    ],
+    "deploy/naver-erp-tunnel/test_policy.py": [
+      420,
+      18991,
+      "e53a165a0a973aacc5a7f8b81c62f6921c88a7f0acabd4992f5521b86c0a7a26"
+    ],
+    "deploy/nginx-ad.metainc.co.kr.conf": [
+      420,
+      739,
+      "31574f6e1e0dcad25c57fb3f4f183b8f5bfed4b1fb14cd4c7f5f77efac6e89d1"
+    ],
+    "naver_engine/__init__.py": [
+      420,
+      1077,
+      "83ca0328fd0eb93b016be936321703ae88df5d3410b369df18c5c7290ed6bf74"
+    ],
+    "naver_engine/ad_reasons.py": [
+      420,
+      5523,
+      "12cb7edc84f8f302036c16677ae51ebbbbc117aa1feba6f58fb32b906501beec"
+    ],
+    "naver_engine/alerts.py": [
+      420,
+      39621,
+      "bc4636d8b6f685e02a9305061926299f9fa52f50fbcf6c6e4cb9da8b29d1c35d"
+    ],
+    "naver_engine/approval_documents.py": [
+      420,
+      7554,
+      "47de41a6c0840710e62b56135593b0c00e99b41053630c3f37b79d2231c17243"
+    ],
+    "naver_engine/automation_views.py": [
+      420,
+      12728,
+      "fb1ad696e195123521251deeb9073edee0bab263cc1205df1c4e37940f3223d3"
+    ],
+    "naver_engine/backup.py": [
+      420,
+      16760,
+      "1bc2561ea3d8cc5f528b64ed275da4ca242fe9a5cf166c6bb53aaf6c0ff3a92e"
+    ],
+    "naver_engine/catalog_links.py": [
+      420,
+      13417,
+      "2984a7582347cad4580be1f25bdee93146e933222f3b783cc2a1bb5ae6478b7b"
+    ],
+    "naver_engine/collection_diagnostics.py": [
+      420,
+      4224,
+      "114806cdfb07eeeef2ac365a460e941d2741d6345b165c8428caf4344b2cacd6"
+    ],
+    "naver_engine/credentials.py": [
+      420,
+      4788,
+      "f20794c7f89ee29c396fa596ff44c6781bd87872914d08f58b83d15b88df3c84"
+    ],
+    "naver_engine/dashboard.py": [
+      420,
+      9334,
+      "2c2c86c96f249f133220463f8988b96e07eee795d44dbc844204943370206f15"
+    ],
+    "naver_engine/erp_alert.py": [
+      420,
+      16095,
+      "55e639ccb747e8e5f34af80e9802e03a0b650c26d06c89531b12ce5b2b8abf92"
+    ],
+    "naver_engine/erp_profile.py": [
+      420,
+      7315,
+      "108b4ee5d97dfa6174ccca18c5e92e9308976a349c6a648985a7ac45ea75986c"
+    ],
+    "naver_engine/erp_read.py": [
+      420,
+      22099,
+      "50434c7943a23ab195b2325a74ef977e9d0e0bff02572175b8994536bf7f3cdc"
+    ],
+    "naver_engine/execution_commands.py": [
+      420,
+      68617,
+      "9def0f8399017376226f3c7ce4477119a9cb19e99a597cbf1f10bbc9066ecc6e"
+    ],
+    "naver_engine/execution_store.py": [
+      420,
+      76944,
+      "6ab5fd81eb0bab41add10b44bcb630b38e8ebd619fd58a2c5304a69b0c59da44"
+    ],
+    "naver_engine/experiments.py": [
+      420,
+      41946,
+      "f99a213727b258aaf88f6769328c2f7a602109466efdbf00a8da33bf7cbad9ff"
+    ],
+    "naver_engine/experiments_reads.py": [
+      420,
+      29482,
+      "1758861970173d771c805813bc949c77c4559337a0bd7c60416be134513b5ccc"
+    ],
+    "naver_engine/experiments_store.py": [
+      420,
+      36620,
+      "5e6db883b0ab270a955e90ff5676f61cf0bbc22b4aab348cf968e96a85a6db74"
+    ],
+    "naver_engine/fields.py": [
+      420,
+      3369,
+      "a92d4182bad903bb3e5c22519ea93dace5041475bc874967024cc34f5e340a6a"
+    ],
+    "naver_engine/funnel_evidence.py": [
+      420,
+      13432,
+      "6a25abe8756912cfe130ddb5e99fc26107b34f94ad5c296494e682ebed7f1514"
+    ],
+    "naver_engine/funnel_reads.py": [
+      420,
+      14000,
+      "f8959edabea14f723a7c8fa3d40c99a1e0e6740deba31294ca2325e53ed59114"
+    ],
+    "naver_engine/funnel_store.py": [
+      420,
+      28540,
+      "7df267d9a5d9cb3ee37ea61b6a6b907acc0f2ec9ddc0d7ea070a903778a9fe61"
+    ],
+    "naver_engine/handles.py": [
+      420,
+      16016,
+      "fa64d8841f352b413ea12fdb8b88ab53c73133eaf0e91a98d8c586a52e8a8e14"
+    ],
+    "naver_engine/hourly_stats.py": [
+      420,
+      3181,
+      "287213de98df68c57634e3b6ed454bcb6df6febd12fe22effbb40281f88f2319"
+    ],
+    "naver_engine/inspection_fields.py": [
+      420,
+      10771,
+      "102028ecb4f35647043b5efc1751e516c92f326252b88c3ab6c983ca7c61ba6a"
+    ],
+    "naver_engine/inspection_reads.py": [
+      420,
+      23837,
+      "965f5dac65cbf867a6232c5af2d3992a6324b81cc6470e65167e06d674d0e543"
+    ],
+    "naver_engine/inspection_store.py": [
+      420,
+      29733,
+      "82b368eb9d8122080f24a4fc82007ac38c79f6b7de2c4c42604f02a9c8171cc6"
+    ],
+    "naver_engine/inventory.py": [
+      420,
+      29075,
+      "2a5c4d5f6acb0b431daa9e16be517322a43008aa636cfdf90c49c4a9305ae28e"
+    ],
+    "naver_engine/inventory_reads.py": [
+      420,
+      9956,
+      "40892186fddd444f2f8868ea31323744e155d8c59eeb42b3ef6deea482a379e1"
+    ],
+    "naver_engine/learning_assets.py": [
+      420,
+      40383,
+      "4c3e1d6923eb0396c23e63e18c90c6077623248fc3aa05cb5071684ffde53666"
+    ],
+    "naver_engine/learning_retrieval.py": [
+      420,
+      9135,
+      "f4e32d5c458014697d194c077e769ce929f677e98faaf34cc594982f992188ee"
+    ],
+    "naver_engine/learning_source_storage.py": [
+      420,
+      41649,
+      "144eca9e828c9f73a244b8603bf82758155c351d0586a88b7fcf012126d0935d"
+    ],
+    "naver_engine/links.py": [
+      420,
+      24837,
+      "a97b7f293e32f55ac92a7b53c77884fbc50bb7d481212346f85f7dc8ae2db249"
+    ],
+    "naver_engine/management.py": [
+      420,
+      5723,
+      "84862507d3831053edf618c6d68e800f1f1a1ec4019bcc88030eacb4d14f37e4"
+    ],
+    "naver_engine/management_store.py": [
+      420,
+      11391,
+      "e912f5941d9ce61b57327d7ae7d6307086d06570de72bfea4f9ed0cee389af1d"
+    ],
+    "naver_engine/market_evidence.py": [
+      420,
+      12510,
+      "6ee6ce06477d0c60b798a04e6679beff8ce0e056760e82bef3565764a55075ec"
+    ],
+    "naver_engine/market_store.py": [
+      420,
+      7284,
+      "c8d75ab344c5cfb5ba3f034782521a5ae98e75e7083377147eb491c5917570cc"
+    ],
+    "naver_engine/marketing_strategy.py": [
+      420,
+      84228,
+      "62df719fe988f9c331e82b1324e649a2e481d7817ef32f10efd684cb01e8c12f"
+    ],
+    "naver_engine/metrics.py": [
+      420,
+      15005,
+      "f734fa8b2173ff5b59dcd4aeb02e61fbbe77ab23d1cc15ae6ce8441e3548564c"
+    ],
+    "naver_engine/monthly_reads.py": [
+      420,
+      11994,
+      "f26214bf881b95be54fca75c941a15cb8f92f667e5af30aa94369e8fda5b7299"
+    ],
+    "naver_engine/morning.py": [
+      420,
+      48264,
+      "f6cd9d4c5fd0453dcf77f707313d9c37ff6e01621e1d5f86325423b3adc94ca6"
+    ],
+    "naver_engine/morning_progress.py": [
+      420,
+      6839,
+      "c6cb0faf936820a2d93b90985e0aaa1362b1bf3d3a6d98d861212c17366f54b1"
+    ],
+    "naver_engine/naver_read.py": [
+      420,
+      69880,
+      "ee1d7412dae83610cbb6c7ba2b812963e69894c706064431606c45d402b96534"
+    ],
+    "naver_engine/naver_write.py": [
+      420,
+      24439,
+      "68cb76054948950110a85672a05b04818de67bf0cdef8f071324d08b6ad73860"
+    ],
+    "naver_engine/network_observability.py": [
+      420,
+      1969,
+      "60be59acf1ede301ea93975d6098248f608d738d7178ed8003acb0a326ebe6a5"
+    ],
+    "naver_engine/observation_store.py": [
+      420,
+      12721,
+      "af417af3a526f3083a474a4ebbb524bc0abbac13019da5f34fcedb270ce3a5c4"
+    ],
+    "naver_engine/observation_views.py": [
+      420,
+      3405,
+      "c0a5f541a97aad0c665b7a4e9cb3ab6fcdedb6eac763320119773d843b359323"
+    ],
+    "naver_engine/observational_inference.py": [
+      420,
+      15697,
+      "ff5c9706b4906372f60328c419693fadfee3895cb827bb12c9587323a4b79fb6"
+    ],
+    "naver_engine/operating_criteria.py": [
+      420,
+      17387,
+      "3bae3f568034d40f76ed65a34bd3b61233e0d0df718ba9db8f9bc9e710fadbe4"
+    ],
+    "naver_engine/performance_reads.py": [
+      420,
+      18142,
+      "85a863871288640e0a1a6745a10c618cc2e34e13dbb6de2b6fcf9b9040b3798e"
+    ],
+    "naver_engine/product_evidence.py": [
+      420,
+      13403,
+      "755c97900d34e06ac4a7f46c4ac3aafb3477f5a616cb560bb002f86deac87711"
+    ],
+    "naver_engine/product_store.py": [
+      420,
+      9723,
+      "ffc817908ea1ed8a5e05fbc62e4185c7cdd077820199a9f99db15894c9efe303"
+    ],
+    "naver_engine/randomized_execution.py": [
+      420,
+      11157,
+      "c3c01e3dbcbafaefb859410a6ecb70c24a81909543b24f48ec0b7bac69d17c86"
+    ],
+    "naver_engine/randomized_experiments.py": [
+      420,
+      10739,
+      "98a773addae4425cd4e3d7f6c68a3caf6981a76bd465f265cfdf237862e90829"
+    ],
+    "naver_engine/randomized_experiments_reads.py": [
+      420,
+      8921,
+      "8d5135161638c7a867cec5492c39f6ed4c5261b81a622437836f0b7f4f72122c"
+    ],
+    "naver_engine/randomized_experiments_store.py": [
+      420,
+      61278,
+      "a7fbd33eff873d3ac540357c4c3b73b31f096503f7a62efef3b6060dcfc6c547"
+    ],
+    "naver_engine/randomized_inference.py": [
+      420,
+      18813,
+      "2112f900ae2b9f2188187923deb2f6d6baefcfd6496dc0e5defd4232cbafee58"
+    ],
+    "naver_engine/report_enrichment.py": [
+      420,
+      20237,
+      "b151e866f561b93661ef52a7f7470f04d3f616d00de14b7e81bc2db6f5c0e1d1"
+    ],
+    "naver_engine/report_notes.py": [
+      420,
+      9275,
+      "dadb0b4b1501a87176a4e85dc8c4b74745c39a48888c1c43dda7044048f04408"
+    ],
+    "naver_engine/report_refresh.py": [
+      420,
+      7029,
+      "826b8390d7a7b200d1e0449c2c8a1dcaa4e4310bf64bfeab7142998eb111999e"
+    ],
+    "naver_engine/report_schedule.py": [
+      420,
+      17420,
+      "24a76092fc6420093941fe78f2ce724029fed564c50b3bcce79a8687e0fc58fb"
+    ],
+    "naver_engine/report_schedule_store.py": [
+      420,
+      24135,
+      "ae4158824605e129811cd0beefd7ef2cb1cdde4f996c418b70c7de693c9602d0"
+    ],
+    "naver_engine/report_views.py": [
+      420,
+      17438,
+      "5d6218c1360fee101fb5ec21d036d6047daea11815fc4a1eda66b9e4023c6de2"
+    ],
+    "naver_engine/reporting.py": [
+      420,
+      25850,
+      "76a7a27ab39f69e9adf4a58547562e00776f6aaa0020df519cb2da8d032bd006"
+    ],
+    "naver_engine/runtime_view.py": [
+      420,
+      2407,
+      "a8d78825c16aaa0a3fcc877fdb4a3cfaddc8330154f9331b75eee2cae6c90a4a"
+    ],
+    "naver_engine/sales_views.py": [
+      420,
+      7905,
+      "885598a9890df6913b54e0d4bf8f2041a18befe5ae319aa0963edb12b5e770f7"
+    ],
+    "naver_engine/session.py": [
+      420,
+      8455,
+      "f710ae69062f2ef13c447767fe65ce17c0990aebe65fa6222c4e312129b8e432"
+    ],
+    "naver_engine/setup_checks.py": [
+      420,
+      34334,
+      "8dc378ab101cc5859c8a05287be5a07d6d59448b9eb913a04627ba7c3e26a7bd"
+    ],
+    "naver_engine/store.py": [
+      420,
+      445874,
+      "e63482ff15c5f1fd4f1c26c6119df477aacb708b80751b0617eb9af8ec341b57"
+    ],
+    "naver_engine/structure_reads.py": [
+      420,
+      14811,
+      "fed780a4903a099b540cc4eb6b9419ee84cbfdbd26056ad1c338a5db23d71c22"
+    ],
+    "naver_engine/sync.py": [
+      420,
+      24402,
+      "7ddd57ccce8a8edcf13e3d4495d748d122b067e1bba32becfa6326a4dda32dad"
+    ],
+    "naver_engine/view_sync.py": [
+      420,
+      5380,
+      "57c97bb82d78dc25277cdd7f5ea23c1512be0cfd0279a837e1e64d0b317a4034"
+    ],
+    "naver_engine/views.py": [
+      420,
+      64063,
+      "bfa0f4998153abe01ffeb7d646653db6b4d39b8f4409e09e23002424a60fafb9"
+    ],
+    "naver_engine/web.py": [
+      420,
+      123506,
+      "348ce74c1d4b7f523fabcf5de9516ed79057a0a1520211753e83fe8e1dcfb149"
+    ],
+    "naver_runtime/__init__.py": [
+      420,
+      105,
+      "27d28d6ed467edc27f1b22a7a3fedd78253d562938c3cf060ea2573ef38038ec"
+    ],
+    "naver_runtime/__main__.py": [
+      420,
+      16221,
+      "de4215ea9b64ca6a2643d1b6ea7abaa11ef63ae130bb2da1ea8e03bab62e3e3d"
+    ],
+    "naver_runtime/backup_transport.py": [
+      420,
+      5364,
+      "b14520d0f46429ea93a3158b664ca7f5cb37e378ce146e684cd276265f92db71"
+    ],
+    "naver_runtime/bootstrap.py": [
+      420,
+      12709,
+      "dd7f5949eee28e0391608670b3f00a40c30e6b461a3589bf47fcc7b49c5dd504"
+    ],
+    "naver_runtime/claude_provider.py": [
+      420,
+      45467,
+      "6325f4bf3aa3c95009fb3fe1e2ee4778b8356784aa478091f04166a57c209982"
+    ],
+    "naver_runtime/collection_requests.py": [
+      420,
+      6497,
+      "1e7606023cdbd27826b0f0e4e07a3f0f6fa4955d6d00396a1af33e7f62526660"
+    ],
+    "naver_runtime/config.py": [
+      420,
+      6216,
+      "ee3f1bdd0959ebc7a729de431518200d7eb58dce5f8580936b0ad5ec12bf7fa1"
+    ],
+    "naver_runtime/erp_tunnel_transport.py": [
+      420,
+      10072,
+      "59d1c40300c416b40d022ce6d1d91cdc9ac3d4a3b981c260ca3002e919bd3288"
+    ],
+    "naver_runtime/learning_jobs.py": [
+      420,
+      5884,
+      "724b4840a6b33da22d2291e5a8066a80d4a13f15d7d6952ce60735d266028802"
+    ],
+    "naver_runtime/learning_provider.py": [
+      420,
+      6364,
+      "736d97270bf6a22a916fade9959710c761b09eaea5e8db8fd58bbb60f30849a2"
+    ],
+    "naver_runtime/market_export.py": [
+      420,
+      2464,
+      "6faef9473ebb38f609a58b7657f86e7c32a3d44d446e2e546392ac8eea3dafb0"
+    ],
+    "naver_runtime/network_observability.py": [
+      420,
+      2741,
+      "da1c9f7778ab68142e64e1aaaa21d82514a0852df031deb015dc165f0d48ffbf"
+    ],
+    "naver_runtime/observation_binding.py": [
+      420,
+      1342,
+      "f4de2e326ff799c3a7730f71c942011911c14ed4ce9bd051742d7adcf6bbc326"
+    ],
+    "naver_runtime/product_export.py": [
+      420,
+      2467,
+      "e22619d2e1030b4e3d3cb6325e636198eeddc3041412dfe1ae937f5c487ee6fa"
+    ],
+    "naver_runtime/provider_observability.py": [
+      420,
+      16225,
+      "16bcf67ff4c43b71843f6c94ca95982f12c00b76764b94e500070b5f9691f814"
+    ],
+    "naver_runtime/report_schedule_jobs.py": [
+      420,
+      9356,
+      "a88ede0467ed6f097f8a9bca818e88eb3107e7c28ddccbddb2a670115349334a"
+    ],
+    "naver_runtime/restore_check.py": [
+      420,
+      5657,
+      "0f7c392155b9fdcb602307b7bd5771c211ca9f6774f5dcfa8106f940bb7905b9"
+    ],
+    "naver_runtime/runtime_status.py": [
+      420,
+      6149,
+      "f08633202d21248dde7c62c2d6bdb42a40b981721df958b0124fc7009b4da8eb"
+    ],
+    "naver_runtime/scheduler.py": [
+      420,
+      36880,
+      "f7920b79c0339acf7c619222a46fd9056d73822445cd69966802f261e1e07d41"
+    ],
+    "naver_runtime/server.py": [
+      420,
+      6425,
+      "bf17856d256bf672aa4f50d8d9bf4b2557cec9a2aed7f1a0f5f97eee81ca8007"
+    ],
+    "naver_runtime/writer.py": [
+      420,
+      15964,
+      "f4825faa816f2001a3902d9828bdf0dc1086467c4a56b89cf7ee4c5425ca5e26"
+    ]
+  },
+  "migration": {
+    "actual_data": false,
+    "network_calls": 0,
+    "ok": true,
+    "old_engine_refused_new_schema": true,
+    "old_rows": 42,
+    "old_schema": 11,
+    "old_tables": 36,
+    "preserved_old_rows": true,
+    "randomized_tables": [
+      "naver_randomized_block",
+      "naver_randomized_command",
+      "naver_randomized_experiment",
+      "naver_randomized_history",
+      "naver_randomized_job",
+      "naver_randomized_observation",
+      "naver_randomized_probe",
+      "naver_randomized_receipt",
+      "naver_randomized_result",
+      "naver_randomized_scan_cursor",
+      "naver_randomized_switch",
+      "naver_randomized_switch_event"
+    ],
+    "randomized_tables_empty": true,
+    "repeatable": true,
+    "schema_sha256": {
+      "old": "6339215c290f599984f114eeeaf1cd12ed378b1fc5e45c7896e2f442f379fd6c",
+      "target": "f7a5d1a05dca07e4eeed737155cb4bc5031e492ba07ce948b0b13d773cdcb8e5"
+    },
+    "snapshot_restore_verified": true,
+    "source_commit": "737a65952f2ddbc05a235cf2b139a4a11f4e7673",
+    "synthetic_metadata_cases": 7,
+    "target_schema": 21
+  },
+  "old_manifest": {
+    ".dockerignore": [
+      420,
+      408,
+      "ba16cad53840bc35b7c174d5cc143a83e7a56cc63acad2c2d14fab17ab30d1a6"
+    ],
+    "Dockerfile.naver-engine": [
+      420,
+      1134,
+      "f838c3da2687e8b800046005ef5bd39b1fc3e3454cecdbe291a233ee00004edc"
+    ],
+    "Dockerfile.naver-engine.dockerignore": [
+      420,
+      374,
+      "4b3d1a3f35e7f84a6db89382a1b27358ed1a8f2ee9d3b0112c87ded1f468f43d"
+    ],
+    "Dockerfile.naver-relay": [
+      420,
+      1421,
+      "c05ec8ced0554c9237718e3c37c265c615d86461d3f5b23df30f23bf113da77d"
+    ],
+    "Dockerfile.naver-relay.dockerignore": [
+      420,
+      462,
+      "ae83e68adcc2b2b9cc987dc81e92a3fa42c91542309d9467033a69f59590fb59"
+    ],
+    "backend/app/__init__.py": [
+      420,
+      0,
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    "backend/app/naver_auto/__init__.py": [
+      420,
+      927,
+      "64020d9148504885f294af924dcea4d2f312df8b6014d646f98b9e5221a4f164"
+    ],
+    "backend/app/naver_auto/checks.py": [
+      420,
+      16435,
+      "79e61753a0c16f1a8106e7bec2ed89404688eb6ff9a67f8783f47d13409b0b4c"
+    ],
+    "backend/app/naver_auto/issues.py": [
+      420,
+      14469,
+      "b47ab19a490c5035cec0e59d19e5720edb03d0c103fe4e1cce3abe2dace9556a"
+    ],
+    "backend/app/naver_auto/matching.py": [
+      420,
+      27050,
+      "6be28f0bcf2e86ff1a2d799063c3ac5caca81a33ac3572ed7f754aef14bb3eb0"
+    ],
+    "backend/app/naver_auto/org_snapshot.py": [
+      420,
+      33415,
+      "34da0635ee7d071c3dd02bf4001343f2c42001ebc70d7e5548e692d687920f97"
+    ],
+    "backend/app/naver_auto/scope.py": [
+      420,
+      35601,
+      "fd25fae418f27e6bd9b01415489164eb85241a5151a3e5fa1ad085edec7b3cd7"
+    ],
+    "backend/app/naver_auto/thresholds.py": [
+      420,
+      3789,
+      "6b5259480f85d0c397fac1ee7884a4beb14e0ee60da02669c104b21131498aa7"
+    ],
+    "backend/app/naver_auto/verdict.py": [
+      420,
+      11797,
+      "b8ff947d92e9dd0e0ceafd6b1da2e7dc3841875811417e83ae387ba0074809ec"
+    ],
+    "backend/app/naver_entry.py": [
+      420,
+      457,
+      "21aaf8ace7ca7b650e42cf1a32848cf00696680b68c6624a6ca9cbab7c891c08"
+    ],
+    "backend/app/naver_relay.py": [
+      420,
+      25944,
+      "e9d7d38d572a21af77e220199bd34988908d3c636c3a834071fec35bd3065e61"
+    ],
+    "backend/app/routers/__init__.py": [
+      420,
+      0,
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    "backend/app/routers/naver.py": [
+      420,
+      5619,
+      "cac5dfc32757f7472f86387447e93cb178de60771cf2bf699aa8ad4cf6bf8069"
+    ],
+    "backend/naver_page/README.md": [
+      420,
+      824,
+      "6ea9866e718da69999ffc5ce878aaa71e29bb9a6b8f65e4cf53a59c7fb779212"
+    ],
+    "backend/naver_page/app.css": [
+      420,
+      57115,
+      "82174f6c25649692b68df439bb8f61329a218f6d052e77b8e9b0e9dd1970bee7"
+    ],
+    "backend/naver_page/app.js": [
+      420,
+      222000,
+      "f119f80f3fac01de107f7ce45a2ed39f5443dfc4a79db8f8c67ad06678549078"
+    ],
+    "backend/naver_page/automation-ui.js": [
+      420,
+      22976,
+      "0828746fd2c60d43dd9e6f448782d1c46d543ecf2eb243590df8130ac5f6d2d3"
+    ],
+    "backend/naver_page/favicon.svg": [
+      420,
+      188,
+      "008a5b8b00e9602ceb35ea244f5ecef6110d8ad0067ac9d993f992a9525c9c5c"
+    ],
+    "backend/naver_page/index.html": [
+      420,
+      28101,
+      "1651175414b128e136f1553d38cae8e44cd7baf61fd3dad8d001d48b0963dd77"
+    ],
+    "backend/naver_page/learning-ui.js": [
+      420,
+      23619,
+      "9cae047e4cf163d20e9e597df364da3565c88ed622b4cfe2d6ab651a1274ef7e"
+    ],
+    "backend/naver_page/report-pdf.js": [
+      420,
+      37921,
+      "454ccb5f20b3a8f125ac9f1e1cc765041a0d23e8a881fa11ccbfea5b5c848964"
+    ],
+    "backend/naver_page/report-ui.js": [
+      420,
+      89541,
+      "24aba1490a188ab52e6cb22a412030ef42ed1d89da356cdea595f314180e6ead"
+    ],
+    "backend/naver_page/sales-ui.js": [
+      420,
+      17774,
+      "00553781030990970c88dcd6d86c11730cf9c60cf9ce7a7963f2b091cd5aa2ff"
+    ],
+    "backend/naver_page/sales.css": [
+      420,
+      5905,
+      "f27843cb1e1e63a41d85f5f794035f47c62ec72dda5971f95dd9ed58226ba09d"
+    ],
+    "backend/naver_page/sso-bootstrap.js": [
+      420,
+      4588,
+      "b32369913287c49fa43fa210db73742f51c203066273b0334b4d6ebbb335b289"
+    ],
+    "backend/naver_page/vendor/report-pdf/Apache-2.0.txt": [
+      420,
+      11358,
+      "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    ],
+    "backend/naver_page/vendor/report-pdf/NanumGothic-OFL.txt": [
+      420,
+      4532,
+      "90f6a909ffb2af7f6422ea20042a26180fe5520cba80bbbf75a5e660320d7924"
+    ],
+    "backend/naver_page/vendor/report-pdf/NanumGothic-Regular.ttf.gz": [
+      420,
+      697020,
+      "72d1bf88a642ede8ff7da422031106fc697ea4c79b1cfd2994bffc57df4dab07"
+    ],
+    "backend/naver_page/vendor/report-pdf/THIRD-PARTY-NOTICES.txt": [
+      420,
+      12147,
+      "33588a8c88e8c3f6535dc653bf65840b08dd75b7e7f2beec69d6f5a3542ffa67"
+    ],
+    "backend/naver_page/vendor/report-pdf/fontkit-1.1.1.umd.min.js": [
+      420,
+      758440,
+      "d8df561b9fba98e24f2e5130e40948809281bbbc55a20c412359f1a0a5eb35a6"
+    ],
+    "backend/naver_page/vendor/report-pdf/fontkit-LICENSE.txt": [
+      420,
+      1462,
+      "3b839fbef51e4721ff85ba6c6c79e0d37738f28c28bf90c744d7c4bf9f0eb1a0"
+    ],
+    "backend/naver_page/vendor/report-pdf/js-sha256-LICENSE.txt": [
+      420,
+      1076,
+      "2153bd2978793748fbe0eb8f838ae2ae19f03f9d4ee5473dd1628a0c0790e4ab"
+    ],
+    "backend/naver_page/vendor/report-pdf/manifest.json": [
+      420,
+      3008,
+      "d7b047f71ecf086d422031b4fba80d708a3987fe6635c78e16de82979aa2f3de"
+    ],
+    "backend/naver_page/vendor/report-pdf/pako-LICENSE.txt": [
+      420,
+      1104,
+      "a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539"
+    ],
+    "backend/naver_page/vendor/report-pdf/pdf-lib-1.17.1.min.js": [
+      420,
+      525099,
+      "0f9a5cad07941f0826586c94e089d89b918c46e5c17cf2d5a3c6f666e3bc694f"
+    ],
+    "backend/naver_page/vendor/report-pdf/pdf-lib-LICENSE.txt": [
+      420,
+      1070,
+      "f2c9fc00fdb66eb99ac156ba52d734af66d8d309f65753ae809ad34ee2883bcb"
+    ],
+    "backend/naver_page/vendor/report-pdf/sha256-1.0.0.min.js": [
+      420,
+      8156,
+      "a050d794e170699bd1a69d33908d0942c68901cb88347016064b60b240f0067e"
+    ],
+    "backend/naver_page/vendor/report-pdf/standard-fonts-LICENSE.txt": [
+      420,
+      1070,
+      "45cc2bb9957ed43f5c7f5eb1912f9f670730394d614079510477cae626194649"
+    ],
+    "backend/naver_page/vendor/report-pdf/upng-LICENSE.txt": [
+      420,
+      1065,
+      "c1fb8861eca211bf5aea574358aba7039396c0c1824c2a1477cc126d398efd89"
+    ],
+    "backend/requirements.txt": [
+      420,
+      144,
+      "0264b07e26f94bc31522b7fcf4801318f21b0d86d74793e6fd9608f8a64ca67c"
+    ],
+    "compose.naver-engine.yml": [
+      420,
+      2697,
+      "62e33c3d2815579a28031973b956cd36031171f26ead4e21ad2d72adfe2a5ef7"
+    ],
+    "compose.naver-relay.yml": [
+      420,
+      1514,
+      "00404b84a4377fcb74afc883feff6d2a434b1fca92f0be7b2d399a72ba05da66"
+    ],
+    "deploy/naver-backup-receiver.py": [
+      420,
+      11383,
+      "ac324dab4e868477c5c5aceef641e26a2359d45bdde6ac884331de09a208205c"
+    ],
+    "deploy/naver-engine-ad-api.override.yml": [
+      420,
+      598,
+      "961eddbd2bfe607ac0fe90dc056a7cd09de2a065b942ee0e6c0cc205e1f432fd"
+    ],
+    "deploy/naver-engine-backup.override.yml": [
+      420,
+      971,
+      "bfbe6cc3b2a5988071ba067d2b599929deea2ef7d6b8c8644d2aefd236b65a78"
+    ],
+    "deploy/naver-engine-nginx.conf": [
+      420,
+      2599,
+      "b26a13f1b7b4f7b5d6ca154333f91b3a92b80348a164544ded2d6e3b8e78e025"
+    ],
+    "deploy/naver-erp-tunnel/OPERATIONS.md": [
+      420,
+      8186,
+      "ee50a7dc794d1168b53dff435577595fafb90f11dd2771e77a0e8209aaac37be"
+    ],
+    "deploy/naver-erp-tunnel/ad-ssh.conf": [
+      420,
+      1385,
+      "1c37f158c26a988973707c36b2f4ccade561c6e1fa93334a12ece8abaf9df0aa"
+    ],
+    "deploy/naver-erp-tunnel/ad-tunnel.service": [
+      420,
+      1245,
+      "d6f4698a5aaf53e87bb47e07826503801d4ef49a9a12213d419b1208e33eb35a"
+    ],
+    "deploy/naver-erp-tunnel/authorized_keys.template": [
+      420,
+      138,
+      "3fab1b741f766435b317325799e50dab985c9f368041b16ca435ed82c1903c3b"
+    ],
+    "deploy/naver-erp-tunnel/be-nginx.conf": [
+      420,
+      2966,
+      "0c8b4d959203b37892346bcc9796518f95377eaee7e56ff26dee8b01c547d891"
+    ],
+    "deploy/naver-erp-tunnel/be-sshd.conf": [
+      420,
+      835,
+      "4440431dd03fc52171ee3a8abd9d9ce45500ece0c88e853dfe5537bd30992fc3"
+    ],
+    "deploy/naver-erp-tunnel/test.Dockerfile": [
+      420,
+      588,
+      "0fa260ab2000c9ea9d7d45330c8256060f7912e3d296bf554c2f4e3fc73b1ee0"
+    ],
+    "deploy/naver-erp-tunnel/test.Dockerfile.dockerignore": [
+      420,
+      250,
+      "4b7c07b25bf9724ea79620e03d7b40b69ce548dcfe01f478ada8c02c9c2c755a"
+    ],
+    "deploy/naver-erp-tunnel/test_policy.py": [
+      420,
+      18991,
+      "e53a165a0a973aacc5a7f8b81c62f6921c88a7f0acabd4992f5521b86c0a7a26"
+    ],
+    "deploy/nginx-ad.metainc.co.kr.conf": [
+      420,
+      739,
+      "31574f6e1e0dcad25c57fb3f4f183b8f5bfed4b1fb14cd4c7f5f77efac6e89d1"
+    ],
+    "naver_engine/__init__.py": [
+      420,
+      1077,
+      "83ca0328fd0eb93b016be936321703ae88df5d3410b369df18c5c7290ed6bf74"
+    ],
+    "naver_engine/ad_reasons.py": [
+      420,
+      5523,
+      "12cb7edc84f8f302036c16677ae51ebbbbc117aa1feba6f58fb32b906501beec"
+    ],
+    "naver_engine/alerts.py": [
+      420,
+      39621,
+      "bc4636d8b6f685e02a9305061926299f9fa52f50fbcf6c6e4cb9da8b29d1c35d"
+    ],
+    "naver_engine/approval_documents.py": [
+      420,
+      6175,
+      "a50eed929f94debbfc01445ef6a4303c3c749fa1739bad44e942825502691eab"
+    ],
+    "naver_engine/automation_views.py": [
+      420,
+      4948,
+      "841f9d6e1725842914d73adee1d52e330005f961f038279617449883b51b80dd"
+    ],
+    "naver_engine/backup.py": [
+      420,
+      16760,
+      "1bc2561ea3d8cc5f528b64ed275da4ca242fe9a5cf166c6bb53aaf6c0ff3a92e"
+    ],
+    "naver_engine/catalog_links.py": [
+      420,
+      13417,
+      "2984a7582347cad4580be1f25bdee93146e933222f3b783cc2a1bb5ae6478b7b"
+    ],
+    "naver_engine/collection_diagnostics.py": [
+      420,
+      4116,
+      "c0c41429d60a4b5c17dc1495e9f36aa65f2502379b41233487e90d42a296f895"
+    ],
+    "naver_engine/credentials.py": [
+      420,
+      4788,
+      "f20794c7f89ee29c396fa596ff44c6781bd87872914d08f58b83d15b88df3c84"
+    ],
+    "naver_engine/dashboard.py": [
+      420,
+      9334,
+      "2c2c86c96f249f133220463f8988b96e07eee795d44dbc844204943370206f15"
+    ],
+    "naver_engine/erp_alert.py": [
+      420,
+      16095,
+      "55e639ccb747e8e5f34af80e9802e03a0b650c26d06c89531b12ce5b2b8abf92"
+    ],
+    "naver_engine/erp_profile.py": [
+      420,
+      7315,
+      "108b4ee5d97dfa6174ccca18c5e92e9308976a349c6a648985a7ac45ea75986c"
+    ],
+    "naver_engine/erp_read.py": [
+      420,
+      21665,
+      "fc8db800b5fd7cfa9d6e64e621d3513c646b1bcbfaf5c73ab128c6f937092499"
+    ],
+    "naver_engine/fields.py": [
+      420,
+      3369,
+      "a92d4182bad903bb3e5c22519ea93dace5041475bc874967024cc34f5e340a6a"
+    ],
+    "naver_engine/handles.py": [
+      420,
+      16016,
+      "fa64d8841f352b413ea12fdb8b88ab53c73133eaf0e91a98d8c586a52e8a8e14"
+    ],
+    "naver_engine/inventory.py": [
+      420,
+      29075,
+      "2a5c4d5f6acb0b431daa9e16be517322a43008aa636cfdf90c49c4a9305ae28e"
+    ],
+    "naver_engine/inventory_reads.py": [
+      420,
+      9956,
+      "40892186fddd444f2f8868ea31323744e155d8c59eeb42b3ef6deea482a379e1"
+    ],
+    "naver_engine/learning_assets.py": [
+      420,
+      21080,
+      "fa3ca40266c69bae43d645685722874d0097918f9813c943d8b3fd8a579b3347"
+    ],
+    "naver_engine/learning_retrieval.py": [
+      420,
+      5440,
+      "6271dd8af0ba3f435ebeb808dfdcaae9ce645655fb764d17342c0f75d774fd0b"
+    ],
+    "naver_engine/links.py": [
+      420,
+      24837,
+      "a97b7f293e32f55ac92a7b53c77884fbc50bb7d481212346f85f7dc8ae2db249"
+    ],
+    "naver_engine/management.py": [
+      420,
+      5723,
+      "84862507d3831053edf618c6d68e800f1f1a1ec4019bcc88030eacb4d14f37e4"
+    ],
+    "naver_engine/management_store.py": [
+      420,
+      11391,
+      "e912f5941d9ce61b57327d7ae7d6307086d06570de72bfea4f9ed0cee389af1d"
+    ],
+    "naver_engine/marketing_strategy.py": [
+      420,
+      36154,
+      "2b4c5223227890eb7aba253f6ced893a5e19df3b7622556d29aca7b522246b27"
+    ],
+    "naver_engine/metrics.py": [
+      420,
+      15005,
+      "f734fa8b2173ff5b59dcd4aeb02e61fbbe77ab23d1cc15ae6ce8441e3548564c"
+    ],
+    "naver_engine/monthly_reads.py": [
+      420,
+      11994,
+      "f26214bf881b95be54fca75c941a15cb8f92f667e5af30aa94369e8fda5b7299"
+    ],
+    "naver_engine/morning.py": [
+      420,
+      48264,
+      "f6cd9d4c5fd0453dcf77f707313d9c37ff6e01621e1d5f86325423b3adc94ca6"
+    ],
+    "naver_engine/morning_progress.py": [
+      420,
+      6839,
+      "c6cb0faf936820a2d93b90985e0aaa1362b1bf3d3a6d98d861212c17366f54b1"
+    ],
+    "naver_engine/naver_read.py": [
+      420,
+      58166,
+      "07682c649b508eb3b10fd1a0fd62aec0f99bafc6b30c75133e117c7fc6ac49a2"
+    ],
+    "naver_engine/performance_reads.py": [
+      420,
+      18142,
+      "85a863871288640e0a1a6745a10c618cc2e34e13dbb6de2b6fcf9b9040b3798e"
+    ],
+    "naver_engine/report_enrichment.py": [
+      420,
+      20237,
+      "b151e866f561b93661ef52a7f7470f04d3f616d00de14b7e81bc2db6f5c0e1d1"
+    ],
+    "naver_engine/report_notes.py": [
+      420,
+      9275,
+      "dadb0b4b1501a87176a4e85dc8c4b74745c39a48888c1c43dda7044048f04408"
+    ],
+    "naver_engine/report_refresh.py": [
+      420,
+      5882,
+      "1d3e97c43982f855bd6dec93ef0c64173d0c77aec7c0daf25dc56547c2eda3ee"
+    ],
+    "naver_engine/report_views.py": [
+      420,
+      17055,
+      "0e270227163c7b67fb53fcb3b8eb72eb44e84095a4eded5463b3b807805b1cf5"
+    ],
+    "naver_engine/reporting.py": [
+      420,
+      25850,
+      "76a7a27ab39f69e9adf4a58547562e00776f6aaa0020df519cb2da8d032bd006"
+    ],
+    "naver_engine/runtime_view.py": [
+      420,
+      2407,
+      "a8d78825c16aaa0a3fcc877fdb4a3cfaddc8330154f9331b75eee2cae6c90a4a"
+    ],
+    "naver_engine/sales_views.py": [
+      420,
+      7905,
+      "885598a9890df6913b54e0d4bf8f2041a18befe5ae319aa0963edb12b5e770f7"
+    ],
+    "naver_engine/session.py": [
+      420,
+      8455,
+      "f710ae69062f2ef13c447767fe65ce17c0990aebe65fa6222c4e312129b8e432"
+    ],
+    "naver_engine/setup_checks.py": [
+      420,
+      15551,
+      "f7a4f0c0d33fdfa9e3f91c7d219d8185c97bd35d37e4984c04a8eb4bc111a37e"
+    ],
+    "naver_engine/store.py": [
+      420,
+      433675,
+      "a78560f42cd3e4ee774135b3b148f0e518ce59a41f1c9d74ae475769aa643856"
+    ],
+    "naver_engine/structure_reads.py": [
+      420,
+      14811,
+      "fed780a4903a099b540cc4eb6b9419ee84cbfdbd26056ad1c338a5db23d71c22"
+    ],
+    "naver_engine/sync.py": [
+      420,
+      24402,
+      "7ddd57ccce8a8edcf13e3d4495d748d122b067e1bba32becfa6326a4dda32dad"
+    ],
+    "naver_engine/view_sync.py": [
+      420,
+      5380,
+      "57c97bb82d78dc25277cdd7f5ea23c1512be0cfd0279a837e1e64d0b317a4034"
+    ],
+    "naver_engine/views.py": [
+      420,
+      63931,
+      "5fe46a4e04c271cda518c2cfbac5aecf6848dd8e9815c557421ac34a8231b34a"
+    ],
+    "naver_engine/web.py": [
+      420,
+      105840,
+      "a8e9315f458cad04b71f5051865fd08b01b364bc06d1cedcd5d3d080e8b1064c"
+    ],
+    "naver_runtime/__init__.py": [
+      420,
+      105,
+      "27d28d6ed467edc27f1b22a7a3fedd78253d562938c3cf060ea2573ef38038ec"
+    ],
+    "naver_runtime/__main__.py": [
+      420,
+      13017,
+      "26185768b4db95d848b74eeb7d37a173501315fd8941427c17b94c3822c14dd7"
+    ],
+    "naver_runtime/backup_transport.py": [
+      420,
+      5364,
+      "b14520d0f46429ea93a3158b664ca7f5cb37e378ce146e684cd276265f92db71"
+    ],
+    "naver_runtime/bootstrap.py": [
+      420,
+      12709,
+      "dd7f5949eee28e0391608670b3f00a40c30e6b461a3589bf47fcc7b49c5dd504"
+    ],
+    "naver_runtime/claude_provider.py": [
+      420,
+      14343,
+      "a20f6f776414aa794f72d0f70c41330fec276e9542708f397ed49c90f17c7706"
+    ],
+    "naver_runtime/collection_requests.py": [
+      420,
+      6497,
+      "1e7606023cdbd27826b0f0e4e07a3f0f6fa4955d6d00396a1af33e7f62526660"
+    ],
+    "naver_runtime/config.py": [
+      420,
+      5907,
+      "a7575256459b99b278bdeb4452bb643944e8983b8cda5f8d007b766a794c7bf5"
+    ],
+    "naver_runtime/erp_tunnel_transport.py": [
+      420,
+      10072,
+      "59d1c40300c416b40d022ce6d1d91cdc9ac3d4a3b981c260ca3002e919bd3288"
+    ],
+    "naver_runtime/learning_jobs.py": [
+      420,
+      5822,
+      "c1f494af99a2eb678907703ceb8372f7943f205a5d67f16bf41071855b04b33a"
+    ],
+    "naver_runtime/learning_provider.py": [
+      420,
+      4914,
+      "2e1c27a3180ce6ecc032086dad78e27b19eccb6f854a33c26fe6af8a5afb7c6f"
+    ],
+    "naver_runtime/restore_check.py": [
+      420,
+      5657,
+      "0f7c392155b9fdcb602307b7bd5771c211ca9f6774f5dcfa8106f940bb7905b9"
+    ],
+    "naver_runtime/runtime_status.py": [
+      420,
+      6149,
+      "f08633202d21248dde7c62c2d6bdb42a40b981721df958b0124fc7009b4da8eb"
+    ],
+    "naver_runtime/scheduler.py": [
+      420,
+      26620,
+      "521aeec2132f423c62a62600644189cdb9d423b3a95fefa685de2ad8a2f58110"
+    ],
+    "naver_runtime/server.py": [
+      420,
+      6425,
+      "bf17856d256bf672aa4f50d8d9bf4b2557cec9a2aed7f1a0f5f97eee81ca8007"
+    ],
+    "naver_runtime/writer.py": [
+      420,
+      12150,
+      "eaa170a7c3a1b0d6f8c7e9340e99d05168a82961b675b7810960aff7b55e5b5a"
+    ]
+  },
+  "schema_sha256": {
+    "old": "6339215c290f599984f114eeeaf1cd12ed378b1fc5e45c7896e2f442f379fd6c",
+    "target": "f7a5d1a05dca07e4eeed737155cb4bc5031e492ba07ce948b0b13d773cdcb8e5"
+  },
+  "source_commit": "e7649acfc71c25d7ae9c981a6ba036b77d97897b",
+  "version": 1
+}
