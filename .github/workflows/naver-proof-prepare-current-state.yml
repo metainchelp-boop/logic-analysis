@@ -1,0 +1,438 @@
+name: Read fixed proof prepare current state
+
+on:
+  push:
+    branches:
+      - codex/naver-proof-state-read-20261021
+    paths:
+      - .github/workflows/naver-proof-prepare-current-state.yml
+
+permissions: {}
+
+jobs:
+  prepare-current-state:
+    if: ${{ github.repository == 'metainchelp-boop/logic-analysis' && github.event_name == 'push' && github.ref == 'refs/heads/codex/naver-proof-state-read-20261021' && github.run_attempt == 1 }}
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Fixed repository branch event and first attempt only
+        run: |
+          set -eu
+          python3 -I -B - <<'PY'
+          import os
+          import sys
+          EXPECTED = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/codex/naver-proof-state-read-20261021", "GITHUB_REPOSITORY": "metainchelp-boop/logic-analysis", "GITHUB_RUN_ATTEMPT": "1"}
+          def validate(environment):
+              if any(type(environment.get(k)) is not str or environment.get(k) != v for k, v in EXPECTED.items()):
+                  raise ValueError("CONTEXT")
+          if __name__ == "__main__":
+              try:
+                  validate(os.environ)
+              except Exception:
+                  print("NAVER_PROOF_PREPARE_CONTEXT_REFUSED_V1")
+                  sys.exit(1)
+          PY
+      - name: Read fixed prepare current state only
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 45s
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            """Fixed current-state observation; never a prepare-success or current_state proof."""
+            import json
+            import os
+            import re
+            import selectors
+            import signal
+            import stat
+            import subprocess
+            import sys
+            import time
+            
+            TARGET = '56f4aa957ec27e9d948b47cfa3bf6fc47eaf4130'
+            BASE = '382f143ad72a5fb0389d79ba0fac199566016e8b'
+            OTHER_REGISTERED = '537f3fa765966b506df2cb98818fa6064493318b'
+            RUN = '39541765525'
+            OPS = '03a9a3549cfbafb02d2e7db809fc98bae0e64bbe'
+            ROOT = '/srv/metainc/ad-deploy-staging'
+            READ_ROOT = '/'
+            ROOT_UID = 0
+            ROOT_GID = 0
+            MARKER = 'NAVER_PROOF_PREPARE_CURRENT_STATE_V1='
+            ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
+            PACKAGE = {'baseline': '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76',
+                       'source_commit': TARGET, 'run_id': RUN,
+                       'ciphertext_sha256': 'ac21da6892b90a3946a12ff233406e01cb30571ee2dda963a705b3169987c804',
+                       'source_tar_gz_sha256': '26c370c4dd0e9b7828a9f429f6af4bb3c6dce28917d31454075660a40ac50143'}
+            CONFIG_OPERATION = '74c912dddf824fae99012849bc4c19a5'
+            CHECK_CONFIG = b'services:\n  naver-engine:\n    network_mode: none\n'
+            SECRET_NAMES = ('runtime.env', 'backup-recipient.pem', 'backup-upload-key', 'backup-known-hosts')
+            FILES = {ROOT+'/releases/naver-'+TARGET+'/deploy/naver-engine-backup.override.yml'}
+            FILES.update(ROOT+'/releases/naver-'+TARGET+'/'+prefix+name+suffix
+                         for name in ('engine', 'relay')
+                         for prefix, suffix in (('compose.naver-', '.yml'), ('preview-', '.override.yml')))
+            FILES.update('/etc/metainc/naver-engine/'+name for name in SECRET_NAMES)
+            # Cipher is metadata-only. No secret path is registered for opening.
+            SPECS = {
+                'receipt': (ROOT+'/receipts/preview-'+TARGET+'.json', 'file', 0o600, 32768, True),
+                'incoming': (ROOT+'/incoming/'+RUN, 'directory', 0o700, None, False),
+                'cipher': (ROOT+'/incoming/'+RUN+'/runtime-secrets.cms', 'file', 0o600, 2192372, False),
+                'source': (ROOT+'/releases/naver-'+TARGET, 'directory', 0o700, None, False),
+                'check_config': (ROOT+'/incoming/'+RUN+'/check-config.override.yml', 'file', 0o600, 256, True),
+                'engine_unit': ('/etc/systemd/system/metainc-naver-engine.service', 'file', 0o644, 32768, True),
+                'relay_unit': ('/etc/systemd/system/metainc-naver-relay.service', 'file', 0o644, 32768, True),
+            }
+            CODES = frozenset('ROOT PATH DIRECTORY NODE OWNER MODE LINKS SIZE CHANGED JSON RECEIPT_KEYS RECEIPT_IDENTITY RECEIPT_PACKAGE RECEIPT_FLAGS RECEIPT_FILES RECEIPT_IMAGES CHECK_CONFIG UNIT_SHAPE COMMAND COMMAND_CAP COMMAND_TIMEOUT COMMAND_OUTPUT UNIT_OUTPUT CONTAINER_OUTPUT IMAGE_OUTPUT DEADLINE UNCLASSIFIED'.split())
+            INSPECT_FORMAT = '{"id":{{json .Id}},"running":{{json .State.Running}},"restarting":{{json .State.Restarting}},"source":{{json (index .Config.Labels "metainc.naver.preview.source")}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}}}'
+            
+            
+            class Refused(Exception):
+                pass
+            
+            
+            def need(condition, code):
+                if not condition:
+                    raise Refused(code)
+            
+            
+            def code(error):
+                return error.args[0] if type(error) is Refused and len(error.args) == 1 and type(error.args[0]) is str and error.args[0] in CODES else 'UNCLASSIFIED'
+            
+            
+            def identity(info):
+                return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                        info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            
+            
+            def directory(info):
+                need(stat.S_ISDIR(info.st_mode) and info.st_uid == ROOT_UID
+                     and not stat.S_IMODE(info.st_mode) & 0o022, 'DIRECTORY')
+            
+            
+            def read_node(name):
+                need(name in SPECS, 'PATH')
+                path, kind, mode, limit, read = SPECS[name]
+                parts = path.lstrip('/').split('/')
+                need(path.startswith('/') and all(x not in ('', '.', '..') for x in parts), 'PATH')
+                flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+                flags |= getattr(os, 'O_NOATIME', 0)
+                fd = os.open(READ_ROOT, flags)
+                leaf = None
+                try:
+                    directory(os.fstat(fd))
+                    for part in parts[:-1]:
+                        try:
+                            nxt = os.open(part, flags, dir_fd=fd)
+                        except FileNotFoundError:
+                            return None
+                        try:
+                            directory(os.fstat(nxt))
+                        except Exception:
+                            os.close(nxt)
+                            raise
+                        os.close(fd)
+                        fd = nxt
+                    try:
+                        info = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        return None
+                    need(stat.S_ISDIR(info.st_mode) if kind == 'directory' else stat.S_ISREG(info.st_mode), 'NODE')
+                    owners = ((ROOT_UID, ROOT_GID), (1000, 1000)) if name == 'cipher' else ((ROOT_UID, ROOT_GID),)
+                    need((info.st_uid, info.st_gid) in owners, 'OWNER')
+                    need(stat.S_IMODE(info.st_mode) == mode, 'MODE')
+                    if kind == 'directory':
+                        return b''
+                    need(info.st_nlink == 1, 'LINKS')
+                    need(0 < info.st_size <= limit and (name != 'cipher' or info.st_size == limit), 'SIZE')
+                    if not read:
+                        return b''
+                    leaf = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+                                   | getattr(os, 'O_NOATIME', 0), dir_fd=fd)
+                    need(identity(os.fstat(leaf)) == identity(info), 'CHANGED')
+                    body = b''
+                    while len(body) <= limit:
+                        chunk = os.read(leaf, limit + 1 - len(body))
+                        if not chunk:
+                            break
+                        body += chunk
+                    need(identity(os.fstat(leaf)) == identity(info) and len(body) == info.st_size and len(body) <= limit, 'CHANGED')
+                    return body
+                finally:
+                    if leaf is not None:
+                        os.close(leaf)
+                    os.close(fd)
+            
+            
+            def unique(pairs):
+                out = {}
+                for key, value in pairs:
+                    need(key not in out, 'JSON')
+                    out[key] = value
+                return out
+            
+            
+            def invalid_constant(_):
+                raise Refused('JSON')
+            
+            
+            def parsed(raw, limit=32768):
+                need(type(raw) is bytes and 0 < len(raw) <= limit, 'JSON')
+                try:
+                    return json.loads(raw, object_pairs_hook=unique, parse_constant=invalid_constant)
+                except Refused:
+                    raise
+                except (ValueError, UnicodeError, RecursionError):
+                    raise Refused('JSON') from None
+            
+            
+            def receipt_projection(raw):
+                value = parsed(raw)
+                keys = {'ok', 'stage', 'source_commit', 'package', 'images', 'files',
+                        'inventory_enabled', 'execution_enabled', 'runtime_flags_verified',
+                        'runtime_environment_preserved', 'config_operation_id'}
+                need(type(value) is dict and set(value) == keys, 'RECEIPT_KEYS')
+                need(value['ok'] is True and value['stage'] == 'prepared' and value['source_commit'] == TARGET, 'RECEIPT_IDENTITY')
+                need(type(value['package']) is dict and value['package'] == PACKAGE, 'RECEIPT_PACKAGE')
+                need(type(value['inventory_enabled']) is bool and value['execution_enabled'] is False
+                     and value['runtime_flags_verified'] is True and value['runtime_environment_preserved'] is True
+                     and value['config_operation_id'] == CONFIG_OPERATION, 'RECEIPT_FLAGS')
+                need(type(value['files']) is dict and set(value['files']) == FILES
+                     and all(type(x) is str and re.fullmatch('[0-9a-f]{64}', x) for x in value['files'].values()), 'RECEIPT_FILES')
+                need(type(value['images']) is dict and set(value['images']) == {'engine', 'relay'}
+                     and all(type(x) is str and re.fullmatch('sha256:[0-9a-f]{64}', x) for x in value['images'].values()), 'RECEIPT_IMAGES')
+                return {'status': 'present', 'package_match': True, 'required_flags_match': True,
+                        'inventory_enabled': value['inventory_enabled'], 'execution_enabled': False,
+                        'files_shape_match': True, 'images_shape_match': True,
+                        'final_prepare_success_proven': False}
+            
+            
+            def source_class(value):
+                need(type(value) is str and re.fullmatch('[0-9a-f]{40}', value), 'COMMAND_OUTPUT')
+                return {BASE: 'baseline_382f', TARGET: 'target_56f4', OTHER_REGISTERED: 'other_registered_537f'}.get(value, 'unregistered')
+            
+            
+            def unit_projection(raw):
+                need(type(raw) is bytes and 0 < len(raw) <= 32768, 'UNIT_SHAPE')
+                try:
+                    lines = raw.decode('utf-8').splitlines()
+                except UnicodeError:
+                    raise Refused('UNIT_SHAPE') from None
+                starts = [line for line in lines if line.startswith('ExecStart=')]
+                need(len(starts) == 1 and starts[0].startswith('ExecStart=/usr/bin/docker compose '), 'UNIT_SHAPE')
+                commits = set(re.findall(re.escape(ROOT) + r'/releases/naver-([0-9a-f]{40})(?=/)', starts[0]))
+                need(len(commits) == 1, 'UNIT_SHAPE')
+                return {'status': 'present', 'source': source_class(next(iter(commits))), 'unit_full_guard_proven': False}
+            
+            
+            def command(args):
+                """Only fixed read commands constructed below; bounded RAM, no child stderr."""
+                allowed = []
+                for name in ('engine', 'relay'):
+                    allowed.append(['/usr/bin/systemctl', 'show', 'metainc-naver-'+name+'.service', '-p', 'ActiveState', '-p', 'SubState', '-p', 'UnitFileState'])
+                    allowed.append(['/usr/bin/docker', 'ps', '--all', '--no-trunc', '--filter', 'label=com.docker.compose.project=naver-'+name,
+                                    '--filter', 'label=com.docker.compose.service=naver-'+name, '--format', '{{.ID}}'])
+                inspect = type(args) is list and len(args) == 5 and args[:4] == ['/usr/bin/docker', 'inspect', '--format', INSPECT_FORMAT] and type(args[4]) is str and re.fullmatch('[0-9a-f]{64}', args[4])
+                need(type(args) is list and (args in allowed or bool(inspect)), 'COMMAND')
+                process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                           stderr=subprocess.DEVNULL, env=ENV, close_fds=True)
+                select = selectors.DefaultSelector()
+                output = b''
+                deadline = time.monotonic() + 4
+                try:
+                    select.register(process.stdout, selectors.EVENT_READ)
+                    while select.get_map():
+                        remaining = deadline - time.monotonic()
+                        need(remaining > 0, 'COMMAND_TIMEOUT')
+                        for key, _ in select.select(remaining):
+                            data = os.read(key.fd, 8193 - len(output))
+                            if not data:
+                                select.unregister(key.fileobj)
+                                continue
+                            output += data
+                            need(len(output) <= 8192, 'COMMAND_CAP')
+                    process.wait(timeout=max(0.01, deadline-time.monotonic()))
+                    return process.returncode, output
+                except subprocess.TimeoutExpired:
+                    raise Refused('COMMAND_TIMEOUT') from None
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait()
+                    select.close()
+                    process.stdout.close()
+            
+            
+            def service_projection(name):
+                need(name in ('engine', 'relay'), 'PATH')
+                unit = 'metainc-naver-'+name+'.service'
+                rc, raw = command(['/usr/bin/systemctl', 'show', unit, '-p', 'ActiveState', '-p', 'SubState', '-p', 'UnitFileState'])
+                need(rc == 0 and len(raw) <= 1024, 'UNIT_OUTPUT')
+                try:
+                    rows = [line.split('=', 1) for line in raw.decode('ascii').splitlines()]
+                    values = unique(rows)
+                except (ValueError, UnicodeError):
+                    raise Refused('UNIT_OUTPUT') from None
+                allowed = {'ActiveState': {'active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading'},
+                           'SubState': {'running', 'exited', 'dead', 'failed', 'start', 'stop', 'auto-restart', 'stop-sigterm', 'stop-sigkill'},
+                           'UnitFileState': {'enabled', 'disabled', 'static', 'masked', 'indirect', 'generated', 'enabled-runtime'}}
+                need(set(values) == set(allowed) and all(values[k] in allowed[k] for k in allowed), 'UNIT_OUTPUT')
+                return {'status': 'observed', **values}
+            
+            
+            def container_projection(name):
+                need(name in ('engine', 'relay'), 'PATH')
+                service = 'naver-'+name
+                rc, raw = command(['/usr/bin/docker', 'ps', '--all', '--no-trunc', '--filter', 'label=com.docker.compose.project='+service,
+                                   '--filter', 'label=com.docker.compose.service='+service, '--format', '{{.ID}}'])
+                need(rc == 0 and len(raw) <= 256, 'CONTAINER_OUTPUT')
+                try:
+                    ids = raw.decode('ascii').splitlines()
+                except UnicodeError:
+                    raise Refused('CONTAINER_OUTPUT') from None
+                need(len(ids) <= 2 and len(set(ids)) == len(ids) and all(re.fullmatch('[0-9a-f]{64}', x) for x in ids), 'CONTAINER_OUTPUT')
+                if len(ids) != 1:
+                    return {'status': 'absent' if not ids else 'multiple', 'count': len(ids)}
+                rc, raw = command(['/usr/bin/docker', 'inspect', '--format', INSPECT_FORMAT, ids[0]])
+                need(rc == 0, 'CONTAINER_OUTPUT')
+                row = parsed(raw, 4096)
+                need(type(row) is dict and set(row) == {'id', 'running', 'restarting', 'source', 'project', 'service'}
+                     and row['id'] == ids[0] and row['project'] == service and row['service'] == service
+                     and type(row['running']) is bool and type(row['restarting']) is bool, 'CONTAINER_OUTPUT')
+                return {'status': 'observed', 'count': 1, 'running': row['running'], 'restarting': row['restarting'], 'source': source_class(row['source'])}
+            
+            
+            def file_projection(name):
+                body = read_node(name)
+                if body is None:
+                    return {'status': 'absent'}
+                if name == 'receipt':
+                    return receipt_projection(body)
+                if name.endswith('_unit'):
+                    return unit_projection(body)
+                if name == 'check_config':
+                    need(body == CHECK_CONFIG, 'CHECK_CONFIG')
+                return {'status': 'present'}
+            
+            
+            def capture(fn, *args):
+                try:
+                    return fn(*args)
+                except Exception as error:
+                    if code(error) == 'DEADLINE':
+                        raise
+                    return {'status': 'refused', 'code': code(error)}
+            
+            
+            def observe():
+                need(os.geteuid() == 0 and ROOT_UID == ROOT_GID == 0 and READ_ROOT == '/', 'ROOT')
+                out = {'schema': 'proof-prepare-current-state-v1', 'target': TARGET, 'prepare_run': RUN,
+                       'ops_head': OPS, 'current_state_guard_proven': False,
+                       'historical_failure_cause_proven': False, 'final_prepare_success_proven': False,
+                       'database_opened': False, 'secret_files_opened': False, 'cipher_body_opened': False}
+                out['files'] = {name: capture(file_projection, name) for name in SPECS}
+                out['services'] = {name: capture(service_projection, name) for name in ('engine', 'relay')}
+                out['containers'] = {name: capture(container_projection, name) for name in ('engine', 'relay')}
+                return out
+            
+            
+            def validate_result(value):
+                """Pure closed projection validator for the separate one-shot result receiver."""
+                def exact(row, keys):
+                    need(type(row) is dict and set(row) == set(keys.split()), 'COMMAND_OUTPUT')
+            
+                def refusal(row):
+                    if type(row) is dict and row.get('status') == 'refused':
+                        exact(row, 'status code')
+                        need(type(row['code']) is str and row['code'] in CODES, 'COMMAND_OUTPUT')
+                        return True
+                    return False
+            
+                def source(row):
+                    need(type(row['source']) is str and row['source'] in
+                         ('baseline_382f', 'target_56f4', 'other_registered_537f', 'unregistered'), 'COMMAND_OUTPUT')
+            
+                need(type(value) is dict, 'COMMAND_OUTPUT')
+                if value.get('status') == 'refused':
+                    exact(value, 'schema status code')
+                    need(value['schema'] == 'proof-prepare-current-state-v1', 'COMMAND_OUTPUT')
+                    refusal({k: value[k] for k in ('status', 'code')})
+                    return value
+                exact(value, 'schema target prepare_run ops_head current_state_guard_proven historical_failure_cause_proven final_prepare_success_proven database_opened secret_files_opened cipher_body_opened files services containers')
+                need(value['schema'] == 'proof-prepare-current-state-v1' and value['target'] == TARGET
+                     and value['prepare_run'] == RUN and value['ops_head'] == OPS, 'COMMAND_OUTPUT')
+                for key in ('current_state_guard_proven', 'historical_failure_cause_proven', 'final_prepare_success_proven',
+                            'database_opened', 'secret_files_opened', 'cipher_body_opened'):
+                    need(value[key] is False, 'COMMAND_OUTPUT')
+                exact(value['files'], ' '.join(SPECS))
+                for name, row in value['files'].items():
+                    if refusal(row):
+                        continue
+                    need(type(row) is dict and row.get('status') in ('present', 'absent'), 'COMMAND_OUTPUT')
+                    if row['status'] == 'absent' or name in ('incoming', 'cipher', 'source', 'check_config'):
+                        exact(row, 'status')
+                    elif name.endswith('_unit'):
+                        exact(row, 'status source unit_full_guard_proven')
+                        source(row)
+                        need(row['unit_full_guard_proven'] is False, 'COMMAND_OUTPUT')
+                    else:
+                        exact(row, 'status package_match required_flags_match inventory_enabled execution_enabled files_shape_match images_shape_match final_prepare_success_proven')
+                        need(type(row['inventory_enabled']) is bool and row['execution_enabled'] is False
+                             and row['final_prepare_success_proven'] is False
+                             and all(row[k] is True for k in ('package_match', 'required_flags_match', 'files_shape_match', 'images_shape_match')), 'COMMAND_OUTPUT')
+                exact(value['services'], 'engine relay')
+                for row in value['services'].values():
+                    if refusal(row):
+                        continue
+                    exact(row, 'status ActiveState SubState UnitFileState')
+                    need(row['status'] == 'observed' and row['ActiveState'] in
+                         ('active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading')
+                         and row['SubState'] in ('running', 'exited', 'dead', 'failed', 'start', 'stop', 'auto-restart', 'stop-sigterm', 'stop-sigkill')
+                         and row['UnitFileState'] in ('enabled', 'disabled', 'static', 'masked', 'indirect', 'generated', 'enabled-runtime'), 'COMMAND_OUTPUT')
+                exact(value['containers'], 'engine relay')
+                for row in value['containers'].values():
+                    if refusal(row):
+                        continue
+                    need(type(row) is dict and type(row.get('count')) is int, 'COMMAND_OUTPUT')
+                    if row.get('status') in ('absent', 'multiple'):
+                        exact(row, 'status count')
+                        need(row['count'] == (0 if row['status'] == 'absent' else 2), 'COMMAND_OUTPUT')
+                    else:
+                        exact(row, 'status count running restarting source')
+                        need(row['status'] == 'observed' and row['count'] == 1
+                             and type(row['running']) is bool and type(row['restarting']) is bool, 'COMMAND_OUTPUT')
+                        source(row)
+                return value
+            
+            
+            def alarm(_signum, _frame):
+                raise Refused('DEADLINE')
+            
+            
+            def main():
+                os.environ.clear()
+                os.environ.update(ENV)
+                signal.signal(signal.SIGALRM, alarm)
+                signal.alarm(30)
+                try:
+                    result = validate_result(observe())
+                    raw = json.dumps(result, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+                    need(len(raw.encode()) <= 8192, 'SIZE')
+                    print(MARKER+raw)
+                    return 1 if any(v['status'] == 'refused' for group in ('files', 'services', 'containers') for v in result[group].values()) else 0
+                except Exception as error:
+                    print(MARKER+json.dumps({'schema': 'proof-prepare-current-state-v1', 'status': 'refused', 'code': code(error)}, sort_keys=True))
+                    return 1
+                finally:
+                    signal.alarm(0)
+            
+            
+            if __name__ == '__main__':
+                sys.exit(main())
+            PY
