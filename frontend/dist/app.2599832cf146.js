@@ -217,6 +217,31 @@ var api = {
       이름에 공백·기호를 갖고 있다. 「메타 아이앤씨」를 「메타아이앤씨」로 치면 못 찾는다.
    ⚠️ 저장된 이름은 건드리지 않는다 — **비교할 때만** 정규화한다(표시는 원문 그대로).
    ⚠️ 서버 규칙을 바꾸면 여기도 함께 바꿀 것. 한쪽만 고치면 「검색은 되는데 서버는 모른다」가 된다. */
+/* 오래된 순위 배지(2026-09-28 대표 지시) — 「며칠 전 값」인지 보여 준다.
+   ⚠️ 오래됐는지는 **서버가 정한다**(backend/rank_staleness.py · 오늘·어제=최신, 2일 전부터 오래됨).
+      화면은 서버가 준 stale·stale_days 를 그리기만 한다 — 규칙을 여기서 다시 계산하지 않는다.
+   왜: 2페이지(41위 아래)를 수집기가 확인하지 못하면, 1페이지에서 못 찾은 상품은 마지막 순위가 그대로 남는다.
+       그 값을 오늘 값처럼 보여 주면 안 된다. */
+window.rankStaleChip = function rankStaleChip(stale, days, at) {
+  if (!stale || days === null || days === undefined) return null;
+  var md = String(at || '').slice(5, 10).replace('-', '/');
+  return React.createElement('span', {
+    style: {
+      marginLeft: 6,
+      fontSize: 10.5,
+      fontWeight: 800,
+      padding: '1px 7px',
+      borderRadius: 999,
+      background: '#fffbeb',
+      color: '#b45309',
+      border: '1px solid #fde68a',
+      whiteSpace: 'nowrap',
+      verticalAlign: 'middle',
+      display: 'inline-block'
+    },
+    title: '마지막 확인 ' + (at || '') + ' — 그 뒤로는 1페이지(40위 안)에서 찾지 못해 순위를 새로 확인하지 못했습니다. ' + '수집기가 2페이지(41위 아래)를 확인하지 못하는 동안에는 마지막으로 확인한 순위가 그대로 남습니다.'
+  }, (md ? md + ' 값 · ' : '') + days + '일 전');
+};
 window.lookupNorm = function lookupNorm(x) {
   return String(x == null ? '' : x).replace(/[\s\-_.,()\[\]/·&+'"]/g, '').toLowerCase();
 };
@@ -306,6 +331,74 @@ var _naverProductUrlRe = /https?:\/\/(?:[a-z0-9-]+\.)*(?:smartstore|brand|shoppi
 // og:url/canonical 검증용 — 가격비교(search.shopping.naver.com/catalog/123)처럼
 // 도메인 바로 뒤에 catalog/products가 오는 경우까지 허용 (중간 경로 0개 이상)
 var _naverProductUrlTest = /naver\.com\/(?:[\w-]+\/)*(?:products|catalog)\/\d+/;
+// 2026-09-23 대표 결정 A(③) — 붙여넣는 HTML 에는 og:url·canonical 이 없다(저장본 751건 중 0건) →
+// 검색엔진용 상품 정보(JSON-LD · 746건)의 상품 번호 + **진짜 스토어 이름**으로 본 상품 주소를 만든다.
+// ⚠️ JSON-LD 안의 주소는 스토어 이름 대신 main 이 든 범용 주소라 쓰지 않는다(광고주 분석이 주소의 스토어
+//    이름으로 보조 대조를 해 'main' 이면 엉뚱한 상품과 맞춘다). main·inflow 같은 공용 경로 주소는 어느 경로로도 안 돌려준다.
+// ⚠️ 서버 backend/detail_ld.py(product_url_with_reason) · 맞춤제안서 public/proposal 과 같은 규칙.
+var _PRODUCT_NOT_SLUG = {
+  main: 1,
+  inflow: 1,
+  i: 1,
+  category: 1,
+  products: 1,
+  search: 1,
+  profile: 1,
+  v2: 1,
+  api: 1
+};
+function _ldProductNo(h) {
+  var re = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+    m;
+  while (m = re.exec(h)) {
+    try {
+      var d = JSON.parse(m[1].trim()),
+        items = Array.isArray(d) ? d : [d];
+      if (d && !Array.isArray(d) && Array.isArray(d['@graph'])) items = items.concat(d['@graph']);
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        if (it && typeof it === 'object' && String(it['@type'] || '') === 'Product') {
+          var ids = [it.productID, it.sku];
+          for (var j = 0; j < ids.length; j++) {
+            var v = String(ids[j] == null ? '' : ids[j]).trim();
+            if (/^\d{4,}$/.test(v)) return v;
+          }
+          return '';
+        }
+      }
+    } catch (e) {/* 깨진 블록은 건너뛴다 */}
+  }
+  return '';
+}
+function _productUrlFromLd(h) {
+  var no = _ldProductNo(h);
+  if (!no) return '';
+  var re = /https?:\/\/(?:m\.)?(smartstore|brand)\.naver\.com\/([A-Za-z0-9_-]+)\/products\/(\d+)/g,
+    m;
+  while (m = re.exec(h)) {
+    if (m[3] === no && !_PRODUCT_NOT_SLUG[m[2]]) return 'https://' + m[1] + '.naver.com/' + m[2] + '/products/' + no;
+  }
+  var sre = /(?:https?:)?\/\/(?:m\.)?(smartstore|brand)\.naver\.com\/([A-Za-z0-9_-]+)/g,
+    seen = {},
+    keys = [];
+  while (m = sre.exec(h)) {
+    if (_PRODUCT_NOT_SLUG[m[2]]) continue;
+    var k = m[1] + '|' + m[2];
+    if (!seen[k]) {
+      seen[k] = 1;
+      keys.push(k);
+    }
+  }
+  if (keys.length === 1) {
+    var p = keys[0].split('|');
+    return 'https://' + p[0] + '.naver.com/' + p[1] + '/products/' + no;
+  }
+  return ''; // 스토어가 여러 종류면 남의 스토어를 잡지 않도록 비운다
+}
+function _isGenericStoreUrl(u) {
+  var m = /naver\.com\/([A-Za-z0-9_-]+)\/products\//.exec(u || '');
+  return !!(m && _PRODUCT_NOT_SLUG[m[1]]);
+}
 function extractProductUrlFromHtml(html) {
   if (!html || typeof html !== 'string') return '';
   try {
@@ -314,10 +407,13 @@ function extractProductUrlFromHtml(html) {
     var h = html.indexOf('\\/') >= 0 ? html.replace(/\\\//g, '/') : html;
     var m;
     m = h.match(/<meta[^>]+property=["']og:url["'][^>]*content=["']([^"']+)["']/i) || h.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:url["']/i);
-    if (m && m[1] && _naverProductUrlTest.test(m[1])) return m[1].split('?')[0];
+    if (m && m[1] && _naverProductUrlTest.test(m[1]) && !_isGenericStoreUrl(m[1])) return m[1].split('?')[0];
     m = h.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i) || h.match(/<link[^>]+href=["']([^"']+)["'][^>]*rel=["']canonical["']/i);
-    if (m && m[1] && _naverProductUrlTest.test(m[1])) return m[1].split('?')[0];
-    // 3) HTML 내 네이버 쇼핑 상품 URL 중 '가장 많이 등장하는 것' = 본 상품
+    if (m && m[1] && _naverProductUrlTest.test(m[1]) && !_isGenericStoreUrl(m[1])) return m[1].split('?')[0];
+    // 3) 검색엔진용 상품 정보(JSON-LD)의 상품 번호 + 진짜 스토어 이름 (2026-09-23)
+    var ld = _productUrlFromLd(h);
+    if (ld) return ld;
+    // 4) HTML 내 네이버 쇼핑 상품 URL 중 '가장 많이 등장하는 것' = 본 상품
     //    (추천/광고 상품은 보통 1번만 나옴 → 빈도로 본 상품 구별, 2회 이상만 신뢰)
     //    smartstore 외에 brand(브랜드스토어)·shopping(가격비교)·m. 모바일도 인식
     var all = h.match(_naverProductUrlRe);
@@ -325,6 +421,7 @@ function extractProductUrlFromHtml(html) {
       var counts = {};
       for (var i = 0; i < all.length; i++) {
         var u = all[i].split('?')[0];
+        if (_isGenericStoreUrl(u)) continue;
         counts[u] = (counts[u] || 0) + 1;
       }
       var best = '',
@@ -2095,11 +2192,16 @@ window.DashboardSummary = function DashboardSummary({
   var _s2 = useState(0);
   var reportCount = _s2[0];
   var setReportCount = _s2[1];
+  // 플레이스 당일 분석(2026-09-23 대표 확정 — 부 문구 한 줄). null = 옛 서버·조회 실패 → 종전 문구 그대로
+  var _s3 = useState(null);
+  var placeCount = _s3[0];
+  var setPlaceCount = _s3[1];
   useEffect(function () {
     api.get('/cd/today-stats').then(function (res) {
       if (res && res.success && res.data) {
         setAnalysisCount(res.data.analysis_count || 0);
         setReportCount(res.data.report_count || 0);
+        setPlaceCount(typeof res.data.place_analysis_count === 'number' ? res.data.place_analysis_count : null);
       }
     }).catch(function () {});
   }, []);
@@ -2123,7 +2225,7 @@ window.DashboardSummary = function DashboardSummary({
   }), React.createElement(StatCard, {
     label: '당일 분석',
     value: analysisCount,
-    sub: '수동 분석 횟수'
+    sub: placeCount == null ? '수동 분석 횟수' : '스토어 수동 분석 · 플레이스 ' + placeCount
   }), React.createElement(StatCard, {
     label: '보고서 출력',
     value: reportCount,
@@ -3239,11 +3341,11 @@ window.RankTrackingSection = function RankTrackingSection({
           }, isOpen ? '▼' : '▶'), k.keyword), React.createElement('td', null, k.latest_rank ? React.createElement('span', {
             style: {
               fontWeight: 700,
-              color: k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626'
+              color: k.stale ? '#94a3b8' : k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626'
             }
           }, k.latest_rank + '위') : React.createElement('span', {
             className: 'badge badge-gray'
-          }, '300위 밖')), React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'), React.createElement('td', {
+          }, '300위 밖'), window.rankStaleChip(k.stale, k.stale_days, k.last_checked)), React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'), React.createElement('td', {
             style: {
               fontSize: 12,
               color: '#94a3b8'
@@ -3802,7 +3904,7 @@ window.RankTrackingSection = function RankTrackingSection({
           style: {
             padding: '6px 10px'
           }
-        }, _rankBadge(k.latest_rank)), React.createElement('td', {
+        }, _rankBadge(k.latest_rank), window.rankStaleChip(k.stale, k.stale_days, k.last_checked)), React.createElement('td', {
           style: {
             padding: '6px 10px'
           }
@@ -4373,7 +4475,7 @@ function CollectorOpsPanel(props) {
       width: '100%',
       borderCollapse: 'collapse'
     }
-  }, React.createElement('thead', null, React.createElement('tr', null, ['기계', '버전', '상태', '마지막 신호', '오늘', '📤 미전송'].map(function (h) {
+  }, React.createElement('thead', null, React.createElement('tr', null, ['기계', '버전', '상태', '마지막 신호', '오늘', '📤 미전송', '⚙ 서버 설정'].map(function (h) {
     return React.createElement('th', {
       key: h,
       scope: 'col',
@@ -4400,7 +4502,13 @@ function CollectorOpsPanel(props) {
         color: up.c,
         fontWeight: 700
       })
-    }, up.t));
+    }, up.t),
+    // ⚙ v1.27.0 — 서버가 보낸 설정을 이 기계가 쓰고 있나(맞음 초록 · 대기 주황 · 미보고 회색)
+    React.createElement('td', {
+      style: Object.assign({}, _krTd, {
+        color: m.settingsMatch === true ? '#047857' : m.settingsMatch === false && m.settings_hash ? '#b45309' : '#64748b'
+      })
+    }, (m.settingsText || '—') + (m.settings_note ? ' · ' + m.settings_note : '')));
   })))), isAdmin && (view.readinessError || rd) && React.createElement('div', {
     style: {
       marginTop: 10,
@@ -4435,6 +4543,212 @@ function CollectorOpsPanel(props) {
       margin: '8px 0 0'
     }
   }, '완료 = 그날 서버에 저장된 키워드 수 · 부분 = 막혀서 찾은 순위만 적은 키워드 · 미전송 = 기계가 아직 못 올린 결과(서버가 받으면 사라짐). 값이 「미확인」이면 못 잰 것이지 0 이 아닙니다.'));
+}
+/* ───────────────────────────────────────────────────────────────────────
+ * 📖 순위 읽기 도우미 — 운영 칸 (2026-09-24 대표 확정 4건 · 9/25 「하나로 통합해 전체 PC 에 설치」)
+ *   직원이 직접 넘긴 네이버쇼핑 화면으로 채운 순위. 서버 = GET /api/human-view/stats(로그인).
+ *   ③ PC 번호만 보인다(직원 이름·계정은 서버가 받지도 않는다).
+ *   ④ 첫 주 대조 — 같은 날 수집기 결과와 앞 20개가 같은 자리에 있는 비율(로그인/로그아웃 따로).
+ *   「누가 채웠나」는 이 내부 화면에만 있다 — 광고주 보고서에는 순위만 나간다.
+ * ─────────────────────────────────────────────────────────────────────── */
+var _krHvLogin = {
+  'in': '로그인',
+  out: '로그아웃',
+  unknown: '미확인'
+};
+function _krHvPct(v) {
+  return v === null || v === undefined ? '미확인' : Math.round(v * 100) + '%';
+}
+function HumanViewCard(props) {
+  var user = props.currentUser || {};
+  var isSuper = user.role === 'superadmin';
+  var st = React.useState({
+    data: null,
+    error: '',
+    token: '',
+    tokenMsg: ''
+  });
+  var view = st[0],
+    setView = st[1];
+  var alive = React.useRef(true);
+  function load() {
+    Promise.resolve().then(function () {
+      return api.get('/human-view/stats');
+    }).then(function (res) {
+      if (!res || !res.success) throw new Error('bad');
+      if (alive.current) setView(function (v) {
+        return Object.assign({}, v, {
+          data: res,
+          error: ''
+        });
+      });
+    }).catch(function () {
+      if (alive.current) setView(function (v) {
+        return Object.assign({}, v, {
+          error: '읽기 도우미 기록을 읽지 못했습니다(미확인).'
+        });
+      });
+    });
+  }
+  React.useEffect(function () {
+    alive.current = true;
+    load();
+    var t = setInterval(load, 5 * 60 * 1000);
+    return function () {
+      alive.current = false;
+      clearInterval(t);
+    };
+  }, [user.id]);
+  function showToken() {
+    Promise.resolve().then(function () {
+      return api.get('/human-view/token');
+    }).then(function (res) {
+      if (!res || !res.token) throw new Error('bad');
+      if (alive.current) setView(function (v) {
+        return Object.assign({}, v, {
+          token: res.token,
+          tokenMsg: '도우미를 설치한 PC 팝업의 「연결 코드」 칸에 넣어 주세요. 수집기 토큰과 다른 값입니다.'
+        });
+      });
+    }).catch(function () {
+      if (alive.current) setView(function (v) {
+        return Object.assign({}, v, {
+          tokenMsg: '연결 코드를 받지 못했습니다(최고관리자·서버 설정 확인).'
+        });
+      });
+    });
+  }
+  var d = view.data;
+  if (!d && !view.error) return null;
+  var pcs = d && d.pcs,
+    recent = d && d.recent,
+    lc = d && d.loginCompare;
+  return React.createElement('section', {
+    style: _krCard,
+    'aria-label': '순위 읽기 도우미',
+    'data-human-view': true
+  }, React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement('strong', {
+    style: {
+      fontSize: 15
+    }
+  }, '📖 순위 읽기 도우미' + (d ? ' · ' + d.date : '')), React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement('button', {
+    type: 'button',
+    onClick: load,
+    style: _krOpsBtn
+  }, '새로고침'), isSuper && React.createElement('button', {
+    type: 'button',
+    onClick: showToken,
+    style: _krOpsBtn
+  }, '🔑 연결 코드 보기'))), view.error && React.createElement('p', {
+    role: 'status',
+    style: {
+      fontSize: 12,
+      color: '#b45309',
+      margin: '6px 0 0'
+    }
+  }, view.error), view.tokenMsg && React.createElement('p', {
+    role: 'status',
+    style: {
+      fontSize: 12,
+      color: '#1d4ed8',
+      margin: '6px 0 0'
+    }
+  }, view.token && React.createElement('code', {
+    style: {
+      fontSize: 12,
+      background: '#eff6ff',
+      padding: '2px 6px',
+      borderRadius: 6,
+      marginRight: 6,
+      userSelect: 'all',
+      wordBreak: 'break-all'
+    }
+  }, view.token), view.tokenMsg), /* ⚠️ Array 가 아니면(없음·null) 「미확인」 — .length 로 화면 전체가 죽지 않게(2026-09-28 렌더 점검에서 발견) */
+  d && (!Array.isArray(pcs) ? React.createElement('p', {
+    style: {
+      fontSize: 12,
+      color: '#b45309'
+    }
+  }, 'PC별 기록을 읽지 못했습니다(미확인).') : !pcs.length ? React.createElement('p', {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      margin: '8px 0 0'
+    }
+  }, '오늘 읽은 화면이 없습니다 — 아직 설치한 PC 가 없거나 오늘 쓰지 않았습니다.') : React.createElement('div', {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+      gap: 8,
+      marginTop: 10
+    }
+  }, pcs.map(function (p) {
+    return React.createElement('div', {
+      key: p.pc
+    }, _krOpsTile('PC ' + p.pc + '번', _krOpsNum(p.keywords) + '개 키워드', '화면 ' + _krOpsNum(p.uploads) + ' · 완료 ' + _krOpsNum((p.complete || 0) + (p.allFound || 0)) + ' · 마지막 ' + _krOpsClock(p.lastAt)));
+  }))), d && recent && recent.length > 0 && React.createElement('div', {
+    style: {
+      overflowX: 'auto',
+      marginTop: 10
+    }
+  }, React.createElement('table', {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse'
+    }
+  }, React.createElement('thead', null, React.createElement('tr', null, ['키워드', '누가 채웠나', '확인한 범위', '추적 대상', '화면', '시각'].map(function (h) {
+    return React.createElement('th', {
+      key: h,
+      scope: 'col',
+      style: _krTh
+    }, h);
+  }))), React.createElement('tbody', null, recent.map(function (r, i) {
+    var done = r.complete || r.targets > 0 && r.found >= r.targets;
+    return React.createElement('tr', {
+      key: i
+    }, React.createElement('td', {
+      style: _krTd
+    }, r.keyword), React.createElement('td', {
+      style: _krTd
+    }, '사람 · PC ' + r.pc + '번'), React.createElement('td', {
+      style: _krTd
+    }, '1~' + r.covered + '위' + (r.complete ? ' · 끝까지' : done ? '' : ' · 이어서 필요')), React.createElement('td', {
+      style: Object.assign({}, _krTd, {
+        color: done ? '#047857' : '#334155',
+        fontWeight: done ? 700 : 400
+      })
+    }, r.targets ? r.found + ' / ' + r.targets + ' 찾음' + (done ? ' · 완료' : '') : '—'), React.createElement('td', {
+      style: _krTd
+    }, (_krHvLogin[r.loggedIn] || r.loggedIn) + (r.recorded ? '' : ' · 대조만')), React.createElement('td', {
+      style: _krTd
+    }, _krOpsClock(r.at)));
+  })))), d && lc && React.createElement('p', {
+    style: {
+      fontSize: 12,
+      color: '#475569',
+      margin: '8px 0 0'
+    }
+  }, '첫 주 대조(최근 7일 · 같은 날 수집기 결과와 앞 20개가 같은 자리) — 로그인 화면 ' + _krOpsNum(lc['in'] && lc['in'].pairs) + '건 ' + _krHvPct(lc['in'] && lc['in'].samePos) + ' · 로그아웃 화면 ' + _krOpsNum(lc.out && lc.out.pairs) + '건 ' + _krHvPct(lc.out && lc.out.samePos) + ' · 미확인 ' + _krOpsNum(lc.unknown && lc.unknown.pairs) + '건 ' + _krHvPct(lc.unknown && lc.unknown.samePos) + (d.loggedInRecorded === false ? ' · 지금은 로그인 화면을 순위에 쓰지 않습니다' : '')), React.createElement('p', {
+    style: {
+      fontSize: 11.5,
+      color: '#94a3b8',
+      margin: '8px 0 0'
+    }
+  }, '직원이 직접 넘긴 화면만 읽습니다(네이버에 따로 요청하지 않습니다). 1위부터 이어 본 만큼만 순위로 쓰고, 300위까지 다 보지 않았으면 찾은 순위만 적습니다. 값이 「미확인」이면 못 잰 것이지 0 이 아닙니다.'));
 }
 var _krOpsBtn = {
   padding: '6px 11px',
@@ -5381,14 +5695,19 @@ window.KeywordRankPage = function KeywordRankPage(props) {
   // 키워드 한 줄의 등록 상태 — 대표 지시의 「제대로 등록됐나」 + 「300위 밖·nvMid 없음」 표기
   var _kwStateChip = function (b) {
     var st;
-    if (b.pending) st = {
+    // 오래된 순위(2026-09-28) — 예전에 잰 적이 있는 키워드는 「첫 수집 대기」가 아니다
+    if (b.pending && b.pending_reason === 'stale') st = {
+      t: '🕘 ' + (b.last_known && b.last_known.rank ? b.last_known.rank + '위(예전 값)' : '새 기록 없음'),
+      c: '#b45309',
+      bg: '#fef3c7'
+    };else if (b.pending) st = {
       t: '🆕 첫 수집 대기',
       c: '#1d4ed8',
       bg: '#dbeafe'
     };else if (b.rank != null && b.rank > 0) st = {
       t: '✅ ' + b.rank + '위',
-      c: '#059669',
-      bg: '#d1fae5'
+      c: b.stale ? '#64748b' : '#059669',
+      bg: b.stale ? '#f1f5f9' : '#d1fae5'
     };else if (b.has_nvmid === false) st = {
       t: '⚠ 300위 밖 · nvMid 없음',
       c: '#dc2626',
@@ -5400,6 +5719,10 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     };
     return React.createElement('span', {
       style: {
+        whiteSpace: 'nowrap'
+      }
+    }, React.createElement('span', {
+      style: {
         display: 'inline-block',
         padding: '2px 9px',
         borderRadius: 99,
@@ -5409,7 +5732,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         background: st.bg,
         whiteSpace: 'nowrap'
       }
-    }, st.t);
+    }, st.t), window.rankStaleChip(b.stale, b.stale_days, b.last_checked));
   };
   // 며칠째 배지 — 접힌 줄에도 보인다(시안 정합 2026-09-18)
   var _daysBadge = function (dstr) {
@@ -5991,7 +6314,16 @@ window.KeywordRankPage = function KeywordRankPage(props) {
           color: '#94a3b8',
           whiteSpace: 'nowrap'
         })
-      }, c.last_checked || '—'));
+      }, c.last_checked || '—', /* 오래된 순위 수(2026-09-28 · 서버 집계) — 0 이면 안 그린다 */
+      (c.stale || 0) > 0 && React.createElement('span', {
+        style: {
+          display: 'block',
+          fontSize: 10.5,
+          fontWeight: 800,
+          color: '#b45309'
+        },
+        title: '마지막 확인이 2일 이상 지난 순위 수 — 업체를 펼치면 키워드별 날짜가 보입니다'
+      }, '오래된 순위 ' + c.stale + '개')));
       if (!_isOpen) return mainRow;
       var expandRow = React.createElement('tr', {
         key: c.id + '-x'
@@ -6350,7 +6682,19 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         color: '#94a3b8',
         marginLeft: 'auto'
       }
-    }, '추이·전일 대비는 매일 08:00 기록 기준')), bdLoading ? React.createElement('div', {
+    }, '추이·전일 대비는 매일 08:00 기록 기준')), /* 오래된 순위 안내(2026-09-28) — 서버가 센 수(kpis.stale)가 있을 때만 */
+    !bdLoading && (kpis.stale || 0) > 0 && React.createElement('div', {
+      style: {
+        margin: '0 0 12px',
+        padding: '10px 14px',
+        borderRadius: 10,
+        background: '#fffbeb',
+        border: '1px solid #fde68a',
+        color: '#92400e',
+        fontSize: 12.5,
+        lineHeight: 1.6
+      }
+    }, React.createElement('b', null, '⚠ 순위 ' + kpis.stale + '개는 2일 이상 새로 확인되지 않았습니다. '), '수집기가 2페이지(41위 아래)를 확인하지 못하면, 1페이지에서 못 찾은 상품은 마지막으로 확인한 순위가 그대로 남습니다. ', '주황 배지(「며칠 전」)가 붙은 순위는 오늘 값이 아닙니다 — 광고주 안내 전에 날짜를 확인하세요.'), bdLoading ? React.createElement('div', {
       style: {
         padding: '40px 0',
         textAlign: 'center',
@@ -6461,14 +6805,25 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         style: Object.assign({}, _krTd, {
           textAlign: 'right'
         })
-      }, exposed ? React.createElement('span', {
+      }, exposed ? React.createElement('span', null, React.createElement('span', {
         style: {
           fontSize: 16,
           fontWeight: 800,
-          color: b.rank <= 10 ? '#16a34a' : '#0f172a',
+          color: b.stale ? '#94a3b8' : b.rank <= 10 ? '#16a34a' : '#0f172a',
           fontVariantNumeric: 'tabular-nums'
         }
-      }, b.rank + '위') : b.pending
+      }, b.rank + '위'), window.rankStaleChip(b.stale, b.stale_days, b.last_checked)) : b.pending && b.pending_reason === 'stale'
+      // 오래된 순위(2026-09-28) — 창 안에 새 기록이 없지만 예전에 잰 적이 있다 = 「대기」가 아니다
+      ? React.createElement('span', null, b.last_known && b.last_known.rank ? React.createElement('span', {
+        style: {
+          fontSize: 16,
+          fontWeight: 800,
+          color: '#94a3b8',
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, b.last_known.rank + '위') : React.createElement('span', {
+        style: _krChip('mute')
+      }, '미노출'), window.rankStaleChip(true, b.stale_days, b.last_checked)) : b.pending
       // 「기록 대기」를 두 종류로 가른다(신고 #248) —
       // 기다리면 풀리는 것과, 사람이 손대기 전엔 영영 안 풀리는 것.
       // ⚠️ 종전엔 둘 다 같은 배지에 「보통 수 분」이라고 적혀 있었다.
@@ -6490,10 +6845,15 @@ window.KeywordRankPage = function KeywordRankPage(props) {
           marginLeft: 4
         }),
         title: '연속 미노출 일수'
-      }, b.unexposed_days + '일째'))), React.createElement('td', {
+      }, b.unexposed_days + '일째'), window.rankStaleChip(b.stale, b.stale_days, b.last_checked))), React.createElement('td', {
         style: _krTd
-      }, exposed && b.delta !== null && b.delta !== undefined ? React.createElement('span', {
-        style: d.style
+      }, exposed && b.delta !== null && b.delta !== undefined
+      // 오래된 순위의 전일 대비는 그 옛날 두 날짜 사이 변화다 — 흐리게(2026-09-28)
+      ? React.createElement('span', {
+        style: Object.assign({}, d.style, b.stale ? {
+          opacity: 0.4
+        } : {}),
+        title: b.stale ? '마지막으로 확인한 두 날짜 사이의 변화 — 오늘 변화가 아닙니다' : undefined
       }, d.label) : React.createElement('span', {
         style: {
           fontSize: 11.5,
@@ -6514,7 +6874,8 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       }, exposed && b.page ? b.page + 'p' : '—'), React.createElement('td', {
         style: Object.assign({}, _krTd, {
           fontSize: 12,
-          color: '#94a3b8',
+          color: b.stale ? '#b45309' : '#94a3b8',
+          fontWeight: b.stale ? 700 : 400,
           whiteSpace: 'nowrap'
         })
       }, b.last_checked ? String(b.last_checked).slice(0, 16).replace('T', ' ') : '—'), React.createElement('td', {
@@ -6589,6 +6950,9 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     }
   }, selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')), /* ---------- 🧭 수집기 운영 패널 (코덱스 이식 5차) — 업체 상세가 아닐 때 · 뷰어 제외 ---------- */
   !selected && !isViewer && React.createElement(CollectorOpsPanel, {
+    currentUser: currentUser
+  }), /* ---------- 📖 순위 읽기 도우미 (2026-09-24 · 9/25 전 직원 PC 로 통합) — 운영 패널 바로 아래 · 뷰어 제외 ---------- */
+  !selected && !isViewer && React.createElement(HumanViewCard, {
     currentUser: currentUser
   }), /* ---------- ⚠ 추적 안 됨 정리함 (신고 #248 후속) ---------- */
   !selected && canEditHere && tray && function () {
@@ -7216,6 +7580,720 @@ window.KeywordRankPage = function KeywordRankPage(props) {
   })))));
 };
 window.CollectorOpsPanel = CollectorOpsPanel;
+
+;/* ===== js/components/CollectorBoardPage.jsx ===== */
+/* CollectorBoardPage — 🛰 수집 현황판 (대표 지시 2026-09-25)
+ *
+ * 대표 원문: 「이게 잘 작동하는지도 확인하는, 그리고 매일 수집기 관련 데이터를 확인할 수 있는 별도의 페이지를
+ * 만들어서 현황판으로 볼수 있게 개발하자. 매번 여기서 물어볼수 없어.」
+ *
+ * 서버 = GET /api/collector/board(로그인 · 읽기 전용 · 규칙은 backend/collector_board.py 한 곳).
+ * 지금까지 진단 워크플로로 손으로 재던 것을 그대로 옮겼다:
+ *   판정 줄(진짜 차단 · 기계 · 설정 · 미전송 · 나누기 · 순위 기록) → 오늘 숫자 → 시간대별 → 14일 추이
+ *   → 기계 → 막힘 사유(진짜 차단과 진단 보고를 갈라서) → 멈춘 이유 → 순위 기록 → 순위 읽기 도우미.
+ *
+ * ⚠️ 못 잰 값(null)은 「미확인」으로 쓴다 — 0 으로 그리지 않는다(이 저장소 규칙).
+ * ⚠️ 「막힘 보고」 숫자를 그대로 「차단」이라 쓰지 않는다(9/18 교훈) — 대부분이 진단 보고다.
+ * 스타일 상수(_kr*)는 KeywordRankPage.jsx 것을 그대로 쓴다(번들 순서상 먼저 로드).
+ */
+var _cbLevel = {
+  ok: {
+    bg: '#f0fdf4',
+    bd: '#bbf7d0',
+    fg: '#15803d',
+    mark: '정상'
+  },
+  warn: {
+    bg: '#fffbeb',
+    bd: '#fde68a',
+    fg: '#b45309',
+    mark: '확인'
+  },
+  bad: {
+    bg: '#fef2f2',
+    bd: '#fecaca',
+    fg: '#b91c1c',
+    mark: '문제'
+  },
+  unknown: {
+    bg: '#f8fafc',
+    bd: '#e2e8f0',
+    fg: '#64748b',
+    mark: '미확인'
+  }
+};
+var _CB_REFRESH_MS = 5 * 60 * 1000;
+/* 「여기서부터 보기」(대표 지시 2026-09-28) — 기준 시각은 이 브라우저에만 기억한다(원자료는 서버에 그대로). */
+var _CB_SINCE_KEY = 'cb_since';
+function _cbLoadSince() {
+  try {
+    return window.localStorage.getItem(_CB_SINCE_KEY) || '';
+  } catch (e) {
+    return '';
+  }
+}
+function _cbSaveSince(v) {
+  try {
+    if (v) window.localStorage.setItem(_CB_SINCE_KEY, v);else window.localStorage.removeItem(_CB_SINCE_KEY);
+  } catch (e) {/* 저장 못 해도 이번 화면에는 적용 */}
+}
+function _cbNowStamp() {
+  var d = new Date(),
+    p = function (n) {
+      return (n < 10 ? '0' : '') + n;
+    };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+function _cbNum(v) {
+  return v === null || v === undefined ? '미확인' : Number(v).toLocaleString('ko-KR');
+}
+function _cbAgo(min) {
+  if (min === null || min === undefined) return '미확인';
+  if (min < 1) return '방금';
+  if (min < 60) return min + '분 전';
+  if (min < 60 * 24) return Math.floor(min / 60) + '시간 전';
+  return Math.floor(min / 1440) + '일 전';
+}
+/* 2페이지 넘김 {passed, tried} → 「넘김/시도 (비율)」. null 은 「미확인」(0 과 섞지 않는다). */
+function _cbP2(p) {
+  if (p === null || p === undefined) return '미확인';
+  var t = p.tried || 0,
+    n = p.passed || 0;
+  if (!t) return '시도 0';
+  return n + ' / ' + t + ' (' + Math.round(100 * n / t) + '%)';
+}
+function _cbSection(title, sub, body) {
+  return React.createElement('div', {
+    style: _krCard
+  }, React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 10,
+      marginBottom: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement('div', {
+    style: {
+      fontSize: 15,
+      fontWeight: 800,
+      color: '#0f172a'
+    }
+  }, title), sub ? React.createElement('div', {
+    style: {
+      fontSize: 12,
+      color: '#64748b'
+    }
+  }, sub) : null), body);
+}
+function _cbTable(heads, rows, empty) {
+  if (!rows || !rows.length) return React.createElement('div', {
+    style: {
+      fontSize: 12.5,
+      color: '#94a3b8',
+      padding: '8px 2px'
+    }
+  }, empty || '없음');
+  return React.createElement('div', {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement('table', {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse'
+    }
+  }, React.createElement('thead', null, React.createElement('tr', null, heads.map(function (h, i) {
+    return React.createElement('th', {
+      key: i,
+      style: _krTh
+    }, h);
+  }))), React.createElement('tbody', null, rows.map(function (r, i) {
+    return React.createElement('tr', {
+      key: i
+    }, r.map(function (c, j) {
+      return React.createElement('td', {
+        key: j,
+        style: Object.assign({}, _krTd, {
+          fontVariantNumeric: 'tabular-nums'
+        })
+      }, c);
+    }));
+  }))));
+}
+
+/* 막대 — 두 값(시도·완료)을 같은 축에. 최대값이 0 이면 빈 막대. */
+function _cbBars(items, maxV, label) {
+  var h = 96;
+  return React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'flex-end',
+      gap: 3,
+      height: h + 22,
+      overflowX: 'auto'
+    }
+  }, items.map(function (it, i) {
+    var a = it.a === null || it.a === undefined ? null : it.a;
+    var b = it.b === null || it.b === undefined ? null : it.b;
+    var ha = maxV > 0 && a !== null ? Math.max(a ? 2 : 0, Math.round(a / maxV * h)) : 0;
+    var hb = maxV > 0 && b !== null ? Math.max(b ? 2 : 0, Math.round(b / maxV * h)) : 0;
+    return React.createElement('div', {
+      key: i,
+      title: it.title,
+      style: {
+        flex: '1 0 16px',
+        minWidth: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center'
+      }
+    }, React.createElement('div', {
+      style: {
+        position: 'relative',
+        width: '100%',
+        height: h
+      }
+    }, React.createElement('div', {
+      style: {
+        position: 'absolute',
+        bottom: 0,
+        left: '12%',
+        right: '12%',
+        height: ha,
+        background: '#dbeafe',
+        borderRadius: '3px 3px 0 0'
+      }
+    }), React.createElement('div', {
+      style: {
+        position: 'absolute',
+        bottom: 0,
+        left: '30%',
+        right: '30%',
+        height: hb,
+        background: '#3b82f6',
+        borderRadius: '3px 3px 0 0'
+      }
+    }), a === null && b === null ? React.createElement('div', {
+      style: {
+        position: 'absolute',
+        bottom: 0,
+        width: '100%',
+        textAlign: 'center',
+        fontSize: 10,
+        color: '#cbd5e1'
+      }
+    }, '·') : null), React.createElement('div', {
+      style: {
+        fontSize: 10,
+        color: it.hi ? '#0f172a' : '#94a3b8',
+        fontWeight: it.hi ? 800 : 500,
+        marginTop: 4,
+        whiteSpace: 'nowrap'
+      }
+    }, it.label));
+  }));
+}
+function _cbLegend(aName, bName) {
+  var dot = function (c) {
+    return {
+      display: 'inline-block',
+      width: 10,
+      height: 10,
+      borderRadius: 2,
+      background: c,
+      marginRight: 4,
+      verticalAlign: '-1px'
+    };
+  };
+  return React.createElement('div', {
+    style: {
+      fontSize: 11.5,
+      color: '#64748b',
+      marginTop: 6
+    }
+  }, React.createElement('span', {
+    style: dot('#dbeafe')
+  }), aName, '　', React.createElement('span', {
+    style: dot('#3b82f6')
+  }), bName);
+}
+window.CollectorBoardPage = function CollectorBoardPage(props) {
+  var useState = React.useState,
+    useEffect = React.useEffect,
+    useCallback = React.useCallback;
+  var currentUser = props.currentUser || {};
+  var isViewer = currentUser.role !== 'superadmin'; // 대표 확정 「나만 보게 해」 — 최고관리자만
+
+  // undefined = 불러오는 중 · null = 못 불러옴 · 객체 = 현황
+  var _d = useState(undefined);
+  var data = _d[0],
+    setData = _d[1];
+  var _e = useState('');
+  var err = _e[0],
+    setErr = _e[1];
+  var _l = useState(false);
+  var loading = _l[0],
+    setLoading = _l[1];
+  var _o = useState(false);
+  var showOld = _o[0],
+    setShowOld = _o[1];
+  var _s = useState(_cbLoadSince);
+  var since = _s[0],
+    setSince = _s[1];
+  var load = useCallback(function () {
+    if (isViewer) return;
+    setLoading(true);
+    var path = '/collector/board' + (since ? '?since=' + encodeURIComponent(since) : '');
+    Promise.resolve().then(function () {
+      return api.get(path);
+    }).then(function (res) {
+      if (res && res.success) {
+        setData(res);
+        setErr('');
+        // 서버가 기준 시각을 쓰지 않았으면(지난 날·못 읽음) 기억한 것도 지운다 — 다음 날 저절로 하루 전체로
+        if (since && !res.window) {
+          _cbSaveSince('');
+          setSince('');
+        }
+      } else {
+        setData(function (prev) {
+          return prev === undefined ? null : prev;
+        });
+        setErr(res && (res.detail || res.error) || '현황을 불러오지 못했습니다.');
+      }
+    }).catch(function (e) {
+      setData(function (prev) {
+        return prev === undefined ? null : prev;
+      });
+      setErr(e && e.message || '현황을 불러오지 못했습니다.');
+    }).then(function () {
+      setLoading(false);
+    });
+  }, [isViewer, since]);
+  var startHere = function () {
+    var v = _cbNowStamp();
+    _cbSaveSince(v);
+    setSince(v);
+  };
+  var showAll = function () {
+    _cbSaveSince('');
+    setSince('');
+  };
+  useEffect(function () {
+    load();
+    var t = setInterval(load, _CB_REFRESH_MS);
+    return function () {
+      clearInterval(t);
+    };
+  }, [load]);
+  var head = React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      marginBottom: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement('div', {
+    style: {
+      flex: '1 1 auto'
+    }
+  }, React.createElement('div', {
+    style: {
+      fontSize: 20,
+      fontWeight: 800,
+      color: '#0f172a',
+      letterSpacing: '-.02em'
+    }
+  }, '🛰 수집 현황판'), React.createElement('div', {
+    style: {
+      fontSize: 12.5,
+      color: '#64748b',
+      marginTop: 2
+    }
+  }, '쇼핑 순위 수집기와 순위 읽기 도우미가 오늘 제대로 돌았는지 한 화면에서 봅니다. 5분마다 새로 불러옵니다.')), data ? React.createElement('div', {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      textAlign: 'right'
+    }
+  }, '기준일 ', React.createElement('b', {
+    style: {
+      color: '#0f172a'
+    }
+  }, data.today), React.createElement('br'), '불러온 시각 ', data.generatedAt) : null, React.createElement('button', {
+    style: _krOpsBtn,
+    onClick: startHere,
+    disabled: loading,
+    title: '지금 시각 이후에 생긴 것만 셉니다 — 원래 기록은 지우지 않습니다'
+  }, '⏱ 여기서부터 보기'), React.createElement('button', {
+    style: _krOpsBtn,
+    onClick: load,
+    disabled: loading
+  }, loading ? '불러오는 중…' : '↻ 새로고침'));
+  if (isViewer) return React.createElement('div', {
+    style: _krWrap
+  }, head, React.createElement('div', {
+    style: _krCard
+  }, '수집 현황판은 최고관리자만 볼 수 있습니다.'));
+  if (data === undefined) return React.createElement('div', {
+    style: _krWrap
+  }, head, React.createElement('div', {
+    style: _krCard
+  }, '불러오는 중…'));
+  if (data === null) return React.createElement('div', {
+    style: _krWrap
+  }, head, React.createElement('div', {
+    style: Object.assign({}, _krCard, {
+      color: '#b91c1c'
+    })
+  }, '⚠ ' + (err || '현황을 불러오지 못했습니다.') + ' — 잠시 뒤 ↻ 새로고침을 눌러 주세요.'));
+  var s = data.summary || {};
+  var win = data.window || null; // 「여기서부터 보기」 칸(없으면 하루 전체)
+  var hourNow = new Date().getHours();
+  var winBanner = win ? React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
+      background: '#eff6ff',
+      border: '1px solid #bfdbfe',
+      borderRadius: 12,
+      padding: '10px 14px',
+      marginBottom: 12,
+      fontSize: 13,
+      color: '#1d4ed8'
+    }
+  }, React.createElement('b', null, '⏱ ' + win.label + '만 보는 중'), React.createElement('span', {
+    style: {
+      color: '#475569'
+    }
+  }, '판정 줄(진짜 차단 · 2페이지)과 숫자 칸 · 막힘 보고 · 멈춘 이유가 ' + win.since.slice(11, 16) + ' 이후 것만 셉니다. 원래 기록은 그대로 있습니다.'), React.createElement('button', {
+    style: _krOpsBtn,
+    onClick: showAll
+  }, '전체 보기로 돌아가기')) : null;
+
+  // ① 판정 줄
+  var verdicts = React.createElement('div', {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+      gap: 10,
+      marginBottom: 16
+    }
+  }, (data.verdicts || []).map(function (v) {
+    var c = _cbLevel[v.level] || _cbLevel.unknown;
+    return React.createElement('div', {
+      key: v.key,
+      style: {
+        background: c.bg,
+        border: '1px solid ' + c.bd,
+        borderRadius: 12,
+        padding: '11px 14px'
+      }
+    }, React.createElement('div', {
+      style: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center'
+      }
+    }, React.createElement('span', {
+      style: {
+        fontSize: 12,
+        fontWeight: 800,
+        color: '#334155'
+      }
+    }, v.title), React.createElement('span', {
+      style: {
+        fontSize: 11,
+        fontWeight: 800,
+        color: c.fg,
+        border: '1px solid ' + c.bd,
+        background: '#fff',
+        borderRadius: 999,
+        padding: '1px 8px'
+      }
+    }, c.mark)), React.createElement('div', {
+      style: {
+        fontSize: 12.5,
+        color: c.fg,
+        marginTop: 5,
+        lineHeight: 1.45
+      }
+    }, v.text));
+  }));
+
+  // ② 오늘 숫자 — 기준 시각이 있으면 그 뒤 숫자만
+  var tiles = win ? React.createElement('div', {
+    style: _krKpiGrid
+  }, _cbKpi('완료', _cbNum(win.completed), win.label + ' · 300위까지 본 것 ' + _cbNum(win.full), '#15803d'), _cbKpi('시도 횟수', _cbNum(win.attempts), win.label + ' 수집기가 올린 결과 수'), _cbKpi('2페이지 넘김', _cbP2(win.page2), win.label + ' · 넘김 / 시도', win.page2 && win.page2.tried >= 20 ? win.page2.passed * 2 >= win.page2.tried ? '#15803d' : win.page2.passed * 10 >= win.page2.tried ? '#b45309' : '#b91c1c' : undefined), _cbKpi('진짜 차단', _cbNum(win.blocks ? win.blocks.real : null), win.label + ' · 퍼즐·차단 문구', win.blocks && win.blocks.real > 0 ? '#b91c1c' : '#15803d'), _cbKpi('진단 보고', _cbNum(win.blocks ? win.blocks.diag : null), win.label + ' · 차단이 아님'), _cbKpi('도우미가 읽은 화면', _cbNum(win.human), win.label + ' · 사람이 넘긴 화면')) : React.createElement('div', {
+    style: _krKpiGrid
+  }, _cbKpi('오늘 재야 할 키워드', _cbNum(s.universe), '수집 대상 전체'), _cbKpi('완료', _cbNum(s.completed), '300위까지 본 것 ' + _cbNum(s.full) + ' · 대상 다 찾음 ' + _cbNum(s.found), '#15803d'), _cbKpi('부분 수집', _cbNum(s.partial), '보다가 멈춤(내일 다시 잰다)', '#b45309'), _cbKpi('아직 안 봄', _cbNum(s.notTried), '오늘 한 번도 시도 안 함'), _cbKpi('시도 횟수', _cbNum(s.attempts), '수집기가 올린 결과 수'), _cbKpi('도우미가 읽은 화면', _cbNum(s.human), '사람이 넘긴 화면'), _cbKpi('진짜 차단', _cbNum(s.realBlocks), '퍼즐·차단 문구', s.realBlocks > 0 ? '#b91c1c' : '#15803d'), _cbKpi('진단 보고', _cbNum(s.diagBlocks), '차단이 아님 — 2페이지 불변 등'), /* 2페이지 넘김(2026-09-28) — 1페이지에서 끝난 수집은 시도에 넣지 않는다 */
+  _cbKpi('2페이지 넘김', _cbP2(s.page2), '넘김 / 시도 — 41위 아래를 확인한 비율', s.page2 && s.page2.tried >= 20 ? s.page2.passed * 2 >= s.page2.tried ? '#15803d' : s.page2.passed * 10 >= s.page2.tried ? '#b45309' : '#b91c1c' : undefined));
+
+  // ③ 시간대별
+  var hr = data.hourly;
+  var hourly = hr ? function () {
+    var mx = 0;
+    hr.forEach(function (r) {
+      mx = Math.max(mx, r.attempts || 0, r.completed || 0);
+    });
+    return React.createElement('div', null, _cbBars(hr.map(function (r) {
+      var future = r.hour > hourNow;
+      return {
+        a: future ? null : r.attempts,
+        b: future ? null : r.completed,
+        label: String(r.hour),
+        hi: r.hour === hourNow,
+        title: r.hour + '시 — 시도 ' + r.attempts + ' · 완료 ' + r.completed
+      };
+    }), mx), _cbLegend('시도', '완료'));
+  }() : React.createElement('div', {
+    style: {
+      color: '#94a3b8',
+      fontSize: 12.5
+    }
+  }, '시간대별 기록을 읽지 못했습니다(미확인).');
+
+  // ④ 14일 추이
+  var hist = data.history || [];
+  var hmx = 0;
+  hist.forEach(function (r) {
+    hmx = Math.max(hmx, r.attempts || 0, r.completed || 0);
+  });
+  var history = React.createElement('div', null, _cbBars(hist.map(function (r) {
+    return {
+      a: r.attempts,
+      b: r.completed,
+      label: r.day.slice(5).replace('-', '/'),
+      hi: r.day === data.today,
+      title: r.day + ' — 시도 ' + _cbNum(r.attempts) + ' · 완료 ' + _cbNum(r.completed)
+    };
+  }), hmx), _cbLegend('시도', '완료'), React.createElement('div', {
+    style: {
+      marginTop: 12
+    }
+  }, _cbTable(['날짜', '완료', '300위까지', '대상 다 찾음', '부분', '시도', '2페이지 넘김', '도우미 화면', '진짜 차단', '진단 보고'], hist.slice().reverse().map(function (r) {
+    return [r.day, _cbNum(r.completed), _cbNum(r.full), _cbNum(r.found), _cbNum(r.partial), _cbNum(r.attempts), _cbP2(r.page2), _cbNum(r.human), React.createElement('span', {
+      style: {
+        color: r.realBlocks > 0 ? '#b91c1c' : undefined,
+        fontWeight: r.realBlocks > 0 ? 800 : 400
+      }
+    }, _cbNum(r.realBlocks)), _cbNum(r.diagBlocks)];
+  }))));
+
+  // ⑤ 기계
+  var machineRows = function (list) {
+    return (list || []).map(function (m) {
+      var up = m.uploadSummary;
+      return [React.createElement('b', null, m.machine + '번'), m.ext_version ? 'v' + m.ext_version : '미확인', React.createElement('span', {
+        style: {
+          color: m.stale ? '#b91c1c' : '#334155',
+          fontWeight: m.stale ? 800 : 400
+        }
+      }, m.status || '미확인'), _cbAgo(m.minutes_since), m.day_total ? (m.day_done || 0) + ' / ' + m.day_total : '미확인', m.settingsText || '미확인', up ? up.count ? up.count + '건 쌓임' : '없음' : '미보고', _cbP2(win ? m.page2Window : m.page2Today), m.last_error ? String(m.last_error).slice(0, 40) : '—'];
+    });
+  };
+  var mHeads = ['기계', '버전', '상태', '마지막 신호', '오늘 몫(완료/전체)', '서버 설정', '미전송', win ? '2페이지 넘김(' + win.label + ')' : '2페이지 넘김(오늘)', '마지막 오류'];
+  var machines = React.createElement('div', null, data.machines === null ? React.createElement('div', {
+    style: {
+      color: '#94a3b8',
+      fontSize: 12.5
+    }
+  }, '기계 신호를 읽지 못했습니다(미확인).') : _cbTable(mHeads, machineRows(data.machines), '신호를 보내는 기계가 없습니다.'), data.oldMachines && data.oldMachines.length ? React.createElement('div', {
+    style: {
+      marginTop: 10
+    }
+  }, React.createElement('button', {
+    style: _krOpsBtn,
+    onClick: function () {
+      setShowOld(!showOld);
+    }
+  }, (showOld ? '▾ ' : '▸ ') + '옛 설치본 ' + data.oldMachines.length + '개 — 3일 넘게 조용한 기록(교체 전 버전 · 고장 아님)'), showOld ? React.createElement('div', {
+    style: {
+      marginTop: 8
+    }
+  }, _cbTable(mHeads, machineRows(data.oldMachines))) : null) : null);
+
+  // ⑥ 막힘 사유
+  var codeRows = function (b) {
+    if (!b) return null;
+    return b.codes.map(function (c) {
+      var tag = c.kind === 'real' ? {
+        t: '진짜 차단',
+        c: '#b91c1c'
+      } : c.kind === 'diag' ? {
+        t: '진단 보고',
+        c: '#64748b'
+      } : {
+        t: '기타',
+        c: '#b45309'
+      };
+      return [React.createElement('span', {
+        style: {
+          color: tag.c,
+          fontWeight: 800
+        }
+      }, tag.t), c.label, _cbNum(c.count)];
+    });
+  };
+  var blockBox = function (title, b) {
+    return React.createElement('div', {
+      style: {
+        flex: '1 1 320px',
+        minWidth: 0
+      }
+    }, React.createElement('div', {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 800,
+        color: '#334155',
+        marginBottom: 6
+      }
+    }, title, b ? ' — 진짜 차단 ' + b.real + ' · 진단 ' + b.diag + ' · 기타 ' + b.other : ' — 미확인'), b ? _cbTable(['구분', '사유', '건수'], codeRows(b), '보고 없음') : React.createElement('div', {
+      style: {
+        color: '#94a3b8',
+        fontSize: 12.5
+      }
+    }, '막힘 보고를 읽지 못했습니다.'));
+  };
+  var rr = data.recentRealBlocks;
+  var blocks = React.createElement('div', null, React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 16,
+      flexWrap: 'wrap'
+    }
+  }, win ? blockBox(win.label, win.blocks) : blockBox('오늘', data.blocksToday), blockBox('최근 7일', data.blocksWeek)), React.createElement('div', {
+    style: {
+      marginTop: 14,
+      fontSize: 12.5,
+      fontWeight: 800,
+      color: '#334155',
+      marginBottom: 6
+    }
+  }, '최근 7일 진짜 차단 목록'), rr === null ? React.createElement('div', {
+    style: {
+      color: '#94a3b8',
+      fontSize: 12.5
+    }
+  }, '미확인') : _cbTable(['시각', '키워드', '페이지', '사유', '수집기 버전'], (rr || []).map(function (r) {
+    return [r.at, r.keyword, r.page, r.code, r.version || '—'];
+  }), '최근 7일 진짜 차단 없음 — 정상'));
+
+  // ⑦ 멈춘 이유
+  var sr = win ? win.stopReasons : data.stopReasons;
+  var stops = sr === null ? React.createElement('div', {
+    style: {
+      color: '#94a3b8',
+      fontSize: 12.5
+    }
+  }, '미확인') : _cbTable(['이유(수집기가 적은 것)', '건수'], (sr || []).map(function (r) {
+    return [r.label ? r.reason + ' — ' + r.label : r.reason, _cbNum(r.count)];
+  }), '오늘 부분 수집 없음');
+
+  // ⑧ 순위 기록
+  var w = data.rankWrites || {};
+  var writes = React.createElement('div', {
+    style: _krKpiGrid
+  }, _cbKpi('업체 순위 오늘 기록', _cbNum(w.clients), '그중 순위 못 찾음 ' + _cbNum(w.clientsMissing)), _cbKpi('추적 상품 순위 오늘 기록', _cbNum(w.products), '마지막 기록 ' + (w.productsLastAt || '미확인')));
+
+  // ⑨ 순위 읽기 도우미
+  var hv = data.helper;
+  var helper;
+  if (!hv) {
+    helper = React.createElement('div', {
+      style: {
+        color: '#94a3b8',
+        fontSize: 12.5
+      }
+    }, '도우미 기록을 읽지 못했습니다(미확인).');
+  } else {
+    var lc = hv.loginCompare || {};
+    var lcRow = function (k, name) {
+      var x = lc[k] || {};
+      return [name, _cbNum(x.pairs), _krHvPct(x.samePos), _krHvPct(x.overlap)];
+    };
+    helper = React.createElement('div', null, React.createElement('div', {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 800,
+        color: '#334155',
+        marginBottom: 6
+      }
+    }, '오늘 PC별'), hv.pcs === null ? React.createElement('div', {
+      style: {
+        color: '#94a3b8',
+        fontSize: 12.5
+      }
+    }, '미확인') : _cbTable(['PC', '읽은 화면', '키워드', '300위까지 끝냄', '대상 다 찾음', '마지막'], (hv.pcs || []).map(function (p) {
+      return ['PC ' + p.pc + '번', _cbNum(p.uploads), _cbNum(p.keywords), _cbNum(p.complete), _cbNum(p.allFound), p.lastAt || '—'];
+    }), '오늘 도우미가 읽은 화면이 없습니다. 설치한 PC 에서 추적 키워드를 검색하면 여기에 쌓입니다.'), React.createElement('div', {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 800,
+        color: '#334155',
+        margin: '14px 0 6px'
+      }
+    }, '로그인 화면 대조(최근 7일) — 같은 키워드를 수집기와 도우미가 둘 다 봤을 때 순위가 얼마나 같은가'), _cbTable(['화면 상태', '대조 쌍', '같은 자리 비율', '상위 20개 겹침'], [lcRow('out', '로그아웃'), lcRow('in', '로그인'), lcRow('unknown', '미확인')]), React.createElement('div', {
+      style: {
+        fontSize: 11.5,
+        color: '#64748b',
+        marginTop: 6
+      }
+    }, '로그인 화면도 지금은 ' + (hv.loggedInRecorded ? '기록합니다' : '기록하지 않습니다') + ' — 로그인과 로그아웃의 비율이 크게 다르면 로그인 화면 기록을 끄는 것을 검토합니다.'), React.createElement('div', {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 800,
+        color: '#334155',
+        margin: '14px 0 6px'
+      }
+    }, '최근 읽은 화면'), hv.recent === null ? React.createElement('div', {
+      style: {
+        color: '#94a3b8',
+        fontSize: 12.5
+      }
+    }, '미확인') : _cbTable(['시각', 'PC', '키워드', '읽은 깊이', '대상 찾음', '화면', '적힘'], (hv.recent || []).slice(0, 15).map(function (r) {
+      return [r.at, 'PC ' + r.pc + '번', r.keyword, '1~' + r.covered + '위' + (r.complete ? ' · 끝' : ''), r.targets ? r.found + ' / ' + r.targets : '—', _krHvLogin[r.loggedIn] || '미확인', r.recorded ? '예' : '아니오'];
+    }), '아직 없음'));
+  }
+  var guide = React.createElement('div', {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      lineHeight: 1.7,
+      padding: '4px 2px 0'
+    }
+  }, React.createElement('b', {
+    style: {
+      color: '#334155'
+    }
+  }, '읽는 법 — '), '맨 위 판정 줄이 모두 「정상」이면 오늘은 따로 볼 것이 없습니다. ', '「진짜 차단」이 1건이라도 있으면 수집기를 켜 둔 PC 에서 네이버쇼핑 화면을 직접 열어 보안 확인(퍼즐)이 떠 있는지 봐 주세요 — 퍼즐은 사람만 풉니다. ', '「진단 보고」는 차단이 아닙니다(2페이지를 눌러도 화면이 그대로였다는 등 수집기가 스스로 남긴 기록). ', '「미확인」은 0 이 아니라 그 값을 읽지 못했다는 뜻입니다.');
+  return React.createElement('div', {
+    style: _krWrap
+  }, head, err ? React.createElement('div', {
+    style: {
+      fontSize: 12.5,
+      color: '#b45309',
+      marginBottom: 10
+    }
+  }, '⚠ 방금 새로 불러오기에 실패했습니다 — 아래는 직전 값입니다. (' + err + ')') : null, winBanner, verdicts, tiles, _cbSection('오늘 시간대별', '연한 막대 = 시도 · 진한 막대 = 완료 · 지나지 않은 시간은 비워 둡니다', hourly), _cbSection('최근 14일', '완료가 며칠째 줄어들면 수집기를 확인할 때입니다', history), _cbSection('수집 기계', '5분마다 오는 살아있음 신호 기준 · 15분 넘게 신호가 없으면 끊김', machines), _cbSection('막힘 보고 — 진짜 차단과 진단 보고를 나눠서', null, blocks), _cbSection('부분 수집이 멈춘 이유(' + (win ? win.label : '오늘') + ')', '완료로 반영되지 않은 시도만', stops), _cbSection('순위 기록', '수집한 결과가 업체·추적 상품 순위로 실제 적혔는지', writes), _cbSection('📖 순위 읽기 도우미', '직원 PC 에서 사람이 직접 넘긴 화면으로 채운 순위 · 네이버에 요청을 보내지 않습니다', helper), guide);
+};
+function _cbKpi(k, v, sub, color) {
+  return React.createElement('div', {
+    style: _krKpi
+  }, React.createElement('div', {
+    style: _krKpiK
+  }, k), React.createElement('div', {
+    style: Object.assign({}, _krKpiV, color ? {
+      color: color
+    } : {})
+  }, v), sub ? React.createElement('div', {
+    style: _krKpiS
+  }, sub) : null);
+}
 
 ;/* ===== js/components/KeywordVolumeSection.jsx ===== */
 /* KeywordVolumeSection — 키워드 검색량 (v6.1 미리보기 디자인) */
@@ -24552,6 +25630,7 @@ window.ManagerReassignSection = function ManagerReassignSection() {
  *  - 요약 카드: 총 실행 / 이번 달 / 오늘
  *  - 직원별 표: 이름·역할 + 오늘/이번 달/누적 실행 건수
  *  데이터: daily_usage.query_count (분석 실행마다 +1, 모든 역할 카운트)
+ *  2026-09-23 — 스토어·플레이스를 따로 보여 준다(by_analyzer · 직원별 place_*). 옛 서버면 종전 화면.
  */
 var _asRoleLabels = {
   superadmin: '최고관리자',
@@ -24735,6 +25814,12 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
       }, 'IP ' + lg.ip_address));
     })));
   };
+
+  // 분석기별 — 옛 서버(칸 없음)면 hasSplit=false 로 종전 화면 그대로.
+  var hasSplit = !!(data && Object.prototype.hasOwnProperty.call(data, 'by_analyzer'));
+  var place = hasSplit && data.by_analyzer && data.by_analyzer.place || null;
+  var showPlaceCols = !!place; // 조회 실패면 직원별 플레이스 칸을 그리지 않는다(0으로 채우지 않게)
+  var colN = showPlaceCols ? 8 : 5;
   return React.createElement('div', {
     style: {
       background: '#fff',
@@ -24791,6 +25876,28 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
       fontSize: 13
     }
   }, '데이터를 불러오지 못했습니다.'), data && React.createElement(React.Fragment, null,
+  // ── 분석기별(2026-09-23 대표 지시 「분석기도 따로 사용량을」) ──
+  //    by_analyzer 가 **없으면**(옛 서버) 종전 화면 그대로. **null 이면** 조회 실패 — 「0회」로 그리지 않는다.
+  hasSplit && React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginBottom: 8
+    }
+  }, React.createElement('span', {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 800,
+      color: '#0f172a'
+    }
+  }, '🛒 스토어 분석'), React.createElement('span', {
+    style: {
+      fontSize: 11.5,
+      color: '#94a3b8'
+    }
+  }, '분석 버튼 한 번 = 1회 · 종전 숫자 그대로')),
   // 요약 카드
   React.createElement('div', {
     style: {
@@ -24799,7 +25906,33 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
       flexWrap: 'wrap',
       marginBottom: 20
     }
-  }, card('총 누적 실행', data.total, '#6d28d9', '#f5f3ff'), card('이번 달', data.this_month, '#2563eb', '#eff6ff'), card('오늘', data.today, '#16a34a', '#f0fdf4')),
+  }, card('총 누적 실행', data.total, '#6d28d9', '#f5f3ff'), card('이번 달', data.this_month, '#2563eb', '#eff6ff'), card('오늘', data.today, '#16a34a', '#f0fdf4')), hasSplit && React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginBottom: 8
+    }
+  }, React.createElement('span', {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 800,
+      color: '#0f172a'
+    }
+  }, '📍 플레이스 분석'), React.createElement('span', {
+    style: {
+      fontSize: 11.5,
+      color: '#94a3b8'
+    }
+  }, place ? '서버가 분석을 한 번 돌리면 1회(「다시 계산」 포함) · ' + (place.since ? Number(place.since.slice(5, 7)) + '/' + Number(place.since.slice(8, 10)) + '부터 셈 — 그 전 기록은 없습니다' : '아직 기록 없음 — 배포한 날부터 셉니다') + (place.viewer_daily_limit ? ' · 영업사원 하루 ' + place.viewer_daily_limit + '회(스토어와 따로)' : '') : '사용량을 불러오지 못했습니다 — 「0회」가 아니라 이번에 확인을 못 한 것입니다.')), hasSplit && place && React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 12,
+      flexWrap: 'wrap',
+      marginBottom: 20
+    }
+  }, card('누적 실행', place.total, '#0e7490', '#ecfeff'), card('이번 달', place.this_month, '#0e7490', '#ecfeff'), card(place.fails_today ? '오늘 · 그중 실패 ' + fmt(place.fails_today) : '오늘', place.today, '#0e7490', '#ecfeff')),
   // 직원별 표
   React.createElement('div', {
     style: {
@@ -24824,7 +25957,7 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
       borderCollapse: 'collapse',
       fontSize: 13
     }
-  }, React.createElement('thead', null, React.createElement('tr', null, th('직원'), th('권한'), th('오늘', 'right'), th('이번 달', 'right'), th('누적', 'right'))), React.createElement('tbody', null, (data.per_user || []).map(function (u) {
+  }, React.createElement('thead', null, showPlaceCols ? React.createElement('tr', null, th('직원'), th('권한'), th('🛒 오늘', 'right'), th('🛒 이번 달', 'right'), th('🛒 누적', 'right'), th('📍 오늘', 'right'), th('📍 이번 달', 'right'), th('📍 누적', 'right')) : React.createElement('tr', null, th('직원'), th('권한'), th('오늘', 'right'), th('이번 달', 'right'), th('누적', 'right'))), React.createElement('tbody', null, (data.per_user || []).map(function (u) {
     var rc = _asRoleColors[u.role] || _asRoleColors.viewer;
     var isOpen = openId === u.user_id;
     var rows = [React.createElement('tr', {
@@ -24864,12 +25997,12 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
         background: rc.bg,
         color: rc.color
       }
-    }, _asRoleLabels[u.role] || u.role)), numCell(u.today), numCell(u.month), numCell(u.total, true))];
+    }, _asRoleLabels[u.role] || u.role)), numCell(u.today), numCell(u.month), numCell(u.total, true), showPlaceCols && numCell(u.place_today || 0), showPlaceCols && numCell(u.place_month || 0), showPlaceCols && numCell(u.place_total || 0, true))];
     if (isOpen) {
       rows.push(React.createElement('tr', {
         key: u.user_id + '_logs'
       }, React.createElement('td', {
-        colSpan: 5,
+        colSpan: colN,
         style: {
           padding: '4px 10px 12px 24px',
           borderBottom: '1px solid #f1f5f9',
@@ -24881,7 +26014,7 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
       key: 'f_' + u.user_id
     }, rows);
   }), (!data.per_user || data.per_user.length === 0) && React.createElement('tr', null, React.createElement('td', {
-    colSpan: 5,
+    colSpan: colN,
     style: {
       padding: 18,
       textAlign: 'center',
@@ -25930,6 +27063,11 @@ var _AS_GROUPS = function (cu) {
       icon: '📊',
       name: '쇼핑 순위 추적',
       badge: 'up'
+    }, /* 🛰 수집 현황판(2026-09-25 대표 지시 「매번 여기서 물어볼 수 없어」) — 최고관리자 전용(「나만 보게 해」) */
+    role === 'superadmin' && {
+      page: 'collector',
+      icon: '🛰',
+      name: '수집 현황판'
     }].filter(Boolean)
   }, {
     label: '플레이스',
@@ -25971,6 +27109,7 @@ var _AS_CRUMB = {
   seo: '쇼핑 / SEO 최적화',
   analysis: '쇼핑 / 스토어 분석',
   rank: '쇼핑 / 쇼핑 순위 추적',
+  collector: '쇼핑 / 수집 현황판',
   place: '플레이스 / 플레이스 분석',
   placetrack: '플레이스 / 지도 순위 추적',
   management: '통합 / 로직 분석 (업체)',
@@ -26008,6 +27147,14 @@ window.AppShellBar = function AppShellBar(props) {
   var _chX = useState(false);
   var colDismissed = _chX[0],
     setColDismissed = _chX[1];
+  // 지도 순위 추적 멈춤 경보(2026-09-23 대표 확정 — 「나한테만 보이면 돼」 = 최고관리자만)
+  var _pa = useState(null);
+  var placeAlert = _pa[0],
+    setPlaceAlert = _pa[1];
+  var _paX = useState(false);
+  var placeDismissed = _paX[0],
+    setPlaceDismissed = _paX[1];
+  var isOwner = currentUser.role === 'superadmin';
   var _in = useState(function () {
     try {
       return !localStorage.getItem('logic_nav_intro_v7');
@@ -26022,15 +27169,17 @@ window.AppShellBar = function AppShellBar(props) {
   /* 본문 밀어내기 — 페이지 내부 컨테이너 무수정으로 셸 폭 반영.
      경보 배너가 뜨면 그 높이만큼 더 내려 본문 첫 줄이 가려지지 않게 한다. */
   var _bannerOn = !!(colHealth && !colDismissed);
+  var _placeOn = !!(isOwner && placeAlert && !placeDismissed);
+  var _bannerN = (_bannerOn ? 1 : 0) + (_placeOn ? 1 : 0); // 두 경보가 겹치면 두 줄로 쌓인다(쇼핑 먼저)
   useEffect(function () {
     var w = collapsed ? _AS_WC : _AS_W;
     document.body.style.paddingLeft = w + 'px';
-    document.body.style.paddingTop = _AS_TOP + (_bannerOn ? _AS_BANNER : 0) + 'px';
+    document.body.style.paddingTop = _AS_TOP + _bannerN * _AS_BANNER + 'px';
     return function () {
       document.body.style.paddingLeft = '';
       document.body.style.paddingTop = '';
     };
-  }, [collapsed, _bannerOn]);
+  }, [collapsed, _bannerN]);
 
   /* 좁은 화면 자동 접힘(수동 설정 없을 때만) */
   useEffect(function () {
@@ -26060,9 +27209,18 @@ window.AppShellBar = function AppShellBar(props) {
     try {
       if (localStorage.getItem('logic_collect_alert_off') === today) setColDismissed(true);
     } catch (e) {}
+    // 지도 순위 경보는 **로컬 날짜**로 닫기 기억(UTC 로 적으면 한국 오전 9시 전에 어제 날짜가 된다)
+    var _d = new Date();
+    var localDay = _d.getFullYear() + '-' + ('0' + (_d.getMonth() + 1)).slice(-2) + '-' + ('0' + _d.getDate()).slice(-2);
+    try {
+      if (localStorage.getItem('logic_place_alert_off') === localDay) setPlaceDismissed(true);
+    } catch (e) {}
     var load = function () {
       api.get('/collector/health').then(function (res) {
         if (res && res.success && res.state && res.state !== 'ok') setColHealth(res);else setColHealth(null);
+        // 띄울지(missed / 3일째 stale)는 서버 place_watch.alert_of 가 정한다 — 화면은 그대로 따른다.
+        var pl = res && res.success ? res.place : null;
+        setPlaceAlert(pl && pl.alert ? pl : null);
       }).catch(function () {});
     };
     load();
@@ -26106,6 +27264,13 @@ window.AppShellBar = function AppShellBar(props) {
     } catch (e) {}
     setQ('');
     go('home');
+  };
+  var dismissPlace = function () {
+    setPlaceDismissed(true);
+    var d = new Date();
+    try {
+      localStorage.setItem('logic_place_alert_off', d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2));
+    } catch (e) {}
   };
   var dismissCollect = function () {
     setColDismissed(true);
@@ -26393,6 +27558,77 @@ window.AppShellBar = function AppShellBar(props) {
     }
   }, colHealth.message || ''), React.createElement('button', {
     onClick: dismissCollect,
+    title: '오늘 하루 숨기기',
+    style: {
+      border: 'none',
+      background: 'none',
+      cursor: 'pointer',
+      fontSize: 13,
+      fontWeight: 800,
+      color: 'inherit',
+      opacity: .65,
+      padding: '0 2px',
+      fontFamily: 'inherit'
+    }
+  }, '✕')),
+  /* ── 지도 순위 추적 멈춤 경보 (2026-09-23 · 최고관리자만) ──
+     빨강 = 오늘 한 곳도 못 잼 · 주황 = 같은 곳이 3일째 빠짐. 쇼핑 경보가 떠 있으면 그 아래 줄. */
+  _placeOn && React.createElement('div', {
+    style: {
+      position: 'fixed',
+      top: _AS_TOP + (_bannerOn ? _AS_BANNER : 0),
+      left: W,
+      right: 0,
+      zIndex: 998,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '0 18px',
+      height: _AS_BANNER,
+      fontSize: 12.5,
+      fontWeight: 600,
+      transition: 'left .15s ease',
+      background: placeAlert.alert === 'missed' ? '#fef2f2' : '#fffbeb',
+      borderBottom: '1px solid ' + (placeAlert.alert === 'missed' ? '#fecaca' : '#fde68a'),
+      color: placeAlert.alert === 'missed' ? '#991b1b' : '#92400e'
+    }
+  }, React.createElement('span', {
+    style: {
+      fontSize: 14
+    }
+  }, placeAlert.alert === 'missed' ? '🚨' : '⚠️'), React.createElement('span', {
+    style: {
+      fontWeight: 800,
+      whiteSpace: 'nowrap'
+    }
+  }, placeAlert.alert === 'missed' ? placeAlert.tracker && placeAlert.tracker.arrivals > 0 ? '지도 순위 판독 실패' : '지도 순위 추적 멈춤' : '지도 순위 일부 누락'), React.createElement('span', {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      fontWeight: 500,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    },
+    title: placeAlert.message || ''
+  }, placeAlert.message || ''), React.createElement('button', {
+    onClick: function () {
+      go('placetrack');
+    },
+    style: {
+      border: '1px solid currentColor',
+      background: 'transparent',
+      cursor: 'pointer',
+      fontSize: 11.5,
+      fontWeight: 800,
+      color: 'inherit',
+      borderRadius: 7,
+      padding: '2px 9px',
+      fontFamily: 'inherit',
+      whiteSpace: 'nowrap'
+    }
+  }, '지도 순위 추적 보기'), React.createElement('button', {
+    onClick: dismissPlace,
     title: '오늘 하루 숨기기',
     style: {
       border: 'none',
@@ -27263,6 +28499,14 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
  *    그래서 이 버튼은 8/28 부터 **누를 때마다 400** 이었다(9/14 실측: 400 10건 · 200 6건).
  *    ⭐ 교훈 — 「죽은 버튼을 뺐다」고 적을 때 **같은 일을 하는 버튼이 몇 개인지부터 센다.**
  *       `grep products/track` 를 했으면 3곳이 나왔다.
+ *
+ * ⚠️ **nvMid 칸도 빼지 말 것** (2026-09-23 신고 #275 · 9/18 부터 또 죽어 있던 버튼).
+ *    2026-09-18 에 서버가 `nv_mid` 를 **필수**로 받게 바뀌었다(대표 확정 「새 등록은 nvMid 필수」).
+ *    순위 추적 탭(KeywordRankPage)에는 칸을 붙였는데 **이 형제 버튼은 또 빠뜨렸다** — #266 과
+ *    똑같은 모양의 두 번째 사고다. 실측: 9/18 이후 이 버튼 성공 0건 · 400 10건(9/22 7 · 9/23 3,
+ *    응답 303바이트 = 전부 「nvMid 를 넣어야 등록됩니다」).
+ *    ⭐ 교훈 — 서버가 필수 칸을 늘리면 **이 파일도** 같이 본다. 이제 회귀 시험이 서버 검증부에서
+ *       필수 칸 이름을 직접 뽑아 화면의 모든 호출처와 대조한다(`test_client_picker.py` ①).
  */
 window.TrackRegisterButton = function TrackRegisterButton(props) {
   var searchedProductUrl = props.searchedProductUrl;
@@ -27291,6 +28535,25 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
   var _e = React.useState('');
   var err = _e[0],
     setErr = _e[1];
+
+  /* nvMid — 순위 추적 탭과 **같은 경로·같은 규칙**(신고 #275).
+     🔎 자동 찾기 = /products/nvmid-lookup — 이미 모아 둔 수집분만 본다(네이버 요청 0건).
+     ⚠️ 이 훅들은 아래 `return null` 보다 **앞**에 있어야 한다 — 뒤에 두면 조건에 따라 훅 개수가
+        달라져 화면이 통째로 죽는다(2026-09-15 로그인 직후 「화면 로드 오류」 사고와 같은 함정). */
+  var _n = React.useState('');
+  var nvInput = _n[0],
+    setNvInput = _n[1];
+  var _nb = React.useState(false);
+  var nvBusy = _nb[0],
+    setNvBusy = _nb[1];
+  var _nm = React.useState(null);
+  var nvMsg = _nm[0],
+    setNvMsg = _nm[1]; // {ok, text}
+  /* 다른 상품을 분석하면 넣어 둔 nvMid 를 비운다 — nvMid 는 상품마다 다르다(남은 번호로 엉뚱한 상품이 등록되면 안 된다). */
+  React.useEffect(function () {
+    setNvInput('');
+    setNvMsg(null);
+  }, [searchedProductUrl]);
 
   /* 입력이 멈추고 250ms 뒤 한 번만 부른다(글자마다 부르면 서버를 두드린다). */
   React.useEffect(function () {
@@ -27329,6 +28592,66 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
   var alreadyHasKw = already && (already.keywords || []).some(function (k) {
     return (typeof k === 'string' ? k : k && k.keyword) === searchedKeyword;
   });
+
+  /* ⚠️ 숫자만 남긴다 — 주소를 통째로 붙여넣으면 nvMid= 뒤 숫자를 뽑는다.
+     순위 추적 탭(cleanNv)·서버(nvmid.normalize)와 같은 규칙이다. */
+  function cleanNv(v) {
+    var t = String(v == null ? '' : v);
+    var m = /[?&]nvMid=(\d+)/.exec(t);
+    return m ? m[1] : t.replace(/\D/g, '');
+  }
+  /* 자릿수 범위 — 서버 nvmid.MIN_LEN·MAX_LEN 과 같아야 한다(시험이 대조한다). */
+  var NV_MIN = 8,
+    NV_MAX = 20;
+  function nvOk(v) {
+    var t = cleanNv(v);
+    return t.length >= NV_MIN && t.length <= NV_MAX;
+  }
+  /* 상품 1개당 손으로 넣는 키워드 상한 — 서버 keyword_limit.MAX_MANUAL_KEYWORDS 와 같아야 한다(시험이 대조한다). */
+  var KW_MAX = 5;
+
+  /* 이미 추적 중이면 그 상품에 저장된 nvMid 를 그대로 보낸다 — 직원이 다시 넣을 필요가 없다. */
+  var knownNv = already && nvOk(already.nv_mid) ? cleanNv(already.nv_mid) : '';
+  var needNv = !knownNv;
+  var sendNv = knownNv || (nvOk(nvInput) ? cleanNv(nvInput) : '');
+  var kwCount = already ? (already.keywords || []).length : 0;
+  /* 상한이 찬 상품에 키워드를 더하면 서버가 받지 않는다 — 누르기 전에 말한다
+     (종전엔 서버가 거절한 키워드를 모른 채 「등록했습니다」로 떴을 자리다). */
+  var capFull = !!(already && !alreadyHasKw && kwCount >= KW_MAX);
+  var ready = !!(client && sendNv) && !adding;
+
+  /* 🔎 자동 찾기 — 이미 모아 둔 수집분에서만 본다(네이버 요청 0건). 못 찾으면 서버가 이유를 사람 말로 준다. */
+  var lookupNv = function () {
+    if (nvBusy) return;
+    setNvBusy(true);
+    setNvMsg(null);
+    setErr('');
+    api.post('/products/nvmid-lookup', {
+      product_url: searchedProductUrl,
+      keywords: [searchedKeyword]
+    }).then(function (res) {
+      var d = res && res.data || {};
+      if (d.found && d.nv_mid) {
+        setNvInput(String(d.nv_mid));
+        setNvMsg({
+          ok: true,
+          text: d.message || '확인됨'
+        });
+      } else {
+        setNvMsg({
+          ok: false,
+          text: d.message || res && res.detail || '찾지 못했습니다 — nvMid 를 직접 넣어 주세요.'
+        });
+      }
+    }).catch(function (e) {
+      setNvMsg({
+        ok: false,
+        text: '자동 찾기 실패 — ' + (e && e.message || '네트워크 오류') + '. nvMid 를 직접 넣어 주세요.'
+      });
+    }).then(function () {
+      setNvBusy(false);
+    });
+  };
   var onClick = function () {
     if (adding) return;
     /* ⚠️ 업체 없이 보내지 않는다 — 서버가 400 으로 거절한다(위 주석 참조).
@@ -27337,22 +28660,42 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
       setErr('먼저 업체를 골라 주세요 — 목록에서 고른 업체만 등록됩니다.');
       return;
     }
+    /* ⚠️ nvMid 없이 보내지 않는다 — 서버가 새 상품은 400 으로 거절한다(신고 #275). */
+    if (!sendNv) {
+      setErr('nvMid 를 넣어야 등록됩니다 — 「🔎 자동 찾기」를 누르거나, 네이버 쇼핑에서 그 상품을 열어 주소의 nvMid= 뒤 숫자를 넣어 주세요.');
+      return;
+    }
     setErr('');
     setAdding(true);
     api.post('/products/track', {
       product_url: searchedProductUrl,
       keywords: [searchedKeyword],
       client_id: client.id,
+      nv_mid: sendNv,
       store_name_hint: props.storeNameHint || undefined
     }).then(function (res) {
       if (res && res.success) {
         /* ⚠️ 「등록됨」과 「업체에 이어짐」은 다른 일이다 — 서버가 link 로 따로 답한다.
            성공했다고만 알리면 주인 없는 상품이 또 조용히 생긴다(순위 추적 탭과 같은 규칙). */
         var lk = res.data && res.data.link || null;
+        /* ⚠️ 상한을 넘긴 키워드는 서버가 받지 않고 keywords_rejected 로 돌려준다(요청 자체는 200).
+           종전 화면은 이걸 안 봐서 넣지 못한 키워드를 「등록했습니다」로 알렸을 것이다. */
+        var rej = res.data && res.data.keywords_rejected || [];
+        var notes = [];
+        if (rej.length) {
+          notes.push('「' + searchedKeyword + '」은(는) 추가되지 않았습니다 — 키워드 상한(' + KW_MAX + '개)이 찼습니다. 📊 순위 추적 탭에서 쓰지 않는 키워드를 빼고 다시 눌러 주세요');
+        }
         if (lk && lk.linked === false) {
-          setErr('상품은 등록됐지만 「' + client.name + '」에 잇지 못했습니다' + (lk.reason ? ' — ' + lk.reason : '') + '.');
-          if (typeof toast !== 'undefined' && toast.error) toast.error('업체 연결에 실패했습니다 — 순위 추적 탭에서 확인해 주세요.');
+          notes.push('상품은 등록됐지만 「' + client.name + '」에 잇지 못했습니다' + (lk.reason ? ' — ' + lk.reason : ''));
+        }
+        if (notes.length) {
+          setErr(notes.join(' · ') + '.');
+          if (typeof toast !== 'undefined' && toast.error) {
+            toast.error(rej.length ? '키워드 상한이 차서 추가하지 못했습니다.' : '업체 연결에 실패했습니다 — 순위 추적 탭에서 확인해 주세요.');
+          }
         } else {
+          setNvInput('');
+          setNvMsg(null);
           if (typeof toast !== 'undefined' && toast.success) toast.success('「' + client.name + '」 상품으로 등록했습니다. 첫 순위 체크를 시작합니다.');
         }
         if (refreshProducts) refreshProducts();
@@ -27386,6 +28729,49 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
     color: '#0f172a',
     width: 200
   };
+
+  /* nvMid 칸 — 이미 추적 중이라 저장된 번호가 있으면 안 보인다(다시 넣게 하지 않는다).
+     직원 운영 도구라 광고주 전달본(내보내기)에서는 제외(no-export). */
+  function nvField() {
+    if (!needNv) return null;
+    return React.createElement('div', {
+      className: 'no-export',
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6
+      }
+    }, React.createElement('input', {
+      style: Object.assign({}, inp, {
+        width: 150
+      }),
+      value: nvInput,
+      placeholder: 'nvMid (필수) *',
+      autoComplete: 'off',
+      inputMode: 'numeric',
+      onChange: function (e) {
+        setNvInput(e.target.value);
+        setNvMsg(null);
+        setErr('');
+      }
+    }), React.createElement('button', {
+      onClick: lookupNv,
+      disabled: nvBusy,
+      title: '이미 모아 둔 수집분에서 찾습니다 — 네이버에 요청하지 않습니다',
+      style: {
+        padding: '8px 11px',
+        borderRadius: 8,
+        border: '1px solid #cbd5e1',
+        background: '#fff',
+        color: '#334155',
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: nvBusy ? 'default' : 'pointer',
+        whiteSpace: 'nowrap',
+        fontFamily: 'inherit'
+      }
+    }, nvBusy ? '찾는 중…' : '🔎 자동 찾기'));
+  }
 
   /* 업체 고르는 칸 — 직원 운영 도구라 광고주 전달본(내보내기)에서는 제외(no-export) */
   function picker() {
@@ -27498,6 +28884,16 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
       color: '#b91c1c',
       text: err
     };
+    if (nvMsg) return {
+      color: nvMsg.ok ? '#047857' : '#b45309',
+      text: (nvMsg.ok ? '✓ ' : '') + nvMsg.text
+    };
+    if (client && needNv && !nvOk(nvInput)) {
+      return {
+        color: '#b45309',
+        text: 'nvMid 를 넣어야 등록됩니다 — 「🔎 자동 찾기」를 누르거나, 네이버 쇼핑 상품 주소의 nvMid= 뒤 숫자를 넣어 주세요.'
+      };
+    }
     if (client) return {
       color: '#64748b',
       text: '「' + client.name + '」 것으로 등록됩니다 — 그 업체 계약이 끝나면 추적도 함께 멈춥니다.'
@@ -27549,29 +28945,37 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
         fontSize: 12.5,
         fontWeight: 700
       }
-    }, '✓ 이미 추적 중인 상품입니다' + (alreadyHasKw ? ' (이 키워드 포함)' : '')), !alreadyHasKw && picker(), !alreadyHasKw ? React.createElement('button', {
+    }, '✓ 이미 추적 중인 상품입니다' + (alreadyHasKw ? ' (이 키워드 포함)' : '')), capFull && React.createElement('span', {
+      className: 'no-export',
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: '#b45309',
+        flexBasis: '100%'
+      }
+    }, '키워드 ' + KW_MAX + '개(상한)가 모두 찼습니다 — 「' + searchedKeyword + '」를 더하려면 📊 순위 추적 탭에서 쓰지 않는 키워드를 먼저 빼 주세요.'), !alreadyHasKw && !capFull && picker(), !alreadyHasKw && !capFull && nvField(), !alreadyHasKw && !capFull ? React.createElement('button', {
       onClick: onClick,
-      disabled: adding || !client,
+      disabled: !ready,
       className: 'no-export',
       style: {
         padding: '8px 14px',
         borderRadius: 10,
         border: '1px solid #c7d2fe',
-        background: client ? '#eef2ff' : '#f1f5f9',
-        color: client ? '#3b82f6' : '#94a3b8',
+        background: ready ? '#eef2ff' : '#f1f5f9',
+        color: ready ? '#3b82f6' : '#94a3b8',
         fontSize: 12.5,
         fontWeight: 700,
-        cursor: adding || !client ? 'default' : 'pointer'
+        cursor: ready ? 'pointer' : 'default'
       }
-    }, adding ? '등록 중...' : '＋ 이 키워드도 추적 추가') : null, !alreadyHasKw && hintEl));
+    }, adding ? '등록 중...' : '＋ 이 키워드도 추적 추가') : null, !alreadyHasKw && !capFull && hintEl));
   }
   return React.createElement('div', {
     className: 'container'
   }, React.createElement('div', {
     style: wrap
-  }, picker(), React.createElement('button', {
+  }, picker(), nvField(), React.createElement('button', {
     onClick: onClick,
-    disabled: adding || !client,
+    disabled: !ready,
     style: {
       display: 'inline-flex',
       alignItems: 'center',
@@ -27579,11 +28983,11 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
       padding: '10px 18px',
       borderRadius: 10,
       border: 'none',
-      background: adding || !client ? '#94a3b8' : 'linear-gradient(135deg,#3b82f6,#3b82f6)',
+      background: !ready ? '#94a3b8' : 'linear-gradient(135deg,#3b82f6,#3b82f6)',
       color: '#fff',
       fontSize: 13,
       fontWeight: 700,
-      cursor: adding || !client ? 'default' : 'pointer',
+      cursor: !ready ? 'default' : 'pointer',
       boxShadow: '0 3px 10px rgba(79,70,229,0.3)'
     }
   }, adding ? '⏳ 등록 중...' : '🔍 이 상품 순위 추적 시작'), React.createElement('span', {
@@ -30918,6 +32322,10 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
   var _ro = useState(false);
   var regOpen = _ro[0],
     setRegOpen = _ro[1]; // 등록 카드 접기(기본 접힘 — 목록이 먼저)
+  // 추적 멈춤 감시 상태(2026-09-23) — undefined=불러오는 중 · null=못 불러옴(「0곳」과 다르다) · 객체=상태
+  var _pw = useState(undefined);
+  var watch = _pw[0],
+    setWatch = _pw[1];
 
   // ── 상세: 키워드 추가 등록 ──
   var _dki = useState('');
@@ -31022,8 +32430,16 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
   }
 
   // ==================== 데이터 ====================
+  function loadWatch() {
+    api.get('/place/watch').then(function (res) {
+      setWatch(res && res.success && res.data ? res.data : null);
+    }).catch(function () {
+      setWatch(null);
+    });
+  }
   function load() {
     setLoading(true);
+    loadWatch();
     api.get('/place/track-targets').then(function (res) {
       setLoading(false);
       if (res && res.success) {
@@ -31685,6 +33101,134 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
   }
 
   // ==================== 랜딩(업체 목록) — 쇼핑 순위 추적 renderList 미러 ====================
+  // ==================== 추적 멈춤 감시 — 상태 줄(2026-09-23 대표 확정) ====================
+  // 서버 place_watch 가 센 값 그대로 그린다(판정은 서버 한 곳 — 화면이 다시 세지 않는다).
+  function _pwHm(ts) {
+    return ts ? String(ts).slice(11, 16) : '';
+  }
+  function renderWatchStrip() {
+    if (watch === undefined) return null;
+    var box = {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(220px,auto) 1fr',
+      gap: 14,
+      alignItems: 'center',
+      background: '#fff',
+      border: '1px solid #e2e8f0',
+      borderRadius: 12,
+      padding: '12px 16px',
+      marginBottom: 14
+    };
+    if (watch === null) {
+      return React.createElement('div', {
+        style: Object.assign({}, box, {
+          display: 'block',
+          fontSize: 12.5,
+          color: '#94a3b8'
+        })
+      }, '추적 상태를 불러오지 못했습니다 — 「0곳」이 아니라 이번에 확인을 못 한 것입니다.');
+    }
+    if (!watch.active) return null;
+    var st = watch.state,
+      act = watch.active,
+      meas = watch.measured || 0;
+    var pill = {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      fontWeight: 800,
+      borderRadius: 999,
+      padding: '4px 11px',
+      border: '1px solid'
+    };
+    var tone = st === 'ok' ? ['#dcfce7', '#bbf7d0', '#059669'] : st === 'missed' ? ['#fef2f2', '#fecaca', '#991b1b'] : st === 'partial' ? ['#fffbeb', '#fde68a', '#92400e'] : ['#f1f5f9', '#e2e8f0', '#64748b'];
+    var label = st === 'pending' ? '⏳ 오늘 ' + meas + '/' + act + '곳 · ' + (watch.check_from_hour || 9) + '시부터 판정' : '● 오늘 ' + meas + '/' + act + '곳' + (st === 'ok' ? ' 잼' : '') + (watch.unconfirmed ? ' · 미확인 ' + watch.unconfirmed : '') + (watch.stale ? ' · ' + (watch.stale_days || 3) + '일째 ' + watch.stale + '곳' : '');
+    var tr = watch.tracker;
+    var sub = (tr == null ? '추적기 도착 기록 전' : tr.arrivals > 0 ? '추적기 도착 ' + _pwHm(tr.last_at) + ' · ' + tr.arrivals + '회' : '오늘 추적기 도착 없음') + (watch.last_check ? ' · 마지막 점검 ' + _pwHm(watch.last_check) : '');
+    var days = watch.days || [];
+    var today = watch.date;
+    return React.createElement('div', {
+      style: box
+    }, React.createElement('div', {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5
+      }
+    }, React.createElement('span', null, React.createElement('span', {
+      style: Object.assign({}, pill, {
+        background: tone[0],
+        borderColor: tone[1],
+        color: tone[2]
+      })
+    }, label)), React.createElement('span', {
+      style: {
+        fontSize: 12,
+        color: '#64748b'
+      }
+    }, sub), watch.message ? React.createElement('span', {
+      style: {
+        fontSize: 12,
+        color: tone[2],
+        fontWeight: 600
+      }
+    }, watch.message) : null), React.createElement('div', {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        minWidth: 0
+      }
+    }, React.createElement('div', {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(' + Math.max(days.length, 1) + ', minmax(0,1fr))',
+        gap: 4
+      }
+    }, days.map(function (d) {
+      var isToday = d.date === today;
+      var c = !d.active ? ['#f8fafc', '#eef2f6', '#cbd5e1'] : d.measured >= d.active ? ['#dcfce7', '#bbf7d0', '#059669'] : isToday && st === 'pending' ? ['#f1f5f9', '#e2e8f0', '#64748b'] : d.measured === 0 ? ['#fef2f2', '#fecaca', '#991b1b'] : ['#fffbeb', '#fde68a', '#92400e'];
+      return React.createElement('div', {
+        key: d.date,
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 3
+        }
+      }, React.createElement('div', {
+        title: d.date + ' · ' + d.measured + '/' + d.active + '곳',
+        style: {
+          width: '100%',
+          height: 28,
+          borderRadius: 6,
+          background: c[0],
+          border: '1px solid ' + c[1],
+          color: c[2],
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 10.5,
+          fontWeight: 800,
+          fontVariantNumeric: 'tabular-nums',
+          outline: isToday ? '2px solid #3b82f6' : 'none',
+          outlineOffset: 1
+        }
+      }, d.active ? d.measured : '—'), React.createElement('span', {
+        style: {
+          fontSize: 10.5,
+          color: '#94a3b8',
+          fontVariantNumeric: 'tabular-nums'
+        }
+      }, Number(String(d.date).slice(5, 7)) + '/' + Number(String(d.date).slice(8, 10))));
+    })), React.createElement('div', {
+      style: {
+        fontSize: 11.5,
+        color: '#94a3b8'
+      }
+    }, '지난 ' + days.length + '일 · 칸 숫자 = 그날 잰 곳(노출·미노출) · 지금 활성 대상 ' + act + '곳 기준')));
+  }
   function renderList() {
     var q = query.trim().toLowerCase();
     var totals = {
@@ -31727,7 +33271,11 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
         }
       }, label);
     };
-    return React.createElement(React.Fragment, null, React.createElement('div', {
+    var staleIds = {};
+    (watch && watch.stale_ids || []).forEach(function (id) {
+      staleIds[id] = true;
+    });
+    return React.createElement(React.Fragment, null, renderWatchStrip(), React.createElement('div', {
       style: _krKpiGrid
     }, React.createElement('div', {
       style: _krKpi
@@ -31906,8 +33454,29 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
           marginLeft: 6
         }
       }, g.region || '')), React.createElement('td', {
-        style: _krTd
-      }, chip), React.createElement('td', {
+        style: Object.assign({}, _krTd, {
+          whiteSpace: 'nowrap'
+        })
+      }, chip, function () {
+        // 3일째 못 잰 키워드가 있는 업체 — 18/19 가 매일 「거의 다 됐다」로 보이던 곳(9/16~9/21)
+        var n = g.items.filter(function (t) {
+          return staleIds[t.id];
+        }).length;
+        return n ? React.createElement('span', {
+          title: '키워드·장소 번호를 확인해 주세요',
+          style: {
+            display: 'inline-block',
+            fontSize: 11.5,
+            fontWeight: 800,
+            borderRadius: 999,
+            padding: '3px 10px',
+            whiteSpace: 'nowrap',
+            marginLeft: 6,
+            color: '#dc2626',
+            background: '#fef2f2'
+          }
+        }, (watch.stale_days || 3) + '일째 못 잼' + (n > 1 ? ' ' + n : '')) : null;
+      }()), React.createElement('td', {
         style: Object.assign({}, _krTd, {
           textAlign: 'right',
           fontVariantNumeric: 'tabular-nums'
@@ -33554,7 +35123,7 @@ window.App = function App() {
   // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
   var _getPageFromHash = function () {
     var hash = window.location.hash.replace('#', '');
-    var validPages = ['home', 'place', 'placetrack', 'analysis', 'rank', 'management', 'learning', 'seo', 'guide', 'settings'];
+    var validPages = ['home', 'place', 'placetrack', 'analysis', 'rank', 'collector', 'management', 'learning', 'seo', 'guide', 'settings'];
     return validPages.indexOf(hash) !== -1 ? hash : 'home';
   };
   const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -33611,6 +35180,46 @@ window.App = function App() {
   };
   useEffect(function () {
     try {
+      var _ssoBootstrap = window.__metaincSso;
+      if (_ssoBootstrap && _ssoBootstrap.started) {
+        // 새 로그인 실패는 다른 계정의 기존 세션/구 토큰으로 되돌리지 않는다.
+        setCurrentUser(null);
+        setAuthToken(null);
+        try {
+          sessionStorage.removeItem('logic_token');
+          sessionStorage.removeItem('logic_user');
+        } catch (e) {}
+        _ssoBootstrap.consume().then(function (credentials) {
+          var controller = new AbortController();
+          var timeout = setTimeout(function () {
+            controller.abort();
+          }, 15000);
+          return fetch('/api/auth/sso-code', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(credentials),
+            signal: controller.signal,
+            credentials: 'omit',
+            cache: 'no-store',
+            redirect: 'error'
+          }).then(function (r) {
+            clearTimeout(timeout);
+            if (!r.ok) throw new Error('전산 연결 로그인 실패');
+            return r.json();
+          }, function (error) {
+            clearTimeout(timeout);
+            throw error;
+          });
+        }).then(function (data) {
+          if (data && data.success && data.token && data.user) saveAuth(data.user, data.token);
+          setAuthChecking(false);
+        }).catch(function () {
+          setAuthChecking(false);
+        });
+        return;
+      }
       // 기존 세션 복원 (SSO 실패 시 폴백으로도 사용 — 오래된 sso 토큰이 유효 세션을 밀어내지 않게)
       var _restoreSession = function () {
         var savedToken = sessionStorage.getItem('logic_token');
@@ -33638,10 +35247,12 @@ window.App = function App() {
         }
       };
       // 0) 전산(ERP) SSO 자동 로그인: URL ?sso=<토큰> 있으면 우선 처리
-      var _ssoTok = '';
-      try {
-        _ssoTok = new URLSearchParams(window.location.search).get('sso') || '';
-      } catch (e) {}
+      var _ssoTok = _ssoBootstrap ? _ssoBootstrap.takeLegacyToken() : '';
+      if (!_ssoBootstrap) {
+        try {
+          _ssoTok = new URLSearchParams(window.location.search).get('sso') || '';
+        } catch (e) {}
+      }
       if (_ssoTok) {
         var _cleanUrl = function () {
           try {
@@ -34438,6 +36049,16 @@ window.App = function App() {
     health: health,
     onNavigate: setCurrentPage
   }), React.createElement(window.PlaceAnalysisPage, {
+    currentUser: currentUser
+  })), React.createElement(window.ChatWidget, {
+    currentUser: currentUser
+  }));
+  if (currentPage === 'collector') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
+    activePage: 'collector',
+    currentUser: currentUser,
+    health: health,
+    onNavigate: setCurrentPage
+  }), React.createElement(window.CollectorBoardPage, {
     currentUser: currentUser
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
