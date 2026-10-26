@@ -501,6 +501,8 @@ jobs:
                   - .env
                 environment:
                   - TZ=Asia/Seoul
+                  # SEO만 별도 전환. 공용 채팅 모델·운영 인증값은 .env 그대로 보존한다.
+                  - SEO_CLAUDE_MODEL=claude-sonnet-4-6
                 volumes:
                   - ./data:/app/data
                 logging:
