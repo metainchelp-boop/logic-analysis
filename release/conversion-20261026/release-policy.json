@@ -1,0 +1,17 @@
+{
+  "job_conclusion": "success",
+  "private_artifact_id": 12653654802,
+  "private_artifact_sha256": "48531e9805c97bb5a92adfc04637cf00a8fb6e8d7a855c70dc14e282fcc72163",
+  "private_fixture_bodies_exported": 0,
+  "private_head": "7ec30317b1f91ffb65fa97ac6e2711a114b03247",
+  "private_job_id": 121603350131,
+  "private_run_id": "40331946476",
+  "private_tree": "57a031c9f93077a83cfdce8426ae0ddb8923fcb5",
+  "receipt_sha256": "4f89630514da4fd3684e6552f3db7dc553aafa91bf320997fd434b84fbf3ebdf",
+  "run_conclusion": "success",
+  "schema": "conversion-existing-executor-release-policy-v1",
+  "secret_values_copied": 0,
+  "spec_review": "pass",
+  "standards_review": "pass",
+  "trust_boundary": "owner_reviewed_exact_public_release_commit"
+}

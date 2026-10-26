@@ -1,0 +1,97 @@
+{
+  "attempt": 1,
+  "base": "7b8eecf673d5d9db0c79b8a705414d07a87b1aed",
+  "base_files": 796,
+  "base_manifest_sha256": "ff1703526eca736923839c250bcebde1f9e20a8a305f4f7eb3341746583510c9",
+  "bundle_python_sha256": "4d9c7e1c4d9fd922106b07c8eae8387126dfcfa1a769b1699d0c8fcabca1d699",
+  "checks": [
+    {
+      "command_sha256": "8ba57baee2cb8abcb2138f8e2be6524044e5b9e4504cdb648f910aa4b22e3032",
+      "errors": 0,
+      "expected_skipped_replays": [
+        "test_naver_preview_verify_database_repro.VerifyDatabaseReplay.test_actual_old_and_new_store_with_closed_report_fixture",
+        "test_naver_preview_verify_database_repro.VerifyDatabaseReplay.test_actual_new_store_with_live_wal_writer_and_report_transaction"
+      ],
+      "failures": 0,
+      "passed": 1225,
+      "skipped": 2,
+      "skipped_cases": 3,
+      "tests": 1227
+    },
+    {
+      "command_sha256": "6546d59b21512463d106aaf61aef95a1b72281086ed6641ce826e294609c46f6",
+      "errors": 0,
+      "expected_skipped_replays": [],
+      "failures": 0,
+      "passed": 109,
+      "skipped": 0,
+      "skipped_cases": 0,
+      "tests": 109
+    }
+  ],
+  "deployment_ready": false,
+  "head": "7ec30317b1f91ffb65fa97ac6e2711a114b03247",
+  "private": true,
+  "private_fixtures": 6,
+  "public_files": {
+    "backend/naver_market_export.py": {
+      "bytes": 17992,
+      "sha256": "d491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8"
+    },
+    "backend/naver_product_export.py": {
+      "bytes": 20647,
+      "sha256": "42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59"
+    },
+    "backend/tools/naver_completion_download.py": {
+      "bytes": 3548,
+      "sha256": "cc5f87d78f05cac5ad1ceebf99c79505edd4604fd65007403e752d06c0e05c5e"
+    },
+    "backend/tools/naver_completion_exports.py": {
+      "bytes": 10121,
+      "sha256": "1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed"
+    },
+    "backend/tools/naver_erp_tunnel_service_install.py": {
+      "bytes": 30508,
+      "sha256": "236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a"
+    },
+    "backend/tools/naver_preview_completion_release.py": {
+      "bytes": 130559,
+      "sha256": "3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2"
+    },
+    "backend/tools/naver_preview_lifecycle.py": {
+      "bytes": 8083,
+      "sha256": "4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4"
+    },
+    "backend/tools/naver_preview_release.py": {
+      "bytes": 23235,
+      "sha256": "7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84"
+    },
+    "backend/tools/naver_preview_upgrade.py": {
+      "bytes": 19571,
+      "sha256": "6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28"
+    },
+    "backend/tools/naver_report_progress_patch.py": {
+      "bytes": 121290,
+      "sha256": "029c000fc5bd3c2428048a4f82da301f09979c0caf1d5ea4cdc0286e1799d731"
+    },
+    "backend/tools/naver_report_progress_transport.py": {
+      "bytes": 18979,
+      "sha256": "782703fdc8efad330ecbe7b37378d3d1347caa55e40ca4fa12673ac0001b7cd4"
+    },
+    "backend/tools/naver_saved_exports.py": {
+      "bytes": 37216,
+      "sha256": "062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737"
+    }
+  },
+  "qualification_scope": "unchanged_bundle_checks_private_only",
+  "ref": "refs/heads/codex/naver-conversion-existing-executor-20261026",
+  "report_progress_job_sha256": "5bfb40a0f6cf8fb87ce01abd93430f49c8f8b875a62011d98652d0c299423da1",
+  "repository": "metainchelp-boop/metainc-ad-dashboard",
+  "run_id": "40331946476",
+  "schema": "private-conversion-bundle-qualification-v1",
+  "secret_values_read": 0,
+  "server_calls": 0,
+  "status": "pass",
+  "tree": "57a031c9f93077a83cfdce8426ae0ddb8923fcb5",
+  "workflow": ".github/workflows/naver-conversion-bundle-private.yml"
+}

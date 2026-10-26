@@ -1,0 +1,82 @@
+{
+  ".github/workflows/debug-rank.yml": {
+    "bytes": 7581,
+    "sha256": "96116804a374676307c124d9d780f025e29422d0572618ebffc56323f3d982b0"
+  },
+  "release/conversion-20261026/.github/workflows/debug-rank.yml": {
+    "bytes": 10842,
+    "sha256": "5bfb40a0f6cf8fb87ce01abd93430f49c8f8b875a62011d98652d0c299423da1"
+  },
+  "release/conversion-20261026/README.md": {
+    "bytes": 1812,
+    "sha256": "dfe563fc22f990818e58eed91f7e24c77a697e26ae75ca963d493369300ee21d"
+  },
+  "release/conversion-20261026/backend/naver_market_export.py": {
+    "bytes": 17992,
+    "sha256": "d491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8"
+  },
+  "release/conversion-20261026/backend/naver_product_export.py": {
+    "bytes": 20647,
+    "sha256": "42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59"
+  },
+  "release/conversion-20261026/backend/tools/naver_completion_download.py": {
+    "bytes": 3548,
+    "sha256": "cc5f87d78f05cac5ad1ceebf99c79505edd4604fd65007403e752d06c0e05c5e"
+  },
+  "release/conversion-20261026/backend/tools/naver_completion_exports.py": {
+    "bytes": 10121,
+    "sha256": "1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed"
+  },
+  "release/conversion-20261026/backend/tools/naver_erp_tunnel_service_install.py": {
+    "bytes": 30508,
+    "sha256": "236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a"
+  },
+  "release/conversion-20261026/backend/tools/naver_preview_completion_release.py": {
+    "bytes": 130559,
+    "sha256": "3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2"
+  },
+  "release/conversion-20261026/backend/tools/naver_preview_lifecycle.py": {
+    "bytes": 8083,
+    "sha256": "4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4"
+  },
+  "release/conversion-20261026/backend/tools/naver_preview_release.py": {
+    "bytes": 23235,
+    "sha256": "7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84"
+  },
+  "release/conversion-20261026/backend/tools/naver_preview_upgrade.py": {
+    "bytes": 19571,
+    "sha256": "6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28"
+  },
+  "release/conversion-20261026/backend/tools/naver_report_progress_patch.py": {
+    "bytes": 121290,
+    "sha256": "029c000fc5bd3c2428048a4f82da301f09979c0caf1d5ea4cdc0286e1799d731"
+  },
+  "release/conversion-20261026/backend/tools/naver_report_progress_transport.py": {
+    "bytes": 18979,
+    "sha256": "782703fdc8efad330ecbe7b37378d3d1347caa55e40ca4fa12673ac0001b7cd4"
+  },
+  "release/conversion-20261026/backend/tools/naver_saved_exports.py": {
+    "bytes": 37216,
+    "sha256": "062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737"
+  },
+  "release/conversion-20261026/bundle.py": {
+    "bytes": 4141,
+    "sha256": "4d9c7e1c4d9fd922106b07c8eae8387126dfcfa1a769b1699d0c8fcabca1d699"
+  },
+  "release/conversion-20261026/qualification.json": {
+    "bytes": 3789,
+    "sha256": "4f89630514da4fd3684e6552f3db7dc553aafa91bf320997fd434b84fbf3ebdf"
+  },
+  "release/conversion-20261026/release-policy.json": {
+    "bytes": 733,
+    "sha256": "870a973ec9660b7ffe80b35447ac034064636a17c8eea30d842e70bd0cc3df59"
+  },
+  "tools/check_conversion_executor.py": {
+    "bytes": 10630,
+    "sha256": "26e2681ec4f1a1e956fee9f9da93a5856131683fe7b3cfea76299bbfbb130377"
+  },
+  "tools/test_conversion_executor.py": {
+    "bytes": 5516,
+    "sha256": "b5dd2f8ba35d19fb467c41efc559948156e0444d31709b6ddf0a7fcac1d467e9"
+  }
+}
