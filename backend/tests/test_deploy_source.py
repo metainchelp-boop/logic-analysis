@@ -129,11 +129,22 @@ def test_self_registered_in_gate():
     ok(f"deploy.yml 이 {me} 를 부른다", me in dy, "만들어 놓고 안 도는 시험이 된다")
 
 
+def test_seo_model_is_scoped_and_survives_later_deploys():
+    dy = read(".github", "workflows", "deploy.yml")
+    gen = re.search(r"cat > docker-compose\.yml << 'COMPEOF'(.*?)COMPEOF", dy, re.S).group(1)
+    ok("실제 배포 compose 에 SEO 전용 지원 모델이 고정된다",
+       "- SEO_CLAUDE_MODEL=claude-sonnet-4-6" in gen)
+    ok("공용 채팅 모델은 compose 에서 덮어쓰지 않는다",
+       not re.search(r"^\s*-\s*CLAUDE_MODEL=", gen, re.M))
+    ok("기존 운영 인증과 공용 설정은 .env 를 계속 읽는다", "env_file:" in gen and "- .env" in gen)
+
+
 if __name__ == "__main__":
     print("=== 배포가 어느 파일을 집어 가는가 회귀 시험 ===")
     test_deploy_builds_from_backend()
     test_dead_files_warn()
     test_backend_dockerfile_is_the_real_one()
     test_self_registered_in_gate()
+    test_seo_model_is_scoped_and_survives_later_deploys()
     print(f"\n통과 {_pass} · 실패 {_fail}")
     sys.exit(1 if _fail else 0)

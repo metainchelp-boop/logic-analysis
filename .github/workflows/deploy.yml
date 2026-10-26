@@ -68,6 +68,17 @@ jobs:
           pip install --quiet beautifulsoup4 requests
           python backend/tests/test_analysis_regression.py
 
+      # SEO는 가짜 DB·공급자 모형만 사용한다. 실패하면 VPS 접촉 전에 중단한다.
+      - name: SEO evidence and read-only diagnosis regressions
+        run: |
+          python backend/tests/test_seo_evidence.py
+          python backend/tests/test_seo_readonly_diagnosis.py
+
+      - name: SEO review API regressions
+        run: |
+          pip install --quiet fastapi==0.115.0 pydantic==2.9.0 anthropic httpx 'python-jose[cryptography]==3.3.0' 'passlib[bcrypt]==1.7.4' bcrypt==4.0.1
+          python backend/tests/test_seo_workflow.py
+
       # 요청 큐 회귀(2026-09-11) — 수집을 꺼 둔 날인데 큐에 하루 576건이 들어왔다.
       # 89% 가 08~09시 배치 창(분당 15~16건 균일) = 배치가 자기 일을 되넣고 있었다.
       # 8/28 에 6곳을 막았는데 상품정보 1차 키워드 경로와 search_products 가 빠져 있었다.
@@ -490,6 +501,8 @@ jobs:
                   - .env
                 environment:
                   - TZ=Asia/Seoul
+                  # SEO만 별도 전환. 공용 채팅 모델·운영 인증값은 .env 그대로 보존한다.
+                  - SEO_CLAUDE_MODEL=claude-sonnet-4-6
                 volumes:
                   - ./data:/app/data
                 logging:
