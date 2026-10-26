@@ -1,0 +1,69 @@
+name: Read-only failed conversion incoming diagnosis
+on:
+  push:
+    branches: [codex/naver-conversion-incoming-diagnostic-20261026]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.actor == 'metainchelp-boop' && github.event_name == 'push' && github.ref == 'refs/heads/codex/naver-conversion-incoming-diagnostic-20261026' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Verify new read-only boundary
+        run: python3 -I -B -m unittest discover -s tools -p test_diagnose_conversion_incoming.py -q
+      - name: Bind unchanged qualified source and failed prepare identity
+        run: python3 -I -B tools/diagnose_conversion_incoming.py
+      - name: Read only incoming refusal conditions
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          P22_WIRE: ${{env.P22_WIRE}}
+          P22_BOOT: ${{env.P22_BOOT}}
+        with:
+          host: ${{secrets.VPS_HOST}}
+          username: ${{secrets.VPS_USER}}
+          key: ${{secrets.VPS_SSH_KEY}}
+          envs: P22_WIRE,P22_BOOT
+          command_timeout: 2m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PYCODE'
+            import base64,hashlib,json,os,pathlib,signal,stat,types
+            signal.alarm(100)
+            stage='transport';result={'ok':False,'mutations':0,'probe_prepare_run':'40335961943'}
+            codes={'PATCH_ENCODING','PATCH_SOURCE','PATCH_BUNDLE','PATCH_SCOPE','PATCH_BASELINE','PATCH_PACKAGE','PACKAGE_FIELDS','PACKAGE_SHAPE','PACKAGE_OPERATION','HOST_BASELINE','COMPLETION_TRANSPORT_SOURCE','COMPLETION_TRANSPORT_PROFILE','UNEXPECTED_CONTAINERS','AD_NOT_RUNNING'}
+            try:
+             wire=os.environ['P22_WIRE'];source=os.environ['P22_BOOT']
+             if len(source)>32768:raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+             raw=base64.b64decode(source,validate=True)
+             if hashlib.sha256(raw).hexdigest()!='782703fdc8efad330ecbe7b37378d3d1347caa55e40ca4fa12673ac0001b7cd4':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+             T=types.ModuleType('qualified_transport');exec(raw,T.__dict__)
+             if T.TRANSPORT_RAW_SHA256 is not None:raise ValueError('COMPLETION_TRANSPORT_PROFILE')
+             T.TRANSPORT_RAW_SHA256=hashlib.sha256(raw).hexdigest();stage='decode';value=T.decode(wire)
+             os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+             stage='modules';m=T.modules(value);P=m['patch'];release=m['release'];stage='package'
+             P.validate_package(value['package'],release)
+             if value['package']['run_id']!='40335961943':raise ValueError('PATCH_PACKAGE')
+             result['root_user']=os.geteuid()==0;stage='baseline';actual=m['host'].NativeHost().baseline()
+             result.update(baseline_match=actual==P.EXPECTED_BASELINE,actual_baseline_sha256=actual,expected_baseline_sha256=P.EXPECTED_BASELINE)
+             stage='paths';paths={}
+             for label,path in [('root',release.ROOT),('incoming',release.ROOT/'incoming'),('failed_run',release.ROOT/'incoming'/'40335961943')]:
+              try:
+               st=path.lstat();paths[label]={'exists':True,'directory':stat.S_ISDIR(st.st_mode),'symlink':stat.S_ISLNK(st.st_mode),'uid':st.st_uid,'gid':st.st_gid,'mode':stat.S_IMODE(st.st_mode)}
+              except FileNotFoundError:paths[label]={'exists':False}
+             result.update(ok=True,stage='diagnostic_complete',paths=paths)
+            except Exception as e:
+             code=e.args[0] if len(e.args)==1 and isinstance(e.args[0],str) and e.args[0] in codes else 'UNRECOGNIZED'
+             result.update(stage=stage,error_code=code,error_kind=type(e).__name__ if type(e).__name__ in {'ValueError','RuntimeError','FileNotFoundError','PermissionError','InstallError'} else 'OtherError')
+            print('NAVER_CONVERSION_INCOMING_DIAGNOSTIC='+json.dumps(result,sort_keys=True))
+            PYCODE
