@@ -106,6 +106,11 @@ def template(f):
         return f"{_q(t['keyword'])}(월 {n(t['total'])}회)" if t else ""
 
     tpair = " · ".join(x for x in (tk(t1), tk(t2)) if x)
+    # 상품명에 이미 들어 있는 키워드를 「없다」고 쓰지 않는다 — 빠진 것만 말한다.
+    missing = set(kws.get("targetsMissingInName") or [])
+    miss = [t for t in targets if t["keyword"] in missing][:2]
+    mpair = " · ".join(tk(t) for t in miss)
+    mnames = "·".join(_q(t["keyword"]) for t in miss)
     tnames = "·".join(_q(t["keyword"]) for t in targets[:2]) or "검색량이 큰 키워드"
     rank_txt = (f"{rank.get('rank')}위" if rank.get("status") == "노출"
                 else ("상위권 노출이 확인되지 않은" if rank.get("status") == "미노출" else "순위를 확인하지 못한"))
@@ -120,8 +125,8 @@ def template(f):
     else:
         c["summary.conclusion"] = f"{j(store, '은')} 이미 노출을 확보했습니다 — 전환과 재구매를 끌어올리면 매출 성장 속도를 높일 수 있습니다"
         c["summary.now"] = f"{_q(kw)} 검색 {rank_txt}에 {j(trust_txt, '을')} 확보한 상태입니다."
-    c["summary.problem"] = (f"고객이 실제로 찾는 {j(tpair, '가')} 상품명 앞에 없어 검색 수요를 놓치고 있습니다."
-                            if fl.get("nameMissesTargets") and tpair else
+    c["summary.problem"] = (f"고객이 실제로 찾는 {j(mpair, '가')} 상품명 앞에 없어 검색 수요를 놓치고 있습니다."
+                            if mpair else
                             f"{_q(kw)} 수요를 매출로 바꾸는 전환·재구매 장치가 더 필요합니다.")
     c["summary.solution"] = "12개 품목을 노출·전환·재구매 3축으로 통합 운영해 매출을 끌어올립니다."
 
@@ -173,9 +178,9 @@ def template(f):
         c[f"diag.pain{i}.b"], c[f"diag.pain{i}.t"] = b, t
 
     gaps, imp = [], []
-    if fl.get("nameMissesTargets") and targets:
-        gaps.append(f"상품명 앞부분에 검색량 큰 {j(tnames, '가')} 없습니다")
-        imp.append(f"{j(tnames, '를')} 상품명 앞 30자 안에 배치")
+    if mnames:
+        gaps.append(f"상품명 앞부분에 검색량 큰 {j(mnames, '가')} 없습니다")
+        imp.append(f"{j(mnames, '를')} 상품명 앞 30자 안에 배치")
     if dt.get("missing"):
         gaps.append(f"상세페이지에 {j('·'.join(dt['missing'][:2]), '이')} 없습니다")
     if main.get("comp") == "높음" or (main.get("adDepth") or 0) >= 5:
