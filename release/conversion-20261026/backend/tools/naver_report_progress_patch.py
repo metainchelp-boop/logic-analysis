@@ -38,6 +38,7 @@ APPROVED_AST_SCOPE = {'naver_engine/observation_store.py': {'changed': ('Observa
 EXPECTED_AST_SCOPE = APPROVED_AST_SCOPE
 STAGE = 'input'
 OPERATION = 'none'
+CURRENT_BASELINE = '1a107fb029873d44ccfc09b1001c5d85b3dd5e871c008adeadb516e12b72e3cd'
 FAILURE_KINDS = frozenset('ValueError RuntimeError TimeoutError TimeoutExpired CalledProcessError OSError PermissionError FileNotFoundError BlockingIOError JSONDecodeError TypeError KeyError AttributeError AssertionError ImportError ModuleNotFoundError ExportInstallInvalid'.split())
 FAILURE_STAGES = frozenset('input incoming code_prepare_preflight code_prepare_runtime_config code_prepare_runtime_postflight code_prepare_postflight code_build_engine code_build_relay code_config_engine code_config_relay code_check_config code_apply_preflight code_stop_isolated code_recreate code_replace_units code_start code_verify code_rollback rollback_preflight rollback_stop rollback_restore rollback_start rollback_verify rollback_failed_stop'.split())
 FAILURE_CODES = frozenset('DETAIL_AI_PINS_PENDING PATCH_NOT_PINNED PATCH_BASELINE PATCH_SCOPE PATCH_STORE PATCH_SCHEMA PATCH_EXPORTS PATCH_CONFIG PATCH_RECEIPT PATCH_PACKAGE PATCH_DEPENDENCY CODE_APPLY_FIELDS CODE_OPERATION_ID CODE_ALREADY_ATTEMPTED CODE_POST_STATE CODE_ONLY_FAILED_ROLLED_BACK CODE_ROLLBACK_FAILED CODE_ROLLBACK_FIELDS CODE_ROLLBACK_OPERATION_ID CODE_ROLLBACK_SOURCE CODE_ROLLBACK_UNIT CODE_ROLLBACK_RECOVERY CODE_ROLLBACK_STARTED CODE_ROLLBACK_ALREADY_ATTEMPTED CODE_ROLLBACK_STATE CODE_POST_ROLLBACK_FAILED HOST_BASELINE OLD_BASELINE OLD_SOURCE_CHANGED OLD_UNIT_CHANGED OLD_UNIT_NOT_ENABLED DEPENDENCY_NOT_ACTIVE TMPFILES_CHANGED ACCOUNT_WRITER_NOT_STOPPED CODE_INFRASTRUCTURE_CHANGED CODE_STORE_CHANGED CODE_SCHEMA_CHANGED CODE_OVERRIDE_CHANGED CODE_SOURCE_PATH CODE_SCOPE_CHANGED CODE_PROBE_SOURCE CODE_ROUTE_STATUS PAGE_NOT_READY REPORT_ASSET_NOT_READY CODE_SERVICE_NOT_ACTIVE CODE_SERVICE_NOT_ENABLED VERIFIED_WRITE_AUTH_NOT_REQUIRED RUNTIME_CONFIG_PROOF RUNTIME_CONFIG_DRIFT EXECUTION_ENABLED RUNTIME_SECRET_CHANGED CONFIG_PRESERVE_PROOF CONFIG_PRESERVE_DRIFT CONFIG_PRESERVE_NOT_APPROVED PREEXISTING_RELEASE SYMLINKED_PARENT SYMLINKED_ENVELOPE_PARENT PLAINTEXT_SIZE OLD_STATE_CHANGED SOURCE_DIRECTORY_CHANGED SOURCE_INVENTORY_CHANGED SOURCE_CONTENT_CHANGED FILE_POLICY FILE_PATH DIRECTORY_POLICY COMMAND_FAILED PREPARED_MANIFEST PREPARED_DIGEST PREPARED_FILE_CHANGED PREPARED_IMAGE PREPARED_IMAGE_CHANGED SOURCE_NOT_READY BOOTSTRAP_REQUEST BOOTSTRAP_NOT_FINISHED'.split())
@@ -49,6 +50,8 @@ def manifest_digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 def require_target_pins():
+    if CURRENT_BASELINE != '1a107fb029873d44ccfc09b1001c5d85b3dd5e871c008adeadb516e12b72e3cd':
+        raise ValueError('PATCH_BASELINE')
     GT = (TARGET_COMMIT, TARGET_DELTA, TARGET_SOURCE_SHA256, TARGET_CANONICAL_SHA256, CI_PROOF, APPROVED_TARGET_COMMIT, EXPECTED_TARGET_DELTA, APPROVED_CI_PROOF, APPROVED_CANONICAL_SHA256, APPROVED_TARGET_SOURCE_SHA256, APPROVED_AST_SCOPE, EXPECTED_AST_SCOPE)
     if any((value is None for value in GT)):
         raise ValueError('DETAIL_AI_PINS_PENDING')
@@ -258,7 +261,7 @@ def validate_package(package, release):
     if type(package) is not dict or package.get('operation') != 'code-prepare':
         raise ValueError('PATCH_PACKAGE')
     release.validate_package(dict(package, operation='upgrade-prepare'))
-    if package.get('source_commit') != TARGET_COMMIT or package.get('source_tar_gz_sha256') != TARGET_SOURCE_SHA256 or package.get('baseline') != EXPECTED_BASELINE:
+    if package.get('source_commit') != TARGET_COMMIT or package.get('source_tar_gz_sha256') != TARGET_SOURCE_SHA256 or package.get('baseline') != CURRENT_BASELINE:
         raise ValueError('PATCH_PACKAGE')
     return package
 
@@ -502,7 +505,7 @@ def current_state(package, host, release, lifecycle, upgrade):
     if os.geteuid() != 0 or host.baseline() != package['baseline']:
         raise ValueError('HOST_BASELINE')
     path, receipt, _ = base_success(release, upgrade)
-    if receipt['package'].get('baseline') != package['baseline']:
+    if receipt['package'].get('baseline') != EXPECTED_BASELINE:
         raise ValueError('OLD_BASELINE')
     if receipt['package'].get('source_tar_gz_sha256') != OLD_SOURCE_SHA256:
         raise ValueError('OLD_SOURCE_CHANGED')
@@ -1234,8 +1237,8 @@ def rollback(package, host, release, lifecycle, upgrade):
         raise ValueError('HOST_BASELINE')
     DX, DS = upgrade.manifest(release, OLD_COMMIT, started=True)
     path, receipt = upgrade.manifest(release, TARGET_COMMIT, EF, started=True)
-    for value, digest in ((DS, OLD_SOURCE_SHA256), (receipt, TARGET_SOURCE_SHA256)):
-        if value['package'].get('baseline') != EF['baseline'] or value['package'].get('source_tar_gz_sha256') != digest:
+    for value, digest, baseline in ((DS, OLD_SOURCE_SHA256, EXPECTED_BASELINE), (receipt, TARGET_SOURCE_SHA256, CURRENT_BASELINE)):
+        if value['package'].get('baseline') != baseline or value['package'].get('source_tar_gz_sha256') != digest:
             raise ValueError('CODE_ROLLBACK_SOURCE')
     compatible_source(DX, path, upgrade)
     files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)
