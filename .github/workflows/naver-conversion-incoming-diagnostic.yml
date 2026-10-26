@@ -54,14 +54,18 @@ jobs:
              stage='modules';m=T.modules(value);P=m['patch'];release=m['release'];stage='package'
              P.validate_package(value['package'],release)
              if value['package']['run_id']!='40335961943':raise ValueError('PATCH_PACKAGE')
-             result['root_user']=os.geteuid()==0;stage='baseline';actual=m['host'].NativeHost().baseline()
+             result['root_user']=os.geteuid()==0;stage='baseline';H=m['host'];actual=H.NativeHost().baseline()
              result.update(baseline_match=actual==P.EXPECTED_BASELINE,actual_baseline_sha256=actual,expected_baseline_sha256=P.EXPECTED_BASELINE)
-             stage='paths';paths={}
-             for label,path in [('root',release.ROOT),('incoming',release.ROOT/'incoming'),('failed_run',release.ROOT/'incoming'/'40335961943')]:
-              try:
-               st=path.lstat();paths[label]={'exists':True,'directory':stat.S_ISDIR(st.st_mode),'symlink':stat.S_ISLNK(st.st_mode),'uid':st.st_uid,'gid':st.st_gid,'mode':stat.S_IMODE(st.st_mode)}
-              except FileNotFoundError:paths[label]={'exists':False}
-             result.update(ok=True,stage='diagnostic_complete',paths=paths)
+             stage='components';names=sorted(n for n in H.run(['/usr/bin/docker','ps','-a','--format','{{.Names}}']).splitlines() if H.re.fullmatch(r'[a-zA-Z0-9_.-]{1,100}',n) and H.re.search(r'ad-api|ad-dashboard|logic-analysis|studio|autobid',n))
+             if not 0<len(names)<=20:raise ValueError('UNEXPECTED_CONTAINERS')
+             fields={'id':'.Id','image_id':'.Image','running':'.State.Running','started_at':'.State.StartedAt','restart_count':'.RestartCount','project':'(index .Config.Labels "com.docker.compose.project")','service':'(index .Config.Labels "com.docker.compose.service")'}
+             rows=[]
+             for name in names:
+              row={'name':name}
+              for field,value in fields.items():row[field]=json.loads(H.run(['/usr/bin/docker','inspect','--format','{{json '+value+'}}',name]))
+              rows.append(row)
+             if hashlib.sha256(json.dumps(rows,sort_keys=True,separators=(',',':')).encode()).hexdigest()!=actual:raise ValueError('HOST_BASELINE')
+             result.update(ok=True,stage='components_confirmed',components=rows)
             except Exception as e:
              code=e.args[0] if len(e.args)==1 and isinstance(e.args[0],str) and e.args[0] in codes else 'UNRECOGNIZED'
              result.update(stage=stage,error_code=code,error_kind=type(e).__name__ if type(e).__name__ in {'ValueError','RuntimeError','FileNotFoundError','PermissionError','InstallError'} else 'OtherError')

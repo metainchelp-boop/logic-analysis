@@ -10,7 +10,9 @@ class ReadonlyProbe(unittest.TestCase):
         tree=ast.parse(source)
         calls={n.func.attr for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)}
         self.assertFalse(calls & {'execute','prepare','apply','rollback','trusted_dir','mkdir','chmod','chown','open','write_bytes','write_text','unlink','remove','rmdir'})
-        self.assertIn('baseline',calls);self.assertIn('lstat',calls)
+        self.assertIn('baseline',calls);self.assertIn('run',calls)
+        self.assertIn("stage='components'",source)
+        self.assertIn("hexdigest()!=actual",source)
 
     def test_foreign_context_and_retry_refused(self):
         head='a'*40;env=dict(GITHUB_REPOSITORY='metainchelp-boop/logic-analysis',GITHUB_REF=diagnostic.REF,GITHUB_EVENT_NAME='push',GITHUB_RUN_ATTEMPT='1',GITHUB_ACTOR='metainchelp-boop',GITHUB_SHA=head)
