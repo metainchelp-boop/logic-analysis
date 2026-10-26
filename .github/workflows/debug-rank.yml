@@ -2,7 +2,7 @@ name: Conversion diagnostic through existing VPS connection
 
 on:
   push:
-    branches: [codex/naver-conversion-existing-executor-impl-20261026, codex/naver-conversion-existing-executor-20261026]
+    branches: [codex/naver-conversion-baseline-executor-20261026, codex/naver-conversion-existing-executor-20261026]
   pull_request:
     branches: [codex/naver-conversion-existing-executor-20261026]
   workflow_dispatch:
@@ -86,7 +86,7 @@ jobs:
              wire=os.environ['P22_WIRE'];source=os.environ['P22_BOOT']
              if len(source)>32768:raise ValueError('COMPLETION_TRANSPORT_SIZE')
              raw=base64.b64decode(source,validate=True)
-             if hashlib.sha256(raw).hexdigest()!='782703fdc8efad330ecbe7b37378d3d1347caa55e40ca4fa12673ac0001b7cd4':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+             if hashlib.sha256(raw).hexdigest()!='7367334d1205b2d22856d50f773d53cf71fec83bc5df90700a03d312b8fdf762':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
              transport=types.ModuleType('approved_completion_transport');exec(raw,transport.__dict__)
              verified_transport_sha=hashlib.sha256(raw).hexdigest()
              if transport.TRANSPORT_RAW_SHA256 is not None:raise ValueError('COMPLETION_TRANSPORT_PROFILE')
@@ -134,7 +134,7 @@ jobs:
              wire=os.environ['P22_WIRE'];source=os.environ['P22_BOOT']
              if len(source)>32768:raise ValueError('COMPLETION_TRANSPORT_SIZE')
              raw=base64.b64decode(source,validate=True)
-             if hashlib.sha256(raw).hexdigest()!='782703fdc8efad330ecbe7b37378d3d1347caa55e40ca4fa12673ac0001b7cd4':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+             if hashlib.sha256(raw).hexdigest()!='7367334d1205b2d22856d50f773d53cf71fec83bc5df90700a03d312b8fdf762':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
              transport=types.ModuleType('approved_completion_transport');exec(raw,transport.__dict__)
              verified_transport_sha=hashlib.sha256(raw).hexdigest()
              if transport.TRANSPORT_RAW_SHA256 is not None:raise ValueError('COMPLETION_TRANSPORT_PROFILE')

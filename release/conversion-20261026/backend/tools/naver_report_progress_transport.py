@@ -35,8 +35,8 @@ EXPECTED_TARGET_SOURCE=TARGET_SOURCE
 EXPECTED_CODE_PATHS=CODE_PATHS 
 FUNCTIONS={'preview-report-progress-prepare':'prepare','preview-report-progress-apply':'apply','preview-report-progress-rollback':'rollback'}
 SOURCE_FILES={'host':'naver_erp_tunnel_service_install.py','release':'naver_preview_release.py','lifecycle':'naver_preview_lifecycle.py','upgrade':'naver_preview_upgrade.py','exports_binding':'naver_completion_exports.py','exports_helper':'naver_saved_exports.py','product_exporter':'../naver_product_export.py','market_exporter':'../naver_market_export.py','controller':'naver_preview_completion_release.py','patch':'naver_report_progress_patch.py'}
-SOURCE_SHA256 = {'patch': '029c000fc5bd3c2428048a4f82da301f09979c0caf1d5ea4cdc0286e1799d731', 'controller': '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'lifecycle': '4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4', 'upgrade': '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28', 'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
-COMPACT_SHA256 = {'host': '4e95c24f9da93d814cc90e919ffb9fdfb6113667f16205f382406b7369085b95', 'release': 'd9b4456ecd3de6bfe9fa12430616cf6b9cedadf4ba4dbe28582ad3ea22f84367', 'lifecycle': '0c3ffaa303ad066f23117b304b8f9289e0e3bc78a9c59a8dced8d58e54f498bd', 'upgrade': 'e4dd1f3c29c04439321bff785d803a12356d56e2b83986cf81f286d4dce46f60', 'exports_binding': '2c7f944b2b992eead34508ba671422c50d9becbc5ae5ff39933ab00a5958f32f', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8', 'controller': '4d937e6c55c36853f6d9e6b0f7557558e074a66910ab03c8b43aae92c5ef3fba', 'patch': '65659e9a8835e4c1610e68a671d9d1e4d08a6cb65987715094fc1eb654c86a3c'}
+SOURCE_SHA256 = {'patch': '4d010dc3d4211442c3149e5b6aea58c5a2608f01a83b0388b7fc064c5795f108', 'controller': '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'lifecycle': '4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4', 'upgrade': '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28', 'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
+COMPACT_SHA256 = {'host': 'd0d33e68476f623e2a3171083300541001a899c03988d2afc7beaa0800ffb997', 'release': '1b03d1ec1a59e619047fda38ee3a4915b29aae90c960c34e9af089573b6d7108', 'lifecycle': '6fcd07d7b4a180d51181ab596e0f96f1c4340839c56ce5d5b045a08162cef16c', 'upgrade': '9dca1c835892094cc0a67382a4161e38324fc9e53250646996098cdcf80c0cee', 'exports_binding': '54a8c70d4bb7ffbec9a633996766d26007782d3b411bef2464a08333b947a05c', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8', 'controller': '22e66e1c29c841d13a0564997ceda708b0f0c3aaab68ae2b3f6270c4289cf747', 'patch': 'a9c2f1691449df7f9c964c810cc4ad4d516f39b928bee3cebba20f77116e4a0d'}
 COMPACT_SOURCE_SHA256=COMPACT_SHA256 
 def require_pins():
  def digest(value):
@@ -139,6 +139,15 @@ def _compact_continuation_layout(source):
  if keep(tokens)!=keep(after)or ast.dump(ast.parse(source),include_attributes=False)!=ast.dump(ast.parse(result),include_attributes=False):
   raise ValueError('COMPLETION_SOURCE_AST')
  return result 
+def _compact_line_ends(source):
+ tokens=list(tokenize.generate_tokens(io.StringIO(source).readline));lines=source.splitlines(True);ends={}
+ for token in tokens:
+  if token.type==tokenize.STRING or tokenize.tok_name[token.type].startswith('FSTRING'):
+   for row in range(token.start[0],token.end[0]+1):ends[row]=max(ends.get(row,0),token.end[1]if row==token.end[0]else len(lines[row-1]))
+ result=''.join(line if ends.get(row,0)>len(line.rstrip())else line.rstrip()+'\n'for row,line in enumerate(lines,1))
+ literals=lambda ts:[(t.type,t.string)for t in ts if t.type==tokenize.STRING or tokenize.tok_name[t.type].startswith('FSTRING')]
+ if literals(tokens)!=literals(tokenize.generate_tokens(io.StringIO(result).readline))or ast.dump(ast.parse(source))!=ast.dump(ast.parse(result)):raise ValueError('COMPLETION_SOURCE_AST')
+ return result
 def compact(source):
  def fields(value):
   if isinstance(value,ast.AST):return(type(value).__name__,tuple((name,fields(item))for name,item in ast.iter_fields(value)))
@@ -160,7 +169,7 @@ def compact(source):
  result=tokenize.untokenize(pairs)
  if literals(tokens)!=literals(tokenize.generate_tokens(io.StringIO(result).readline))or fields(ast.parse(source))!=fields(ast.parse(result)):
   raise ValueError('COMPLETION_SOURCE_AST')
- return _compact_horizontal_layout(_compact_continuation_layout(result))
+ return _compact_line_ends(_compact_horizontal_layout(_compact_continuation_layout(result)))
 class CompletionRelease:
  """Preserve the existing fixed sealed source envelope."""
  def __init__(self,release):self._release=release 
@@ -263,7 +272,7 @@ def execute(value=None,*,incoming=False):
    P.STAGE='incoming'
    if operation!='preview-report-progress-prepare':raise ValueError('PATCH_OPERATION')
    P.validate_package(package,release)
-   if os.geteuid()!=0 or host.baseline()!=P.EXPECTED_BASELINE:raise ValueError('HOST_BASELINE')
+   if os.geteuid()!=0 or host.baseline()!=P.CURRENT_BASELINE:raise ValueError('HOST_BASELINE')
    for path in(release.ROOT,release.ROOT/'incoming'):release.trusted_dir(path,mode=0o700)
    release.trusted_dir(release.ROOT/'incoming'/package['run_id'],mode=0o700,new=True)
    return{'ok':True,'stage':'incoming_ready','source_commit':P.TARGET_COMMIT}
