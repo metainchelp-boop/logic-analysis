@@ -235,6 +235,9 @@ jobs:
 
       # App.jsx 훅 순서 — 로그인 전 early return 뒤에 훅을 두면 로그인 직후 React #310 으로
       # 전체 화면이 죽는다(2026-09-15 실사고 · 영업팀 신고 「화면 로드 오류」).
+      - name: Proposal facts product and analysis isolation
+        run: node frontend/tests/proposal-facts-scope.test.cjs
+
       - name: App.jsx hooks-before-early-return regression
         run: python backend/tests/test_app_hooks_order.py
 

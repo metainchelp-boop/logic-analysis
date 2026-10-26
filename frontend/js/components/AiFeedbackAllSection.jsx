@@ -1,6 +1,7 @@
 /* AiFeedbackAllSection — METAINC AI 통합 피드백 (1회 호출) */
 window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
     var keyword = props.keyword;
+    var factsTicket = window.ReportFacts && window.ReportFacts.ticket(keyword, props.productUrl);
     var analysisData = props.analysisData;
     var volumeData = props.volumeData;
     var relatedData = props.relatedData;
@@ -99,7 +100,7 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
             if (res && res.success && res.data) {
                 setFeedbacks(res.data.feedbacks);
                 setFullText(res.data.full_text || '');
-                if (window.ReportFacts) window.ReportFacts.put(keyword, 'ai', { full_text: res.data.full_text || '' });   // 맞춤제안서 v3 로 넘김
+                if (window.ReportFacts) window.ReportFacts.put(factsTicket, 'ai', { full_text: res.data.full_text || '' });   // 맞춤제안서 v3 로 넘김
             } else {
                 setError((res && res.error) || 'AI 피드백 생성 실패');
             }

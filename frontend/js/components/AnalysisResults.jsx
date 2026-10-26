@@ -424,6 +424,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* 19. AI 종합 분석 리포트 */
                 analysisData && React.createElement(window.SectionErrorBoundary, { name: 'AI 종합 분석' },
                     React.createElement(AiFeedbackAllSection, {
+                        productUrl: searchedProductUrl,
                         keyword: searchedKeyword,
                         analysisData: analysisData,
                         volumeData: volumeData,

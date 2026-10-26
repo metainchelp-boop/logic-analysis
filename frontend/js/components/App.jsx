@@ -506,7 +506,7 @@ window.App = function App() {
             htmlDetail: htmlDetailResult ? trimHtmlDetail(htmlDetailResult) : null,
             productName: (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name) ||
                          (analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.product_name) || '',
-            screen: (window.ReportFacts ? window.ReportFacts.get(kw) : {})
+            screen: (window.ReportFacts ? window.ReportFacts.get(kw, searchedProductUrl) : {})
         };
 
         var openProposal = function(key) {
@@ -549,6 +549,7 @@ window.App = function App() {
     var downloadSavedReport = function(saved) {
         if (!saved) { toast.error('보고서 데이터가 없습니다.'); return; }
         var kw = saved.keyword || '';
+        if (window.ReportFacts) window.ReportFacts.begin(kw, saved.product_url || '');
         // 1) 저장 데이터를 화면 상태에 주입 → 분석 화면(React 컴포넌트)으로 그대로 렌더
         setCurrentClientId(saved.client_id || null);
         setCompanyName(saved.companyName || saved.client_name || '');

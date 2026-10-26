@@ -8,6 +8,7 @@
  *   보고서는 화면 DOM을 그대로 복제하므로 이 표가 보고서에도 자동 포함된다. */
 window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
   var keyword = props.keyword || '';
+  var factsTicket = window.ReportFacts && window.ReportFacts.ticket(keyword);
 
   /* 파워링크 공식 입찰가 — hooks는 조기 return 이전에 선언(Rules of Hooks) */
   var _bs = React.useState(null); var bidData = _bs[0]; var setBidData = _bs[1];
@@ -21,7 +22,7 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
         var d = (res && res.success && res.data) || null;
         if (d && ((d.pc || []).length > 0 || (d.mobile || []).length > 0)) {
           setBidData(d);
-          if (window.ReportFacts) window.ReportFacts.put(keyword, 'bid', d);   // 맞춤제안서 v3 로 넘김
+          if (window.ReportFacts) window.ReportFacts.put(factsTicket, 'bid', d);   // 맞춤제안서 v3 로 넘김
         } else if (canRetry) {
           setTimeout(function() { if (alive) call(false); }, 3000); // 순간 실패 1회 재조회(검수 철학)
         }
@@ -31,7 +32,7 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
     };
     call(true);
     return function() { alive = false; };
-  }, [keyword]);
+  }, [keyword, factsTicket]);
 
   var vol = (props.volumeData && props.volumeData.length) ? props.volumeData[0] : null;
   if (!vol) return null;
