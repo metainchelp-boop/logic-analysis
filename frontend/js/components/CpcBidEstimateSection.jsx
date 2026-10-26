@@ -21,6 +21,7 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
         var d = (res && res.success && res.data) || null;
         if (d && ((d.pc || []).length > 0 || (d.mobile || []).length > 0)) {
           setBidData(d);
+          if (window.ReportFacts) window.ReportFacts.put(keyword, 'bid', d);   // 맞춤제안서 v3 로 넘김
         } else if (canRetry) {
           setTimeout(function() { if (alive) call(false); }, 3000); // 순간 실패 1회 재조회(검수 철학)
         }

@@ -52,6 +52,7 @@ ok(f["datalab"]["peakMonthNames"][:1] == ["2026년 4월"], "최고 달 이름")
 ok(f["datalab"]["avgIndex"] == 29, "평균 지수 29")
 ok(f["datalab"]["peakDay"] == "수", "가장 많은 요일 수")
 ok(f["entry"]["score"] == 50, "진입 점수 50")
+ok(f["bid"] == {"pc1": 2400, "mobile1": 1800, "pc5": 700, "minPc": 70, "minMobile": 70}, "입찰가 모양")
 tg = [t["keyword"] for t in f["keywords"]["targets"]]
 ok(tg[:2] == ["커피원두", "원두1KG"], "공략 키워드 앞 둘")
 ok("커피원두추천" not in tg, "정보성 키워드는 공략에서 뺀다")

@@ -371,14 +371,25 @@ def _seo(screen):
 
 
 def _bid(screen):
+    """파워링크 공식 입찰가(화면 CpcBidEstimateSection 이 받은 /keyword/bid-estimate 그대로).
+
+    모양: {"pc": [{"position":1,"bid":..}...], "mobile": [...], "minBid": {"pc":..,"mobile":..}}
+    """
     b = _d(_d(screen).get("bid"))
     if not b:
         return None
-    out = {}
-    for k in ("low", "base", "high"):
-        v = to_int(b.get(k))
-        if v:
-            out[k] = v
+
+    def pos(rows, n):
+        for r in _l(rows):
+            if isinstance(r, dict) and to_int(r.get("position")) == n:
+                return to_int(r.get("bid"))
+        return None
+
+    mb = _d(b.get("minBid"))
+    out = {"pc1": pos(b.get("pc"), 1), "mobile1": pos(b.get("mobile"), 1),
+           "pc5": pos(b.get("pc"), 5), "mobile5": pos(b.get("mobile"), 5),
+           "minPc": to_int(mb.get("pc")), "minMobile": to_int(mb.get("mobile"))}
+    out = {k: v for k, v in out.items() if v}
     return out or None
 
 

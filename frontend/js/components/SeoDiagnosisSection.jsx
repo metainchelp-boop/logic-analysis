@@ -62,7 +62,10 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                 });
             }
             const res = await api.post('/seo/analyze', seoBody);
-            if (res.success) setResult(res.data);
+            if (res.success) {
+                setResult(res.data);
+                if (window.ReportFacts) window.ReportFacts.put(keyword, 'seo', res.data);   // 맞춤제안서 v3 로 넘김
+            }
             else toast.warn(res.detail || 'SEO 분석 데이터 일부를 가져오지 못했습니다.');
         } catch (e) { toast.warn('SEO 분석 요청 실패 — 잠시 후 다시 시도해주세요.'); }
         setLoading(false);

@@ -80,6 +80,7 @@ def bundle():
             },
         },
         "screen": {"seo": {"scores": {"total": 31}, "suggestions": [{"text": "상품명이 너무 짧습니다. 핵심 키워드와 속성을 추가하세요."}]},
-                   "bid": {"low": 700, "base": 1200, "high": 2400},
+                   "bid": {"pc": [{"position": 1, "bid": 2400}, {"position": 5, "bid": 700}],
+                           "mobile": [{"position": 1, "bid": 1800}], "minBid": {"pc": 70, "mobile": 70}},
                    "ai": {"full_text": "AI 종합 의견 예시"}},
     }

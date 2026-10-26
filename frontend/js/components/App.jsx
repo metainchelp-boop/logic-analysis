@@ -499,7 +499,14 @@ window.App = function App() {
             shopProducts: shopProducts || null,
             datalab: datalabData || null,
             advertiser: advertiserReport || null,
-            analysis: analysisData || null
+            analysis: analysisData || null,
+            /* 맞춤제안서 v3(2026-10-26) — 서버가 이 자료로 제안서 재료·문장을 만든다.
+               상세 진단·리뷰는 App 상태에, SEO·입찰가·AI 의견은 각 화면 칸이 받아 둔 값(ReportFacts)에 있다. */
+            v3: true,
+            htmlDetail: htmlDetailResult ? trimHtmlDetail(htmlDetailResult) : null,
+            productName: (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name) ||
+                         (analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.product_name) || '',
+            screen: (window.ReportFacts ? window.ReportFacts.get(kw) : {})
         };
 
         var openProposal = function(key) {
@@ -518,7 +525,9 @@ window.App = function App() {
                 if (reportOk) S.reportDownloaded(ctx);
                 return;
             }
-            var url = base + '/proposal/index.html?' + p.toString();
+            /* v3(2026-10-26) — 보고서 자료만으로 만드는 새 제안서. 인계 키가 없으면(보관 실패) 종전 제안서로 연다
+               — 새 제안서는 인계 자료가 없으면 만들 재료가 없다. */
+            var url = base + (key ? '/proposal/v3/index.html?' : '/proposal/index.html?') + p.toString();
             setTimeout(function() {
                 try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (e) {}
                 S.mark('proposal', 'done');

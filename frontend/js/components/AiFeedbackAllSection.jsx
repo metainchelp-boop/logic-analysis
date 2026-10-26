@@ -99,6 +99,7 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
             if (res && res.success && res.data) {
                 setFeedbacks(res.data.feedbacks);
                 setFullText(res.data.full_text || '');
+                if (window.ReportFacts) window.ReportFacts.put(keyword, 'ai', { full_text: res.data.full_text || '' });   // 맞춤제안서 v3 로 넘김
             } else {
                 setError((res && res.error) || 'AI 피드백 생성 실패');
             }
