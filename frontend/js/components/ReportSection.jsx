@@ -8,6 +8,10 @@ window.ReportSection = function ReportSection(props) {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(false);
     const [companyName, setCompanyName] = useState(propCompanyName);
+    /* 맞춤제안서 만들기(2026-10-27) — 보고서에 없는 두 값만 직원이 넣는다(만원 단위). 나머지는 분석 결과 그대로. */
+    const [salesMan, setSalesMan] = useState('');
+    const [adMan, setAdMan] = useState('');
+    const [proposing, setProposing] = useState(false);
 
     /* props에서 업체명이 바뀌면 반영 */
     useEffect(function() {
@@ -61,6 +65,22 @@ window.ReportSection = function ReportSection(props) {
     var handleExport = function() {
         if (format === 'html') { handleHtmlExport(); }
         else { handleDataExport(); }
+    };
+
+    var toMan = function(v) {
+        var n = Number(String(v || '').replace(/[^0-9.]/g, ''));
+        return isFinite(n) && n > 0 ? Math.round(n) : null;
+    };
+    var handleMakeProposal = function() {
+        if (!props || !props.onMakeProposal || proposing) return;
+        try {
+            if (window.ReportCapture && window.ReportCapture.aiState() === 'loading') {
+                if (!window.confirm('🤖 AI 종합 분석이 아직 진행 중입니다.\n완료 후 만들면 AI 의견이 제안서 문장에 반영됩니다.\n\n지금 바로 만드시겠습니까?')) return;
+            }
+        } catch (eG) {}
+        setProposing(true);
+        Promise.resolve(props.onMakeProposal({ name: companyName, salesMan: toMan(salesMan), adMan: toMan(adMan) }))
+            .then(function() { setProposing(false); }, function() { setProposing(false); });
     };
 
     var handleDownloadCSV = function() {
@@ -119,6 +139,28 @@ window.ReportSection = function ReportSection(props) {
                     {format === 'html' && (
                         <div style={{ marginTop: 12, padding: '10px 14px', background: '#f0f9ff', borderRadius: 8, fontSize: 13, color: '#0369a1' }}>
                             💡 현재 페이지에 표시된 모든 분석 결과를 그대로 HTML 파일로 내보냅니다. 먼저 키워드 검색을 완료한 후 보고서를 생성해주세요.
+                        </div>
+                    )}
+
+                    {props && props.onMakeProposal && (
+                        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px dashed #e2e8f0' }}>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 10 }}>📑 이 분석으로 맞춤제안서 만들기</div>
+                            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                                <div className="form-group" style={{ marginBottom: 0 }}>
+                                    <label className="form-label">월 매출 (만원)</label>
+                                    <input className="form-input" style={{ width: 150 }} inputMode="numeric" placeholder="예: 3000" value={salesMan} onChange={function(e) { setSalesMan(e.target.value.replace(/[^0-9]/g, '')); }} />
+                                </div>
+                                <div className="form-group" style={{ marginBottom: 0 }}>
+                                    <label className="form-label">월 광고비 (만원)</label>
+                                    <input className="form-input" style={{ width: 150 }} inputMode="numeric" placeholder="예: 300" value={adMan} onChange={function(e) { setAdMan(e.target.value.replace(/[^0-9]/g, '')); }} />
+                                </div>
+                                <button className="btn btn-primary" onClick={handleMakeProposal} disabled={proposing} data-proposal-btn="1">
+                                    {proposing ? '제안서 준비 중...' : '📑 맞춤제안서 만들기'}
+                                </button>
+                            </div>
+                            <div style={{ marginTop: 10, padding: '10px 14px', background: '#f5f3ff', borderRadius: 8, fontSize: 13, color: '#5b21b6' }}>
+                                💡 위 분석 결과(검색량·경쟁·리뷰·상세·SEO·순위·시기·입찰가·공략 키워드)가 제안서에 그대로 들어갑니다. 월 매출·월 광고비는 몰라도 비워 두고 만들 수 있고, 제안서 화면에서 다시 고칠 수 있습니다.
+                            </div>
                         </div>
                     )}
 

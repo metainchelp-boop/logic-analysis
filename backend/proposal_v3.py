@@ -14,11 +14,36 @@ import proposal_facts
 logger = logging.getLogger(__name__)
 
 
+MAX_MAN = 10_000_000  # 만원 — 1천억 원. 그보다 크면 잘못 넣은 값으로 보고 버린다.
+
+
+def clean_inputs(raw):
+    """직원이 보고서 칸에서 넣은 월 매출·월 광고비(만원) — 양수 숫자만 남긴다. 없으면 None."""
+    if not isinstance(raw, dict):
+        return None
+    out = {}
+    for k in ("salesMan", "adMan"):
+        v = raw.get(k)
+        if isinstance(v, bool):
+            continue
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            continue
+        if n == n and 0 < n <= MAX_MAN:
+            out[k] = int(round(n))
+    return out or None
+
+
 def enrich(payload, api_key=None, client=None, now=None):
     """payload 를 고치지 않고 facts·copy 를 붙인 **새 dict** 를 돌려준다. v3 가 아니면 그대로."""
     if not isinstance(payload, dict) or not payload.get("v3"):
         return payload
     out = dict(payload)
+    out.pop("inputs", None)
+    inputs = clean_inputs(payload.get("inputs"))
+    if inputs:
+        out["inputs"] = inputs  # 제안서 화면이 월 매출·월 광고비 칸을 미리 채운다(직원이 고칠 수 있음)
     try:
         facts = proposal_facts.build(payload, now=now)
     except Exception as e:  # 재료를 못 만들면 문장도 못 만든다 — 원본만 보관

@@ -459,7 +459,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     
                 /* 21. 보고서 출력 */
                 searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '보고서' },
-                    React.createElement(ReportSection, { keyword: searchedKeyword, companyName: companyName, managerName: currentUser && currentUser.name })
+                    React.createElement(ReportSection, { keyword: searchedKeyword, companyName: companyName, managerName: currentUser && currentUser.name, onMakeProposal: props.onMakeProposal })
                 ),
     
                 /* 알림 설정 (admin/superadmin만) */

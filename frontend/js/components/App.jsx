@@ -465,6 +465,60 @@ window.App = function App() {
     /* 영업 자료 동시 생성 — 훅(useRef·useEffect)은 위쪽, `if (authChecking) return` **앞**에 있다.
        여기 두면 로그인 뒤 훅 수가 달라져 React #310 으로 전체 화면이 죽는다(2026-09-15 실사고). */
 
+    /* 맞춤제안서 v3 인계 자료 — 「영업 자료 동시 생성」과 보고서 칸 「맞춤제안서 만들기」가 같은 것을 쓴다.
+       상세 진단·리뷰는 App 상태에, SEO·입찰가·AI 의견은 각 화면 칸이 받아 둔 값(ReportFacts)에 있다. */
+    var _buildProposalBundle = function(kw, who, storeUrl) {
+        return {
+            keyword: kw,
+            name: who,
+            storeUrl: storeUrl || '',
+            volume: volumeData || null,
+            related: relatedData || null,
+            shopProducts: shopProducts || null,
+            datalab: datalabData || null,
+            advertiser: advertiserReport || null,
+            analysis: analysisData || null,
+            v3: true,
+            htmlDetail: htmlDetailResult ? trimHtmlDetail(htmlDetailResult) : null,
+            productName: (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name) ||
+                         (analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.product_name) || '',
+            screen: (window.ReportFacts ? window.ReportFacts.get(kw, searchedProductUrl) : {})
+        };
+    };
+
+    /* 보고서 칸 「📑 맞춤제안서 만들기」(2026-10-27) — 지금 화면의 분석 결과 + 직원이 넣은 월 매출·월 광고비(만원)로
+       맞춤제안서 v3 를 연다. 네이버·분석을 다시 부르지 않는다(받아 둔 자료를 보관소에 넣고 그 키로 연다).
+       ⚠️ 창은 누른 순간 먼저 연다 — 보관이 끝난 뒤 열면 브라우저가 팝업으로 막는다.
+       ⚠️ 제안서는 전산 화면 주소(회사 주소)에 있다. 전산 index.html 이 카페24 주소를 이 주소로 옮긴다. */
+    var PROPOSAL_ORIGIN = 'http://metainc.co.kr';
+    var makeProposal = function(opt) {
+        opt = opt || {};
+        var kw = searchedKeyword || '';
+        if (!kw || !analysisData) { toast.error('먼저 키워드 분석을 마친 뒤 눌러 주세요.'); return Promise.resolve(false); }
+        var who = (opt.name || companyName || '').trim() || '업체';
+        var win = null;
+        try { win = window.open('about:blank', '_blank'); } catch (e) { win = null; }
+        if (!win) { toast.error('새 창이 막혔습니다. 브라우저의 팝업 허용을 켠 뒤 다시 눌러 주세요.'); return Promise.resolve(false); }
+        try { win.opener = null; win.document.title = '맞춤제안서 준비 중'; win.document.body.innerHTML = '<p style="font-family:sans-serif;padding:40px;color:#334155">맞춤제안서를 준비하고 있습니다… (10~30초)</p>'; } catch (e) {}
+        var bundle = _buildProposalBundle(kw, who, searchedProductUrl || '');
+        bundle.inputs = { salesMan: opt.salesMan || null, adMan: opt.adMan || null };
+        return api.post('/sales-bundle', { payload: bundle })
+            .then(function(res) {
+                if (!res || !res.key) throw new Error('no-key');
+                var p = new URLSearchParams();
+                p.set('handoff', res.key);
+                p.set('name', who);
+                p.set('keywords', kw);
+                try { win.location.replace(PROPOSAL_ORIGIN + '/proposal/v3/index.html?' + p.toString()); } catch (e) {}
+                return true;
+            })
+            .catch(function() {
+                try { win.close(); } catch (e) {}
+                toast.error('제안서 자료를 넘기지 못했습니다. 잠시 뒤 다시 눌러 주세요.');
+                return false;
+            });
+    };
+
     var _runOneShot = function(S) {
         var ctx = S.context();
         var kw = searchedKeyword || '';
@@ -490,24 +544,7 @@ window.App = function App() {
         //    ⚠️ 보관이 실패해도 **제안서는 연다** — 그때는 제안서가 평소대로 스스로 받아 온다
         //       (느려질 뿐 결과는 같다. 여기서 멈추면 영업사원이 자료 하나를 통째로 잃는다).
         S.mark('proposal', 'run');
-        var bundle = {
-            keyword: kw,
-            name: who,
-            storeUrl: ctx.storeUrl || searchedProductUrl || '',
-            volume: volumeData || null,
-            related: relatedData || null,
-            shopProducts: shopProducts || null,
-            datalab: datalabData || null,
-            advertiser: advertiserReport || null,
-            analysis: analysisData || null,
-            /* 맞춤제안서 v3(2026-10-26) — 서버가 이 자료로 제안서 재료·문장을 만든다.
-               상세 진단·리뷰는 App 상태에, SEO·입찰가·AI 의견은 각 화면 칸이 받아 둔 값(ReportFacts)에 있다. */
-            v3: true,
-            htmlDetail: htmlDetailResult ? trimHtmlDetail(htmlDetailResult) : null,
-            productName: (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name) ||
-                         (analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.product_name) || '',
-            screen: (window.ReportFacts ? window.ReportFacts.get(kw, searchedProductUrl) : {})
-        };
+        var bundle = _buildProposalBundle(kw, who, ctx.storeUrl || searchedProductUrl || '');
 
         var openProposal = function(key) {
             var p = new URLSearchParams();
@@ -817,7 +854,8 @@ window.App = function App() {
                 volumeData: volumeData,
                 competitorContext: competitorContext,
                 onCompetitorSaved: function() { setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {} },
-                onOpenRankTab: handleOpenRankTab
+                onOpenRankTab: handleOpenRankTab,
+                onMakeProposal: makeProposal
             })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
