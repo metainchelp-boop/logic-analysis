@@ -160,6 +160,16 @@ try:
 except Exception as e:  # noqa: BLE001
     ok(False, "깨진 자료에서 예외: %r" % e)
 json.dumps(out, ensure_ascii=False)
+ok("inputs" not in out, "입력값을 안 보내면 inputs 없음")
+src_in = bundle()
+src_in["inputs"] = {"salesMan": "3000", "adMan": 300.4, "evil": "<script>"}
+out_in = pv.enrich(src_in, api_key="")
+ok(out_in["inputs"] == {"salesMan": 3000, "adMan": 300}, "월 매출·월 광고비(만원)는 숫자만 남긴다")
+for bad in ({"salesMan": -1}, {"salesMan": "abc"}, {"salesMan": True}, {"adMan": 10 ** 9}, "문자열", None):
+    t = bundle(); t["inputs"] = bad
+    ok("inputs" not in pv.enrich(t, api_key=""), "이상한 입력값은 버린다: %r" % (bad,))
+broken_in = {"v3": True, "related": "깨진값", "datalab": 3, "inputs": {"salesMan": 100}}
+ok(pv.enrich(broken_in, api_key="").get("inputs") == {"salesMan": 100}, "재료 정리 실패해도 입력값은 남는다")
 
 # ⑥ 조사
 ok(pc.j("상점", "은") == "상점은" and pc.j("스토어", "은") == "스토어는", "은/는")
