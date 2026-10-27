@@ -497,6 +497,41 @@ function placeRegionHasDong(region) {
   return /[동가읍면리]$/.test(tail);
 }
 
+// ===== 화면에서만 받은 결과 모아 두기 (맞춤제안서 v3 · 2026-10-26) =====
+// SEO 진단·파워링크 입찰가·AI 종합 의견은 각 화면 칸이 스스로 받아 온다(App 상태에 없다).
+// 영업 자료 동시 생성이 제안서로 넘길 때 이 값들을 함께 보낸다 — 네이버·AI 를 다시 부르지 않는다.
+// 검색·저장 보고서 전환마다 세대를 바꾼다. 같은 키워드라도 다른 상품/늦은 응답은 섞지 않는다.
+window.ReportFacts = function () {
+  var current = null,
+    values = {},
+    seq = 0;
+  return {
+    begin: function (keyword, productUrl) {
+      current = {
+        id: ++seq,
+        keyword: keyword || '',
+        productUrl: productUrl || ''
+      };
+      values = {};
+    },
+    ticket: function (keyword, productUrl) {
+      return current && current.keyword === keyword && (productUrl === undefined || current.productUrl === (productUrl || '')) ? current.id : null;
+    },
+    put: function (ticket, name, value) {
+      if (!current || ticket !== current.id || !name) return;
+      values[name] = value;
+    },
+    get: function (keyword, productUrl) {
+      return current && current.keyword === keyword && current.productUrl === (productUrl || '') ? Object.assign({}, values) : {};
+    },
+    reset: function () {
+      current = null;
+      values = {};
+      ++seq;
+    }
+  };
+}();
+
 ;/* ===== js/rankImage.js ===== */
 /* rankImage.js — 순위 이력 이미지(PNG) 생성 공용 헬퍼
  *
@@ -1470,6 +1505,7 @@ function placeRegionHasDong(region) {
 /* AiFeedbackAllSection — METAINC AI 통합 피드백 (1회 호출) */
 window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
   var keyword = props.keyword;
+  var factsTicket = window.ReportFacts && window.ReportFacts.ticket(keyword, props.productUrl);
   var analysisData = props.analysisData;
   var volumeData = props.volumeData;
   var relatedData = props.relatedData;
@@ -1592,6 +1628,9 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
       if (res && res.success && res.data) {
         setFeedbacks(res.data.feedbacks);
         setFullText(res.data.full_text || '');
+        if (window.ReportFacts) window.ReportFacts.put(factsTicket, 'ai', {
+          full_text: res.data.full_text || ''
+        }); // 맞춤제안서 v3 로 넘김
       } else {
         setError(res && res.error || 'AI 피드백 생성 실패');
       }
@@ -8777,8 +8816,13 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({
           };
         });
       }
+      // SEO 칸에서 메인 상품과 다른 URL을 조사했다면 제안서로 섞지 않는다.
+      const factsTicket = window.ReportFacts && window.ReportFacts.ticket(keyword, productUrl.trim());
       const res = await api.post('/seo/analyze', seoBody);
-      if (res.success) setResult(res.data);else toast.warn(res.detail || 'SEO 분석 데이터 일부를 가져오지 못했습니다.');
+      if (res.success) {
+        setResult(res.data);
+        if (window.ReportFacts) window.ReportFacts.put(factsTicket, 'seo', res.data); // 맞춤제안서 v3 로 넘김
+      } else toast.warn(res.detail || 'SEO 분석 데이터 일부를 가져오지 못했습니다.');
     } catch (e) {
       toast.warn('SEO 분석 요청 실패 — 잠시 후 다시 시도해주세요.');
     }
@@ -28470,6 +28514,7 @@ window.RankDeltaROISimulation = function RankDeltaROISimulation(props) {
  *   보고서는 화면 DOM을 그대로 복제하므로 이 표가 보고서에도 자동 포함된다. */
 window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
   var keyword = props.keyword || '';
+  var factsTicket = window.ReportFacts && window.ReportFacts.ticket(keyword);
 
   /* 파워링크 공식 입찰가 — hooks는 조기 return 이전에 선언(Rules of Hooks) */
   var _bs = React.useState(null);
@@ -28487,6 +28532,7 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
         var d = res && res.success && res.data || null;
         if (d && ((d.pc || []).length > 0 || (d.mobile || []).length > 0)) {
           setBidData(d);
+          if (window.ReportFacts) window.ReportFacts.put(factsTicket, 'bid', d); // 맞춤제안서 v3 로 넘김
         } else if (canRetry) {
           setTimeout(function () {
             if (alive) call(false);
@@ -28502,7 +28548,7 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
     return function () {
       alive = false;
     };
-  }, [keyword]);
+  }, [keyword, factsTicket]);
   var vol = props.volumeData && props.volumeData.length ? props.volumeData[0] : null;
   if (!vol) return null;
   var comp = (vol.compIdx || '').trim();
@@ -29777,6 +29823,7 @@ window.AnalysisResults = function AnalysisResults(props) {
   analysisData && React.createElement(window.SectionErrorBoundary, {
     name: 'AI 종합 분석'
   }, React.createElement(AiFeedbackAllSection, {
+    productUrl: searchedProductUrl,
     keyword: searchedKeyword,
     analysisData: analysisData,
     volumeData: volumeData,
@@ -34255,6 +34302,7 @@ window.createDoSearch = function (deps) {
         } catch (e) {}
       }
     }
+    if (window.ReportFacts) window.ReportFacts.begin(keyword, cleanedUrl);
     var currentSearchId = ++searchIdRef.current; // 새 검색마다 ID 증가
     setSearchLoading(true);
     setSearchedKeyword(keyword);
@@ -35991,7 +36039,13 @@ window.App = function App() {
       shopProducts: shopProducts || null,
       datalab: datalabData || null,
       advertiser: advertiserReport || null,
-      analysis: analysisData || null
+      analysis: analysisData || null,
+      /* 맞춤제안서 v3(2026-10-26) — 서버가 이 자료로 제안서 재료·문장을 만든다.
+         상세 진단·리뷰는 App 상태에, SEO·입찰가·AI 의견은 각 화면 칸이 받아 둔 값(ReportFacts)에 있다. */
+      v3: true,
+      htmlDetail: htmlDetailResult ? trimHtmlDetail(htmlDetailResult) : null,
+      productName: advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name || analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.product_name || '',
+      screen: window.ReportFacts ? window.ReportFacts.get(kw, searchedProductUrl) : {}
     };
     var openProposal = function (key) {
       var p = new URLSearchParams();
@@ -36009,7 +36063,9 @@ window.App = function App() {
         if (reportOk) S.reportDownloaded(ctx);
         return;
       }
-      var url = base + '/proposal/index.html?' + p.toString();
+      /* v3(2026-10-26) — 보고서 자료만으로 만드는 새 제안서. 인계 키가 없으면(보관 실패) 종전 제안서로 연다
+         — 새 제안서는 인계 자료가 없으면 만들 재료가 없다. */
+      var url = base + (key ? '/proposal/v3/index.html?' : '/proposal/index.html?') + p.toString();
       setTimeout(function () {
         try {
           window.open(url, '_blank', 'noopener,noreferrer');
@@ -36037,6 +36093,7 @@ window.App = function App() {
       return;
     }
     var kw = saved.keyword || '';
+    if (window.ReportFacts) window.ReportFacts.begin(kw, saved.product_url || '');
     // 1) 저장 데이터를 화면 상태에 주입 → 분석 화면(React 컴포넌트)으로 그대로 렌더
     setCurrentClientId(saved.client_id || null);
     setCompanyName(saved.companyName || saved.client_name || '');

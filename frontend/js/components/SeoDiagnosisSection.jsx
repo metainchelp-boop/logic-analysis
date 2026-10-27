@@ -61,8 +61,13 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                     return { product_id: p.product_id || '', product_name: p.product_name, price: p.price, store_name: p.store_name, brand: p.brand, category1: p.category1, category2: p.category2, product_url: p.product_url };
                 });
             }
+            // SEO 칸에서 메인 상품과 다른 URL을 조사했다면 제안서로 섞지 않는다.
+            const factsTicket = window.ReportFacts && window.ReportFacts.ticket(keyword, productUrl.trim());
             const res = await api.post('/seo/analyze', seoBody);
-            if (res.success) setResult(res.data);
+            if (res.success) {
+                setResult(res.data);
+                if (window.ReportFacts) window.ReportFacts.put(factsTicket, 'seo', res.data);   // 맞춤제안서 v3 로 넘김
+            }
             else toast.warn(res.detail || 'SEO 분석 데이터 일부를 가져오지 못했습니다.');
         } catch (e) { toast.warn('SEO 분석 요청 실패 — 잠시 후 다시 시도해주세요.'); }
         setLoading(false);

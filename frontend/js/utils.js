@@ -374,3 +374,30 @@ function placeRegionHasDong(region) {
     var tail = (parts[parts.length - 1] || '').replace(/[0-9]+/g, '');
     return /[동가읍면리]$/.test(tail);
 }
+
+// ===== 화면에서만 받은 결과 모아 두기 (맞춤제안서 v3 · 2026-10-26) =====
+// SEO 진단·파워링크 입찰가·AI 종합 의견은 각 화면 칸이 스스로 받아 온다(App 상태에 없다).
+// 영업 자료 동시 생성이 제안서로 넘길 때 이 값들을 함께 보낸다 — 네이버·AI 를 다시 부르지 않는다.
+// 검색·저장 보고서 전환마다 세대를 바꾼다. 같은 키워드라도 다른 상품/늦은 응답은 섞지 않는다.
+window.ReportFacts = (function() {
+    var current = null, values = {}, seq = 0;
+    return {
+        begin: function(keyword, productUrl) {
+            current = { id: ++seq, keyword: keyword || '', productUrl: productUrl || '' };
+            values = {};
+        },
+        ticket: function(keyword, productUrl) {
+            return current && current.keyword === keyword &&
+                (productUrl === undefined || current.productUrl === (productUrl || '')) ? current.id : null;
+        },
+        put: function(ticket, name, value) {
+            if (!current || ticket !== current.id || !name) return;
+            values[name] = value;
+        },
+        get: function(keyword, productUrl) {
+            return current && current.keyword === keyword && current.productUrl === (productUrl || '')
+                ? Object.assign({}, values) : {};
+        },
+        reset: function() { current = null; values = {}; ++seq; }
+    };
+})();
