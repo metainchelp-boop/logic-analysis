@@ -6,8 +6,11 @@ name: 네이버 관제 배포 (naver-deploy)
 # push·pull_request 트리거 없음. 이 파일과 deploy/naver/** 는 deploy.yml 의 paths-ignore 에 있다
 # (머지해도 로직분석이 재배포되지 않는다). 사용법: docs/naver-simple-deploy.md
 #
-# ⚠️ 이 저장소는 공개다. Actions 로그도 공개이므로 비공개 제품 시험은 요약만 출력하고,
-# 비밀값은 어디에도 출력하지 않는다.
+# ⚠️ 이 저장소는 공개다. Actions 로그도 공개다. 그래서
+#   - 비공개 제품의 설치·시험·빌드 원문 출력(stdout·stderr)은 러너 임시 폴더의 비공개 파일에만 쓰고
+#     로그에는 단계 이름·종료 코드·개수만 낸다(업로드하지 않는다).
+#   - 서버 쪽은 결과 한 줄(NAVER_DEPLOY_RESULT, 형식 고정)과 단계 이름만 낸다. 서버 로그 원문은 흘리지 않는다.
+#   - inspect 는 원문 없이 정해진 사실(모양·커밋·이미지 ID·개수·참거짓)만 담은 한 줄 JSON 이다.
 
 on:
   workflow_dispatch:
@@ -115,10 +118,18 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/naver-browsers
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/naver-ci" "$RUNNER_TEMP/naver-ci-home"
-          python -m pip install --quiet -r backend/requirements.txt httpx 'bcrypt<4'
-          npm install --silent --prefix "$RUNNER_TEMP/naver-node" --ignore-scripts --no-audit --no-fund playwright@1.62.1
-          "$RUNNER_TEMP/naver-node/node_modules/.bin/playwright" install --with-deps chromium > /dev/null
+          mkdir -p "$RUNNER_TEMP/naver-ci" "$RUNNER_TEMP/naver-ci-home" "$RUNNER_TEMP/private"
+          chmod 700 "$RUNNER_TEMP/private"
+          step() { # 이름 명령... — 원문 출력은 비공개 파일, 로그에는 이름·종료 코드만
+            local name=$1 rc=0
+            shift
+            "$@" > "$RUNNER_TEMP/private/$name.log" 2>&1 || rc=$?
+            echo "$name: exit $rc"
+            return "$rc"
+          }
+          step pip-install python -m pip install -r backend/requirements.txt httpx 'bcrypt<4'
+          step npm-playwright npm install --prefix "$RUNNER_TEMP/naver-node" --ignore-scripts --no-audit --no-fund playwright@1.62.1
+          step playwright-chromium "$RUNNER_TEMP/naver-node/node_modules/.bin/playwright" install --with-deps chromium
           python --version
           node --version
 
@@ -126,6 +137,7 @@ jobs:
         if: inputs.mode == 'deploy'
         run: |
           set -euo pipefail
+          # product-tests.sh 는 묶음별 요약·실패 이름만 표준출력에 낸다. 그 밖의 표준오류는 비공개 파일로.
           sudo unshare --net -- /bin/bash -c '
             set -euo pipefail
             ip link set lo up
@@ -138,7 +150,7 @@ jobs:
           ' naver-ci "$(id -u)" "$(id -g)" "$PATH" "$RUNNER_TEMP/naver-ci-home" \
             "$GITHUB_WORKSPACE/product" "$RUNNER_TEMP/naver-ci" \
             "$RUNNER_TEMP/naver-node/node_modules" "$RUNNER_TEMP/naver-browsers" \
-            "$GITHUB_WORKSPACE/deploy/naver/product-tests.sh"
+            "$GITHUB_WORKSPACE/deploy/naver/product-tests.sh" 2> "$RUNNER_TEMP/private/product-tests.stderr"
 
       - name: 배포 원본 묶기 · 두 Dockerfile 빌드 확인 (push 없음)
         id: archive
@@ -153,11 +165,15 @@ jobs:
           mkdir "$RUNNER_TEMP/context"
           tar -xf "$RUNNER_TEMP/source.tar" -C "$RUNNER_TEMP/context"
           for name in engine relay; do
+            rc=0
+            # 빌드 원문(stdout·stderr)에는 Dockerfile·RUN 발췌가 섞일 수 있어 비공개 파일에만 쓴다.
             docker build --quiet --label "metainc.naver.preview.source=$COMMIT" \
               -t "naver-deploy-ci-$name:$COMMIT" -f "$RUNNER_TEMP/context/Dockerfile.naver-$name" \
-              "$RUNNER_TEMP/context" > /dev/null
-            test "$(docker image inspect --format '{{.Config.User}}' "naver-deploy-ci-$name:$COMMIT")" = 10001:10001
-            echo "$name 이미지 빌드 성공 (사용자 10001:10001)"
+              "$RUNNER_TEMP/context" > "$RUNNER_TEMP/private/build-$name.log" 2>&1 || rc=$?
+            echo "build-$name: exit $rc"
+            [ "$rc" = 0 ] || exit 1
+            test "$(docker image inspect --format '{{.Config.User}}' "naver-deploy-ci-$name:$COMMIT" 2>/dev/null)" = 10001:10001
+            echo "build-$name: user 10001:10001"
           done
 
   ship:
@@ -244,60 +260,57 @@ jobs:
           script: |
             set -eu
             incoming="/tmp/naver-deploy-$NSD_RUN"
-            fail() { echo "::error::$1"; exit 1; }
+            # 이 단계의 출력은 공개 로그다. 고정 문구·단계 이름·결과 한 줄만 낸다(서버 로그 원문은 흘리지 않는다).
+            fail() { echo "NAVER_DEPLOY_SHIP_ERROR=$1"; exit 1; }
             hash_of() { sha256sum "$1" | cut -d' ' -f1; }
-            [ -d "$incoming" ] && [ ! -L "$incoming" ] || fail "업로드 폴더가 없습니다: $incoming"
+            [ -d "$incoming" ] && [ ! -L "$incoming" ] || fail UPLOAD_MISSING
             if [ "$NSD_MODE" = inspect ]; then
-              [ "$(hash_of "$incoming/naver-deploy.sh")" = "$NSD_SCRIPT_SHA" ] || fail "스크립트 해시 불일치"
+              [ "$(hash_of "$incoming/naver-deploy.sh")" = "$NSD_SCRIPT_SHA" ] || fail SCRIPT_HASH
               rc=0
-              bash "$incoming/naver-deploy.sh" inspect || rc=$?
+              out=$(bash "$incoming/naver-deploy.sh" inspect 2>/dev/null) || rc=$?
               rm -f "$incoming/naver-deploy.sh"
               rmdir "$incoming" || true
+              printf '%s\n' "$out" | grep '^NAVER_DEPLOY_INSPECT={' || fail "INSPECT_FAILED_$rc"
               exit "$rc"
             fi
-            [ "$NSD_MODE" = deploy ] || fail "mode 이상"
-            [ "$(id -u)" = 0 ] || fail "deploy 는 root SSH 사용자로만 실행합니다 (지금 $(id -un))"
-            command -v systemd-run >/dev/null || fail "systemd-run 이 없습니다"
+            [ "$NSD_MODE" = deploy ] || fail MODE
+            [ "$(id -u)" = 0 ] || fail NOT_ROOT
+            command -v systemd-run >/dev/null || fail NO_SYSTEMD_RUN
             base=/var/lib/metainc/naver-deploy
             install -d -m 700 "$base" "$base/incoming"
             work="$base/incoming/$NSD_RUN"
-            [ ! -e "$work" ] || fail "같은 실행 폴더가 이미 있습니다: $work"
+            [ ! -e "$work" ] || fail RUN_DIR_EXISTS
             install -d -m 700 "$work"
             install -m 600 "$incoming/naver-deploy.sh" "$work/naver-deploy.sh"
             install -m 600 "$incoming/source.tar" "$work/source.tar"
             rm -f "$incoming/naver-deploy.sh" "$incoming/source.tar"
             rmdir "$incoming" || true
-            [ "$(hash_of "$work/naver-deploy.sh")" = "$NSD_SCRIPT_SHA" ] || fail "스크립트 해시 불일치"
-            [ "$(hash_of "$work/source.tar")" = "$NSD_ARCHIVE_SHA" ] || fail "원본 묶음 해시 불일치"
+            [ "$(hash_of "$work/naver-deploy.sh")" = "$NSD_SCRIPT_SHA" ] || fail SCRIPT_HASH
+            [ "$(hash_of "$work/source.tar")" = "$NSD_ARCHIVE_SHA" ] || fail ARCHIVE_HASH
             unit="naver-deploy-$NSD_RUN"
-            # SSH 가 끊겨도 서버에서 끝까지(실패 시 복원까지) 돌도록 별도 systemd 작업으로 띄우고 로그만 따라간다.
+            # SSH 가 끊겨도 서버에서 끝까지(실패 시 복원까지) 돌도록 별도 systemd 작업으로 띄운다.
+            # 자세한 로그는 서버 $work/deploy.log(root 0700 폴더)에만 남는다.
             systemd-run --unit="$unit" --collect --quiet --property=KillMode=mixed --property=TimeoutStopSec=900 \
               /bin/bash "$work/naver-deploy.sh" deploy "$NSD_COMMIT" "$work/source.tar" \
-              --log "$work/deploy.log" --result "$work/result.json"
-            printed=0
+              --log "$work/deploy.log" --result "$work/result.json" >/dev/null 2>&1 || fail SYSTEMD_RUN
+            last=''
             deadline=$(( $(date +%s) + 3000 ))
-            while :; do
-              if [ -f "$work/deploy.log" ]; then
-                total=$(wc -l < "$work/deploy.log")
-                if [ "$total" -gt "$printed" ]; then
-                  sed -n "$((printed + 1)),${total}p" "$work/deploy.log"
-                  printed=$total
-                fi
-              fi
-              [ ! -f "$work/result.json" ] || break
+            while [ ! -f "$work/result.json" ]; do
+              phase=$(python3 -I -c 'import json,re,sys
+            try: p=json.load(open(sys.argv[1])).get("phase","")
+            except Exception: p=""
+            print(p if re.fullmatch(r"[a-z_]{1,24}",p or "") else "")' /var/lib/metainc/naver-deploy/state.json 2>/dev/null || true)
+              if [ -n "$phase" ] && [ "$phase" != "$last" ]; then echo "phase=$phase"; last=$phase; fi
               state=$(systemctl show "$unit.service" -p ActiveState --value 2>/dev/null || echo gone)
               case "$state" in
                 active|activating|reloading|deactivating) ;;
-                *)
-                  sleep 3
-                  [ -f "$work/result.json" ] || fail "배포 작업이 결과 없이 끝났습니다. inspect 로 확인하세요 (서버 로그 $work/deploy.log)"
-                  break ;;
+                *) sleep 3; [ -f "$work/result.json" ] || fail ENDED_WITHOUT_RESULT; break ;;
               esac
-              [ "$(date +%s)" -lt "$deadline" ] || fail "추적 시간 초과 — 서버 작업은 계속됩니다. 끝난 뒤 inspect 로 확인하세요"
+              [ "$(date +%s)" -lt "$deadline" ] || fail FOLLOW_TIMEOUT_DEPLOY_CONTINUES_ON_HOST
               sleep 3
             done
-            sleep 1
-            total=$(wc -l < "$work/deploy.log")
-            [ "$total" -le "$printed" ] || sed -n "$((printed + 1)),${total}p" "$work/deploy.log"
-            rc=$(python3 -I -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["exit_code"]))' "$work/result.json")
+            # result.json 은 스크립트 helper 가 필드별 형식으로 걸러 만든 한 줄이다.
+            line=$(head -n 1 "$work/result.json")
+            printf 'NAVER_DEPLOY_RESULT=%s\n' "$line"
+            rc=$(python3 -I -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["exit_code"]))' "$work/result.json" 2>/dev/null || echo 1)
             exit "$rc"

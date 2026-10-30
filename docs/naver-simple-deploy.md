@@ -13,9 +13,23 @@
 | `deploy/naver/tests/` | 서버 없이 도는 스크립트 시험(가짜 systemctl·docker·curl) |
 
 이 파일들은 `deploy.yml` 의 `paths-ignore` 에 있어 **머지해도 로직분석이 재배포되지 않는다.**
-같은 커밋이 `deploy.yml` 자신도 고치므로 `deploy.yml` 도 무시 목록에 넣었다(`paths-ignore` 는 바뀐 파일이
-전부 무시 대상일 때만 건너뛴다). 앞으로 `deploy.yml` 만 고친 커밋은 자동 배포되지 않으니, 바로 반영하려면
-Actions 에서 「Deploy to VPS」를 수동 실행한다.
+
+> ⚠️ **main push 동작의 영구 변경.** 같은 커밋이 `deploy.yml` 자신도 고치므로 `deploy.yml` 도 무시 목록에 넣었다
+> (`paths-ignore` 는 바뀐 파일이 전부 무시 대상일 때만 건너뛴다). 그래서 **이 PR 이후 `deploy.yml` 만 고친 커밋은
+> main 에 push 돼도 로직분석을 자동 배포하지 않는다.** 배포 절차를 고친 뒤 바로 반영하려면 Actions 에서
+> 「Deploy to VPS」를 수동 실행한다. 다른 파일(backend·frontend 등)이 함께 바뀐 커밋은 지금처럼 자동 배포된다.
+> CLAUDE.md 「배포 규칙」(main 푸시 → 배포)과 함께 검토할 변경이다.
+
+## 0. 실행 전 지켜야 할 것
+
+- **최초 `inspect` 는 공개 출력 제한 수정(이 문서의 3장 「공개 로그에 나가는 것」)이 들어간 커밋이 재검증·머지된 뒤에만 실행한다.**
+  그 전 판(e747271)의 inspect 는 unit·override·label 원문을 출력했다.
+- **첫 배포와 되돌리기 훈련 동안 옛 실행기(「Conversion diagnostic through existing VPS connection」, 브랜치
+  `codex/naver-conversion-existing-executor-20261026`)는 dispatch 하지 않는다.** 운영 진입점은 이 워크플로 하나뿐이어야 한다.
+  새 장치의 `flock` 은 옛 실행기를 막지 못하고, concurrency group 은 SSH 가 끊긴 뒤 서버에서 계속 도는 작업까지 막지 못한다.
+  가능하면 첫 `deploy` 전에 그 워크플로를 **Disable workflow** 로 꺼 둔다.
+- **같은 SCHEMA_VERSION 안의 데이터·프로토콜 하위 호환은 이 장치가 확인하지 않는다.** 자동 복원은 이미지·unit·override 만 되돌리고
+  DB 는 그대로 두므로, 새 판이 남긴 데이터를 직전 판이 읽을 수 있는지는 **배포 대상마다 리뷰에서** 확인한다. 우회 입력은 없다.
 
 ---
 
@@ -40,17 +54,26 @@ Actions 에서 「Deploy to VPS」를 수동 실행한다.
 | 종료 코드 | status | 뜻 | 할 일 |
 |---|---|---|---|
 | 0 | `DEPLOYED` | 배포·헬스·60초 유지 통과 | 없음 |
-| 2 | `DEPLOY_FAILED_RESTORED` | 새 판이 실패해 **직전 판으로 자동 복원**, 복원 판 헬스 통과 | `message`·`health` 로 원인 확인 후 고쳐서 다시 |
+| 0 | `DEPLOYED_WITH_WARNINGS` | 배포·헬스 통과, 마무리 경고(`warnings` 코드) | 경고 코드 확인 |
+| 2 | `DEPLOY_FAILED_RESTORED` | 새 판이 실패해 **직전 판으로 자동 복원**, 복원 판 헬스 통과 | `reason`·`health_status` 로 원인 확인 후 고쳐서 다시 |
 | 3 | `RECOVERED_INTERRUPTED_RUN` | 지난 배포가 중간에 끊겨(SSH 끊김·재부팅 등) 이번 실행이 **먼저 직전 판으로 복원**함 | 같은 입력으로 다시 실행 |
-| 4 | `RESTORE_FAILED` | 복원까지 실패 → 두 서비스를 **정지**해 둠 | Claude/Codex 에 즉시 알림. `inspect` 결과 첨부 |
-| 10 | `REFUSED` | 시작 전 거부(스키마 변경, 서버 배치 다름, 빌드 실패, execution 켜짐 등). **서비스는 그대로** | `message` 확인 |
+| 4 | `RESTORE_FAILED` | 복원까지 실패 → 두 서비스 정지를 시도. 실제로 멈췄는지는 `services_stopped_confirmed`(true/false) | 개발 담당에게 즉시 알림. `inspect` 결과 첨부 |
+| 10 | `REFUSED` | 시작 전 거부. **서비스는 그대로**. `reason` 예: `SCHEMA_CHANGED`(`schema_current`→`schema_new`), `CONFIG_SHAPE_CHANGED`, `FLAGS_CHANGED`, `EXECUTION_ENABLED`, `LAYOUT`, `BUILD_FAILED`, `CHECK_CONFIG` | `reason` 확인 |
 | 11 | `LOCKED` | 다른 관제 배포가 서버에서 실행 중 | 끝난 뒤 다시 |
 
 `inspect` 결과는 `NAVER_DEPLOY_INSPECT={...}` 한 줄 JSON 이다.
 
-> ⚠️ 이 저장소는 **공개**다. Actions 로그도 누구나 볼 수 있다. 비밀값은 출력하지 않지만,
-> `inspect` 는 서버 경로·이미지 ID·디스크 사용량을 보여 준다. 필요하면 결과를 받은 뒤 그 실행 로그를 지운다.
-> 제품 시험은 비공개 소스가 traceback 으로 새지 않도록 묶음별 요약과 실패한 시험 이름만 출력한다.
+### 공개 로그에 나가는 것 (이 저장소는 공개다)
+
+- **deploy:** `phase=<단계 이름>` 줄들과 마지막 `NAVER_DEPLOY_RESULT={...}` 한 줄뿐이다. 결과 줄의 모든 값은 필드별 형식
+  (커밋 40자리, `sha256:` 이미지 ID, 숫자, 대문자 사유 코드, `name=true|false` 스위치 등)을 통과한 것만 나가고, 문구는 고정표에서 고른다.
+  자세한 사유·단계 로그는 서버 `/var/lib/metainc/naver-deploy/incoming/<실행번호>/deploy.log`, docker build·compose 원문 출력은
+  `/var/lib/metainc/naver-deploy/runs/<시각>-<커밋>/commands.log`(root 전용 폴더)에만 남는다.
+- **inspect:** unit·override·tmpfiles·label·Env **원문을 내지 않는다.** unit 은 ExecStart 모양(compose 파일 역할 목록, 커밋, 커밋 횟수,
+  Environment 줄 수), override 는 키 이름과 image 태그, tmpfiles 는 허용된 `d` 줄, 컨테이너는 이미지 ID·상태·RestartCount·
+  허용된 label 4개·mount 경로·스위치 참거짓, 데이터 폴더는 파일 이름·크기·권한만 낸다. sqlite 는 쓰지 않는다.
+- **test 작업:** 제품 의존성 설치·시험·Docker build 의 stdout·stderr 는 러너 임시 폴더(`$RUNNER_TEMP/private`)에만 쓰고 올리지 않는다.
+  로그에는 단계 이름·종료 코드·시험 개수만 나간다.
 
 ---
 
@@ -93,21 +116,33 @@ Actions 에서 「Deploy to VPS」를 수동 실행한다.
 2. `scp` 로 스크립트(+tar)를 서버 `/tmp/naver-deploy-<실행번호>` 에 보낸 뒤
 3. `inspect` 는 바로 실행해 JSON 출력.
    `deploy` 는 root 전용 폴더 `/var/lib/metainc/naver-deploy/incoming/<실행번호>` 로 옮겨 해시를 다시 확인하고,
-   **`systemd-run` 으로 별도 작업**으로 띄운 뒤 로그만 따라간다. SSH 가 끊겨도 서버에서는 끝까지(실패 시 복원까지) 돈다.
+   **`systemd-run` 으로 별도 작업**으로 띄운 뒤 단계 이름과 결과 한 줄만 따라 출력한다(서버 로그 원문은 흘리지 않는다).
+   SSH 가 끊겨도 서버에서는 끝까지(실패 시 복원까지) 돈다.
 
 ### 서버의 `naver-deploy.sh deploy` 순서
 1. `flock` 잠금(동시 실행 방지). 지난 실행이 서비스를 멈춘 뒤 끝나지 못했으면 **먼저 직전 판으로 복원**하고 끝(코드 3)
-2. 현재 배치 확인 — 모르는 모양이면 거부(아래 「서버 배치 가정」)
+2. 현재 배치 확인 — 모르는 모양이면 거부(아래 「서버 배치 가정」). 실행 중 engine 컨테이너 Env 에서 **유효 스위치 10개**
+   (제품 `naver_runtime/config.py` 와 같은 참/거짓 규칙)와 두 컨테이너 mount 목록을 기록한다. `execution` 은 false 여야 한다
 3. 원본 tar 범위 검사, **SCHEMA_VERSION 비교**(새 판 `naver_engine/store.py` vs 실행 중 이미지 안의 `store.py` 또는 이 장치가 붙인 이미지 라벨). 다르면 거부. 우회 입력 없음
-4. 복구 기록 저장: `state.json` + `runs/<시각>-<커밋>/` 에 현재 unit 2개·override 2개 사본, 직전 이미지 ID
+4. 복구 기록 저장: `state.json` + `runs/<시각>-<커밋>/` 에 현재 unit 2개·override 2개·mount 목록 사본, 직전 이미지 ID, 스위치
 5. `releases/naver-<새 커밋>` 생성(이미 있으면 같은 원본인지 확인만), 현재 override 에서 **커밋만 치환**(각 1회 단언)
-6. **서비스를 멈추기 전에** 두 이미지 빌드(`metainc/naver-{engine,relay}:<커밋>`), `compose config`, 네트워크 없는 별도 project 로 `check-config` → `execution=false` 단언
+6. **서비스를 멈추기 전에**
+   - 두 이미지 빌드(`metainc/naver-{engine,relay}:<커밋>`, 원문 출력은 비공개 명령 로그로)
+   - 지금 판과 새 판의 `compose config`(JSON)에서 **관제 설정 묶음**(서비스 목록, data·socket·backup·tunnel mount, user 10001:10001,
+     restart no, network_mode, read_only, tmpfs, cap_drop, security_opt)을 정규화해 비교 → 이미지 태그 말고 다르면 거부(`CONFIG_SHAPE_CHANGED`).
+     호스트 전체 baseline 은 보지 않는다. environment(비밀값 포함)는 비교·출력하지 않는다
+   - **격리된 `check-config`**: 새 이미지를 `docker run --network none --read-only --user 10001:10001 --cap-drop ALL` 로,
+     운영 data·socket·backup·tunnel mount 없이(데이터 경로는 빈 tmpfs) 실행한다. 환경은 새 compose 설정의 유효 environment
+     (runtime.env 포함)를 `-e 이름` 으로만 넘겨 값이 명령줄·로그에 남지 않는다. 새 판 스위치가 **지금 판과 하나라도 다르면 거부**(`FLAGS_CHANGED`),
+     `execution=false` 단언
 7. DB 복사 공간 확인 → relay 정지 → engine 정지(둘 다 MainPID 0·컨테이너 PID 0 확인)
 8. 엔진이 멈춘 상태에서만 `engine.db*` 파일 복사(`/var/backups/metainc/naver-deploy-db`, 최근 3벌). sqlite 로 열지 않는다
-9. unit 2개에서 **커밋만 치환**(engine 6회·relay 4회 단언) → `daemon-reload` → `compose up --no-start --no-build --force-recreate` → 새 컨테이너 `execution=false` 확인
+9. unit 2개에서 **커밋만 치환**(engine 6회·relay 4회 단언) → `daemon-reload` → `compose up --no-start --no-build --force-recreate` →
+   새 컨테이너의 mount 목록이 직전과 같고, engine 스위치가 기록과 같은지 확인
 10. engine 시작 → relay 시작
 11. 헬스: engine `/_engine/health` 200, relay `/naver/` 200, `/api/naver-auto/me` 401 → **60초 유지**(두 unit active, MainPID·NRestarts 불변, 컨테이너 RestartCount 0, StartedAt 불변)
-12. 실패하면 기록으로 **직전 unit·override·이미지 복원 → 같은 헬스체크**. 복원도 실패하면 두 서비스 정지(코드 4)
+12. 실패하면 기록으로 **직전 unit·override·이미지 복원 → mount·스위치 재확인 → 같은 헬스체크**. 복원도 실패하면 두 서비스 정지를 시도하고,
+    MainPID 0·컨테이너 정지를 실제로 확인했는지(`services_stopped_confirmed`)를 따로 보고한다(코드 4)
 13. 성공하면 이미지 정리: 이 장치가 배포한 기록 중 **최근 3개·현재·직전은 절대 삭제하지 않는다.** 기록에 없는 태그(옛 실행기가 만든 것 등)는 건드리지 않는다
 
 ### 건드리지 않는 것
@@ -139,7 +174,7 @@ Actions 에서 「Deploy to VPS」를 수동 실행한다.
 
 ## 5. 첫 배포 계획 (대표 승인 후)
 
-1. `inspect`(commit 칸: 지금 운영 커밋) → 결과를 Claude 가 대표께 보고
+1. (공개 출력 제한 수정이 재검증·머지된 뒤) `inspect`(commit 칸: 지금 운영 커밋) → 결과를 개발 담당이 대표께 보고
 2. `deploy` abceeb7(`report_output_schema.py` 1파일, 스키마 21 불변)
 3. 되돌리기 훈련: `deploy` c44a663 (기존 `releases/naver-c44a663…` 은 같은 원본인지 확인 후 재사용)
 4. `deploy` abceeb7 재배포
@@ -150,8 +185,9 @@ Actions 에서 「Deploy to VPS」를 수동 실행한다.
 
 옛 실행기 파일은 지금 바꾸지 않는다. 새 방식 첫 배포와 훈련이 끝나면:
 
-1. 옛 경로를 막는다: GitHub → Actions → 「Conversion diagnostic through existing VPS connection」(브랜치 `codex/naver-conversion-existing-executor-20261026` 의 `debug-rank.yml`) → 오른쪽 `…` → **Disable workflow**.
-   두 경로가 같은 서버를 동시에 바꾸지 않게 하기 위함이다(새 장치의 `flock` 은 옛 실행기를 막지 못한다).
+1. 옛 경로를 막는다(0장대로 첫 배포 전에 이미 꺼 두는 것을 권한다): GitHub → Actions → 「Conversion diagnostic through existing VPS connection」
+   (브랜치 `codex/naver-conversion-existing-executor-20261026` 의 `debug-rank.yml`) → 오른쪽 `…` → **Disable workflow**.
+   두 경로가 같은 서버를 동시에 바꾸지 않게 하기 위함이다(새 장치의 `flock` 은 옛 실행기를 막지 못한다). 첫 배포·훈련 동안 옛 경로 dispatch 는 금지.
 2. 새 배포가 끝나면 옛 실행기의 host baseline·receipt 는 더 이상 현재 상태와 맞지 않는다. 옛 rollback 도 쓰지 않는다 — 되돌리기는 이 장치로 직전 커밋을 다시 `deploy` 한다.
 3. 옛 이미지 태그는 이 장치가 새로 3번 배포한 뒤 자동으로 정리 대상이 된다(기록에 있는 것만). 옛 release 폴더·receipts 는 이 장치가 지우지 않는다. 필요하면 `inspect` 로 현재 unit 이 가리키지 않는 것을 확인한 뒤 따로 정리한다.
 4. 옛 실행기 브랜치·워크플로 정리 PR 은 별도로 검토한다.

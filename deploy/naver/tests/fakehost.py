@@ -81,6 +81,72 @@ def project_container(state, project):
     return None
 
 
+def release_commit(files):
+    for path in files:
+        match = re.search(r'/releases/naver-([0-9a-f]{40})/', path)
+        if match:
+            return match.group(1)
+    return None
+
+
+def effective_env(commit, files=()):
+    """compose 가 만드는 유효 environment 의 대역: runtime.env + compose environment + 시험용 덮어쓰기."""
+    env = {}
+    path = config()['root'] + '/etc/metainc/naver-engine/runtime.env'
+    if os.path.exists(path):
+        with open(path) as handle:
+            for line in handle:
+                line = line.rstrip('\n')
+                if line and not line.startswith('#') and '=' in line:
+                    key, _, value = line.partition('=')
+                    env[key] = value
+    env.update({'TZ': 'Asia/Seoul', 'NAVER_ENGINE_DB': '/var/lib/naver-engine/engine.db',
+                'NAVER_ENGINE_SOCKET': '/run/naver-engine/engine.sock'})
+    if any('naver-saved-exports' in f for f in files):
+        env['NAVER_ENGINE_PRODUCT_EXPORT_FILE'] = '/var/lib/naver-product-source/bundle.json'
+    env.update((config().get('env_by_commit') or {}).get(commit or '', {}))
+    return env
+
+
+def engine_volumes(files):
+    volumes = [['/var/lib/metainc/naver-engine', '/var/lib/naver-engine', False],
+               ['/run/metainc/naver-engine', '/run/naver-engine', False],
+               ['/var/backups/metainc/naver-engine', '/var/backups/naver-engine', False],
+               ['/run/metainc-naver-erp-tunnel', '/run/naver-erp-tunnel', True]]
+    if any(f.endswith('naver-engine-backup.override.yml') for f in files):
+        volumes += [['/etc/metainc/naver-engine/backup-recipient.pem', '/run/secrets/naver-backup-recipient.pem', True]]
+    if any('naver-saved-exports' in f for f in files):
+        volumes += [['/var/lib/metainc/naver-product-source', '/var/lib/naver-product-source', True]]
+    return volumes
+
+
+def compose_config(project, files):
+    commit = release_commit(files)
+    change = (config().get('shape_change') or {}).get(commit or '')
+    if project == 'naver-engine':
+        volumes = engine_volumes(files)
+        service = {'user': '10001:10001', 'restart': 'no', 'read_only': True, 'cap_drop': ['ALL'],
+                   'security_opt': ['no-new-privileges:true'], 'tmpfs': ['/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777'],
+                   'environment': effective_env(commit, files)}
+    else:
+        volumes = [['/run/metainc/naver-relay', '/run/naver-relay', False],
+                   ['/run/metainc/naver-engine', '/run/naver-engine', True]]
+        service = {'user': '10001:10001', 'restart': 'no', 'read_only': True, 'network_mode': 'none',
+                   'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'],
+                   'environment': {'TZ': 'Asia/Seoul', 'NAVER_AUTO_WEB': 'on'}}
+    if change == 'data_source' and project == 'naver-engine':
+        volumes[0][0] = '/var/lib/metainc/naver-engine-empty'
+    service['volumes'] = [{'type': 'bind', 'source': src, 'target': dst, 'read_only': ro,
+                           'bind': {'create_host_path': False}} for src, dst, ro in volumes]
+    service['image'] = 'metainc/' + project + ':' + (commit or 'unknown')
+    services = {project: service}
+    if change == 'restart':
+        service['restart'] = 'always'
+    if change == 'extra_service':
+        services['naver-sidecar'] = dict(service)
+    return {'name': project, 'services': services}
+
+
 def create_container(state, project, files):
     tag = None
     for path in files:
@@ -96,13 +162,14 @@ def create_container(state, project, files):
             sys.stderr.write('container running\n')
             sys.exit(1)
         del state['containers'][old]
-    flag = 'true' if config().get('execution_enabled') else 'false'
     identity = new_id(state, 'container')
+    commit = image_commit(state, image)
+    env = effective_env(commit, files) if project == 'naver-engine' else {'TZ': 'Asia/Seoul', 'NAVER_AUTO_WEB': 'on'}
+    shape = compose_config(project, files)['services'][project]
     state['containers'][identity] = {
         'project': project, 'image': image, 'running': False, 'pid': 0, 'started': '0001-01-01T00:00:00Z',
-        'restarts': 0, 'user': '10001:10001', 'inspects': 0,
-        'env': ['TZ=Asia/Seoul', 'NAVER_ENGINE_EXECUTION_ENABLED=' + flag, 'NAVER_ENGINE_INVENTORY_ENABLED=true',
-                'NAVER_AUTO_TOKEN_SECRET=do-not-print']}
+        'restarts': 0, 'user': '10001:10001', 'inspects': 0, 'env': ['%s=%s' % kv for kv in sorted(env.items())],
+        'mounts': [[v['type'], v['source'], v['target'], not v['read_only']] for v in shape['volumes']]}
     return identity
 
 
@@ -120,13 +187,9 @@ def compose(state, args):
             sys.exit(1)
     command = rest[0] if rest else ''
     if command == 'config':
-        return
-    if command == 'run':
-        flag = bool(config().get('execution_enabled'))
-        print(json.dumps({'command': 'check-config', 'configuration': 'valid',
-                          'switches': {'inventory': True, 'execution': flag, 'web': True},
-                          'network_performed': False, 'storage_opened': False, 'credentials_verified': False,
-                          'web_available': False, 'deployment_ready': False}))
+        if config().get('compose_stderr'):
+            sys.stderr.write(config()['compose_stderr'] + '\n')
+        print(json.dumps(compose_config(project, files)))
         return
     if command == 'up' and '--no-start' in rest:
         create_container(state, project, files)
@@ -149,12 +212,13 @@ def inspect_container(state, identity):
             'State': {'Running': container['running'], 'Restarting': False, 'Pid': container['pid'],
                       'StartedAt': container['started'], 'Status': 'running' if container['running'] else 'exited'},
             'Config': {'User': container['user'], 'Env': container['env'], 'Image': container['image'],
-                       'Labels': {'com.docker.compose.project': container['project'],
-                                  'com.docker.compose.service': container['project'],
-                                  'metainc.naver.preview.source': commit or ''}},
+                       'Labels': dict({'com.docker.compose.project': container['project'],
+                                       'com.docker.compose.service': container['project'],
+                                       'metainc.naver.preview.source': commit or ''},
+                                      **(config().get('extra_labels') or {}))},
             'HostConfig': {'RestartPolicy': {'Name': 'no'}, 'NetworkMode': 'default'},
-            'Mounts': [{'Type': 'bind', 'Source': '/var/lib/metainc/naver-engine', 'Destination': '/var/lib/naver-engine',
-                        'RW': True}]}
+            'Mounts': [{'Type': m[0], 'Source': m[1], 'Destination': m[2], 'RW': m[3]}
+                       for m in container.get('mounts') or []]}
 
 
 def docker(args):
@@ -194,6 +258,8 @@ def docker(args):
                 context = rest[0]
                 rest = rest[1:]
         name = 'engine' if 'naver-engine' in tag else 'relay'
+        if config().get('build_stderr'):
+            sys.stderr.write(config()['build_stderr'] + '\n')
         if config().get('build_fail') == name:
             sys.stderr.write('build failed\n')
             sys.exit(1)
@@ -203,6 +269,7 @@ def docker(args):
             if tag in image['tags']:
                 image['tags'].remove(tag)
         identity = new_id(state, 'image')
+        labels.update(config().get('extra_labels') or {})
         state['images'][identity] = {'tags': [tag], 'labels': labels, 'user': '10001:10001', 'schema': schema}
         print(identity)
     elif args[:1] == ['tag']:
@@ -247,6 +314,19 @@ def docker(args):
             info.size = len(body)
             archive.addfile(info, io.BytesIO(body))
         sys.stdout.buffer.write(buffer.getvalue())
+    elif args[:1] == ['run']:
+        # check-config 전용 대역: -e 로 이름만 받은 값을 이 프로세스 환경에서 읽어 제품과 같은 규칙으로 계산한다.
+        names = [args[i + 1] for i, a in enumerate(args) if a == '-e']
+        env = {name: os.environ.get(name, '') for name in names}
+        switches = {}
+        for name in ('sync', 'links', 'morning', 'alerts', 'metrics', 'inventory', 'execution', 'backup', 'web',
+                     'issue_alerts'):
+            switches[name] = env.get('NAVER_ENGINE_%s_ENABLED' % name.upper(), 'false').strip().lower() in ('true', 'on', '1')
+        if config().get('check_stderr'):
+            sys.stderr.write(config()['check_stderr'] + '\n')
+        print(json.dumps({'command': 'check-config', 'configuration': 'valid', 'switches': switches,
+                          'network_performed': False, 'storage_opened': False, 'credentials_verified': False,
+                          'web_available': False, 'deployment_ready': False}))
     elif args[:1] == ['rm']:
         del state['containers'][args[1]]
     elif args[:1] == ['version']:
@@ -304,6 +384,9 @@ def systemctl(args):
     elif args[:1] == ['stop']:
         name = args[1]
         unit = units[name]
+        if name in (config().get('stop_noop') or []):
+            save(state)
+            return
         if unit.get('loaded'):
             project, _ = unit_project(unit['loaded'])
             identity = project_container(state, project)

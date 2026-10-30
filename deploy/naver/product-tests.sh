@@ -4,7 +4,7 @@
 # 비루트, 외부망 없는 namespace, NAVER_SCREEN_REQUIRE_BROWSER=1·NAVER_RELAY_REQUIRE_APP=1 은 호출하는 쪽이 준다).
 #
 # 이 저장소(logic-analysis)는 공개라 Actions 로그도 공개다. 비공개 제품 소스가 traceback 으로 새지
-# 않게 전체 출력은 러너 임시 폴더에만 두고, 로그에는 묶음별 요약과 실패한 시험 이름만 낸다.
+# 않게 전체 출력은 러너 임시 폴더에만 두고, 로그에는 묶음 이름·결과·개수만 낸다.
 #
 # 사용: product-tests.sh <제품 소스 폴더> <출력 폴더>
 set -euo pipefail
@@ -48,7 +48,7 @@ status=0
 export NAVER_SCREEN_SHOTS="$output_dir/screenshots"
 
 run_suite() { # label discover-args...
-  local label=$1 result ran last
+  local label=$1 result ran last failed
   shift
   if python -m unittest discover "$@" -v >"$output_dir/$label.txt" 2>&1; then
     result=통과
@@ -58,10 +58,9 @@ run_suite() { # label discover-args...
   fi
   ran=$(grep -E '^Ran [0-9]+ tests? in ' "$output_dir/$label.txt" | tail -n 1 || true)
   last=$(grep -E '^(OK|FAILED)( |$)' "$output_dir/$label.txt" | tail -n 1 || true)
-  printf '%s: %s · %s · %s\n' "$label" "$result" "${ran:-Ran ?}" "${last:-?}"
-  if [ "$result" = 실패 ]; then
-    grep -E '^(FAIL|ERROR): ' "$output_dir/$label.txt" | head -n 50 || true
-  fi
+  failed=$(grep -cE '^(FAIL|ERROR): ' "$output_dir/$label.txt" || true)
+  # 공개 로그에는 묶음 이름·결과·개수만. 시험 이름·traceback 은 러너의 비공개 출력 폴더에만 남는다.
+  printf '%s: %s · %s · %s · failing=%s\n' "$label" "$result" "${ran:-Ran ?}" "${last:-?}" "${failed:-0}"
 }
 
 run_suite naver_engine-tests -s naver_engine/tests

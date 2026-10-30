@@ -26,6 +26,16 @@ C1 = 'abceeb7375480000000000000000000000000c1c'
 C2 = '2222222222222222222222222222222222222222'
 C3 = '3333333333333333333333333333333333333333'
 C4 = '4444444444444444444444444444444444444444'
+# 공개 출력·로그로 새면 안 되는 합성 비밀값(모든 시험의 가짜 서버에 심는다).
+CANARY_RUNTIME = 'canary-runtime-secret-7f3a'
+CANARY_UNIT = 'canary-unit-secret-91c2'
+CANARY_TUNNEL = 'canary-tunnel-secret-3b77'
+CANARY_OVERRIDE = 'canary-override-secret-5d10'
+CANARY_LABEL = 'canary-label-secret-c0de'
+CANARY_TMPFILES = 'canary-tmpfiles-secret-aa01'
+CANARIES = (CANARY_RUNTIME, CANARY_UNIT, CANARY_TUNNEL, CANARY_OVERRIDE, CANARY_LABEL, CANARY_TMPFILES)
+PRODUCTION_PATHS = ('/var/lib/metainc', '/run/metainc', '/var/backups', '/etc/metainc', 'naver-erp-tunnel',
+                    'saved-exports')
 MUTATING_DOCKER = ('build', 'tag', 'rmi', 'create', 'rm', 'run', 'stop', 'start', 'kill', 'cp')
 MUTATING_SYSTEMCTL = ('start', 'stop', 'restart', 'daemon-reload', 'enable', 'disable', 'reload')
 
@@ -51,10 +61,16 @@ def unit_files(release, companion):
             '[Service]\nType=exec\nUser=root\nGroup=root\nUMask=0077\n'
             'Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin\n'
             'ExecStartPre=/usr/bin/systemd-tmpfiles --create /etc/tmpfiles.d/metainc-naver-preview.conf\n'
+            'Environment=NAVER_FAKE_UNIT_TOKEN=' + CANARY_UNIT + '\n'
             'ExecStart=' + start + '\nExecStop=' + stop + '\nRestart=always\nRestartSec=10s\n'
             'TimeoutStopSec=70s\nStandardOutput=null\nStandardError=null\n\n'
             '[Install]\nWantedBy=multi-user.target\n')
     return files
+
+
+RUNTIME_ENV_BODY = ('NAVER_ENGINE_EXECUTION_ENABLED=false\nNAVER_ENGINE_INVENTORY_ENABLED=false\n'
+                    'NAVER_AUTO_TOKEN_SECRET=' + CANARY_RUNTIME + '\n')
+TUNNEL_UNIT_BODY = '[Service]\nEnvironment=TUNNEL_TOKEN=' + CANARY_TUNNEL + '\nExecStart=/usr/bin/ssh tunnel\n'
 
 
 def source_files(commit, schema, extra=None):
@@ -107,7 +123,7 @@ class FakeHost:
                 handle.write('#!%s\nimport sys\nsys.path.insert(0, %r)\nimport fakehost\nfakehost.main(%r)\n'
                              % (sys.executable, self.bin, tool))
             os.chmod(path, 0o755)
-        self.config = {'root': self.root}
+        self.config = {'root': self.root, 'extra_labels': {'vendor.secret': CANARY_LABEL}}
         self.write_config()
         self.state = {'images': {}, 'containers': {}, 'units': {}, 'seq': 100, 'clock': 0}
         self.build_host()
@@ -138,14 +154,16 @@ class FakeHost:
         self.file(release + '/preview-engine.override.yml',
                   'services:\n  naver-engine:\n    image: metainc/naver-engine:%s\n' % C0, 0o600)
         self.file(release + '/preview-relay.override.yml',
-                  'services:\n  naver-relay:\n    image: metainc/naver-relay:%s\n    environment:\n      NAVER_AUTO_WEB: "on"\n' % C0, 0o600)
+                  'services:\n  naver-relay:\n    image: metainc/naver-relay:%s\n    environment:\n      NAVER_AUTO_WEB: "on"\n'
+                  '      NAVER_FAKE_OVERRIDE_TOKEN: "%s"\n' % (C0, CANARY_OVERRIDE), 0o600)
         self.file(COMPANION, '{"services":{"naver-engine":{}}}\n')
         units = unit_files(release, COMPANION)
         for name, body in units.items():
             self.file('/etc/systemd/system/' + name, body)
-        self.file('/etc/systemd/system/metainc-naver-erp-tunnel.service', '[Service]\nExecStart=/usr/bin/ssh tunnel\n')
-        self.file('/etc/tmpfiles.d/metainc-naver-preview.conf', 'd /run/metainc 0755 root root -\n')
-        self.file('/etc/metainc/naver-engine/runtime.env', 'NAVER_ENGINE_EXECUTION_ENABLED=false\nSECRET=x\n', 0o600)
+        self.file('/etc/systemd/system/metainc-naver-erp-tunnel.service', TUNNEL_UNIT_BODY)
+        self.file('/etc/tmpfiles.d/metainc-naver-preview.conf',
+                  'd /run/metainc 0755 root root -\nf /etc/fake 0600 root root - %s\n' % CANARY_TMPFILES)
+        self.file('/etc/metainc/naver-engine/runtime.env', RUNTIME_ENV_BODY, 0o600)
         self.file('/etc/nginx/nginx.conf', 'user www-data;\n')
         self.file('/var/lib/metainc/naver-engine/engine.db', 'SQLite format 3\0' + 'x' * 4000, 0o640)
         self.file('/var/lib/metainc/naver-engine/engine.db-wal', 'wal' * 100, 0o640)
@@ -161,18 +179,17 @@ class FakeHost:
         unrelated = 'sha256:' + 'f' * 64
         self.state['images'][unrelated] = {'tags': ['metainc/naver-engine:local-review'], 'user': '10001:10001',
                                            'labels': {}, 'schema': 21}
-        for number, name in enumerate(('engine', 'relay')):
-            identity = hashlib.sha256(('old-container-' + name).encode()).hexdigest()
-            self.state['containers'][identity] = {
-                'project': 'naver-' + name, 'image': images[name], 'running': True, 'pid': 500 + number,
-                'started': '2026-10-29T00:00:0%d.000000Z' % number, 'restarts': 0, 'user': '10001:10001',
-                'env': ['NAVER_ENGINE_EXECUTION_ENABLED=false', 'NAVER_AUTO_TOKEN_SECRET=do-not-print']}
+        for name in ('engine', 'relay'):
             self.state['units']['metainc-naver-%s.service' % name] = {
-                'active': 'active', 'pid': 600 + number, 'enabled': 'enabled', 'loaded': units['metainc-naver-%s.service' % name]}
+                'active': 'inactive', 'pid': 0, 'enabled': 'enabled', 'loaded': units['metainc-naver-%s.service' % name]}
         self.state['units']['docker.service'] = {'active': 'active', 'pid': 1}
         self.state['units']['metainc-naver-erp-tunnel.service'] = {'active': 'active', 'pid': 2}
         self.old_images = images
         self.save_state()
+        # 지금 운영처럼 두 서비스를 가짜 systemd 로 띄운다(컨테이너 env·mount 가 가짜 compose 설정과 같아진다).
+        for name in ('engine', 'relay'):
+            subprocess.run([os.path.join(self.bin, 'systemctl'), 'start', 'metainc-naver-%s.service' % name], check=True)
+        self.clear_calls()
 
     def save_state(self):
         with open(os.path.join(self.bin, 'state.json'), 'w') as handle:
@@ -212,6 +229,18 @@ class FakeHost:
     def deploy(self, commit, schema=21, extra=None):
         return self.run('deploy', commit, self.tar(commit, schema, extra))
 
+    def deploy_logged(self, commit, schema=21, extra=None):
+        """workflow 처럼 --log/--result 로 실행. (stdout, 서버 비공개 로그, 결과 줄, 명령 로그들) 을 돌려준다."""
+        log, result = os.path.join(self.base, 'deploy.log'), os.path.join(self.base, 'result.json')
+        done = self.run('deploy', commit, self.tar(commit, schema, extra), '--log', log, '--result', result)
+        private = ''
+        for folder, _, files in os.walk(self.root + '/var/lib/metainc/naver-deploy'):
+            for name in files:
+                if name.startswith('commands'):
+                    with open(os.path.join(folder, name), errors='replace') as handle:
+                        private += handle.read()
+        return done, read_text(log), read_text(result), private
+
     def tree(self):
         result = {}
         for folder, children, files in os.walk(self.root):
@@ -238,6 +267,13 @@ class FakeHost:
     def deploy_state(self):
         with open(self.root + '/var/lib/metainc/naver-deploy/state.json') as handle:
             return json.load(handle)
+
+
+def read_text(path):
+    if not os.path.exists(path):
+        return ''
+    with open(path, errors='replace') as handle:
+        return handle.read()
 
 
 def result_of(done):
@@ -280,13 +316,12 @@ class DeployScriptTest(unittest.TestCase):
         self.assertEqual(units['metainc-naver-relay.service']['active'], 'active')
 
     def assert_untouched_secrets(self):
-        self.assertEqual(self.host.read('/etc/metainc/naver-engine/runtime.env'),
-                         'NAVER_ENGINE_EXECUTION_ENABLED=false\nSECRET=x\n')
+        self.assertEqual(self.host.read('/etc/metainc/naver-engine/runtime.env'), RUNTIME_ENV_BODY)
         self.assertEqual(self.host.read('/etc/nginx/nginx.conf'), 'user www-data;\n')
-        self.assertEqual(self.host.read('/etc/systemd/system/metainc-naver-erp-tunnel.service'),
-                         '[Service]\nExecStart=/usr/bin/ssh tunnel\n')
+        self.assertEqual(self.host.read('/etc/systemd/system/metainc-naver-erp-tunnel.service'), TUNNEL_UNIT_BODY)
         self.assertEqual(self.host.read(COMPANION), '{"services":{"naver-engine":{}}}\n')
         self.assertFalse(any(call[0] == 'sqlite3' for call in self.host.calls()))
+        self.assertEqual(self.host.read('/etc/tmpfiles.d/metainc-naver-preview.conf').count(CANARY_TMPFILES), 1)
 
     # ── 1. 정상 배포 ──
     def test_happy_deploy(self):
@@ -296,7 +331,8 @@ class DeployScriptTest(unittest.TestCase):
         result = result_of(done)
         self.assertEqual(result['status'], 'DEPLOYED')
         self.assertEqual(result['previous_commit'], C0)
-        self.assertNotIn('do-not-print', self.output(done))
+        for canary in CANARIES:
+            self.assertNotIn(canary, self.output(done))
         for name, count in (('engine', 6), ('relay', 4)):
             body = self.host.read('/etc/systemd/system/metainc-naver-%s.service' % name)
             self.assertEqual(body.count(C1), count)
@@ -332,7 +368,8 @@ class DeployScriptTest(unittest.TestCase):
                          ['engine.db', 'engine.db-wal'])
         # 라벨 없는 옛 이미지는 컨테이너를 시작하지 않고 store.py 만 복사해 스키마를 읽었다.
         self.index(calls, ['docker', 'create', '--network', 'none'])
-        self.assertFalse(any(c[:2] == ['docker', 'run'] for c in calls))
+        runs = [c for c in calls if c[:2] == ['docker', 'run']]
+        self.assertEqual(len(runs), 1)  # check-config 전용 격리 컨테이너 하나
 
     # ── 2. 헬스 실패 → 자동 복원 ──
     def test_health_failure_restores_previous(self):
@@ -361,6 +398,7 @@ class DeployScriptTest(unittest.TestCase):
         self.assertEqual(units['metainc-naver-engine.service']['active'], 'inactive')
         self.assertEqual(units['metainc-naver-relay.service']['active'], 'inactive')
         self.assertEqual(self.host.deploy_state()['phase'], 'restore_failed')
+        self.assertEqual(result_of(done)['services_stopped_confirmed'], 'true')
         # unit 파일과 이미지 태그는 직전 판으로 되돌려져 있다.
         for name, body in self.original_units.items():
             self.assertEqual(self.host.read('/etc/systemd/system/' + name), body)
@@ -387,7 +425,7 @@ class DeployScriptTest(unittest.TestCase):
         self.assertFalse(any(c[:2] == ['docker', 'build'] for c in self.host.calls()))
 
     def test_execution_enabled_refused(self):
-        self.host.set(execution_enabled=True)
+        self.host.set(env_by_commit={C1: {'NAVER_ENGINE_EXECUTION_ENABLED': 'true'}})
         before = self.host.tree()
         done = self.host.deploy(C1)
         self.assert_refused_without_change(done, before)
@@ -429,21 +467,152 @@ class DeployScriptTest(unittest.TestCase):
             tool, args = call[0], call[1:]
             self.assertNotIn(tool, ('cp', 'sqlite3', 'flock'), call)
             if tool == 'systemctl':
-                self.assertIn(args[0], ('show', 'cat', '--version'), call)
+                self.assertIn(args[0], ('show', '--version'), call)  # systemctl cat(원문)도 쓰지 않는다
             if tool == 'docker':
                 self.assertFalse(args[0] in MUTATING_DOCKER, call)
                 if args[0] == 'compose':
                     self.assertEqual(args[1:], ['version', '--short'], call)
-        line = [x for x in self.output(done).splitlines() if x.startswith('NAVER_DEPLOY_INSPECT=')][0]
-        report = json.loads(line.split('=', 1)[1])
-        self.assertEqual(report['layout']['engine']['commit'], C0)
-        self.assertEqual(report['layout']['engine']['companion'], COMPANION)
+        lines = self.output(done).splitlines()
+        self.assertEqual(len(lines), 1)
+        report = json.loads(lines[0].split('NAVER_DEPLOY_INSPECT=', 1)[1])
+        shape = report['unit_shapes']['engine']
+        self.assertTrue(shape['shape_ok'])
+        self.assertEqual(shape['commit'], C0)
+        self.assertEqual(shape['companion'], COMPANION)
+        self.assertEqual(shape['commit_count'], 6)
+        self.assertEqual(shape['environment_lines'], 2)
         self.assertEqual(report['current_release']['schema_version'], 21)
-        self.assertIn('engine.db', report['data_dir_ls']['out'])
-        self.assertEqual(report['containers']['naver-engine']['containers'][0]['execution_enabled'], 'false')
-        self.assertNotIn('do-not-print', line)
-        for key in ('units', 'tmpfiles_conf', 'releases', 'images', 'df', 'id'):
+        self.assertEqual(report['current_release']['overrides']['relay']['image'], 'metainc/naver-relay:' + C0)
+        self.assertIn('services.naver-relay.environment.NAVER_FAKE_OVERRIDE_TOKEN',
+                      report['current_release']['overrides']['relay']['keys'])  # 이름만, 값은 없음
+        self.assertEqual(report['tmpfiles_conf'], {'readable': True, 'other_lines': 1,
+                                                   'directories': [['/run/metainc', '0755', 'root', 'root']]})
+        self.assertIn('engine.db', [e['name'] for e in report['data_dir']['entries']])
+        engine = report['containers']['naver-engine'][0]
+        self.assertIn('execution=false', engine['switches'])
+        self.assertEqual(engine['labels']['other_label_count'], 1)
+        self.assertEqual(report['units']['metainc-naver-erp-tunnel.service']['ActiveState'], 'active')
+        for key in ('units', 'tmpfiles_conf', 'releases', 'images', 'disk', 'id', 'tools', 'deploy_state'):
             self.assertIn(key, report)
+
+    # ── 1(P1). 공개 출력에 원문·비밀값이 섞이지 않는다 ──
+    def test_inspect_prints_no_raw_text_or_canary(self):
+        done = self.host.run('inspect')
+        self.assertExit(done, 0)
+        out = self.output(done)
+        for canary in CANARIES:
+            self.assertNotIn(canary, out)
+        for raw in ('Environment=', 'ExecStart=', 'NAVER_AUTO_WEB: "on"', 'TUNNEL_TOKEN', 'vendor.secret'):
+            self.assertNotIn(raw, out)
+
+    def assert_no_canary(self, *texts):
+        for text in texts:
+            for canary in CANARIES:
+                self.assertNotIn(canary, text)
+
+    def test_deploy_outputs_and_private_logs_have_no_canary(self):
+        done, log, result, private = self.host.deploy_logged(C1)
+        self.assertExit(done, 0)
+        self.assertEqual(self.output(done), '')  # --log 일 때 표준출력은 비어 있다
+        self.assertEqual(json.loads(result)['status'], 'DEPLOYED')
+        calls = read_text(os.path.join(self.host.bin, 'calls.log'))
+        self.assert_no_canary(log, result, private, calls)
+
+    # ── 2(P1). 빌드·compose 원문 stderr 는 비공개 명령 로그에만 ──
+    def test_build_stderr_stays_private(self):
+        canary = 'canary-private-build-stderr-1234'
+        self.host.set(build_fail='engine', build_stderr=canary)
+        done, log, result, private = self.host.deploy_logged(C1)
+        self.assertExit(done, 10)
+        self.assertEqual(json.loads(result)['reason'], 'BUILD_FAILED')
+        self.assertIn(canary, private)
+        for public in (self.output(done), result, log):
+            self.assertNotIn(canary, public)
+
+    def test_compose_and_check_stderr_stay_private(self):
+        canaries = ('canary-compose-stderr-5678', 'canary-check-stderr-9abc')
+        self.host.set(compose_stderr=canaries[0], check_stderr=canaries[1])
+        done, log, result, private = self.host.deploy_logged(C1)
+        self.assertExit(done, 0)
+        for canary in canaries:
+            self.assertIn(canary, private)
+            for public in (self.output(done), result, log):
+                self.assertNotIn(canary, public)
+
+    def test_result_line_is_fixed_format(self):
+        done = self.host.deploy(C1, schema=22)
+        result = result_of(done)
+        self.assertEqual(set(result), {
+            'database_opened_by_deploy', 'db_backup', 'downtime_seconds', 'exit_code', 'health_codes', 'health_status',
+            'message', 'mode', 'new_commit', 'new_engine_image', 'new_relay_image', 'phase', 'previous_commit',
+            'previous_engine_image', 'previous_relay_image', 'reason', 'runtime_env_changed_by_deploy',
+            'schema_current', 'schema_new', 'services_stopped_confirmed', 'switches', 'status', 'warnings'})
+        self.assertEqual((result['reason'], result['schema_current'], result['schema_new']), ('SCHEMA_CHANGED', '21', '22'))
+        self.assertEqual(result['message'], '시작 전 거부. 서비스는 그대로')
+
+    # ── 3(P1). check-config 컨테이너에는 운영 mount 가 없다 ──
+    def test_check_config_container_has_no_production_mounts(self):
+        done = self.host.deploy(C1)
+        self.assertExit(done, 0)
+        runs = [c for c in self.host.calls() if c[:2] == ['docker', 'run']]
+        self.assertEqual(len(runs), 1)
+        args = runs[0][2:]
+        for flag in ('-v', '--volume', '--mount', '--volumes-from', '--env-file', '--privileged'):
+            self.assertNotIn(flag, args)
+        joined = ' '.join(args)
+        for path in PRODUCTION_PATHS:
+            self.assertNotIn(path, joined)
+        for pair in (['--network', 'none'], ['--user', '10001:10001'], ['--cap-drop', 'ALL']):
+            self.assertIn(pair, [args[i:i + 2] for i in range(len(args) - 1)])
+        self.assertIn('--read-only', args)
+        tmpfs = [args[i + 1] for i, a in enumerate(args) if a == '--tmpfs']
+        self.assertEqual([t.split(':')[0] for t in tmpfs], ['/tmp', '/var/lib/naver-engine'])
+        env_names = [args[i + 1] for i, a in enumerate(args) if a == '-e']
+        self.assertIn('NAVER_AUTO_TOKEN_SECRET', env_names)  # 이름만 넘기고 값은 명령줄에 없다
+        self.assertTrue(all('=' not in name for name in env_names))
+        self.assertNotIn(CANARY_RUNTIME, joined)
+        self.assertEqual(args[-5:], ['python', '-B', '-m', 'naver_runtime', 'check-config'])
+        self.assertRegex(args[-6], r'^sha256:[0-9a-f]{64}$')
+
+    # ── 4(P1). 관제 설정 묶음(mount·user·restart·서비스 목록)이 바뀌면 멈추기 전에 거부 ──
+    def test_compose_shape_changes_refused(self):
+        for change in ('data_source', 'restart', 'extra_service'):
+            with self.subTest(change=change):
+                self.host.set(shape_change={C1: change})
+                self.host.clear_calls()
+                before = self.host.tree()
+                done = self.host.deploy(C1)
+                self.assert_refused_without_change(done, before)
+                self.assertEqual(result_of(done)['reason'], 'CONFIG_SHAPE_CHANGED')
+        self.host.set(shape_change={})
+        self.assertExit(self.host.deploy(C1), 0)
+
+    # ── 5(P2). 유효 스위치 보존: 현재 false 인 inventory 가 새 판에서 true 가 되면 거부 ──
+    def test_runtime_flag_change_refused(self):
+        self.host.set(env_by_commit={C1: {'NAVER_ENGINE_INVENTORY_ENABLED': 'true'}})
+        before = self.host.tree()
+        done = self.host.deploy(C1)
+        self.assert_refused_without_change(done, before)
+        result = result_of(done)
+        self.assertEqual(result['reason'], 'FLAGS_CHANGED')
+        self.assertIn('inventory=false', result['switches'])
+
+    def test_switches_recorded_and_kept_after_restore(self):
+        self.host.set(health_fail=[C1])
+        done = self.host.deploy(C1)
+        self.assertExit(done, 2)
+        self.assertIn('inventory=false', self.host.deploy_state()['switches'])
+        env = self.host.running('naver-engine')['env']
+        self.assertIn('NAVER_ENGINE_INVENTORY_ENABLED=false', env)
+
+    # ── 6. 복원 실패 시 정지가 실제로 확인됐는지 따로 보고 ──
+    def test_restore_failure_reports_unconfirmed_stop(self):
+        self.host.set(stop_noop=['metainc-naver-relay.service'])
+        done = self.host.deploy(C1)
+        self.assertExit(done, 4)
+        result = result_of(done)
+        self.assertEqual((result['status'], result['services_stopped_confirmed']), ('RESTORE_FAILED', 'false'))
+        self.assertEqual(self.host.deploy_state()['stopped_confirmed'], 'false')
 
     # ── 5. 동시 실행 방지 ──
     def test_lock_conflict(self):
@@ -543,6 +712,29 @@ class WorkflowConsistencyTest(unittest.TestCase):
         for line in workflow.splitlines():
             if 'uses:' in line:
                 self.assertRegex(line, r'@[0-9a-f]{40}\b', line)
+
+    def test_workflow_publishes_only_fixed_summaries(self):
+        with open(os.path.normpath(WORKFLOW)) as handle:
+            workflow = handle.read()
+        # 비공개 제품 빌드·설치 원문은 러너 비공개 파일로만 간다.
+        build = workflow[workflow.index('docker build --quiet'):]
+        build = build[:build.index('|| rc=$?')]
+        self.assertIn('> "$RUNNER_TEMP/private/build-$name.log" 2>&1', build)
+        self.assertIn('"$@" > "$RUNNER_TEMP/private/$name.log" 2>&1', workflow)
+        for command in ('python -m pip install', 'npm install', 'playwright" install'):
+            line = [l for l in workflow.splitlines() if command in l][0]
+            self.assertTrue(line.strip().startswith('step '), line)
+        self.assertIn('product-tests.sh" 2> "$RUNNER_TEMP/private/product-tests.stderr"', workflow)
+        # 서버 단계: 서버 로그 원문을 흘리지 않고 결과 한 줄·단계 이름만 낸다.
+        ssh = workflow[workflow.index('appleboy/ssh-action'):]
+        for forbidden in ('sed -n', 'tail ', 'cat "$work/deploy.log"', 'wc -l < "$work/deploy.log"'):
+            self.assertNotIn(forbidden, ssh)
+        self.assertIn('out=$(bash "$incoming/naver-deploy.sh" inspect 2>/dev/null)', ssh)
+        self.assertIn("grep '^NAVER_DEPLOY_INSPECT={'", ssh)
+        self.assertIn("printf 'NAVER_DEPLOY_RESULT=%s\\n' \"$line\"", ssh)
+        with open(os.path.join(os.path.dirname(HERE), 'product-tests.sh')) as handle:
+            product = handle.read()
+        self.assertNotIn("grep -E '^(FAIL|ERROR): ' \"$output_dir/$label.txt\" | head", product)
 
     def test_deploy_paths_ignored_by_logic_analysis_deploy(self):
         path = os.path.normpath(os.path.join(os.path.dirname(WORKFLOW), 'deploy.yml'))

@@ -14,7 +14,10 @@
 #   - engine.db* 는 제자리 보존. 엔진이 멈춘 동안에만 파일 복사(최근 3벌).
 #     sqlite 로 DB 를 열지 않는다.
 #   - runtime.env, nginx, ERP 터널 unit, 다른 앱, saved-exports companion 은 건드리지 않는다.
-#   - execution_enabled 는 false 여야 한다.
+#   - execution_enabled 는 false 여야 하고, 실행 중 판의 유효 스위치(inventory 등)와 새 판이 같아야 한다.
+#   - check-config 는 운영 data·socket·backup·tunnel mount 없이(네트워크 없음·읽기 전용·10001) 돌린다.
+#   - compose 설정 묶음(서비스 목록·mount·user 10001·restart no 등)이 직전과 같아야 한다.
+#   - 공개 로그로는 고정 형식 결과 한 줄만 나간다. 명령 원문 출력은 서버의 비공개 로그에만 쓴다.
 #   - 제품 SCHEMA_VERSION 이 지금 돌고 있는 판과 다르면 거부한다(우회 입력 없음).
 #   - 헬스체크: engine /_engine/health 200, relay /naver/ 200, /api/naver-auto/me 401,
 #     그 뒤 60초 동안 unit active + 컨테이너 RestartCount 0 + StartedAt 불변.
@@ -329,22 +332,146 @@ def container_info():
         config.get('User') or '-')))
 
 
-def check_config():
-    raw = sys.stdin.read().strip().splitlines()
-    if not raw:
-        fail('check-config 출력이 없습니다')
+SWITCHES = ('sync', 'links', 'morning', 'alerts', 'metrics', 'inventory', 'execution', 'backup', 'web',
+            'issue_alerts')
+ENV_NAME = re.compile(r'[A-Z][A-Z0-9_]{0,63}\Z')
+RESERVED_ENV = {'PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL', 'USER'}
+CHECK_DATA_TMPFS = '/var/lib/naver-engine:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700'
+
+
+def canonical(values):
+    return ','.join('%s=%s' % (name, 'true' if values[name] else 'false') for name in SWITCHES)
+
+
+def env_to_map(items):
+    result = {}
+    for item in items or []:
+        key, sep, value = str(item).partition('=')
+        if not sep or key in result:
+            fail('FLAGS: 컨테이너 환경 변수 형식이 이상합니다')
+        result[key] = value
+    return result
+
+
+def switches_from_env(env):
+    """제품 naver_runtime/config.py _flag 와 같은 규칙으로 유효 스위치를 구한다(값은 출력하지 않는다)."""
+    values = {}
+    for name in SWITCHES:
+        raw = str(env.get('NAVER_ENGINE_%s_ENABLED' % name.upper(), 'false')).strip().lower()
+        if raw in ('false', 'off', '0', ''):
+            values[name] = False
+        elif raw in ('true', 'on', '1'):
+            values[name] = True
+        else:
+            fail('FLAGS: %s 스위치 값이 참/거짓이 아닙니다' % name)
+    return values
+
+
+def env_switches():
+    rows = json.load(sys.stdin)
+    if not isinstance(rows, list) or len(rows) != 1:
+        fail('FLAGS: 컨테이너 정보 형식 오류')
+    print(canonical(switches_from_env(env_to_map(((rows[0].get('Config') or {}).get('Env'))))))
+
+
+def container_mounts():
+    rows = json.load(sys.stdin)
+    if not isinstance(rows, list) or len(rows) != 1:
+        fail('MOUNTS: 컨테이너 정보 형식 오류')
+    mounts = sorted([str(m.get('Type')), str(m.get('Source')), str(m.get('Destination')), bool(m.get('RW'))]
+                    for m in rows[0].get('Mounts') or [])
+    print(json.dumps(mounts, separators=(',', ':')))
+
+
+def compose_shape():
+    """compose config(JSON)에서 관제의 작은 설정 묶음만 뽑는다. environment(비밀값 포함)는 읽지 않는다."""
+    data = json.load(sys.stdin)
+    services = data.get('services') if isinstance(data, dict) else None
+    if not isinstance(services, dict) or not services:
+        fail('COMPOSE_SHAPE: services 가 없습니다')
+    shape = {}
+    for name in sorted(services):
+        service = services[name] or {}
+        volumes = []
+        for volume in service.get('volumes') or []:
+            if not isinstance(volume, dict):
+                fail('COMPOSE_SHAPE: 긴 형식이 아닌 volume 이 있습니다')
+            volumes.append([volume.get('type'), volume.get('source'), volume.get('target'),
+                            bool(volume.get('read_only', False)),
+                            bool((volume.get('bind') or {}).get('create_host_path', True))])
+        tmpfs = service.get('tmpfs') or []
+        if isinstance(tmpfs, str):
+            tmpfs = [tmpfs]
+        shape[name] = {'user': service.get('user'), 'restart': service.get('restart'),
+                       'network_mode': service.get('network_mode'), 'read_only': bool(service.get('read_only', False)),
+                       'volumes': sorted(volumes, key=json.dumps), 'tmpfs': sorted(tmpfs),
+                       'cap_drop': sorted(service.get('cap_drop') or []),
+                       'security_opt': sorted(service.get('security_opt') or [])}
+    print(json.dumps(shape, sort_keys=True, separators=(',', ':')))
+
+
+def shape_diff(old, new):
+    old, new = json.loads(old), json.loads(new)
+    problems = []
+    if sorted(old) != sorted(new):
+        problems.append('services')
+    for name in sorted(set(old) & set(new)):
+        for key in sorted(set(old[name]) | set(new[name])):
+            if old[name].get(key) != new[name].get(key):
+                problems.append(name + '.' + key)
+    for name, service in new.items():
+        if service.get('user') != '10001:10001':
+            problems.append(name + '.user!=10001:10001')
+        if service.get('restart') != 'no':
+            problems.append(name + '.restart!=no')
+    if problems:
+        fail('CONFIG_SHAPE_CHANGED: ' + ', '.join(sorted(set(problems))))
+
+
+def check_config_run(image, private_log):
+    """새 이미지로 check-config 를 운영 data·socket·backup·tunnel mount 없이 돌린다.
+    환경 값은 docker 클라이언트 환경으로만 넘기고(-e 이름), 명령줄·로그에 값이 남지 않는다."""
+    if not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
+        fail('CHECK_CONFIG: 이미지 ID 형식 오류')
+    data = json.load(sys.stdin)
+    service = ((data.get('services') or {}).get('naver-engine')) if isinstance(data, dict) else None
+    if not isinstance(service, dict):
+        fail('CHECK_CONFIG: naver-engine 서비스가 없습니다')
+    environment = service.get('environment') or {}
+    if isinstance(environment, list):
+        environment = env_to_map(environment)
+    argv = ['docker', 'run', '--rm', '--network', 'none', '--read-only', '--user', '10001:10001',
+            '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--pids-limit', '64',
+            '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777', '--tmpfs', CHECK_DATA_TMPFS,
+            '--label', 'metainc.naver.check-config=1']
+    child = {'PATH': os.environ.get('PATH', '/usr/sbin:/usr/bin:/sbin:/bin'), 'LANG': 'C'}
+    for key in sorted(environment):
+        value = environment[key]
+        if value is None:
+            continue
+        if not ENV_NAME.match(key) or key in RESERVED_ENV or key.startswith(('DOCKER_', 'COMPOSE_', 'BUILDKIT_')):
+            fail('CHECK_CONFIG: 넘길 수 없는 환경 변수 이름이 있습니다')
+        argv += ['-e', key]
+        child[key] = str(value)
+    argv += [image, 'python', '-B', '-m', 'naver_runtime', 'check-config']
+    done = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=child, timeout=180)
+    with open(private_log, 'ab') as handle:
+        handle.write(b'[check-config] exit %d\n' % done.returncode)
+        handle.write(done.stderr[-20000:])
+    if done.returncode:
+        fail('CHECK_CONFIG: check-config 종료 코드 %d' % done.returncode)
+    lines = done.stdout.decode('utf-8', 'replace').strip().splitlines()
     try:
-        value = json.loads(raw[-1])
-    except ValueError:
-        fail('check-config 출력이 JSON 이 아닙니다')
-    if (not isinstance(value, dict) or value.get('command') != 'check-config' or value.get('configuration') != 'valid'
+        value = json.loads(lines[-1])
+    except (ValueError, IndexError):
+        fail('CHECK_CONFIG: 출력이 JSON 이 아닙니다')
+    switches = value.get('switches') if isinstance(value, dict) else None
+    if (value.get('command') != 'check-config' or value.get('configuration') != 'valid'
             or value.get('storage_opened') is not False or value.get('network_performed') is not False
-            or not isinstance(value.get('switches'), dict)):
-        fail('check-config 결과가 예상과 다릅니다')
-    execution = value['switches'].get('execution')
-    if execution is not False:
-        fail('EXECUTION_ENABLED: 새 판의 execution 스위치가 false 가 아닙니다(%r)' % (execution,))
-    print('inventory=%s execution=false' % str(value['switches'].get('inventory')).lower())
+            or not isinstance(switches, dict) or set(switches) != set(SWITCHES)
+            or any(type(v) is not bool for v in switches.values())):
+        fail('CHECK_CONFIG: 결과가 예상과 다릅니다')
+    print(canonical(switches))
 
 
 def state_write(path, *pairs):
@@ -456,157 +583,326 @@ def tree_sha(folder):
     print(digest.hexdigest())
 
 
+RESULT_FIELDS = {
+    'mode': r'(inspect|deploy)', 'status': r'[A-Z_]{1,40}', 'exit_code': r'[0-9]{1,3}', 'reason': r'[A-Z_]{0,40}',
+    'message': None, 'phase': r'[a-z_]{1,24}', 'new_commit': r'[0-9a-f]{40}|', 'previous_commit': r'[0-9a-f]{40}|',
+    'new_engine_image': r'sha256:[0-9a-f]{64}|', 'new_relay_image': r'sha256:[0-9a-f]{64}|',
+    'previous_engine_image': r'sha256:[0-9a-f]{64}|', 'previous_relay_image': r'sha256:[0-9a-f]{64}|',
+    'db_backup': r'/var/backups/metainc/naver-deploy-db/[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}|',
+    'downtime_seconds': r'[0-9]{0,6}', 'health_status': r'[a-z_]{0,32}',
+    'health_codes': r'(engine=[0-9]{3},page=[0-9]{3},me=[0-9]{3})?', 'schema_current': r'[0-9]{0,6}',
+    'schema_new': r'[0-9]{0,6}', 'switches': r'([a-z_]+=(true|false),?){0,12}', 'warnings': r'[A-Z_,]{0,400}',
+    'services_stopped_confirmed': r'(true|false)?', 'database_opened_by_deploy': r'false',
+    'runtime_env_changed_by_deploy': r'false'}
+# 공개 로그로 나가는 유일한 줄. 모든 값은 위 형식만 통과하고, message 는 고정 문구표에서만 고른다.
+MESSAGES = {
+    'DEPLOYED': '배포 완료(헬스·60초 유지 통과)', 'DEPLOYED_WITH_WARNINGS': '배포 완료(헬스 통과), 마무리 경고 있음',
+    'DEPLOY_FAILED_RESTORED': '새 판 실패 → 직전 판 복원·헬스 통과', 'RECOVERED_INTERRUPTED_RUN':
+    '중단된 이전 배포를 직전 판으로 복원함. 다시 실행 필요', 'RESTORE_FAILED': '복원 실패. 두 서비스 정지 시도. 사람 확인 필요',
+    'REFUSED': '시작 전 거부. 서비스는 그대로', 'LOCKED': '다른 관제 배포 실행 중', 'EXITED': '예상하지 못한 종료'}
+
+
 def result_json(*pairs):
-    data, extra = {}, {}
+    data = {}
     for pair in pairs:
         key, _, value = pair.partition('=')
-        if key.startswith('json:'):
-            try:
-                extra[key[5:]] = json.loads(value) if value else None
-            except ValueError:
-                extra[key[5:]] = value
-        elif key == 'exit_code':
-            data[key] = int(value)
-        else:
-            data[key] = value
-    data.update(extra)
+        pattern = RESULT_FIELDS.get(key, False)
+        if pattern is False:
+            continue
+        if pattern is not None and not re.fullmatch(pattern, value):
+            value = 'invalid'
+        data[key] = int(value) if key == 'exit_code' and value.isdigit() else value
+    data['message'] = MESSAGES.get(data.get('status'), '')
     print(json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(',', ':')))
 
 
-# ── inspect: 읽기 전용 명령만 실행한다 ───────────────────────────────────────
-def run(argv, limit=20000):
+def prune_logs(folder, keep):
+    names = sorted(name for name in os.listdir(folder) if re.fullmatch(r'commands-[0-9]{8}T[0-9]{6}Z\.log', name))
+    for name in names[:-int(keep)] if len(names) > int(keep) else []:
+        os.unlink(os.path.join(folder, name))
+
+
+# ── inspect: 읽기 전용. 원문(unit·override·label·Env)은 내보내지 않고 정해진 사실만 낸다 ──────────
+SAFE_NAME = re.compile(r'[A-Za-z0-9_.@-]{1,128}\Z')
+SAFE_PATH = re.compile(r'/[A-Za-z0-9_./-]{0,250}\Z')
+IMAGE_ID = re.compile(r'sha256:[0-9a-f]{64}\Z')
+STAMP = re.compile(r'[0-9]{4}-?[0-9]{2}-?[0-9]{2}T[0-9:.]{6,20}Z?\Z')
+PHASES = {'init', 'preflight', 'preparing', 'building', 'prepared', 'stopping', 'backing_up', 'switching', 'starting',
+          'verifying', 'done', 'restoring', 'restored', 'restore_failed', 'aborted_before_stop'}
+
+
+def pick(value, pattern):
+    if value is None:
+        return None
+    value = str(value)
+    return value if pattern.match(value) else 'unexpected'
+
+
+def run(argv):
     try:
-        done = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-    except Exception as error:
-        return {'rc': None, 'error': type(error).__name__}
-    result = {'rc': done.returncode, 'out': done.stdout.decode('utf-8', 'replace')[-limit:]}
-    if done.returncode:
-        result['err'] = done.stderr.decode('utf-8', 'replace')[-2000:]
-    return result
+        done = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+    except Exception:
+        return None
+    return done.stdout.decode('utf-8', 'replace') if done.returncode == 0 else None
 
 
 def show(unit):
-    fields = 'Id,ActiveState,SubState,MainPID,UnitFileState,NRestarts,FragmentPath,DropInPaths,ExecMainStartTimestamp,NeedDaemonReload'
-    done = run(['systemctl', 'show', unit, '-p', fields])
-    if done.get('rc') != 0:
-        return done
-    return dict(line.split('=', 1) for line in done['out'].splitlines() if '=' in line)
+    fields = ('ActiveState', 'SubState', 'MainPID', 'UnitFileState', 'NRestarts', 'FragmentPath', 'DropInPaths',
+              'NeedDaemonReload')
+    out = run(['systemctl', 'show', unit, '-p', ','.join(fields)])
+    if out is None:
+        return {'available': False}
+    raw = dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
+    result = {'available': True}
+    for key in ('ActiveState', 'SubState', 'UnitFileState', 'NeedDaemonReload'):
+        result[key] = pick(raw.get(key, ''), re.compile(r'[a-z-]{0,32}\Z'))
+    for key in ('MainPID', 'NRestarts'):
+        result[key] = int(raw[key]) if raw.get(key, '').isdigit() else None
+    result['fragment_expected'] = raw.get('FragmentPath') == '/etc/systemd/system/' + unit
+    result['drop_in_count'] = len(raw.get('DropInPaths', '').split())
+    return result
 
 
-def text_file(path):
+def unit_shape(name):
+    """unit 파일에서 모양만 본다(값·Environment 내용은 내보내지 않는다)."""
+    path = ROOT + '/etc/systemd/system/metainc-naver-' + name + '.service'
     try:
-        return read(ROOT + path)
+        text = read(path)
     except Exception as error:
-        return {'error': type(error).__name__}
-
-
-def json_file(path):
+        return {'readable': False, 'error': type(error).__name__}
+    lines = text.splitlines()
+    result = {'readable': True, 'environment_lines': sum(1 for l in lines if l.startswith('Environment=')),
+              'exec_start_lines': sum(1 for l in lines if l.startswith('ExecStart=')),
+              'exec_stop_lines': sum(1 for l in lines if l.startswith('ExecStop=')),
+              'restart_always': 'Restart=always' in lines}
+    captured = io.StringIO()
     try:
-        return json.loads(read(ROOT + path))
-    except FileNotFoundError:
-        return None
+        with contextlib.redirect_stdout(captured):
+            unit_parse(path, name)
+        commit, companion = captured.getvalue().split()
+        result.update(shape_ok=True, commit=commit, companion=None if companion == '-' else companion,
+                      commit_count=text.count(commit),
+                      compose_files=(['release:compose.naver-%s.yml' % name]
+                                     + (['release:deploy/naver-engine-backup.override.yml'] if name == 'engine' else [])
+                                     + ['release:preview-%s.override.yml' % name]
+                                     + (['saved-exports-companion'] if companion != '-' else [])))
+    except Refuse:
+        # 거부 사유 문장에는 unit 원문 토큰이 섞일 수 있어 내보내지 않는다.
+        result['shape_ok'] = False
+        found = re.findall(r'releases/naver-([0-9a-f]{40})/', text)
+        result['commits_seen'] = sorted(set(found))
+    return result
+
+
+def override_shape(path, name):
+    try:
+        text = read(ROOT + path)
     except Exception as error:
-        return {'error': type(error).__name__}
+        return {'readable': False, 'error': type(error).__name__}
+    keys, stack = [], []
+    image = None
+    for line in text.splitlines():
+        match = re.match(r'^( *)([A-Za-z0-9_.-]+):(.*)$', line)
+        if not match:
+            continue
+        depth = len(match.group(1)) // 2
+        stack = stack[:depth] + [match.group(2)]
+        keys.append('.'.join(stack))
+        if match.group(2) == 'image':
+            image = match.group(3).strip()
+    return {'readable': True, 'keys': keys,
+            'image': image if image and re.fullmatch(r'metainc/naver-%s:[0-9a-f]{40}' % name, image) else 'unexpected',
+            'line_count': len(text.splitlines())}
+
+
+def tmpfiles_shape():
+    try:
+        text = read(ROOT + '/etc/tmpfiles.d/metainc-naver-preview.conf')
+    except Exception as error:
+        return {'readable': False, 'error': type(error).__name__}
+    rows, other = [], 0
+    for line in text.splitlines():
+        match = re.fullmatch(r'd (/run/metainc(?:/naver-(?:engine|relay))?) ([0-7]{4}) ([A-Za-z0-9_-]{1,32}) '
+                             r'([A-Za-z0-9_-]{1,32}) -', line.strip())
+        if match:
+            rows.append(list(match.groups()))
+        elif line.strip():
+            other += 1
+    return {'readable': True, 'directories': rows, 'other_lines': other}
+
+
+def labels_shape(labels):
+    labels = labels or {}
+    known = {'com.docker.compose.project': re.compile(r'naver-[a-z-]{1,20}\Z'),
+             'com.docker.compose.service': re.compile(r'naver-[a-z-]{1,20}\Z'),
+             'metainc.naver.preview.source': re.compile(r'[0-9a-f]{40}\Z'),
+             'metainc.naver.schema': re.compile(r'[0-9]{1,6}\Z')}
+    result = {key: pick(labels.get(key), pattern) for key, pattern in known.items() if key in labels}
+    result['other_label_count'] = sum(1 for key in labels if key not in known)
+    return result
 
 
 def container_rows(project):
-    ids = run(['docker', 'ps', '--all', '--no-trunc', '--filter', 'label=com.docker.compose.project=' + project,
-               '--format', '{{.ID}}'])
+    ids = (run(['docker', 'ps', '--all', '--no-trunc', '--filter', 'label=com.docker.compose.project=' + project,
+                '--format', '{{.ID}}']) or '').split()
     rows = []
-    for identity in (ids.get('out') or '').split():
-        done = run(['docker', 'inspect', identity], limit=10 ** 7)
+    for identity in ids:
         try:
-            row = json.loads(done['out'])[0]
+            row = json.loads(run(['docker', 'inspect', identity]))[0]
         except Exception:
-            rows.append({'id': identity, 'error': 'inspect'})
+            rows.append({'id': pick(identity, re.compile(r'[0-9a-f]{64}\Z')), 'inspect': False})
             continue
         state, config = row.get('State') or {}, row.get('Config') or {}
-        rows.append({'id': row.get('Id'), 'name': row.get('Name'), 'image': row.get('Image'),
-                     'config_image': config.get('Image'), 'user': config.get('User'),
-                     'status': state.get('Status'), 'running': state.get('Running'), 'pid': state.get('Pid'),
-                     'started_at': state.get('StartedAt'), 'restart_count': row.get('RestartCount'),
-                     'labels': config.get('Labels') or {},
-                     'restart_policy': (row.get('HostConfig') or {}).get('RestartPolicy'),
-                     'network_mode': (row.get('HostConfig') or {}).get('NetworkMode'),
-                     'mounts': [{'type': m.get('Type'), 'source': m.get('Source'), 'destination': m.get('Destination'),
-                                 'rw': m.get('RW')} for m in row.get('Mounts') or []],
-                     # Env 값은 내보내지 않는다. 두 스위치의 참/거짓만 낸다.
-                     'execution_enabled': env_flag(config.get('Env'), 'NAVER_ENGINE_EXECUTION_ENABLED'),
-                     'inventory_enabled': env_flag(config.get('Env'), 'NAVER_ENGINE_INVENTORY_ENABLED')})
-    return {'ids': ids, 'containers': rows}
+        host = row.get('HostConfig') or {}
+        env = {}
+        try:
+            env = env_to_map(config.get('Env'))
+            switches = canonical(switches_from_env(env))
+        except Refuse:
+            switches = 'invalid'
+        rows.append({'id': pick(row.get('Id'), re.compile(r'[0-9a-f]{64}\Z')), 'image': pick(row.get('Image'), IMAGE_ID),
+                     'user': pick(config.get('User'), re.compile(r'[0-9]{1,6}:[0-9]{1,6}\Z')),
+                     'status': pick(state.get('Status'), re.compile(r'[a-z]{1,16}\Z')),
+                     'running': bool(state.get('Running')), 'pid': state.get('Pid') if type(state.get('Pid')) is int else None,
+                     'started_at': pick(state.get('StartedAt'), STAMP),
+                     'restart_count': row.get('RestartCount') if type(row.get('RestartCount')) is int else None,
+                     'labels': labels_shape(config.get('Labels')),
+                     'restart_policy': pick((host.get('RestartPolicy') or {}).get('Name'), re.compile(r'[a-z-]{1,20}\Z')),
+                     'network_mode': pick(host.get('NetworkMode'), re.compile(r'[a-z]{1,16}\Z')),
+                     'mounts': [[pick(m.get('Type'), re.compile(r'[a-z]{1,10}\Z')), pick(m.get('Source'), SAFE_PATH),
+                                 pick(m.get('Destination'), SAFE_PATH), bool(m.get('RW'))]
+                                for m in row.get('Mounts') or []],
+                     'switches': switches})
+    return rows
+
+
+def listing(path, name_pattern=SAFE_NAME):
+    try:
+        names = sorted(os.listdir(ROOT + path))
+    except Exception as error:
+        return {'readable': False, 'error': type(error).__name__}
+    entries = []
+    for name in names:
+        try:
+            info = os.lstat(os.path.join(ROOT + path, name))
+        except OSError:
+            continue
+        kind = 'dir' if stat.S_ISDIR(info.st_mode) else 'file' if stat.S_ISREG(info.st_mode) else 'other'
+        entries.append({'name': pick(name, name_pattern), 'type': kind, 'size': info.st_size,
+                        'mode': oct(stat.S_IMODE(info.st_mode)), 'uid': info.st_uid, 'gid': info.st_gid,
+                        'mtime': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(info.st_mtime))})
+    return {'readable': True, 'entries': entries}
+
+
+def state_shape(path):
+    try:
+        data = json.loads(read(ROOT + path))
+    except FileNotFoundError:
+        return None
+    except Exception as error:
+        return {'readable': False, 'error': type(error).__name__}
+    if isinstance(data, list):
+        return [pick(item, re.compile(r'[0-9a-f]{40}\Z')) for item in data]
+    patterns = {'phase': re.compile(r'[a-z_]{1,24}\Z'), 'reason': re.compile(r'[A-Z_]{1,40}\Z'),
+                'schema': re.compile(r'[0-9]{1,6}\Z'), 'run_dir': SAFE_PATH, 'started_at': STAMP, 'updated_at': STAMP,
+                'deployed_at': STAMP, 'companion': re.compile(r'(-|/[A-Za-z0-9_./-]{1,250})\Z'),
+                'switches': re.compile(r'([a-z_]+=(true|false),?){1,12}\Z')}
+    result = {}
+    for key, value in sorted(data.items()):
+        if key.endswith('commit'):
+            result[key] = pick(value, re.compile(r'[0-9a-f]{40}\Z'))
+        elif key.endswith('image'):
+            result[key] = pick(value, IMAGE_ID)
+        elif key in patterns:
+            result[key] = pick(value, patterns[key])
+    return result
+
+
+def version(argv, pattern):
+    out = run(argv)
+    match = re.search(pattern, out or '')
+    return match.group(1) if match else None
 
 
 def inspect():
-    out = {'mode': 'inspect', 'read_only': True,
-           'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
-    out['id'] = run(['id'])
-    out['df'] = run(['df', '-h'])
+    out = {'mode': 'inspect', 'read_only': True, 'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+    try:
+        import pwd
+        user = pwd.getpwuid(os.geteuid()).pw_name
+    except Exception:
+        user = None
+    out['id'] = {'uid': os.geteuid(), 'gid': os.getegid(), 'user': pick(user, SAFE_NAME), 'root': os.geteuid() == 0}
+    disks = {}
+    for path in ('/', '/var/lib/metainc', '/var/backups/metainc', '/var/lib/docker', '/srv/metainc'):
+        try:
+            info = os.statvfs(ROOT + path)
+            disks[path] = {'total_gb': round(info.f_blocks * info.f_frsize / 2 ** 30, 2),
+                           'free_gb': round(info.f_bavail * info.f_frsize / 2 ** 30, 2)}
+        except OSError as error:
+            disks[path] = {'error': type(error).__name__}
+    out['disk'] = disks
     out['tools'] = {'python': sys.version.split()[0],
-                    'docker': run(['docker', 'version', '--format', '{{.Server.Version}}']),
-                    'compose': run(['docker', 'compose', 'version', '--short']),
-                    'systemd': run(['systemctl', '--version'], limit=200),
+                    'docker': version(['docker', 'version', '--format', '{{.Server.Version}}'], r'^([0-9][0-9A-Za-z.+-]{0,40})'),
+                    'compose': version(['docker', 'compose', 'version', '--short'], r'^v?([0-9][0-9A-Za-z.+-]{0,40})'),
+                    'systemd': version(['systemctl', '--version'], r'^systemd ([0-9]{1,4})\b'),
                     'curl': bool(shutil.which('curl')), 'flock': bool(shutil.which('flock')),
                     'systemd_run': bool(shutil.which('systemd-run'))}
-    units = {}
-    for unit in ('metainc-naver-engine.service', 'metainc-naver-relay.service', 'metainc-naver-erp-tunnel.service'):
-        units[unit] = {'cat': run(['systemctl', 'cat', unit]), 'show': show(unit)}
-    units['docker.service'] = {'show': show('docker.service')}
-    out['units'] = units
-    out['tmpfiles_conf'] = text_file('/etc/tmpfiles.d/metainc-naver-preview.conf')
-    layout, commit = {}, None
-    for name in ('engine', 'relay'):
-        captured = io.StringIO()
-        try:
-            with contextlib.redirect_stdout(captured):
-                unit_parse(ROOT + '/etc/systemd/system/metainc-naver-' + name + '.service', name)
-            found, companion = captured.getvalue().split()
-            layout[name] = {'ok': True, 'commit': found, 'companion': None if companion == '-' else companion}
-            commit = commit or found
-        except Exception as error:
-            layout[name] = {'ok': False, 'reason': str(error)[-500:] or type(error).__name__}
-    if layout.get('engine', {}).get('ok') and layout.get('relay', {}).get('ok') \
-            and layout['engine']['commit'] != layout['relay']['commit']:
-        layout['same_commit'] = False
-    out['layout'] = layout
+    out['units'] = {unit: show(unit) for unit in ('metainc-naver-engine.service', 'metainc-naver-relay.service',
+                                                  'metainc-naver-erp-tunnel.service', 'docker.service')}
+    out['unit_shapes'] = {name: unit_shape(name) for name in ('engine', 'relay')}
+    out['tmpfiles_conf'] = tmpfiles_shape()
+    commit = out['unit_shapes']['engine'].get('commit')
     try:
-        out['releases'] = sorted(os.listdir(ROOT + RELEASES))
+        names = sorted(os.listdir(ROOT + RELEASES))
+        out['releases'] = {'naver': [n for n in names if re.fullmatch(r'naver-[0-9a-f]{40}', n)],
+                           'other_count': sum(1 for n in names if not re.fullmatch(r'naver-[0-9a-f]{40}', n))}
     except Exception as error:
-        out['releases'] = {'error': type(error).__name__}
+        out['releases'] = {'readable': False, 'error': type(error).__name__}
     if commit:
         release = RELEASES + '/naver-' + commit
-        out['current_release'] = {'path': release, 'ls': run(['ls', '-la', ROOT + release]),
-                                  'overrides': {name: text_file(release + '/' + name) for name in OVERRIDES}}
+        current = {'path': release,
+                   'overrides': {name: override_shape(release + '/preview-' + name + '.override.yml', name)
+                                 for name in ('engine', 'relay')}}
         try:
-            out['current_release']['schema_version'] = schema_of(read(ROOT + release + '/naver_engine/store.py'))
-        except BaseException as error:
-            out['current_release']['schema_version'] = {'error': type(error).__name__}
-        image = run(['docker', 'image', 'inspect', 'metainc/naver-engine:' + commit], limit=10 ** 7)
+            info = os.lstat(ROOT + release)
+            current.update(mode=oct(stat.S_IMODE(info.st_mode)), uid=info.st_uid)
+            current['schema_version'] = schema_of(read(ROOT + release + '/naver_engine/store.py'))
+        except (OSError, Refuse) as error:
+            current['schema_version'] = {'error': type(error).__name__}
         try:
-            row = json.loads(image['out'])[0]
-            out['current_release']['engine_image'] = {'id': row.get('Id'), 'labels': (row.get('Config') or {}).get('Labels')}
+            row = json.loads(run(['docker', 'image', 'inspect', 'metainc/naver-engine:' + commit]))[0]
+            current['engine_image'] = {'id': pick(row.get('Id'), IMAGE_ID),
+                                       'labels': labels_shape((row.get('Config') or {}).get('Labels'))}
         except Exception:
-            out['current_release']['engine_image'] = image
-    images = run(['docker', 'image', 'ls', '--no-trunc', '--filter', 'reference=metainc/naver-*', '--format', '{{json .}}'])
-    try:
-        out['images'] = [json.loads(line) for line in images['out'].splitlines() if line.strip()]
-    except Exception:
-        out['images'] = images
+            current['engine_image'] = None
+        out['current_release'] = current
+    images = []
+    for line in (run(['docker', 'image', 'ls', '--no-trunc', '--filter', 'reference=metainc/naver-*',
+                      '--format', '{{json .}}']) or '').splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        images.append({'repository': pick(row.get('Repository'), re.compile(r'metainc/naver-[a-z-]{1,20}\Z')),
+                       'tag': pick(row.get('Tag'), SAFE_NAME), 'id': pick(row.get('ID'), IMAGE_ID)})
+    out['images'] = images
     out['containers'] = {project: container_rows(project) for project in ('naver-engine', 'naver-relay')}
-    out['data_dir_ls'] = run(['ls', '-la', ROOT + '/var/lib/metainc/naver-engine'])
-    out['db_backups_ls'] = run(['ls', '-la', ROOT + '/var/backups/metainc/naver-deploy-db'])
-    out['deploy_state'] = {'state': json_file('/var/lib/metainc/naver-deploy/state.json'),
-                           'current': json_file('/var/lib/metainc/naver-deploy/current.json'),
-                           'history': json_file('/var/lib/metainc/naver-deploy/history.json')}
+    out['data_dir'] = listing('/var/lib/metainc/naver-engine')
+    out['db_backups'] = listing('/var/backups/metainc/naver-deploy-db', BACKUP_DIR_NAME)
+    out['deploy_state'] = {name: state_shape('/var/lib/metainc/naver-deploy/' + name + '.json')
+                           for name in ('state', 'current', 'history')}
     print('NAVER_DEPLOY_INSPECT=' + json.dumps(out, ensure_ascii=False, sort_keys=True, separators=(',', ':')))
 
 
 COMMANDS = {'unit-parse': unit_parse, 'override-check': override_check, 'subst': subst, 'tar-check': tar_check,
             'tar-extract': tar_extract, 'tree-compare': tree_compare, 'image-info': image_info,
-            'container-info': container_info, 'check-config': check_config, 'state-write': state_write,
+            'container-info': container_info, 'state-write': state_write,
             'state-get': state_get, 'history-add': history_add, 'prune-list': prune_list,
             'prune-history': prune_history, 'db-files': db_files, 'same-size': same_size,
             'backup-prune': backup_prune, 'sha': sha, 'tree-sha': tree_sha, 'result-json': result_json,
-            'inspect': inspect,
+            'inspect': inspect, 'env-switches': env_switches, 'container-mounts': container_mounts,
+            'compose-shape': compose_shape, 'shape-diff': shape_diff, 'check-config-run': check_config_run,
+            'prune-logs': prune_logs,
             'schema-file': lambda path: print(schema_of(read(path))),
             'schema-tar-stdin': lambda: print(schema_of(tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read()))
                                                         .extractfile('store.py').read().decode('utf-8'))),
@@ -629,12 +925,14 @@ dk() { env -i PATH="$PATH" LANG=C docker "$@"; }
 log() { printf '%s %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 
 # ── 결과 보고 ───────────────────────────────────────────────────────────────
+# 공개 로그로 나가는 것은 결과 한 줄(NAVER_DEPLOY_RESULT)뿐이다. 그 줄은 helper 가 필드별 형식으로
+# 걸러 내고 문구는 고정표에서 고른다. 자세한 사유·명령 출력은 서버의 비공개 로그에만 남는다.
 MODE="${1:-}"
 LOG_FILE=''
 RESULT_FILE=''
 RESULT_CODE=''
 RESULT_STATUS=''
-RESULT_MESSAGE=''
+RESULT_REASON=''
 PHASE='init'
 NEW=''
 PREV_COMMIT=''
@@ -646,21 +944,33 @@ DB_BACKUP=''
 WARNINGS=''
 STOP_STARTED=''
 DOWNTIME=''
-HEALTH_DETAIL=''
+HEALTH_STATUS=''
+HEALTH_CODES=''
+SCHEMA_CUR=''
+SCHEMA_NEW=''
+CUR_SWITCHES=''
+STOPPED_CONFIRMED=''
 STATE_FILE="$R$STATE_DIR/state.json"
+CMD_LOG=/dev/null
 HAVE_STATE=0
 RESTORING=0
 
-warn() { log "주의: $*"; WARNINGS="${WARNINGS}${WARNINGS:+; }$*"; }
+warn() { # CODE detail
+  log "주의($1): $2"
+  WARNINGS="${WARNINGS}${WARNINGS:+,}$1"
+}
 
 write_result() {
   local line
-  line=$(py result-json "mode=$MODE" "status=${RESULT_STATUS:-UNKNOWN}" "exit_code=${RESULT_CODE:-1}" \
-    "message=$RESULT_MESSAGE" "phase=$PHASE" "new_commit=$NEW" "previous_commit=$PREV_COMMIT" \
+  line=$(py result-json "mode=$MODE" "status=${RESULT_STATUS:-EXITED}" "exit_code=${RESULT_CODE:-1}" \
+    "reason=$RESULT_REASON" "phase=$PHASE" "new_commit=$NEW" "previous_commit=$PREV_COMMIT" \
     "new_engine_image=$NEW_ENGINE_IMAGE" "new_relay_image=$NEW_RELAY_IMAGE" \
     "previous_engine_image=$PREV_ENGINE_IMAGE" "previous_relay_image=$PREV_RELAY_IMAGE" \
-    "db_backup=$DB_BACKUP" "downtime_seconds=$DOWNTIME" "health=$HEALTH_DETAIL" "warnings=$WARNINGS" \
-    "database_opened_by_deploy=false" "runtime_env_changed_by_deploy=false" 2>/dev/null) || line='{"status":"RESULT_WRITE_FAILED"}'
+    "db_backup=$DB_BACKUP" "downtime_seconds=$DOWNTIME" "health_status=$HEALTH_STATUS" \
+    "health_codes=$HEALTH_CODES" "schema_current=$SCHEMA_CUR" "schema_new=$SCHEMA_NEW" \
+    "switches=$CUR_SWITCHES" "warnings=$WARNINGS" "services_stopped_confirmed=$STOPPED_CONFIRMED" \
+    "database_opened_by_deploy=false" "runtime_env_changed_by_deploy=false" 2>/dev/null) \
+    || line='{"status":"RESULT_WRITE_FAILED"}'
   printf 'NAVER_DEPLOY_RESULT=%s\n' "$line"
   if [ -n "$RESULT_FILE" ]; then
     printf '%s\n' "$line" > "$RESULT_FILE.tmp" && mv -f "$RESULT_FILE.tmp" "$RESULT_FILE"
@@ -681,11 +991,11 @@ on_exit() {
   exit "$rc"
 }
 
-finish() { # code status message
+finish() { # exit-code status reason detail
   RESULT_CODE=$1
   RESULT_STATUS=$2
-  RESULT_MESSAGE=$3
-  log "결과: $2 — $3"
+  RESULT_REASON=$3
+  log "결과: $2 ($3) — $4"
   exit "$1"
 }
 
@@ -705,29 +1015,30 @@ phase_needs_restore() {
 }
 
 # 실패 처리: 서비스를 멈추기 전이면 거부(아무것도 안 바뀜), 멈춘 뒤면 직전 판으로 복원.
-fail_deploy() { # code message
+fail_deploy() { # CODE detail
   trap - ERR
   set +e
+  log "실패 사유($1): $2"
   if [ "$RESTORING" = 1 ]; then
-    finish 4 RESTORE_FAILED "$2"
+    finish 4 RESTORE_FAILED "$1" "$2"
   fi
-  if [ "$PHASE" = done ]; then
+  if [ "$PHASE" = 'done' ]; then
     # 새 판은 이미 헬스를 통과했다. 기록·이미지 정리 같은 마무리 실패는 경고로만 남긴다.
-    warn "마무리 정리 중 실패($1): $2"
-    finish 0 DEPLOYED "배포 완료(헬스 통과) · 마무리 경고: $1"
+    warn "$1" "마무리 정리 중 실패: $2"
+    finish 0 DEPLOYED_WITH_WARNINGS "$1" "배포 완료, 마무리 경고"
   fi
   if [ "$HAVE_STATE" = 1 ] && phase_needs_restore "$PHASE"; then
-    log "배포 실패($1): $2 — 직전 판 $PREV_COMMIT 으로 복원합니다"
+    log "직전 판 $PREV_COMMIT 으로 복원합니다"
     if restore_previous; then
-      finish 2 DEPLOY_FAILED_RESTORED "$1: $2 · 직전 판 $PREV_COMMIT 복원·헬스 통과"
+      finish 2 DEPLOY_FAILED_RESTORED "$1" "직전 판 $PREV_COMMIT 복원·헬스 통과"
     fi
-    finish 4 RESTORE_FAILED "$1: $2 · 복원도 실패해 두 서비스를 정지했습니다. 사람 확인 필요"
+    finish 4 RESTORE_FAILED "$1" "복원 실패. 정지 확인=$STOPPED_CONFIRMED"
   fi
   if [ "$HAVE_STATE" = 1 ]; then
     py state-write "$STATE_FILE" "phase=aborted_before_stop" "reason=$1" || true
     PHASE=aborted_before_stop
   fi
-  finish 10 REFUSED "$1: $2 (서비스는 건드리지 않았습니다)"
+  finish 10 REFUSED "$1" "서비스는 건드리지 않았습니다"
 }
 
 die() { fail_deploy "$1" "$2"; }
@@ -762,13 +1073,16 @@ read_container() { # project
   # shellcheck disable=SC2086
   set -- $ids
   if [ "$#" != 1 ]; then
-    HEALTH_DETAIL="$project 컨테이너 수가 $# 입니다(1이어야 함)"
+    log "$project 컨테이너 수가 $# 입니다(1이어야 함)"
     return 1
   fi
   info=$(dk inspect "$1" | py container-info) || return 1
   IFS='|' read -r C_ID C_IMAGE C_RUNNING _ _ C_STARTED C_RESTARTS C_PROJECT C_SERVICE C_EXEC C_USER <<EOF
 $info
 EOF
+  : "$C_EXEC"
+  C_SWITCHES=$(dk inspect "$C_ID" | py env-switches) || return 1
+  C_MOUNTS=$(dk inspect "$C_ID" | py container-mounts) || return 1
   return 0
 }
 
@@ -788,20 +1102,25 @@ EOF
   return 0
 }
 
+stopped_confirmed() { # unit project
+  local state pid
+  state=$(unit_prop "$1" ActiveState) || return 1
+  pid=$(unit_prop "$1" MainPID) || return 1
+  { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ "$pid" = 0 ] && project_stopped "$2"
+}
+
 stop_and_wait() { # unit project
-  local deadline state pid
+  local deadline
   log "정지: $1"
-  systemctl stop "$1" || return 1
+  systemctl stop "$1" 2>>"$CMD_LOG" || log "systemctl stop $1 실패"
   deadline=$((SECONDS + ${STOP_TIMEOUT%.*}))
   while :; do
-    state=$(unit_prop "$1" ActiveState) || state=unknown
-    pid=$(unit_prop "$1" MainPID) || pid=unknown
-    if { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ "$pid" = 0 ] && project_stopped "$2"; then
+    if stopped_confirmed "$1" "$2"; then
       log "정지 확인: $1 (MainPID 0, 컨테이너 PID 0)"
       return 0
     fi
     if [ "$SECONDS" -ge "$deadline" ]; then
-      log "정지 확인 실패: $1 state=$state MainPID=$pid"
+      log "정지 확인 실패: $1"
       return 1
     fi
     sleep "$POLL"
@@ -813,25 +1132,34 @@ http_code() { # socket path
   code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 --unix-socket "$R$1" \
     -H "Host: $HOST_HEADER" -H "Origin: https://$HOST_HEADER" -H 'X-Real-IP: 127.0.0.1' \
     "http://localhost$2" 2>/dev/null) || code=000
-  printf '%s' "${code:-000}"
+  case "$code" in
+    [0-9][0-9][0-9]) printf '%s' "$code" ;;
+    *) printf '000' ;;
+  esac
 }
 
 probe_once() {
   P_ENGINE=$(http_code "$ENGINE_SOCK" /_engine/health)
   P_PAGE=$(http_code "$RELAY_SOCK" /naver/)
   P_ME=$(http_code "$RELAY_SOCK" /api/naver-auto/me)
+  HEALTH_CODES="engine=$P_ENGINE,page=$P_PAGE,me=$P_ME"
   [ "$P_ENGINE" = 200 ] && [ "$P_PAGE" = 200 ] && [ "$P_ME" = 401 ]
+}
+
+health_fail() { # status detail
+  HEALTH_STATUS=$1
+  log "헬스 실패($1): $2"
+  return 1
 }
 
 # 헬스체크: 준비(시간 제한) → 60초 유지(unit active, RestartCount 0, StartedAt 불변) → 마지막 확인.
 health_check() { # engine_image relay_image
   local deadline e_id e_start e_pid e_nr r_id r_start r_pid r_nr end
-  HEALTH_DETAIL=''
+  HEALTH_STATUS=checking
   deadline=$((SECONDS + ${READY_TIMEOUT%.*}))
   until probe_once; do
     if [ "$SECONDS" -ge "$deadline" ]; then
-      HEALTH_DETAIL="준비 시간 초과: engine=$P_ENGINE page=$P_PAGE me=$P_ME"
-      log "헬스 실패: $HEALTH_DETAIL"
+      health_fail ready_timeout "$HEALTH_CODES"
       return 1
     fi
     sleep "$POLL"
@@ -839,18 +1167,16 @@ health_check() { # engine_image relay_image
   if [ -n "$STOP_STARTED" ] && [ -z "$DOWNTIME" ]; then
     DOWNTIME=$((SECONDS - STOP_STARTED))
   fi
-  log "헬스 준비: engine=$P_ENGINE page=$P_PAGE me=$P_ME"
-  read_container naver-engine || { HEALTH_DETAIL="engine 컨테이너 확인 실패 ${HEALTH_DETAIL}"; return 1; }
+  log "헬스 준비: $HEALTH_CODES"
+  read_container naver-engine || { health_fail container_state "engine 컨테이너 확인 실패"; return 1; }
   if [ "$C_IMAGE" != "$1" ] || [ "$C_RUNNING" != true ] || [ "$C_RESTARTS" != 0 ]; then
-    HEALTH_DETAIL="engine 컨테이너 상태 이상(image=$C_IMAGE running=$C_RUNNING restarts=$C_RESTARTS)"
-    log "헬스 실패: $HEALTH_DETAIL"
+    health_fail container_state "engine image=$C_IMAGE running=$C_RUNNING restarts=$C_RESTARTS"
     return 1
   fi
   e_id=$C_ID; e_start=$C_STARTED
-  read_container naver-relay || { HEALTH_DETAIL="relay 컨테이너 확인 실패 ${HEALTH_DETAIL}"; return 1; }
+  read_container naver-relay || { health_fail container_state "relay 컨테이너 확인 실패"; return 1; }
   if [ "$C_IMAGE" != "$2" ] || [ "$C_RUNNING" != true ] || [ "$C_RESTARTS" != 0 ]; then
-    HEALTH_DETAIL="relay 컨테이너 상태 이상(image=$C_IMAGE running=$C_RUNNING restarts=$C_RESTARTS)"
-    log "헬스 실패: $HEALTH_DETAIL"
+    health_fail container_state "relay image=$C_IMAGE running=$C_RUNNING restarts=$C_RESTARTS"
     return 1
   fi
   r_id=$C_ID; r_start=$C_STARTED
@@ -865,30 +1191,26 @@ health_check() { # engine_image relay_image
     if [ "$(unit_prop "$ENGINE_UNIT" ActiveState)" != active ] || [ "$(unit_prop "$RELAY_UNIT" ActiveState)" != active ] \
       || [ "$(unit_prop "$ENGINE_UNIT" MainPID)" != "$e_pid" ] || [ "$(unit_prop "$RELAY_UNIT" MainPID)" != "$r_pid" ] \
       || [ "$(unit_prop "$ENGINE_UNIT" NRestarts)" != "$e_nr" ] || [ "$(unit_prop "$RELAY_UNIT" NRestarts)" != "$r_nr" ]; then
-      HEALTH_DETAIL="유지 중 unit 이 active 가 아니거나 재시작됨"
-      log "헬스 실패: $HEALTH_DETAIL"
+      health_fail unit_restarted "유지 중 unit 이 active 가 아니거나 재시작됨"
       return 1
     fi
-    read_container naver-engine || { HEALTH_DETAIL="유지 중 engine 확인 실패"; return 1; }
+    read_container naver-engine || { health_fail container_state "유지 중 engine 확인 실패"; return 1; }
     if [ "$C_ID" != "$e_id" ] || [ "$C_STARTED" != "$e_start" ] || [ "$C_RESTARTS" != 0 ] || [ "$C_RUNNING" != true ]; then
-      HEALTH_DETAIL="유지 중 engine 재시작 감지(StartedAt $e_start → $C_STARTED, RestartCount $C_RESTARTS)"
-      log "헬스 실패: $HEALTH_DETAIL"
+      health_fail container_restarted "유지 중 engine 재시작 감지(StartedAt $e_start → $C_STARTED, RestartCount $C_RESTARTS)"
       return 1
     fi
-    read_container naver-relay || { HEALTH_DETAIL="유지 중 relay 확인 실패"; return 1; }
+    read_container naver-relay || { health_fail container_state "유지 중 relay 확인 실패"; return 1; }
     if [ "$C_ID" != "$r_id" ] || [ "$C_STARTED" != "$r_start" ] || [ "$C_RESTARTS" != 0 ] || [ "$C_RUNNING" != true ]; then
-      HEALTH_DETAIL="유지 중 relay 재시작 감지(StartedAt $r_start → $C_STARTED, RestartCount $C_RESTARTS)"
-      log "헬스 실패: $HEALTH_DETAIL"
+      health_fail container_restarted "유지 중 relay 재시작 감지(StartedAt $r_start → $C_STARTED, RestartCount $C_RESTARTS)"
       return 1
     fi
   done
   if ! probe_once; then
-    HEALTH_DETAIL="유지 후 확인 실패: engine=$P_ENGINE page=$P_PAGE me=$P_ME"
-    log "헬스 실패: $HEALTH_DETAIL"
+    health_fail final_probe_failed "$HEALTH_CODES"
     return 1
   fi
-  HEALTH_DETAIL="engine=200 page=200 me=401 hold=${HOLD_SECONDS}s restarts=0"
-  log "헬스 통과: $HEALTH_DETAIL"
+  HEALTH_STATUS=passed
+  log "헬스 통과: $HEALTH_CODES hold=${HOLD_SECONDS}s restarts=0"
   return 0
 }
 
@@ -901,6 +1223,13 @@ compose_args() { # name release companion → CARGS
   if [ "$1" = engine ] && [ "$3" != - ]; then
     CARGS+=(-f "$R$3")
   fi
+}
+
+# compose config(JSON)에서 관제의 작은 설정 묶음(mount·user·restart·서비스 목록)만 뽑는다.
+# JSON 에는 runtime.env 값이 섞여 있으므로 파이프로만 넘기고 파일·로그에 남기지 않는다.
+compose_shape() { # name release companion
+  compose_args "$1" "$2" "$3"
+  dk "${CARGS[@]}" config --format json 2>>"$CMD_LOG" | py compose-shape
 }
 
 write_file_atomic() { # source target mode
@@ -916,14 +1245,27 @@ load_state() {
   PREV_RELAY_IMAGE=$(py state-get "$STATE_FILE" prev_relay_image)
   NEW_ENGINE_IMAGE=$(py state-get "$STATE_FILE" new_engine_image)
   NEW_RELAY_IMAGE=$(py state-get "$STATE_FILE" new_relay_image)
+  CUR_SWITCHES=$(py state-get "$STATE_FILE" switches)
   S_RUN_DIR=$(py state-get "$STATE_FILE" run_dir)
   S_COMPANION=$(py state-get "$STATE_FILE" companion)
   S_PREV_REL="$RELEASES/naver-$PREV_COMMIT"
+  if [ -n "$S_RUN_DIR" ] && [ -d "$R$S_RUN_DIR" ]; then
+    CMD_LOG="$R$S_RUN_DIR/commands.log"
+  fi
+}
+
+# 복원 실패 마무리: 두 서비스 정지를 시도하고, 실제로 멈췄는지 확인한 결과만 보고한다.
+stop_both_and_confirm() {
+  local ok=true
+  stop_and_wait "$RELAY_UNIT" naver-relay || ok=false
+  stop_and_wait "$ENGINE_UNIT" naver-engine || ok=false
+  STOPPED_CONFIRMED=$ok
+  log "정지 확인 결과: $ok"
 }
 
 # ── 복원: 기록(state.json + run 폴더 사본)만으로 직전 판을 되살린다 ───────────────
 restore_previous() {
-  local name unit saved target image ok=1
+  local name unit saved target image prev_mounts ok=1
   RESTORING=1
   set +e
   trap - ERR
@@ -959,45 +1301,53 @@ restore_previous() {
   if [ "$ok" = 1 ]; then
     for name in engine relay; do
       if [ "$name" = engine ]; then image=$PREV_ENGINE_IMAGE; else image=$PREV_RELAY_IMAGE; fi
-      if ! dk image inspect "$image" >/dev/null; then
+      if ! dk image inspect "$image" >/dev/null 2>>"$CMD_LOG"; then
         log "직전 이미지가 없습니다: $image"
         ok=0
       else
-        dk tag "$image" "metainc/naver-$name:$PREV_COMMIT" || ok=0
+        dk tag "$image" "metainc/naver-$name:$PREV_COMMIT" >>"$CMD_LOG" 2>&1 || ok=0
       fi
     done
   fi
   if [ "$ok" = 1 ]; then
-    systemctl daemon-reload || ok=0
+    systemctl daemon-reload 2>>"$CMD_LOG" || ok=0
   fi
   if [ "$ok" = 1 ]; then
     for name in engine relay; do
       compose_args "$name" "$S_PREV_REL" "$S_COMPANION"
-      dk "${CARGS[@]}" up --no-start --no-build --force-recreate || { ok=0; break; }
+      dk "${CARGS[@]}" up --no-start --no-build --force-recreate >>"$CMD_LOG" 2>&1 || { ok=0; break; }
     done
   fi
   if [ "$ok" = 1 ]; then
-    read_container naver-engine && [ "$C_IMAGE" = "$PREV_ENGINE_IMAGE" ] || ok=0
-    read_container naver-relay && [ "$C_IMAGE" = "$PREV_RELAY_IMAGE" ] || ok=0
+    for name in engine relay; do
+      if [ "$name" = engine ]; then image=$PREV_ENGINE_IMAGE; else image=$PREV_RELAY_IMAGE; fi
+      prev_mounts=$(cat "$R$S_RUN_DIR/mounts-$name.json" 2>/dev/null)
+      if ! read_container "naver-$name" || [ "$C_IMAGE" != "$image" ] || [ "$C_MOUNTS" != "$prev_mounts" ]; then
+        log "복원 컨테이너 $name 의 이미지·mount 가 기록과 다릅니다"
+        ok=0
+      elif [ "$name" = engine ] && [ "$C_SWITCHES" != "$CUR_SWITCHES" ]; then
+        log "복원 컨테이너 스위치가 기록과 다릅니다"
+        ok=0
+      fi
+    done
   fi
   if [ "$ok" = 1 ]; then
-    systemctl start "$ENGINE_UNIT" || ok=0
+    systemctl start "$ENGINE_UNIT" 2>>"$CMD_LOG" || ok=0
   fi
   if [ "$ok" = 1 ]; then
-    systemctl start "$RELAY_UNIT" || ok=0
+    systemctl start "$RELAY_UNIT" 2>>"$CMD_LOG" || ok=0
   fi
   if [ "$ok" = 1 ] && health_check "$PREV_ENGINE_IMAGE" "$PREV_RELAY_IMAGE"; then
     PHASE=restored
-    py state-write "$STATE_FILE" "phase=restored" "restored_at_health=$HEALTH_DETAIL"
+    py state-write "$STATE_FILE" "phase=restored"
     log "== 복원 완료: $PREV_COMMIT 헬스 통과"
     RESTORING=0
     return 0
   fi
-  log "== 복원 실패: 두 서비스를 정지합니다(엔진이 잘못된 판으로 계속 쓰지 않게)"
-  systemctl stop "$RELAY_UNIT"
-  systemctl stop "$ENGINE_UNIT"
+  log "== 복원 실패: 두 서비스를 정지하고 정지를 확인합니다(엔진이 잘못된 판으로 계속 쓰지 않게)"
+  stop_both_and_confirm
   PHASE=restore_failed
-  py state-write "$STATE_FILE" "phase=restore_failed"
+  py state-write "$STATE_FILE" "phase=restore_failed" "stopped_confirmed=$STOPPED_CONFIRMED"
   RESTORING=0
   return 1
 }
@@ -1013,12 +1363,12 @@ recover_if_needed() {
     log "이전 실행이 단계 '$phase' 에서 끝나지 못했습니다 — 기록으로 직전 판을 복원합니다"
     NEW=''
     if restore_previous; then
-      finish 3 RECOVERED_INTERRUPTED_RUN "중단된 이전 배포를 직전 판 $PREV_COMMIT 으로 복원했습니다. 다시 실행하세요"
+      finish 3 RECOVERED_INTERRUPTED_RUN INTERRUPTED_RUN "직전 판 $PREV_COMMIT 으로 복원"
     fi
-    finish 4 RESTORE_FAILED "중단된 이전 배포의 복원에 실패해 두 서비스를 정지했습니다. 사람 확인 필요"
+    finish 4 RESTORE_FAILED INTERRUPTED_RUN "복원 실패. 정지 확인=$STOPPED_CONFIRMED"
   fi
   case "$phase" in
-    preparing|prepared)
+    preparing|building|prepared)
       log "이전 실행이 서비스를 멈추기 전($phase)에 끝났습니다 — 바뀐 것이 없어 계속합니다"
       py state-write "$STATE_FILE" "phase=aborted_before_stop"
       ;;
@@ -1032,13 +1382,13 @@ main_inspect() {
 
 # ── deploy ──────────────────────────────────────────────────────────────────
 main_deploy() {
-  local tar_path cur cur_r companion schema_new schema_cur name info id user src label unit
+  local tar_path cur cur_r companion name info id user src label unit
   local rel_new rel_cur run_dir stamp sum_runtime sum_tmpfiles sum_tunnel sum_nginx size files f
-  local free_kb need_kb override cid check flags
+  local free_kb need_kb override cid new_switches shape_old shape_new
   NEW=${1:-}
   tar_path=${2:-}
-  printf '%s' "$NEW" | grep -Eq '^[0-9a-f]{40}$' || die BAD_INPUT "커밋은 40자리 소문자 16진수여야 합니다"
-  [ -f "$tar_path" ] || die BAD_INPUT "source.tar 가 없습니다: $tar_path"
+  printf '%s' "$NEW" | grep -Eq '^[0-9a-f]{40}$' || { NEW=''; die BAD_INPUT "커밋은 40자리 소문자 16진수여야 합니다"; }
+  [ -f "$tar_path" ] || die BAD_INPUT "source.tar 가 없습니다"
   for f in docker systemctl curl python3 flock; do
     command -v "$f" >/dev/null || die MISSING_TOOL "$f 명령이 없습니다"
   done
@@ -1046,19 +1396,24 @@ main_deploy() {
     die NOT_ROOT "deploy 는 root 로 실행해야 합니다(unit·docker·root 전용 폴더)"
   fi
   [ -d "$R/var/lib/metainc" ] || die LAYOUT "/var/lib/metainc 가 없습니다"
-  mkdir -p "$R$STATE_DIR/runs"
-  chmod 700 "$R$STATE_DIR"
+  mkdir -p "$R$STATE_DIR/runs" "$R$STATE_DIR/logs"
+  chmod 700 "$R$STATE_DIR" "$R$STATE_DIR/logs"
 
   # 직렬화: 같은 서버에서 두 배포가 겹치지 않게.
   exec 9>>"$R$STATE_DIR/lock"
   if ! flock -n 9; then
     RESULT_CODE=11
     RESULT_STATUS=LOCKED
-    RESULT_MESSAGE="다른 naver-deploy 가 실행 중입니다"
-    log "결과: LOCKED — $RESULT_MESSAGE"
+    RESULT_REASON=LOCKED
+    log "결과: LOCKED — 다른 naver-deploy 가 실행 중입니다"
     exit 11
   fi
   log "잠금 획득: $STATE_DIR/lock"
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  # docker build·compose 등 명령의 원문 출력(비공개 소스 발췌가 섞일 수 있음)은 이 비공개 파일에만 쓴다.
+  CMD_LOG="$R$STATE_DIR/logs/commands-$stamp.log"
+  : > "$CMD_LOG"
+  py prune-logs "$R$STATE_DIR/logs" 10
 
   recover_if_needed
 
@@ -1089,7 +1444,8 @@ main_deploy() {
   [ "$NEW" != "$cur" ] || die ALREADY_RUNNING "$NEW 는 이미 실행 중인 판입니다"
   for name in engine relay; do
     info=$(py override-check "$cur_r/preview-$name.override.yml" "$name" "$cur") || die LAYOUT "$info"
-    info=$(dk image inspect "metainc/naver-$name:$cur" | py image-info) || die LAYOUT "현재 이미지 metainc/naver-$name:$cur 정보를 읽지 못했습니다"
+    info=$(dk image inspect "metainc/naver-$name:$cur" 2>>"$CMD_LOG" | py image-info) \
+      || die LAYOUT "현재 이미지 metainc/naver-$name:$cur 정보를 읽지 못했습니다"
     read -r id user src label <<EOF
 $info
 EOF
@@ -1102,50 +1458,62 @@ EOF
     [ "$C_USER" = 10001:10001 ] || die LAYOUT "naver-$name 컨테이너 사용자 $C_USER (10001:10001 이어야 함)"
     if [ "$name" = engine ]; then
       PREV_ENGINE_IMAGE=$id
-      [ "$C_EXEC" = false ] || die EXECUTION_ENABLED "실행 중 엔진의 execution 스위치가 false 가 아닙니다($C_EXEC)"
+      PREV_ENGINE_MOUNTS=$C_MOUNTS
+      # 실행 중 판의 유효 스위치(제품 _flag 규칙, 컨테이너 Env 기준). 값은 참/거짓만 다룬다.
+      CUR_SWITCHES=$C_SWITCHES
+      case ",$CUR_SWITCHES," in
+        *,execution=false,*) ;;
+        *) die EXECUTION_ENABLED "실행 중 엔진의 execution 스위치가 false 가 아닙니다" ;;
+      esac
     else
       PREV_RELAY_IMAGE=$id
+      PREV_RELAY_MOUNTS=$C_MOUNTS
     fi
   done
-  log "현재 판 $cur (engine $PREV_ENGINE_IMAGE, relay $PREV_RELAY_IMAGE, companion $companion)"
+  log "현재 판 $cur (engine $PREV_ENGINE_IMAGE, relay $PREV_RELAY_IMAGE, companion $companion, 스위치 $CUR_SWITCHES)"
 
   # ── 2. 원본 묶음과 스키마(엔진 DB 를 열지 않고 소스로 비교) ──
-  schema_new=$(py tar-check "$tar_path") || die ARCHIVE "$schema_new"
-  info=$(dk image inspect "$PREV_ENGINE_IMAGE" | py image-info) || die LAYOUT "실행 중 engine 이미지 정보를 읽지 못했습니다"
+  SCHEMA_NEW=$(py tar-check "$tar_path") || { info=$SCHEMA_NEW; SCHEMA_NEW=''; die ARCHIVE "$info"; }
+  info=$(dk image inspect "$PREV_ENGINE_IMAGE" 2>>"$CMD_LOG" | py image-info) || die LAYOUT "실행 중 engine 이미지 정보를 읽지 못했습니다"
   read -r id user src label <<EOF
 $info
 EOF
   if printf '%s' "$label" | grep -Eq '^[0-9]+$'; then
-    schema_cur=$label
-    log "현재 스키마(이미지 라벨): $schema_cur"
+    SCHEMA_CUR=$label
+    log "현재 스키마(이미지 라벨): $SCHEMA_CUR"
   else
     # 라벨 없는 옛 이미지: 컨테이너를 시작하지 않고(create) 이미지 안의 store.py 만 복사해 읽는다.
-    cid=$(dk create --network none "$PREV_ENGINE_IMAGE")
-    schema_cur=$(dk cp "$cid:/opt/naver-engine/naver_engine/store.py" - | py schema-tar-stdin) || schema_cur=''
-    dk rm "$cid" >/dev/null || warn "임시 컨테이너 $cid 삭제 실패"
-    [ -n "$schema_cur" ] || die SCHEMA_UNKNOWN "실행 중 이미지의 SCHEMA_VERSION 을 읽지 못했습니다"
-    log "현재 스키마(이미지 안 store.py): $schema_cur"
+    cid=$(dk create --network none "$PREV_ENGINE_IMAGE" 2>>"$CMD_LOG")
+    SCHEMA_CUR=$(dk cp "$cid:/opt/naver-engine/naver_engine/store.py" - 2>>"$CMD_LOG" | py schema-tar-stdin) || SCHEMA_CUR=''
+    dk rm "$cid" >>"$CMD_LOG" 2>&1 || warn TEMP_CONTAINER_LEFT "임시 컨테이너 $cid 삭제 실패"
+    [ -n "$SCHEMA_CUR" ] || die SCHEMA_UNKNOWN "실행 중 이미지의 SCHEMA_VERSION 을 읽지 못했습니다"
+    log "현재 스키마(이미지 안 store.py): $SCHEMA_CUR"
   fi
-  if [ "$schema_new" != "$schema_cur" ]; then
-    die SCHEMA_CHANGED "SCHEMA_VERSION 이 $schema_cur → $schema_new 로 바뀝니다. 스키마 이관은 이 배포 장치에서 하지 않습니다"
+  if [ "$SCHEMA_NEW" != "$SCHEMA_CUR" ]; then
+    die SCHEMA_CHANGED "SCHEMA_VERSION 이 $SCHEMA_CUR → $SCHEMA_NEW 로 바뀝니다. 스키마 이관은 이 배포 장치에서 하지 않습니다"
   fi
-  log "스키마 동일: $schema_new"
+  log "스키마 동일: $SCHEMA_NEW"
 
   # ── 3. 복구 기록 시작(서비스를 멈추기 전) ──
-  stamp=$(date -u +%Y%m%dT%H%M%SZ)
   run_dir="$STATE_DIR/runs/$stamp-$(printf '%s' "$NEW" | cut -c1-12)"
   mkdir "$R$run_dir"
   for name in engine relay; do
     cp "$R$UNIT_DIR/metainc-naver-$name.service" "$R$run_dir/metainc-naver-$name.service"
     cp "$cur_r/preview-$name.override.yml" "$R$run_dir/preview-$name.override.yml"
   done
+  printf '%s\n' "$PREV_ENGINE_MOUNTS" > "$R$run_dir/mounts-engine.json"
+  printf '%s\n' "$PREV_RELAY_MOUNTS" > "$R$run_dir/mounts-relay.json"
+  # 명령 로그를 이 실행 폴더로 옮긴다(복원 때도 같은 곳에 쓴다).
+  cat "$CMD_LOG" > "$R$run_dir/commands.log"
+  rm -f "$CMD_LOG"
+  CMD_LOG="$R$run_dir/commands.log"
   rm -f "$STATE_FILE"
   HAVE_STATE=1
   py state-write "$STATE_FILE" "phase=preparing" "new_commit=$NEW" "prev_commit=$cur" \
     "prev_engine_image=$PREV_ENGINE_IMAGE" "prev_relay_image=$PREV_RELAY_IMAGE" "run_dir=$run_dir" \
-    "companion=$companion" "schema=$schema_new" "started_at=$stamp"
+    "companion=$companion" "schema=$SCHEMA_NEW" "switches=$CUR_SWITCHES" "started_at=$stamp"
   PHASE=preparing
-  log "복구 기록: $run_dir (unit·override 사본, 직전 이미지 ID)"
+  log "복구 기록: $run_dir (unit·override·mount 사본, 직전 이미지 ID, 스위치)"
 
   # ── 4. 새 release 폴더(이미 있으면 같은 원본인지만 확인) ──
   rel_new="$RELEASES/naver-$NEW"
@@ -1167,33 +1535,39 @@ EOF
     fi
   done
 
-  # ── 5. 빌드(서비스를 멈추기 전) ──
+  # ── 5. 빌드·설정 비교·check-config(서비스를 멈추기 전) ──
   set_phase building
   for name in engine relay; do
-    log "빌드: metainc/naver-$name:$NEW"
-    dk build --quiet --label "metainc.naver.preview.source=$NEW" --label "metainc.naver.schema=$schema_new" \
-      -t "metainc/naver-$name:$NEW" -f "$R$rel_new/Dockerfile.naver-$name" "$R$rel_new" >/dev/null \
+    log "빌드: metainc/naver-$name:$NEW (출력은 비공개 명령 로그에만)"
+    dk build --quiet --label "metainc.naver.preview.source=$NEW" --label "metainc.naver.schema=$SCHEMA_NEW" \
+      -t "metainc/naver-$name:$NEW" -f "$R$rel_new/Dockerfile.naver-$name" "$R$rel_new" >>"$CMD_LOG" 2>&1 \
       || die BUILD_FAILED "metainc/naver-$name:$NEW 빌드 실패"
-    info=$(dk image inspect "metainc/naver-$name:$NEW" | py image-info)
+    info=$(dk image inspect "metainc/naver-$name:$NEW" 2>>"$CMD_LOG" | py image-info) || die BUILD_FAILED "새 이미지 정보 없음"
     read -r id user src label <<EOF
 $info
 EOF
     [ "$src" = "$NEW" ] && [ "$user" = 10001:10001 ] || die BUILD_FAILED "새 이미지 라벨/사용자 이상($src, $user)"
     if [ "$name" = engine ]; then NEW_ENGINE_IMAGE=$id; else NEW_RELAY_IMAGE=$id; fi
-    compose_args "$name" "$rel_new" "$companion"
-    dk "${CARGS[@]}" config --quiet || die COMPOSE_CONFIG "새 $name compose 설정이 유효하지 않습니다"
+    # 관제 설정 묶음(서비스 목록·mount·user·restart·network·read_only·tmpfs·cap_drop·security_opt) 비교.
+    shape_old=$(compose_shape "$name" "$rel_cur" "$companion") || die COMPOSE_CONFIG "현재 $name compose 설정을 읽지 못했습니다"
+    shape_new=$(compose_shape "$name" "$rel_new" "$companion") || die COMPOSE_CONFIG "새 $name compose 설정이 유효하지 않습니다"
+    info=$(py shape-diff "$shape_old" "$shape_new") || die CONFIG_SHAPE_CHANGED "$info"
+    log "$name 설정 묶음 동일(mount·user 10001·restart no·서비스 목록)"
   done
-  [ "$NEW_ENGINE_IMAGE" != "$PREV_ENGINE_IMAGE" ] || warn "새 engine 이미지 ID 가 직전과 같습니다"
+  [ "$NEW_ENGINE_IMAGE" != "$PREV_ENGINE_IMAGE" ] || warn SAME_IMAGE_ID "새 engine 이미지 ID 가 직전과 같습니다"
   py state-write "$STATE_FILE" "new_engine_image=$NEW_ENGINE_IMAGE" "new_relay_image=$NEW_RELAY_IMAGE"
 
-  # 새 이미지·실제 runtime.env 로 check-config(네트워크 없음, 별도 project, DB 미개방).
-  printf 'services:\n  naver-engine:\n    network_mode: none\n' > "$R$run_dir/check-config.override.yml"
+  # 새 이미지로 check-config: 운영 data·socket·backup·tunnel mount 없음, 네트워크 없음, 읽기 전용, 10001.
+  # 환경은 새 compose 설정의 유효 environment(runtime.env 포함)를 값 노출 없이 넘긴다.
   compose_args engine "$rel_new" "$companion"
-  CARGS[2]="naver-check-$(printf '%s' "$NEW" | cut -c1-12)-$(py randhex)"
-  check=$(dk "${CARGS[@]}" -f "$R$run_dir/check-config.override.yml" run --rm --no-deps --pull never \
-    naver-engine python -B -m naver_runtime check-config) || die CHECK_CONFIG "새 판 check-config 실패"
-  flags=$(printf '%s\n' "$check" | py check-config) || die EXECUTION_ENABLED "$flags"
-  log "check-config: $flags"
+  new_switches=$(dk "${CARGS[@]}" config --format json 2>>"$CMD_LOG" | py check-config-run "$NEW_ENGINE_IMAGE" "$CMD_LOG") \
+    || die CHECK_CONFIG "$new_switches"
+  case ",$new_switches," in
+    *,execution=false,*) ;;
+    *) die EXECUTION_ENABLED "새 판의 execution 스위치가 false 가 아닙니다" ;;
+  esac
+  [ "$new_switches" = "$CUR_SWITCHES" ] || die FLAGS_CHANGED "새 판 스위치($new_switches)가 현재($CUR_SWITCHES)와 다릅니다"
+  log "check-config(격리): 스위치 현재와 동일 $new_switches"
 
   # 디스크: DB cold copy 공간(+256MB) 이 없으면 멈추기 전에 거부.
   info=$(py db-files "$R$DATA_DIR") || die DB_FILES "$info"
@@ -1209,7 +1583,7 @@ EOF
   sum_tunnel=$(py sha "$R$UNIT_DIR/$TUNNEL_UNIT" 2>/dev/null || echo absent)
   sum_nginx=$(py tree-sha "$R$NGINX_DIR")
 
-  # 멈추기 직전 재확인: unit 이 기록한 사본과 같고 컨테이너가 그대로인지.
+  # 멈추기 직전 재확인: unit 이 기록한 사본과 같은지.
   for name in engine relay; do
     [ "$(py sha "$R$UNIT_DIR/metainc-naver-$name.service")" = "$(py sha "$R$run_dir/metainc-naver-$name.service")" ] \
       || die CHANGED_DURING_PREPARE "준비 중 $name unit 이 바뀌었습니다"
@@ -1224,7 +1598,7 @@ EOF
 
   # ── 7. DB cold copy(엔진 정지 확인 상태에서만) ──
   set_phase backing_up
-  [ "$(unit_prop "$ENGINE_UNIT" MainPID)" = 0 ] && project_stopped naver-engine || die DB_COPY "엔진이 멈춰 있지 않아 복사하지 않습니다"
+  stopped_confirmed "$ENGINE_UNIT" naver-engine || die DB_COPY "엔진이 멈춰 있지 않아 복사하지 않습니다"
   mkdir -p "$R$DB_BACKUPS"
   chmod 700 "$R$DB_BACKUPS"
   DB_BACKUP="$DB_BACKUPS/$stamp-$(printf '%s' "$cur" | cut -c1-12)"
@@ -1237,7 +1611,7 @@ EOF
   log "DB 파일 복사(정지 상태): $DB_BACKUP (${files#* })"
   while read -r f; do
     [ -z "$f" ] || log "오래된 DB 사본 정리: $f"
-  done < <(py backup-prune "$R$DB_BACKUPS" 3 || warn "오래된 DB 사본 정리 실패")
+  done < <(py backup-prune "$R$DB_BACKUPS" 3 || warn BACKUP_PRUNE_FAILED "오래된 DB 사본 정리 실패")
 
   # ── 8. unit 교체(커밋만 치환, 치환 개수 단언) → daemon-reload → 컨테이너 생성 ──
   set_phase switching
@@ -1246,39 +1620,42 @@ EOF
   write_file_atomic "$R$run_dir/new-$ENGINE_UNIT" "$R$UNIT_DIR/$ENGINE_UNIT" 644
   write_file_atomic "$R$run_dir/new-$RELAY_UNIT" "$R$UNIT_DIR/$RELAY_UNIT" 644
   sync
-  systemctl daemon-reload
+  systemctl daemon-reload 2>>"$CMD_LOG"
   for unit in "$ENGINE_UNIT" "$RELAY_UNIT"; do
     [ "$(unit_prop "$unit" NeedDaemonReload)" = no ] || die SWITCH "$unit daemon-reload 반영 안 됨"
   done
   for name in engine relay; do
     compose_args "$name" "$rel_new" "$companion"
-    dk "${CARGS[@]}" up --no-start --no-build --force-recreate
+    dk "${CARGS[@]}" up --no-start --no-build --force-recreate >>"$CMD_LOG" 2>&1 || die SWITCH "새 $name 컨테이너 생성 실패"
   done
   read_container naver-engine || die SWITCH "새 engine 컨테이너 확인 실패"
   [ "$C_IMAGE" = "$NEW_ENGINE_IMAGE" ] && [ "$C_RUNNING" = false ] || die SWITCH "새 engine 컨테이너 상태 이상"
-  [ "$C_EXEC" = false ] || die EXECUTION_ENABLED "새 engine 컨테이너 execution 스위치가 false 가 아닙니다($C_EXEC)"
+  [ "$C_MOUNTS" = "$PREV_ENGINE_MOUNTS" ] || die MOUNTS_CHANGED "새 engine 컨테이너 mount 가 직전과 다릅니다"
+  [ "$C_SWITCHES" = "$CUR_SWITCHES" ] || die FLAGS_CHANGED "새 engine 컨테이너 스위치가 직전과 다릅니다"
   read_container naver-relay || die SWITCH "새 relay 컨테이너 확인 실패"
   [ "$C_IMAGE" = "$NEW_RELAY_IMAGE" ] && [ "$C_RUNNING" = false ] || die SWITCH "새 relay 컨테이너 상태 이상"
+  [ "$C_MOUNTS" = "$PREV_RELAY_MOUNTS" ] || die MOUNTS_CHANGED "새 relay 컨테이너 mount 가 직전과 다릅니다"
 
   # ── 9. 시작: engine → relay ──
   set_phase starting
   log "시작: $ENGINE_UNIT"
-  systemctl start "$ENGINE_UNIT"
+  systemctl start "$ENGINE_UNIT" 2>>"$CMD_LOG"
   log "시작: $RELAY_UNIT"
-  systemctl start "$RELAY_UNIT"
+  systemctl start "$RELAY_UNIT" 2>>"$CMD_LOG"
 
   # ── 10. 헬스 + 60초 유지 ──
   set_phase verifying
-  health_check "$NEW_ENGINE_IMAGE" "$NEW_RELAY_IMAGE" || die HEALTH "$HEALTH_DETAIL"
+  health_check "$NEW_ENGINE_IMAGE" "$NEW_RELAY_IMAGE" || die HEALTH "헬스 실패($HEALTH_STATUS $HEALTH_CODES)"
 
   # ── 11. 마무리 ──
-  [ "$(py sha "$R$RUNTIME_ENV" 2>/dev/null || echo absent)" = "$sum_runtime" ] || warn "runtime.env 가 배포 중 바뀌었습니다(이 장치는 쓰지 않음)"
-  [ "$(py sha "$R$TMPFILES_CONF")" = "$sum_tmpfiles" ] || warn "tmpfiles conf 가 배포 중 바뀌었습니다(이 장치는 쓰지 않음)"
-  [ "$(py sha "$R$UNIT_DIR/$TUNNEL_UNIT" 2>/dev/null || echo absent)" = "$sum_tunnel" ] || warn "ERP 터널 unit 이 배포 중 바뀌었습니다(이 장치는 쓰지 않음)"
-  [ "$(py tree-sha "$R$NGINX_DIR")" = "$sum_nginx" ] || warn "nginx 설정이 배포 중 바뀌었습니다(이 장치는 쓰지 않음)"
-  set_phase done
+  [ "$(py sha "$R$RUNTIME_ENV" 2>/dev/null || echo absent)" = "$sum_runtime" ] || warn RUNTIME_ENV_CHANGED "runtime.env 가 배포 중 바뀌었습니다(이 장치는 쓰지 않음)"
+  [ "$(py sha "$R$TMPFILES_CONF")" = "$sum_tmpfiles" ] || warn TMPFILES_CHANGED "tmpfiles conf 가 배포 중 바뀌었습니다(이 장치는 쓰지 않음)"
+  [ "$(py sha "$R$UNIT_DIR/$TUNNEL_UNIT" 2>/dev/null || echo absent)" = "$sum_tunnel" ] || warn TUNNEL_UNIT_CHANGED "ERP 터널 unit 이 배포 중 바뀌었습니다(이 장치는 쓰지 않음)"
+  [ "$(py tree-sha "$R$NGINX_DIR")" = "$sum_nginx" ] || warn NGINX_CHANGED "nginx 설정이 배포 중 바뀌었습니다(이 장치는 쓰지 않음)"
+  set_phase 'done'
   py state-write "$R$STATE_DIR/current.json" "commit=$NEW" "engine_image=$NEW_ENGINE_IMAGE" \
-    "relay_image=$NEW_RELAY_IMAGE" "schema=$schema_new" "deployed_at=$stamp" "previous_commit=$cur"
+    "relay_image=$NEW_RELAY_IMAGE" "schema=$SCHEMA_NEW" "switches=$CUR_SWITCHES" "deployed_at=$stamp" \
+    "previous_commit=$cur"
   py history-add "$R$STATE_DIR/history.json" "$cur"
   py history-add "$R$STATE_DIR/history.json" "$NEW"
   # 이미지 정리: 이 장치가 배포한 기록 중 최근 3개·현재·직전은 남긴다. 기록에 없는 태그는 건드리지 않는다.
@@ -1286,16 +1663,19 @@ EOF
     [ -n "$f" ] || continue
     for name in engine relay; do
       if dk image inspect "metainc/naver-$name:$f" >/dev/null 2>&1; then
-        if dk rmi "metainc/naver-$name:$f" >/dev/null; then
+        if dk rmi "metainc/naver-$name:$f" >>"$CMD_LOG" 2>&1; then
           log "오래된 이미지 태그 정리: metainc/naver-$name:$f"
         else
-          warn "이미지 태그 정리 실패: metainc/naver-$name:$f"
+          warn IMAGE_PRUNE_FAILED "이미지 태그 정리 실패: metainc/naver-$name:$f"
         fi
       fi
     done
     py prune-history "$R$STATE_DIR/history.json" "$f"
   done < <(py prune-list "$R$STATE_DIR/history.json" "$NEW" "$cur")
-  finish 0 DEPLOYED "$cur → $NEW 배포 완료($HEALTH_DETAIL, 정지~헬스 준비 ${DOWNTIME:-?}초)"
+  if [ -n "$WARNINGS" ]; then
+    finish 0 DEPLOYED_WITH_WARNINGS "$WARNINGS" "$cur → $NEW 배포 완료(경고 있음)"
+  fi
+  finish 0 DEPLOYED '' "$cur → $NEW 배포 완료($HEALTH_CODES, 정지~헬스 준비 ${DOWNTIME:-?}초)"
 }
 
 # ── 입구 ────────────────────────────────────────────────────────────────────
