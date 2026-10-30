@@ -227,7 +227,8 @@ engine 43·relay 43, release 폴더 43개. DB 사본 하나(합 + 256MiB = 3.574
    - `path_references`: naver 가 들어간 unit·timer·path·socket 의 조각과 **drop-in(`<unit>.d/*.conf`)** —
      `/etc/systemd/system`, `/run/systemd/system`, `/usr/lib/systemd/system`, `/lib/systemd/system` 과 `systemctl show` 의
      FragmentPath·DropInPaths — , 현재 compose·override, saved-exports companion, 컨테이너 mount 가 가리켜 남기는 release.
-     이 중 하나라도 읽지 못하면 계획을 세우지 않는다(모르는 배치 → 거부)
+     이 중 하나라도 읽지 못하거나, `systemctl show` 출력에 FragmentPath·DropInPaths·LoadState 가 정확히 한 번씩 있지 않거나
+     LoadState 가 loaded·masked·not-found 가 아니면 계획을 세우지 않는다(모르는 배치 → 거부)
    - `reclaim_estimate`: 이미지는 **이미지 ID 별로 한 번만**, 그리고 정리 뒤에도 남는 ID(후보가 아닌 다른 태그·별칭, 컨테이너 사용, 보호 판)는 뺀다.
      하한 = 그런 ID 의 `docker system df -v` UniqueSize 합(후보끼리만 공유하는 층은 빠져 보수적, 하나라도 모르면 null),
      상한 = 후보 ID 의 `docker image inspect` Size 합(공유 층 포함). release 는 디스크 블록 **추정치**(hardlink 는 한 번, 같은 파일시스템만).
@@ -240,8 +241,9 @@ engine 43·relay 43, release 폴더 43개. DB 사본 하나(합 + 256MiB = 3.574
    - 이미지: **항목마다 지우기 직전** 태그가 아직 승인된 이미지 ID 를 가리키는지, 그 ID 를 쓰는 컨테이너(정지 포함)가 없는지,
      보호 판(현재·fallback·기록)이 아닌지 다시 확인하고 `docker image rm <태그>`(**강제 없음**). 하나라도 어긋나면 지우지 않고 `refused`
    - release: **항목마다 지우기 직전** 참조 근거(unit·drop-in·timer·compose·override·companion·컨테이너 mount)를 처음부터 다시 모으고,
-     폴더의 dev:inode 가 계획 때와 같은지 본 뒤, 링크를 따르지 않는 폴더 fd 기준으로 그 폴더만 지운다(다른 파일시스템으로 내려가지 않고,
-     안의 링크는 링크 자체만 지운다). 어긋나면 `refused`. `refused`·`failed` 가 하나라도 있으면 결과는 `PARTIAL`(5)
+     폴더를 releases 폴더 fd 기준·링크 미추적으로 **연 뒤 그 fd 의 dev:inode 를 승인값과 대조**하고, 같은 fd 로만 비운다.
+     하위 폴더도 lstat → 열기 → fstat 대조를 거쳐서만 내려가고, 각 폴더의 마지막 rmdir 직전에 이름이 아직 같은 dev:inode 인지 다시 본다
+     (다른 파일시스템으로 내려가지 않고, 안의 링크는 링크 자체만 지운다). 어긋나면 그 항목은 `refused`. `refused`·`failed` 가 하나라도 있으면 결과는 `PARTIAL`(5)
    - 결과: `NAVER_DEPLOY_CLEANUP_RESULT={status, removed, refused, failed, free_bytes_before, free_bytes_after}` (0 CLEANED / 5 PARTIAL / 10 거부 / 11 잠금)
 3. 다시 `inspect` 로 여유 공간을 확인한 뒤 배포한다.
 

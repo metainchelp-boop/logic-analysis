@@ -2,6 +2,7 @@
 
 실행: python3 -m unittest discover -s deploy/naver/tests -v
 """
+import contextlib
 import fcntl
 import hashlib
 import io
@@ -15,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(os.path.dirname(HERE), 'naver-deploy.sh')
@@ -951,6 +953,125 @@ class DeployScriptTest(unittest.TestCase):
         self.assertEqual(estimate['image_ids_kept_by_other_refs'], 1)
         self.assertEqual(estimate['images_unique_bytes_lower_bound'], 6 * 40000000)
         self.assertIn('per unique image ID', estimate['method'])
+
+
+    # ── 승인한 (dev, inode) 와 실제로 지우는 폴더를 fd 로 묶는다(바꿔치기 경합) ──
+    def run_cleanup_in_process(self, plan, patches):
+        """helper 를 이 프로세스에서 실행해 os.open/os.stat 직전에 폴더 바꿔치기를 끼워 넣는다(가짜 루트 안에서만)."""
+        with open(SCRIPT) as handle:
+            text = handle.read()
+        source = text.split("PY_HELPER=$(cat <<'PYEOF'\n", 1)[1].split('\nPYEOF', 1)[0]
+        namespace = {'__name__': 'naver_deploy_helper'}
+        exec(source, namespace)
+        namespace['ROOT'] = self.host.root
+        env = {'PATH': self.host.bin + ':' + os.path.dirname(sys.executable) + ':/usr/bin:/bin:/usr/sbin:/sbin'}
+        output = io.StringIO()
+        code = None
+        with mock.patch.dict(os.environ, env), contextlib.ExitStack() as stack:
+            for target, replacement in patches:
+                stack.enter_context(mock.patch(target, replacement))
+            stack.enter_context(contextlib.redirect_stdout(output))
+            try:
+                namespace['cleanup'](plan['allowlist_sha256'], os.path.join(self.host.base, 'cleanup.log'))
+            except SystemExit as error:
+                code = error.code
+        return code, json.loads(output.getvalue().splitlines()[-1].split('=', 1)[1])
+
+    def swap_fixture(self):
+        self.add_cleanup_fixture()
+        plan = self.plan()
+        target = next(c for c in plan['candidates'] if c['type'] == 'release')
+        path = self.host.root + target['ref']
+        outside = os.path.join(self.host.base, 'not-approved')
+        os.makedirs(outside)
+        with open(os.path.join(outside, 'keep.txt'), 'w') as handle:
+            handle.write('unapproved data')
+        return plan, target, path, outside, os.path.join(self.host.base, 'approved-parked')
+
+    def assert_swap_refused(self, code, result, target, kept_file):
+        self.assertEqual(code, 5)
+        self.assertEqual(result['status'], 'PARTIAL')
+        self.assertIn(target['ref'], result['refused'])
+        self.assertNotIn(target['ref'], result['removed'])
+        with open(kept_file) as handle:
+            self.assertEqual(handle.read(), 'unapproved data')
+
+    def test_release_swapped_before_open_is_refused(self):
+        plan, target, path, outside, parked = self.swap_fixture()
+        name, real_open, state = os.path.basename(path), os.open, {'done': False}
+
+        def swap_open(file, flags, *args, **kwargs):
+            if file == name and flags & os.O_DIRECTORY and kwargs.get('dir_fd') is not None and not state['done']:
+                os.rename(path, parked)
+                os.rename(outside, path)
+                state['done'] = True
+            return real_open(file, flags, *args, **kwargs)
+        code, result = self.run_cleanup_in_process(plan, [('os.open', swap_open)])
+        self.assertTrue(state['done'])
+        self.assert_swap_refused(code, result, target, os.path.join(path, 'keep.txt'))
+        self.assertTrue(os.path.isdir(os.path.join(parked, 'naver_engine')))  # 승인 폴더도 손대지 않았다
+
+    def test_release_swapped_before_final_rmdir_is_refused(self):
+        plan, target, path, outside, parked = self.swap_fixture()
+        name, real_stat, state = os.path.basename(path), os.stat, {'done': False}
+
+        def swap_stat(file, *args, **kwargs):
+            if (file == name and kwargs.get('dir_fd') is not None and not state['done']
+                    and os.path.isdir(path) and not os.listdir(path)):
+                os.rename(path, parked)
+                os.rename(outside, path)
+                state['done'] = True
+            return real_stat(file, *args, **kwargs)
+        code, result = self.run_cleanup_in_process(plan, [('os.stat', swap_stat)])
+        self.assertTrue(state['done'])
+        self.assert_swap_refused(code, result, target, os.path.join(path, 'keep.txt'))
+
+    def test_child_dir_swapped_during_recursion_is_refused(self):
+        plan, target, path, outside, parked = self.swap_fixture()
+        child = os.path.join(path, 'naver_engine')
+        real_open, state = os.open, {'done': False}
+
+        def swap_open(file, flags, *args, **kwargs):
+            if file == 'naver_engine' and kwargs.get('dir_fd') is not None and not state['done'] and os.path.isdir(child):
+                os.rename(child, parked)
+                os.rename(outside, child)
+                state['done'] = True
+            return real_open(file, flags, *args, **kwargs)
+        code, result = self.run_cleanup_in_process(plan, [('os.open', swap_open)])
+        self.assertTrue(state['done'])
+        self.assert_swap_refused(code, result, target, os.path.join(child, 'keep.txt'))
+
+    # ── systemctl show 출력 계약: 필수 속성이 없으면 모르는 배치로 거부 ──
+    def test_incomplete_systemctl_show_refuses_plan(self):
+        self.add_cleanup_fixture()
+        external = '/opt/review-systemd/dropin.conf'
+        self.host.file(external, '[Service]\nExecStart=/usr/bin/true ' + RELEASES + '/naver-' + OLD2 + '/x\n')
+        state = self.host.load_state()
+        state['units']['metainc-naver-engine.service']['dropins'] = external
+        self.host.state = state
+        self.host.save_state()
+        plan = self.plan()  # 정상 응답: show 로만 알 수 있는 drop-in 도 보호한다
+        self.assertNotIn(RELEASES + '/naver-' + OLD2, {c['ref'] for c in plan['candidates']})
+        self.assertIn(OLD2, plan['path_references'])
+        command = os.path.join(self.host.bin, 'systemctl')
+        with open(command) as handle:
+            original = handle.read()
+        for label, body in (('empty-rc0', 'sys.exit(0)'),
+                            ('missing-loadstate', 'print("FragmentPath=\\nDropInPaths="); sys.exit(0)'),
+                            ('duplicate', 'print("FragmentPath=\\nDropInPaths=\\nDropInPaths=\\nLoadState=loaded"); sys.exit(0)')):
+            with self.subTest(label=label):
+                with open(command, 'w') as handle:
+                    handle.write('#!%s\nimport sys\nif sys.argv[1:2] == ["show"] and "LoadState" in " ".join(sys.argv):\n    %s\n'
+                                 % (sys.executable, body) + original.split('\n', 1)[1])
+                os.chmod(command, 0o755)
+                done = self.host.run('cleanup-plan')
+                self.assertNotEqual(done.returncode, 0)
+                self.assertNotIn('NAVER_DEPLOY_CLEANUP_PLAN=', self.output(done))
+                done = self.host.run('cleanup', plan['allowlist_sha256'])
+                self.assertExit(done, 10)
+                self.assertIn('REFUSED_PLAN_FAILED', self.output(done))
+        with open(command, 'w') as handle:
+            handle.write(original)
 
 
 class WorkflowConsistencyTest(unittest.TestCase):

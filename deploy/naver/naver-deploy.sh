@@ -656,6 +656,9 @@ def remove_backup_entry(root_fd, name, identity):
             os.unlink(item, dir_fd=fd)
     finally:
         os.close(fd)
+    again = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    if (again.st_dev, again.st_ino) != identity or not stat.S_ISDIR(again.st_mode):
+        fail('BACKUP_SAFETY: 지우기 직전 사본 이름이 다른 폴더를 가리킵니다 %s' % name)
     os.rmdir(name, dir_fd=root_fd)
 
 
@@ -804,18 +807,30 @@ def unit_sources():
                         paths.add(os.path.join(full, conf))
             else:
                 paths.add(full)
+    required = ('FragmentPath', 'DropInPaths', 'LoadState')
     for unit in sorted(names):
-        code = subprocess.run(['systemctl', 'show', unit, '-p', 'FragmentPath,DropInPaths'],
+        code = subprocess.run(['systemctl', 'show', unit, '-p', ','.join(required)],
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
         if code.returncode:
             fail('CLEANUP_LAYOUT: systemctl show %s 실패' % unit)
+        # 세 속성이 정확히 한 번씩 있어야 한다. 비었거나 빠졌거나 겹치거나 형식이 이상하면 모르는 배치로 거부한다.
+        values = {}
         for line in code.stdout.decode('utf-8', 'replace').splitlines():
-            key, _, value = line.partition('=')
-            if key in ('FragmentPath', 'DropInPaths'):
-                for item in value.split():
-                    if not item.startswith('/'):
-                        fail('CLEANUP_LAYOUT: %s 경로 형식 이상' % key)
-                    paths.add(ROOT + item)
+            key, sep, value = line.partition('=')
+            if not sep or key not in required or key in values:
+                fail('CLEANUP_LAYOUT: systemctl show %s 출력 형식 이상' % unit)
+            values[key] = value
+        if set(values) != set(required):
+            fail('CLEANUP_LAYOUT: systemctl show %s 출력에 필수 속성이 없습니다' % unit)
+        if values['LoadState'] not in ('loaded', 'masked', 'not-found'):
+            fail('CLEANUP_LAYOUT: %s LoadState 가 예상 밖입니다' % unit)
+        if values['LoadState'] == 'loaded' and not values['FragmentPath']:
+            fail('CLEANUP_LAYOUT: %s FragmentPath 가 비었습니다' % unit)
+        for key in ('FragmentPath', 'DropInPaths'):
+            for item in values[key].split():
+                if not item.startswith('/'):
+                    fail('CLEANUP_LAYOUT: %s 경로 형식 이상' % key)
+                paths.add(ROOT + item)
     texts = []
     for path in sorted(paths):
         if os.path.islink(path) and os.path.realpath(path) == '/dev/null':
@@ -993,21 +1008,50 @@ def cleanup_plan():
     print('NAVER_DEPLOY_CLEANUP_PLAN=' + json.dumps(plan, sort_keys=True, separators=(',', ':')))
 
 
-def remove_tree_at(parent_fd, name, device):
-    """parent_fd 기준 상대 이름으로, 링크를 따르지 않고, 다른 파일시스템으로 내려가지 않고 지운다."""
+def open_verified_dir(parent_fd, name, expected, device=None):
+    """parent_fd 기준으로 링크를 따르지 않고 열고, 연 fd 의 (dev, inode) 가 기대값과 같은 폴더인지 확인한다."""
     fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    opened = os.fstat(fd)
+    if (not stat.S_ISDIR(opened.st_mode) or (opened.st_dev, opened.st_ino) != tuple(expected)
+            or (device is not None and opened.st_dev != device)):
+        os.close(fd)
+        fail('CLEANUP_SAFETY: 연 폴더가 승인·확인한 폴더와 다릅니다')
+    return fd
+
+
+def unlink_name_checked(parent_fd, name, expected):
+    """rmdir 직전에 그 이름이 아직 같은 (dev, inode) 를 가리키는지 확인한다."""
+    again = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if (again.st_dev, again.st_ino) != tuple(expected) or not stat.S_ISDIR(again.st_mode):
+        fail('CLEANUP_SAFETY: 지우기 직전 이름이 다른 폴더를 가리킵니다')
+    os.rmdir(name, dir_fd=parent_fd)
+
+
+def empty_verified_dir(fd, device):
+    """이미 확인한 폴더 fd 안만 비운다. 하위 폴더는 lstat → 열기 → fstat 대조 후 같은 fd 로만 내려간다.
+    경로 문자열로 지우지 않고, 링크는 링크 자체만 지우고, 다른 파일시스템으로 내려가지 않는다."""
+    for item in os.listdir(fd):
+        info = os.stat(item, dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            identity = (info.st_dev, info.st_ino)
+            child = open_verified_dir(fd, item, identity, device)
+            try:
+                empty_verified_dir(child, device)
+            finally:
+                os.close(child)
+            unlink_name_checked(fd, item, identity)
+        else:
+            os.unlink(item, dir_fd=fd)
+
+
+def remove_release(releases_fd, name, approved):
+    """승인한 (dev, inode) 의 release 폴더만 지운다. 열고 나서 대조하고, 같은 fd 로 비우고, 마지막 rmdir 직전에 다시 대조한다."""
+    fd = open_verified_dir(releases_fd, name, approved)
     try:
-        if os.fstat(fd).st_dev != device:
-            fail('CLEANUP_SAFETY: 다른 파일시스템 경계를 넘지 않습니다')
-        for item in os.listdir(fd):
-            info = os.stat(item, dir_fd=fd, follow_symlinks=False)
-            if stat.S_ISDIR(info.st_mode):
-                remove_tree_at(fd, item, device)
-            else:
-                os.unlink(item, dir_fd=fd)  # 일반 파일·링크 자체만 지운다(링크 대상은 건드리지 않는다)
+        empty_verified_dir(fd, approved[0])
     finally:
         os.close(fd)
-    os.rmdir(name, dir_fd=parent_fd)
+    unlink_name_checked(releases_fd, name, approved)
 
 
 def image_still_deletable(candidate):
@@ -1099,15 +1143,15 @@ def cleanup(expected, private_log):
                 result['refused'].append(candidate['ref'])
                 continue
             name = candidate['ref'].rsplit('/', 1)[1]
+            approved = tuple(int(part) for part in candidate['id'].split(':'))
             try:
-                info = os.stat(name, dir_fd=releases_fd, follow_symlinks=False)
-                if '%d:%d' % (info.st_dev, info.st_ino) != candidate['id'] or not stat.S_ISDIR(info.st_mode):
-                    result['refused'].append(candidate['ref'])
-                    continue
-                remove_tree_at(releases_fd, name, info.st_dev)
+                remove_release(releases_fd, name, approved)
                 result['removed'].append(candidate['ref'])
                 log.write('[remove %s] ok\n' % candidate['ref'])
-            except (OSError, Refuse) as error:
+            except Refuse as error:
+                log.write('[remove %s] refused %s\n' % (candidate['ref'], str(error).split(':')[0]))
+                result['refused'].append(candidate['ref'])
+            except OSError as error:
                 log.write('[remove %s] %s\n' % (candidate['ref'], type(error).__name__))
                 result['failed'].append(candidate['ref'])
         if releases_fd is not None:

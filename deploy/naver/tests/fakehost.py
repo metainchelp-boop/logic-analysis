@@ -424,7 +424,8 @@ def systemctl(args):
                   'NRestarts': str(unit.get('restarts', 0)),
                   'FragmentPath': (UNIT_DIR + '/' + name) if disk is not None else '',
                   'DropInPaths': unit.get('dropins', ''), 'ExecMainStartTimestamp': '',
-                  'NeedDaemonReload': 'no' if disk is None or unit.get('loaded') == disk else 'yes'}
+                  'NeedDaemonReload': 'no' if disk is None or unit.get('loaded') == disk else 'yes',
+                  'LoadState': 'loaded' if disk is not None else 'not-found'}
         fields = args[args.index('-p') + 1].split(',')
         if '--value' in args:
             print(values[fields[0]])
