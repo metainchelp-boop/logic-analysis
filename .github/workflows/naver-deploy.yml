@@ -1,0 +1,303 @@
+name: 네이버 관제 배포 (naver-deploy)
+
+# 네이버 관제(engine + relay) 단순 배포. 대표 계정이 main 에서 수동 실행할 때만 동작한다.
+#   입력 commit : 제품 저장소 metainchelp-boop/metainc-ad-dashboard 의 커밋 40자리
+#   입력 mode   : inspect = 서버 상태만 읽어 JSON 으로 출력 / deploy = 시험 → 빌드 → 교체 → 헬스 → 실패 시 자동 복원
+# push·pull_request 트리거 없음. 이 파일과 deploy/naver/** 는 deploy.yml 의 paths-ignore 에 있다
+# (머지해도 로직분석이 재배포되지 않는다). 사용법: docs/naver-simple-deploy.md
+#
+# ⚠️ 이 저장소는 공개다. Actions 로그도 공개이므로 비공개 제품 시험은 요약만 출력하고,
+# 비밀값은 어디에도 출력하지 않는다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: '제품 커밋 SHA 40자리 (metainc-ad-dashboard). inspect 때도 형식은 맞아야 한다(예: 지금 운영 중인 커밋)'
+        required: true
+        type: string
+      mode:
+        description: 'inspect = 서버 상태 읽기만 / deploy = 시험 후 배포(실패 시 직전 판 자동 복원)'
+        required: true
+        type: choice
+        options: [inspect, deploy]
+        default: inspect
+
+permissions:
+  contents: read
+
+# 로직분석 배포·옛 관제 실행기와 같은 그룹 — 같은 VPS 배포가 겹치지 않게. 취소하지 않고 기다린다.
+concurrency:
+  group: deploy-logic-analysis
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      archive_sha256: ${{ steps.archive.outputs.sha256 }}
+    steps:
+      - name: 실행 조건 확인 (대표 계정 · main · 입력 형식)
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+          COMMIT: ${{ inputs.commit }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTOR" != metainchelp-boop ] || [ "$TRIGGERING_ACTOR" != metainchelp-boop ]; then
+            echo "::error::대표 계정(metainchelp-boop)만 실행할 수 있습니다 (actor=$ACTOR)"; exit 1
+          fi
+          if [ "$REF" != refs/heads/main ]; then
+            echo "::error::main 브랜치에서만 실행합니다 (지금 $REF)"; exit 1
+          fi
+          if ! printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::commit 은 40자리 소문자 16진수여야 합니다"; exit 1
+          fi
+          case "$MODE" in inspect|deploy) ;; *) echo "::error::mode 는 inspect 또는 deploy"; exit 1 ;; esac
+
+      - name: 배포 장치 소스 받기
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: 배포 스크립트 시험 (서버 없음 · 가짜 systemctl/docker/curl)
+        run: |
+          set -euo pipefail
+          shellcheck --version | head -n 2
+          shellcheck -S warning deploy/naver/naver-deploy.sh deploy/naver/make-source-archive.sh deploy/naver/product-tests.sh
+          python -I -B -m unittest discover -s deploy/naver/tests -v
+
+      - name: 제품 저장소 읽기 키 확인
+        if: inputs.mode == 'deploy'
+        env:
+          KEY_SET: ${{ secrets.NAVER_PRODUCT_DEPLOY_KEY != '' }}
+        run: |
+          if [ "$KEY_SET" != true ]; then
+            echo "::error::NAVER_PRODUCT_DEPLOY_KEY secret 이 없습니다. docs/naver-simple-deploy.md 의 '처음 한 번' 을 먼저 하세요"
+            exit 1
+          fi
+
+      - name: 제품 소스 받기 (읽기 전용 deploy key)
+        if: inputs.mode == 'deploy'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: metainchelp-boop/metainc-ad-dashboard
+          ref: ${{ inputs.commit }}
+          ssh-key: ${{ secrets.NAVER_PRODUCT_DEPLOY_KEY }}
+          path: product
+          persist-credentials: false
+
+      - name: 받은 커밋이 입력과 같은지 확인
+        if: inputs.mode == 'deploy'
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: test "$(git -C product rev-parse HEAD)" = "$COMMIT"
+
+      - name: Node 22 (화면 시험용)
+        if: inputs.mode == 'deploy'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+
+      - name: 시험 의존성 준비 (제품 CI 와 같은 방식)
+        if: inputs.mode == 'deploy'
+        timeout-minutes: 10
+        working-directory: product
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/naver-browsers
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/naver-ci" "$RUNNER_TEMP/naver-ci-home"
+          python -m pip install --quiet -r backend/requirements.txt httpx 'bcrypt<4'
+          npm install --silent --prefix "$RUNNER_TEMP/naver-node" --ignore-scripts --no-audit --no-fund playwright@1.62.1
+          "$RUNNER_TEMP/naver-node/node_modules/.bin/playwright" install --with-deps chromium > /dev/null
+          python --version
+          node --version
+
+      - name: 제품 단위 시험 (외부망 없는 비루트 namespace · 요약만 출력)
+        if: inputs.mode == 'deploy'
+        run: |
+          set -euo pipefail
+          sudo unshare --net -- /bin/bash -c '
+            set -euo pipefail
+            ip link set lo up
+            exec setpriv --reuid "$1" --regid "$2" --clear-groups --no-new-privs \
+              env -i "PATH=$3" "HOME=$4" "TMPDIR=$4" LANG=C.UTF-8 \
+              "PYTHONPATH=$5/backend:$5" PYTHONDONTWRITEBYTECODE=1 \
+              "NODE_PATH=$7" "PLAYWRIGHT_BROWSERS_PATH=$8" \
+              NAVER_SCREEN_REQUIRE_BROWSER=1 NAVER_RELAY_REQUIRE_APP=1 \
+              /bin/bash "$9" "$5" "$6"
+          ' naver-ci "$(id -u)" "$(id -g)" "$PATH" "$RUNNER_TEMP/naver-ci-home" \
+            "$GITHUB_WORKSPACE/product" "$RUNNER_TEMP/naver-ci" \
+            "$RUNNER_TEMP/naver-node/node_modules" "$RUNNER_TEMP/naver-browsers" \
+            "$GITHUB_WORKSPACE/deploy/naver/product-tests.sh"
+
+      - name: 배포 원본 묶기 · 두 Dockerfile 빌드 확인 (push 없음)
+        id: archive
+        if: inputs.mode == 'deploy'
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          sha=$(bash deploy/naver/make-source-archive.sh product "$COMMIT" "$RUNNER_TEMP/source.tar")
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "원본 묶음 sha256: $sha"
+          mkdir "$RUNNER_TEMP/context"
+          tar -xf "$RUNNER_TEMP/source.tar" -C "$RUNNER_TEMP/context"
+          for name in engine relay; do
+            docker build --quiet --label "metainc.naver.preview.source=$COMMIT" \
+              -t "naver-deploy-ci-$name:$COMMIT" -f "$RUNNER_TEMP/context/Dockerfile.naver-$name" \
+              "$RUNNER_TEMP/context" > /dev/null
+            test "$(docker image inspect --format '{{.Config.User}}' "naver-deploy-ci-$name:$COMMIT")" = 10001:10001
+            echo "$name 이미지 빌드 성공 (사용자 10001:10001)"
+          done
+
+  ship:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: 실행 조건 재확인
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+          COMMIT: ${{ inputs.commit }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          test "$ACTOR" = metainchelp-boop
+          test "$TRIGGERING_ACTOR" = metainchelp-boop
+          test "$REF" = refs/heads/main
+          printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'
+          case "$MODE" in inspect|deploy) ;; *) exit 1 ;; esac
+
+      - name: 배포 장치 소스 받기
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: 제품 소스 받기 (읽기 전용 deploy key)
+        if: inputs.mode == 'deploy'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: metainchelp-boop/metainc-ad-dashboard
+          ref: ${{ inputs.commit }}
+          ssh-key: ${{ secrets.NAVER_PRODUCT_DEPLOY_KEY }}
+          path: product
+          persist-credentials: false
+
+      - name: 서버로 보낼 묶음 준비 (시험한 것과 같은 원본인지 해시 확인)
+        env:
+          MODE: ${{ inputs.mode }}
+          COMMIT: ${{ inputs.commit }}
+          TESTED_SHA: ${{ needs.test.outputs.archive_sha256 }}
+          RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir naver-ship
+          cp deploy/naver/naver-deploy.sh naver-ship/naver-deploy.sh
+          echo "NSD_SCRIPT_SHA=$(sha256sum naver-ship/naver-deploy.sh | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NSD_RUN=$RUN" >> "$GITHUB_ENV"
+          if [ "$MODE" = deploy ]; then
+            test "$(git -C product rev-parse HEAD)" = "$COMMIT"
+            sha=$(bash deploy/naver/make-source-archive.sh product "$COMMIT" "$GITHUB_WORKSPACE/naver-ship/source.tar")
+            if [ -z "$TESTED_SHA" ] || [ "$sha" != "$TESTED_SHA" ]; then
+              echo "::error::보낼 원본($sha)이 시험한 원본($TESTED_SHA)과 다릅니다"; exit 1
+            fi
+            echo "NSD_ARCHIVE_SHA=$sha" >> "$GITHUB_ENV"
+          else
+            echo "NSD_ARCHIVE_SHA=none" >> "$GITHUB_ENV"
+          fi
+          ls -l naver-ship
+
+      - name: 서버로 복사
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: naver-ship
+          target: /tmp/naver-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+          strip_components: 1
+          overwrite: false
+
+      - name: 서버에서 실행 (inspect 또는 deploy)
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          NSD_MODE: ${{ inputs.mode }}
+          NSD_COMMIT: ${{ inputs.commit }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: NSD_MODE,NSD_COMMIT,NSD_RUN,NSD_SCRIPT_SHA,NSD_ARCHIVE_SHA
+          command_timeout: 55m
+          script: |
+            set -eu
+            incoming="/tmp/naver-deploy-$NSD_RUN"
+            fail() { echo "::error::$1"; exit 1; }
+            hash_of() { sha256sum "$1" | cut -d' ' -f1; }
+            [ -d "$incoming" ] && [ ! -L "$incoming" ] || fail "업로드 폴더가 없습니다: $incoming"
+            if [ "$NSD_MODE" = inspect ]; then
+              [ "$(hash_of "$incoming/naver-deploy.sh")" = "$NSD_SCRIPT_SHA" ] || fail "스크립트 해시 불일치"
+              rc=0
+              bash "$incoming/naver-deploy.sh" inspect || rc=$?
+              rm -f "$incoming/naver-deploy.sh"
+              rmdir "$incoming" || true
+              exit "$rc"
+            fi
+            [ "$NSD_MODE" = deploy ] || fail "mode 이상"
+            [ "$(id -u)" = 0 ] || fail "deploy 는 root SSH 사용자로만 실행합니다 (지금 $(id -un))"
+            command -v systemd-run >/dev/null || fail "systemd-run 이 없습니다"
+            base=/var/lib/metainc/naver-deploy
+            install -d -m 700 "$base" "$base/incoming"
+            work="$base/incoming/$NSD_RUN"
+            [ ! -e "$work" ] || fail "같은 실행 폴더가 이미 있습니다: $work"
+            install -d -m 700 "$work"
+            install -m 600 "$incoming/naver-deploy.sh" "$work/naver-deploy.sh"
+            install -m 600 "$incoming/source.tar" "$work/source.tar"
+            rm -f "$incoming/naver-deploy.sh" "$incoming/source.tar"
+            rmdir "$incoming" || true
+            [ "$(hash_of "$work/naver-deploy.sh")" = "$NSD_SCRIPT_SHA" ] || fail "스크립트 해시 불일치"
+            [ "$(hash_of "$work/source.tar")" = "$NSD_ARCHIVE_SHA" ] || fail "원본 묶음 해시 불일치"
+            unit="naver-deploy-$NSD_RUN"
+            # SSH 가 끊겨도 서버에서 끝까지(실패 시 복원까지) 돌도록 별도 systemd 작업으로 띄우고 로그만 따라간다.
+            systemd-run --unit="$unit" --collect --quiet --property=KillMode=mixed --property=TimeoutStopSec=900 \
+              /bin/bash "$work/naver-deploy.sh" deploy "$NSD_COMMIT" "$work/source.tar" \
+              --log "$work/deploy.log" --result "$work/result.json"
+            printed=0
+            deadline=$(( $(date +%s) + 3000 ))
+            while :; do
+              if [ -f "$work/deploy.log" ]; then
+                total=$(wc -l < "$work/deploy.log")
+                if [ "$total" -gt "$printed" ]; then
+                  sed -n "$((printed + 1)),${total}p" "$work/deploy.log"
+                  printed=$total
+                fi
+              fi
+              [ ! -f "$work/result.json" ] || break
+              state=$(systemctl show "$unit.service" -p ActiveState --value 2>/dev/null || echo gone)
+              case "$state" in
+                active|activating|reloading|deactivating) ;;
+                *)
+                  sleep 3
+                  [ -f "$work/result.json" ] || fail "배포 작업이 결과 없이 끝났습니다. inspect 로 확인하세요 (서버 로그 $work/deploy.log)"
+                  break ;;
+              esac
+              [ "$(date +%s)" -lt "$deadline" ] || fail "추적 시간 초과 — 서버 작업은 계속됩니다. 끝난 뒤 inspect 로 확인하세요"
+              sleep 3
+            done
+            sleep 1
+            total=$(wc -l < "$work/deploy.log")
+            [ "$total" -le "$printed" ] || sed -n "$((printed + 1)),${total}p" "$work/deploy.log"
+            rc=$(python3 -I -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["exit_code"]))' "$work/result.json")
+            exit "$rc"
