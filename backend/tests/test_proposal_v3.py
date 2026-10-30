@@ -64,6 +64,30 @@ ok(pf.month_name("이상한값") == "이상한값", "못 읽으면 그대로")
 ok(pf.to_int("< 10") == 5, "'< 10' 은 5")
 json.dumps(f, ensure_ascii=False)  # 직렬화 가능해야 보관된다
 
+# 업종 — 신고 #301: 상품 페이지에 업종이 없어도 광고주 분석·키워드 분석이 받아 둔 업종을 쓴다
+ok(f["product"]["category"] == "식품 > 음료 > 커피 > 원두/생두" and f["product"]["categoryLeaf"] == "원두/생두",
+   "업종 — 상품 페이지 값 우선")
+b = bundle()
+b["htmlDetail"]["reviewData"].pop("category")
+b["advertiser"]["product_info"] = {"product_name": "원두", "category1": "식품", "category2": "커피", "category3": "원두"}
+b["analysis"] = {"targetProductInfo": {"category1": "생활", "category2": "주방"}}
+p = pf.build(b)["product"]
+ok(p["category"] == "식품 > 커피 > 원두" and p["categoryLeaf"] == "원두", "업종 — 상품 페이지 없으면 광고주 분석(1~3단계)")
+b["advertiser"]["product_info"] = {"product_name": "원두", "category1": "", "category2": ""}
+p = pf.build(b)["product"]
+ok(p["category"] == "생활 > 주방" and p["categoryLeaf"] == "주방", "업종 — 둘 다 없으면 키워드 분석")
+b["analysis"] = {}
+p = pf.build(b)["product"]
+ok(p["category"] is None and p["categoryLeaf"] is None, "업종 — 어디에도 없으면 지어내지 않는다(None)")
+b["htmlDetail"]["reviewData"]["category"] = {"wholeCategoryName": "x"}
+ok(pf.build(b)["product"]["category"] is None, "업종 — 글자가 아닌 값은 버린다")
+b["analysis"] = {"targetProductInfo": {"category1": "식품", "category2": "커피"}}
+for bad in (123, True, {"a": 1}, [1]):
+    b["advertiser"]["product_info"] = {"product_name": "원두", "category1": bad, "category2": bad}
+    p = pf.build(b)["product"]
+    ok(p["category"] == "식품 > 커피" and p["categoryLeaf"] == "커피",
+       "업종 — 단계 칸의 글자 아닌 값(%r)은 버리고 다음 출처로" % (bad,))
+
 # 빈 자료에도 예외 없이 돈다
 empty = pf.build({"v3": True, "keyword": "x"})
 ok(empty["rank"]["status"] in ("미확인", "미노출"), "빈 자료 순위")
