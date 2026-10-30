@@ -130,7 +130,8 @@
 3. 원본 tar 범위 검사, **SCHEMA_VERSION 비교**(새 판 `naver_engine/store.py` vs 실행 중 이미지 안의 `store.py` 또는 이 장치가 붙인 이미지 라벨). 다르면 거부. 우회 입력 없음
 4. 복구 기록 저장: `state.json` + `runs/<시각>-<커밋>/` 에 현재 unit 2개·override 2개·mount 목록 사본, 직전 이미지 ID, 스위치
 4b. **빌드 전 공간 예산**: 이미지 빌드·release 폴더 생성 **전에** 확인하고, 모자라면 아무것도 만들지 않고 거부(`DISK_PREBUILD`).
-   빌드 예산 = 지금 실행 중인 engine·relay 이미지 `docker image inspect` Size 합(공유 층까지 모두 새로 받는 최악의 경우를 가정한 실제 값, 최소 512MiB)
+   빌드 예산(**추정치**) = 지금 실행 중인 engine·relay 이미지 `docker image inspect` Size 합(최소 512MiB). 새 Dockerfile 의
+   중간 층·내려받기·build cache 의 최고 사용량을 보장하는 값은 아니다
    + 원본 tar 크기. DB 사본 예산 = `engine.db*` 합 + 256MiB(직전 사본은 남아 있는 상태 그대로). docker 저장 위치·releases·백업 폴더가
    같은 파일시스템이면 합산해 비교한다
 5. `releases/naver-<새 커밋>` 생성(이미 있으면 같은 원본인지 확인만), 현재 override 에서 **커밋만 치환**(각 1회 단언)
@@ -146,7 +147,9 @@
 7. DB 복사 공간 확인 → relay 정지 → engine 정지(둘 다 MainPID 0·컨테이너 PID 0 확인)
 8. 엔진이 멈춘 상태에서만 `engine.db*` 파일 복사(`/var/backups/metainc/naver-deploy-db`, **보관 1벌**). sqlite 로 열지 않는다.
    새 사본은 `<시각>-<커밋>.partial` 에 만들고 원본과 **크기·sha256** 이 같고 fsync 가 끝난 뒤에만 이름을 바꾼 다음 **직전 사본을 지운다**.
-   검증이 실패하면 새 사본만 지우고 직전 사본은 그대로 둔 채 복원한다(`DB_COPY`). 그래서 필요한 공간은 DB 합 + 여유이며 직전 사본은 그 동안 남아 있다
+   검증이 실패하면 새 사본만 지우고 직전 사본은 그대로 둔 채 복원한다(`DB_COPY`). 그래서 필요한 공간은 DB 합 + 여유이며 직전 사본은 그 동안 남아 있다.
+   사본 정리는 사본 폴더를 링크를 따르지 않는 폴더 fd 로 열고 그 안의 상대 이름으로만 지운다. 사본 항목 중 하나라도 링크·일반 파일이거나
+   안에 DB 파일·manifest 말고 다른 것(하위 폴더 등)이 있으면 **아무것도 지우지 않고** 멈춘 뒤 직전 판으로 복원한다(`BACKUP_SAFETY`)
 9. unit 2개에서 **커밋만 치환**(engine 6회·relay 4회 단언) → `daemon-reload` → `compose up --no-start --no-build --force-recreate` →
    새 컨테이너의 mount 목록이 직전과 같고, engine 스위치가 기록과 같은지 확인
 10. engine 시작 → relay 시작
@@ -221,17 +224,24 @@ engine 43·relay 43, release 폴더 43개. DB 사본 하나(합 + 256MiB = 3.574
 1. `mode=cleanup-plan` 실행 → 로그의 `NAVER_DEPLOY_CLEANUP_PLAN={...}` 한 줄을 확인한다.
    - `candidates`: 지울 항목만(`type`=image|release, `ref`=태그 또는 경로, `id`=이미지 ID, `size_bytes`)
    - `kept.protected_commits`: 언제나 남기는 판(현재 판, fallback `89a924f2416f0450f38854b531bdf8778558dca6`, 이 장치 기록의 판)
-   - `path_references`: naver unit·timer, 현재 compose·override, saved-exports companion, 컨테이너 mount 가 가리켜 남기는 release
-   - `reclaim_estimate`: 이미지는 `docker system df -v` 의 UniqueSize 합(**하한** — 후보끼리만 공유하는 층은 빠진다)과
-     `docker image inspect` Size 합(**상한** — 공유 층 포함), release 는 실제 디스크 블록 합. 실제 회수량은 그 사이다
-   - `allowlist_sha256`: 후보 목록(종류·태그/경로·이미지 ID)을 정렬한 정규 JSON 의 sha256. 크기는 해시에 넣지 않는다
+   - `path_references`: naver 가 들어간 unit·timer·path·socket 의 조각과 **drop-in(`<unit>.d/*.conf`)** —
+     `/etc/systemd/system`, `/run/systemd/system`, `/usr/lib/systemd/system`, `/lib/systemd/system` 과 `systemctl show` 의
+     FragmentPath·DropInPaths — , 현재 compose·override, saved-exports companion, 컨테이너 mount 가 가리켜 남기는 release.
+     이 중 하나라도 읽지 못하면 계획을 세우지 않는다(모르는 배치 → 거부)
+   - `reclaim_estimate`: 이미지는 **이미지 ID 별로 한 번만**, 그리고 정리 뒤에도 남는 ID(후보가 아닌 다른 태그·별칭, 컨테이너 사용, 보호 판)는 뺀다.
+     하한 = 그런 ID 의 `docker system df -v` UniqueSize 합(후보끼리만 공유하는 층은 빠져 보수적, 하나라도 모르면 null),
+     상한 = 후보 ID 의 `docker image inspect` Size 합(공유 층 포함). release 는 디스크 블록 **추정치**(hardlink 는 한 번, 같은 파일시스템만).
+     모두 추정이며 보장값이 아니다. 계산 방법은 `method` 에 적힌다
+   - `allowlist_sha256`: 후보 목록(종류·태그/경로·이미지 ID 또는 release 폴더의 dev:inode)을 정렬한 정규 JSON 의 sha256. 크기는 해시에 넣지 않는다
 2. 목록을 검토·승인한 뒤 `mode=cleanup`, `allowlist_sha256=<위 값>` 실행.
    - 같은 `flock` 아래에서 계획을 **다시 계산해 해시가 정확히 같을 때만** 진행한다. 그 사이 무엇이든 바뀌었으면(새 컨테이너가 이미지를 씀,
      태그가 다른 이미지를 가리킴, 폴더 추가 등) `REFUSED_HASH_MISMATCH` 로 아무것도 지우지 않는다 → 1부터 다시
    - 진행 중이거나 끝나지 못한 배포 기록이 있으면 거부(`REFUSED_DEPLOY_NOT_FINISHED`)
-   - 이미지: 지우기 직전 그 이미지로 만든 컨테이너(정지 포함)가 없는지 다시 보고 `docker image rm <태그>`(**강제 없음**).
-     사용 중이면 지우지 않고 `refused` 로 보고한다
-   - release: 지우기 직전 다시 참조 여부·심볼릭 링크 여부를 보고 목록의 정확한 경로만 `rm -r`
+   - 이미지: **항목마다 지우기 직전** 태그가 아직 승인된 이미지 ID 를 가리키는지, 그 ID 를 쓰는 컨테이너(정지 포함)가 없는지,
+     보호 판(현재·fallback·기록)이 아닌지 다시 확인하고 `docker image rm <태그>`(**강제 없음**). 하나라도 어긋나면 지우지 않고 `refused`
+   - release: **항목마다 지우기 직전** 참조 근거(unit·drop-in·timer·compose·override·companion·컨테이너 mount)를 처음부터 다시 모으고,
+     폴더의 dev:inode 가 계획 때와 같은지 본 뒤, 링크를 따르지 않는 폴더 fd 기준으로 그 폴더만 지운다(다른 파일시스템으로 내려가지 않고,
+     안의 링크는 링크 자체만 지운다). 어긋나면 `refused`. `refused`·`failed` 가 하나라도 있으면 결과는 `PARTIAL`(5)
    - 결과: `NAVER_DEPLOY_CLEANUP_RESULT={status, removed, refused, failed, free_bytes_before, free_bytes_after}` (0 CLEANED / 5 PARTIAL / 10 거부 / 11 잠금)
 3. 다시 `inspect` 로 여유 공간을 확인한 뒤 배포한다.
 

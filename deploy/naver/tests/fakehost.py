@@ -221,8 +221,32 @@ def inspect_container(state, identity):
                        for m in container.get('mounts') or []]}
 
 
+def late_hooks(state, args):
+    """시험용 경합 대역: 정리 도중(첫 image rm 뒤) 새 참조가 생기거나 태그가 다른 이미지로 옮겨지는 상황."""
+    hooks = config()
+    if args[:2] == ['image', 'rm']:
+        state['armed'] = True
+        retag = hooks.get('retag_on_rm')
+        if retag and args[2] == retag['trigger'] and not state.get('retagged'):
+            for image in state['images'].values():
+                if retag['retag'] in image['tags']:
+                    image['tags'].remove(retag['retag'])
+            identity = new_id(state, 'image')
+            state['images'][identity] = {'tags': [retag['retag']], 'user': '10001:10001', 'labels': {}, 'schema': 21}
+            state['retagged'] = True
+    late = hooks.get('late_unit')
+    if (late and args[:2] == ['ps', '--all'] and not state.get('late_written')
+            and not os.path.exists(hooks['root'] + late['when_missing'])):
+        path = hooks['root'] + late['path']
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as handle:
+            handle.write(late['body'])
+        state['late_written'] = True
+
+
 def docker(args):
     state = load(STATE, None)
+    late_hooks(state, args)
     if args[:1] == ['compose']:
         compose(state, args[1:])
     elif args[:2] == ['image', 'inspect']:
@@ -330,10 +354,10 @@ def docker(args):
                 continue
             print(identity)
     elif args[:1] == ['inspect']:
-        identity = args[-1]
-        if identity not in state['containers']:
+        identities = [a for a in args[1:] if not a.startswith('-')]
+        if any(identity not in state['containers'] for identity in identities):
             sys.exit(1)
-        print(json.dumps([inspect_container(state, identity)]))
+        print(json.dumps([inspect_container(state, identity) for identity in identities]))
     elif args[:1] == ['create']:
         image = resolve_image(state, args[-1])
         identity = new_id(state, 'container')

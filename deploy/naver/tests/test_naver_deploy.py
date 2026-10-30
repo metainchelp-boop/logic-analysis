@@ -854,6 +854,105 @@ class DeployScriptTest(unittest.TestCase):
         self.assertIn('REFUSED_DEPLOY_NOT_FINISHED', self.output(done))
 
 
+    # ── 사본 정리 안전성: 링크·예상 밖 항목이면 아무것도 지우지 않고 멈춘다 ──
+    def backup_safety_case(self, make):
+        folder = self.host.root + '/var/backups/metainc/naver-deploy-db'
+        os.makedirs(folder)
+        data = self.host.root + '/var/lib/metainc/naver-engine'
+        make(folder, data)
+        before = self.host.read('/var/lib/metainc/naver-engine/engine.db')
+        done = self.host.deploy(C1)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertExit(done, 2)  # 정지 뒤 단계라 직전 판으로 복원하고 끝난다
+        self.assertEqual(result_of(done)['reason'], 'BACKUP_SAFETY')
+        self.assertEqual(self.host.read('/var/lib/metainc/naver-engine/engine.db'), before)
+        self.assertTrue(os.path.exists(data + '/engine.db-wal'))
+        self.assert_previous_running()
+        return folder
+
+    def test_symlinked_partial_backup_never_deletes_target(self):
+        folder = self.backup_safety_case(
+            lambda folder, data: os.symlink(data, os.path.join(folder, '20261030T000000Z-aaaaaaaaaaaa.partial')))
+        self.assertTrue(os.path.islink(os.path.join(folder, '20261030T000000Z-aaaaaaaaaaaa.partial')))
+
+    def test_symlinked_completed_backup_refused(self):
+        folder = self.backup_safety_case(
+            lambda folder, data: os.symlink(data, os.path.join(folder, '20261001T000000Z-bbbbbbbbbbbb')))
+        self.assertTrue(os.path.islink(os.path.join(folder, '20261001T000000Z-bbbbbbbbbbbb')))
+
+    def test_backup_with_unexpected_child_refused(self):
+        def make(folder, data):
+            target = os.path.join(folder, '20261001T000000Z-cccccccccccc')
+            os.makedirs(os.path.join(target, 'nested'))
+            with open(os.path.join(target, 'engine.db'), 'w') as handle:
+                handle.write('old copy')
+        folder = self.backup_safety_case(make)
+        self.assertTrue(os.path.isdir(os.path.join(folder, '20261001T000000Z-cccccccccccc', 'nested')))
+        self.assertTrue(os.path.exists(os.path.join(folder, '20261001T000000Z-cccccccccccc', 'engine.db')))
+
+    # ── 정리: 항목마다 지우기 직전 다시 확인 ──
+    def test_cleanup_refuses_release_referenced_after_approval(self):
+        self.add_cleanup_fixture()
+        plan = self.plan()
+        # 첫 release(OLD1)가 지워진 뒤에야 OLD2 를 쓰는 새 naver service 가 생긴다.
+        self.host.set(late_unit={'path': '/etc/systemd/system/naver-late.service',
+                                 'when_missing': RELEASES + '/naver-' + OLD1,
+                                 'body': '[Service]\nExecStart=/usr/bin/python3 ' + RELEASES + '/naver-' + OLD2 + '/naver_runtime/__main__.py\n'})
+        done = self.host.run('cleanup', plan['allowlist_sha256'])
+        self.assertExit(done, 5)
+        result = json.loads(self.output(done).splitlines()[-1].split('=', 1)[1])
+        self.assertEqual(result['status'], 'PARTIAL')
+        self.assertIn(RELEASES + '/naver-' + OLD2, result['refused'])
+        self.assertTrue(os.path.isdir(self.host.root + RELEASES + '/naver-' + OLD2))
+        self.assertFalse(os.path.exists(self.host.root + RELEASES + '/naver-' + OLD1))
+
+    def test_cleanup_refuses_retagged_image(self):
+        self.add_cleanup_fixture()
+        plan = self.plan()
+        images = [c['ref'] for c in plan['candidates'] if c['type'] == 'image']
+        self.host.set(retag_on_rm={'trigger': images[0], 'retag': images[-1]})
+        done = self.host.run('cleanup', plan['allowlist_sha256'])
+        self.assertExit(done, 5)
+        result = json.loads(self.output(done).splitlines()[-1].split('=', 1)[1])
+        self.assertIn(images[-1], result['refused'])
+        self.assertIn(images[-1], self.host.tags())  # 다른 ID 로 옮겨진 태그는 지우지 않는다
+
+    def test_cleanup_reads_dropins(self):
+        self.add_cleanup_fixture()
+        self.host.file('/run/systemd/system/naver-product-export.service.d/override.conf',
+                       '[Service]\nExecStart=\nExecStart=/usr/bin/true ' + RELEASES + '/naver-' + OLD1 + '/x\n')
+        plan = self.plan()
+        refs = {c['ref'] for c in plan['candidates']}
+        self.assertNotIn(RELEASES + '/naver-' + OLD1, refs)
+        self.assertIn(OLD1, plan['path_references'])
+
+    def test_cleanup_unreadable_dropin_refuses_plan(self):
+        if os.geteuid() == 0:
+            self.skipTest('root 는 권한 000 파일도 읽는다')
+        self.add_cleanup_fixture()
+        path = '/etc/systemd/system/naver-product-export.service.d/override.conf'
+        self.host.file(path, '[Service]\n', 0o000)
+        done = self.host.run('cleanup-plan')
+        self.assertNotEqual(done.returncode, 0)
+        self.assertNotIn('NAVER_DEPLOY_CLEANUP_PLAN=', self.output(done))
+        done = self.host.run('cleanup', 'a' * 64)
+        self.assertExit(done, 10)
+        self.assertIn('REFUSED_PLAN_FAILED', self.output(done))
+        os.chmod(self.host.root + path, 0o644)
+
+    def test_reclaim_lower_bound_skips_ids_kept_by_alias(self):
+        self.add_cleanup_fixture()
+        state = self.host.load_state()
+        old1 = 'sha256:' + hashlib.sha256(('%s-engine' % OLD1).encode()).hexdigest()
+        state['images'][old1]['tags'].append('other/app:alias')
+        self.host.state = state
+        self.host.save_state()
+        estimate = self.plan()['reclaim_estimate']
+        self.assertEqual(estimate['image_ids_kept_by_other_refs'], 1)
+        self.assertEqual(estimate['images_unique_bytes_lower_bound'], 6 * 40000000)
+        self.assertIn('per unique image ID', estimate['method'])
+
+
 class WorkflowConsistencyTest(unittest.TestCase):
     def test_workflow_archive_scope_matches_script(self):
         with open(SCRIPT) as handle:
