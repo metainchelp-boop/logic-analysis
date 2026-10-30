@@ -736,6 +736,31 @@ class WorkflowConsistencyTest(unittest.TestCase):
             product = handle.read()
         self.assertNotIn("grep -E '^(FAIL|ERROR): ' \"$output_dir/$label.txt\" | head", product)
 
+    def test_product_test_summary_rebuilds_numbers_only(self):
+        # unittest 요약 행 원문(OK/FAILED 뒤 임의 문자열)이 공개 요약으로 새지 않는지, 실제 run_suite 를 돌려 확인한다.
+        with open(os.path.join(os.path.dirname(HERE), 'product-tests.sh')) as handle:
+            product = handle.read()
+        func = product[product.index('run_suite() {'):product.index('\n}\n', product.index('run_suite() {')) + 3]
+        canary = 'SUMMARY_PRIVATE_CANARY_8842'
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = os.path.join(tmp, 'bin')
+            os.mkdir(fake)
+            with open(os.path.join(fake, 'python'), 'w') as handle:
+                handle.write('#!/bin/sh\n'
+                             f'printf "test_x (m.T) ... ok\\n\\n----\\nRan 3 tests in 0.012s\\n\\nOK {canary}\\n"\n'
+                             f'printf "FAILED {canary}\\n"\n'
+                             'exit "${FAKE_RC:-0}"\n')
+            os.chmod(os.path.join(fake, 'python'), 0o755)
+            script = 'set -euo pipefail\nstatus=0\noutput_dir=$1\n' + func + 'run_suite demo -s x\necho "status=$status"\n'
+            for rc, word in (('0', '통과'), ('1', '실패')):
+                env = dict(os.environ, PATH=fake + os.pathsep + os.environ['PATH'], FAKE_RC=rc)
+                out = subprocess.run(['bash', '-c', script, 'bash', tmp], capture_output=True, text=True, env=env, check=True)
+                self.assertNotIn(canary, out.stdout + out.stderr)
+                self.assertIn(f'demo: {word} · tests=3 · seconds=0.012 · failing=0', out.stdout)
+                self.assertIn(f'status={rc}', out.stdout)
+                with open(os.path.join(tmp, 'demo.txt')) as handle:
+                    self.assertIn(canary, handle.read())
+
     def test_deploy_paths_ignored_by_logic_analysis_deploy(self):
         path = os.path.normpath(os.path.join(os.path.dirname(WORKFLOW), 'deploy.yml'))
         with open(path) as handle:

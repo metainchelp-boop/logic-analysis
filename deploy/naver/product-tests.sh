@@ -48,7 +48,7 @@ status=0
 export NAVER_SCREEN_SHOTS="$output_dir/screenshots"
 
 run_suite() { # label discover-args...
-  local label=$1 result ran last failed
+  local label=$1 result ran tests seconds failed
   shift
   if python -m unittest discover "$@" -v >"$output_dir/$label.txt" 2>&1; then
     result=통과
@@ -56,11 +56,13 @@ run_suite() { # label discover-args...
     result=실패
     status=1
   fi
-  ran=$(grep -E '^Ran [0-9]+ tests? in ' "$output_dir/$label.txt" | tail -n 1 || true)
-  last=$(grep -E '^(OK|FAILED)( |$)' "$output_dir/$label.txt" | tail -n 1 || true)
+  # 요약 행 원문은 공개하지 않는다. 결과는 종료 코드로 정하고, 개수·시간은 숫자만 다시 만든다.
+  ran=$(grep -E '^Ran [0-9]+ tests? in [0-9]+(\.[0-9]+)?s$' "$output_dir/$label.txt" | tail -n 1 || true)
+  tests=$(printf '%s' "$ran" | sed -nE 's/^Ran ([0-9]+) .*/\1/p')
+  seconds=$(printf '%s' "$ran" | sed -nE 's/^Ran [0-9]+ tests? in ([0-9]+(\.[0-9]+)?)s$/\1/p')
   failed=$(grep -cE '^(FAIL|ERROR): ' "$output_dir/$label.txt" || true)
-  # 공개 로그에는 묶음 이름·결과·개수만. 시험 이름·traceback 은 러너의 비공개 출력 폴더에만 남는다.
-  printf '%s: %s · %s · %s · failing=%s\n' "$label" "$result" "${ran:-Ran ?}" "${last:-?}" "${failed:-0}"
+  # 공개 로그에는 묶음 이름·결과·숫자만. 시험 이름·traceback 은 러너의 비공개 출력 폴더에만 남는다.
+  printf '%s: %s · tests=%s · seconds=%s · failing=%s\n' "$label" "$result" "${tests:-?}" "${seconds:-?}" "${failed:-0}"
 }
 
 run_suite naver_engine-tests -s naver_engine/tests
