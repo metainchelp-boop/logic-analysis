@@ -394,12 +394,14 @@ def _bid(screen):
 
 
 def _category_path(src):
-    """한 출처의 업종 경로 — 통째 경로(category)가 있으면 그것, 없으면 category1~4 를 잇는다."""
-    whole = src.get("category")
-    whole = _clean(whole) if isinstance(whole, str) else ""
+    """한 출처의 업종 경로 — 통째 경로(category)가 있으면 그것, 없으면 category1~4 를 잇는다.
+    글자가 아닌 값(숫자·참거짓·묶음)은 버린다 — 「123」 같은 값이 다음 출처의 진짜 업종을 가리지 않게."""
+    def text(v):
+        return _clean(v) if isinstance(v, str) else ""
+    whole = text(src.get("category"))
     if whole:
         return whole
-    return " > ".join(x for x in (_clean(src.get("category%d" % i)) for i in range(1, 5)) if x)
+    return " > ".join(x for x in (text(src.get("category%d" % i)) for i in range(1, 5)) if x)
 
 
 def _product(bundle, html_detail, advertiser, analysis):

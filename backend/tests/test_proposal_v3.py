@@ -81,6 +81,12 @@ p = pf.build(b)["product"]
 ok(p["category"] is None and p["categoryLeaf"] is None, "업종 — 어디에도 없으면 지어내지 않는다(None)")
 b["htmlDetail"]["reviewData"]["category"] = {"wholeCategoryName": "x"}
 ok(pf.build(b)["product"]["category"] is None, "업종 — 글자가 아닌 값은 버린다")
+b["analysis"] = {"targetProductInfo": {"category1": "식품", "category2": "커피"}}
+for bad in (123, True, {"a": 1}, [1]):
+    b["advertiser"]["product_info"] = {"product_name": "원두", "category1": bad, "category2": bad}
+    p = pf.build(b)["product"]
+    ok(p["category"] == "식품 > 커피" and p["categoryLeaf"] == "커피",
+       "업종 — 단계 칸의 글자 아닌 값(%r)은 버리고 다음 출처로" % (bad,))
 
 # 빈 자료에도 예외 없이 돈다
 empty = pf.build({"v3": True, "keyword": "x"})
