@@ -207,11 +207,29 @@ def qualification(receipt, policy):
     need(all(type(pool_first[k]) is type(v) and pool_first[k] == v for k, v in POOL_FIRST.items()), 'POOL_FIRST_PROOF')
 
 
+def pinned_bytes(root, name, row):
+    """Read a release file once and accept only its exact pinned size and digest.
+
+    Callers compile/exec or parse only the returned bytes; the file is never read again."""
+    need(type(row) is dict and set(row) == {'bytes', 'sha256'}, 'PINNED_ROW')
+    raw = read(root, name)
+    need(len(raw) == row['bytes'] and sha(raw) == row['sha256'], 'PINNED_DIGEST')
+    return raw
+
+
+def pinned_module(root, tool):
+    """Execute a qualified release tool only after its bytes match PUBLIC_FILES."""
+    relative = 'backend/tools/' + tool + '.py'
+    raw = pinned_bytes(root, NS + '/' + relative, PUBLIC_FILES[relative])
+    path = root / NS / relative
+    value = types.ModuleType(tool); value.__file__ = str(path)
+    exec(compile(raw, str(path), 'exec'), value.__dict__)
+    return value, raw
+
+
 def pool_first_identity(root):
     """The qualified controller deploys exactly the privately tested fixture rows and IDs."""
-    path = root / NS / 'backend/tools/naver_report_progress_patch.py'
-    patch = types.ModuleType('qualified_patch'); patch.__file__ = str(path)
-    exec(compile(read(root, path.relative_to(root).as_posix()), str(path), 'exec'), patch.__dict__)
+    patch, _ = pinned_module(root, 'naver_report_progress_patch')
     patch.require_pins()
     old, new = POOL_FIRST_FIXTURES.values()
     need((patch.OLD_COMMIT, patch.TARGET_COMMIT) == (POOL_FIRST['old_commit'], POOL_FIRST['target_commit']), 'POOL_FIRST_COMMITS')
@@ -261,19 +279,19 @@ def operation_packages(env, event):
 
 def pressure(root, env, event):
     # verify() and deploy_context() must pass before this function is called.
+    # Every release file used here is read once and digest-checked before parse/compile/exec.
     folder = root / NS
-    def module(name):
-        path = folder / 'backend/tools' / (name + '.py')
-        raw = read(root, path.relative_to(root).as_posix())
-        value = types.ModuleType(name); value.__file__ = str(path)
-        exec(compile(raw, str(path), 'exec'), value.__dict__)
-        return value, raw
-    transport, raw = module('naver_report_progress_transport')
-    patch, _ = module('naver_report_progress_patch')
+    transport, raw = pinned_module(root, 'naver_report_progress_transport')
+    patch, _ = pinned_module(root, 'naver_report_progress_patch')
     transport.TRANSPORT_RAW_SHA256 = sha(raw)
     transport.require_pins(); patch.require_pins()
     bootstrap = transport.bootstrap(raw)
-    helpers = [n for n in ast.parse(read(root, NS + '/bundle.py')).body if isinstance(n, ast.FunctionDef)]
+    bundle_raw = read(root, NS + '/bundle.py')
+    need(sha(bundle_raw) == BUNDLE_PYTHON_SHA256, 'PINNED_DIGEST')
+    job_raw = read(root, NS + '/' + WORKFLOW)
+    need(sha(job_raw) == REPORT_PROGRESS_JOB_SHA256, 'PINNED_DIGEST')
+    job = job_raw.decode()
+    helpers = [n for n in ast.parse(bundle_raw).body if isinstance(n, ast.FunctionDef)]
     need({n.name for n in helpers} == {'report_progress_ssh_scripts', 'require_report_progress_ssh_pressure'}, 'PRESSURE_HELPERS')
     namespace = {}; exec(compile(ast.Module(body=helpers, type_ignores=[]), 'qualified-pressure', 'exec'), namespace)
     previous = sys.modules.get('naver_report_progress_patch')
@@ -289,7 +307,7 @@ def pressure(root, env, event):
                 modules['patch'].validate_package(package, modules['release'])
             wire = transport.encode(value)
             need(transport.decode(wire) == value, 'PRESSURE_ROUNDTRIP')
-            sizes = namespace['require_report_progress_ssh_pressure'](wire, bootstrap, read(root, NS + '/' + WORKFLOW).decode())
+            sizes = namespace['require_report_progress_ssh_pressure'](wire, bootstrap, job)
             rows.append({'operation': operation, 'json_bytes': len(json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()),
                          'wire_bytes': len(wire), 'bootstrap_bytes': len(bootstrap), 'ssh_bytes': sizes})
         return {'prepare_run_id': packages[0][1]['run_id'], 'rows': rows, 'server_calls': 0, 'cipher_downloads': 0}
@@ -304,7 +322,6 @@ def verify(root):
     need(sha(raw) == policy['receipt_sha256'], 'QUALIFICATION_HASH')
     receipt = json.loads(raw, object_pairs_hook=unique)
     qualification(receipt, policy)
-    pool_first_identity(root)
     manifest = json.loads(read(root, NS + '/public-files.json', 16384), object_pairs_hook=unique)
     additions = {NS + '/' + name for name in receipt['public_files']} | {
         NS + '/bundle.py', NS + '/' + WORKFLOW, NS + '/qualification.json',
@@ -326,6 +343,9 @@ def verify(root):
     need(set(changes) == {'A\t' + name for name in additions} | {'M\t' + WORKFLOW}, 'RELEASE_CHANGE_SET')
     need(git(root, 'status', '--porcelain', '--untracked-files=no') == b'', 'DIRTY_SOURCE')
     need(git(root, 'ls-files', '--others', '-z') == b'', 'UNTRACKED_SOURCE')
+    # Only now, with every digest, the workflow delta, the change set and a clean tree verified,
+    # execute the controller (re-checked against its pin on the single read it executes).
+    pool_first_identity(root)
     return receipt
 
 

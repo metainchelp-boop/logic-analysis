@@ -262,5 +262,89 @@ class PoolFirstBoundaryTests(unittest.TestCase):
                 g.pool_first_identity(HERE.parent)
 
 
+class TamperedCodeNeverExecutesTests(unittest.TestCase):
+    """A tampered release file must be refused by digest before any of its code runs."""
+    PATCH = 'backend/tools/naver_report_progress_patch.py'
+
+    def copy_release(self, folder):
+        source = HERE.parent
+        root = Path(folder).resolve()
+        manifest = json.loads((source / g.NS / 'public-files.json').read_bytes())
+        for name in [*manifest, g.NS + '/public-files.json', 'tools/check_conversion_executor.py']:
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_bytes((source / name).read_bytes())
+        return root
+
+    def tamper(self, root, name, marker, *, default_argument=False):
+        path = root / g.NS / name
+        raw = path.read_bytes()
+        if default_argument:
+            # Executes at definition time if the helper FunctionDefs were ever compiled.
+            hook = "def report_progress_ssh_scripts(workflow, _probe=open(%r, 'w').write('executed')):"
+            changed = raw.replace(b'def report_progress_ssh_scripts(workflow):', (hook % str(marker)).encode(), 1)
+        else:
+            lines = raw.split(b'\n')
+            lines.insert(1, ("open(%r, 'w').write('executed')" % str(marker)).encode())
+            changed = b'\n'.join(lines)
+        self.assertNotEqual(changed, raw)
+        path.write_bytes(changed)
+
+    def test_tampered_controller_refused_by_digest_in_verify_without_execution(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.copy_release(folder); marker = root / 'executed-marker'
+            self.tamper(root, self.PATCH, marker)
+            with self.assertRaisesRegex(ValueError, '^FILE_DIGEST$'):
+                g.verify(root)
+            self.assertFalse(marker.exists())
+            with self.assertRaisesRegex(ValueError, '^PINNED_DIGEST$'):
+                g.pool_first_identity(root)
+            self.assertFalse(marker.exists())
+
+    def test_tampered_tools_refused_by_digest_in_pressure_without_execution(self):
+        env = {'GITHUB_RUN_ID': '41999999999'}
+        source = dict(baseline='1a107fb029873d44ccfc09b1001c5d85b3dd5e871c008adeadb516e12b72e3cd',
+                      source_commit='abceeb737548ada081072df95279d19981b561f7',
+                      source_tar_gz_sha256='50681cb0a30db4f421d8555d859b8a050ca5e07e6f5b6f5662ca527c036ef703',
+                      ciphertext_sha256='d' * 64, download_url='https://example.invalid/private', artifact_sha256='e' * 64)
+        event = {'inputs': {'ad_prepare': 'preview-report-progress-prepare', 'ad_expected_baseline': json.dumps(source)}}
+        for name, default_argument in ((self.PATCH, False), ('backend/tools/naver_report_progress_transport.py', False),
+                                       ('bundle.py', True)):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as folder:
+                root = self.copy_release(folder); marker = root / 'executed-marker'
+                self.tamper(root, name, marker, default_argument=default_argument)
+                with self.assertRaisesRegex(ValueError, '^PINNED_DIGEST$'):
+                    g.pressure(root, env, event)
+                self.assertFalse(marker.exists())
+
+    def test_deploy_entrypoint_refuses_tampered_controller_without_execution(self):
+        import subprocess, sys
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.copy_release(folder); marker = root / 'executed-marker'
+            self.tamper(root, self.PATCH, marker)
+            event = root / 'event.json'
+            event.write_text(json.dumps({'repository': {'full_name': g.REPO}, 'inputs': {
+                'ad_prepare': 'preview-report-progress-prepare', 'ad_expected_baseline': '{}'}}))
+            env = {'PATH': '/usr/bin:/bin', 'GITHUB_EVENT_PATH': str(event), 'GITHUB_REPOSITORY': g.REPO,
+                   'GITHUB_REF': 'refs/heads/' + g.RELEASE, 'GITHUB_EVENT_NAME': 'workflow_dispatch',
+                   'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': 'b' * 40, 'GITHUB_RUN_ID': '41999999999'}
+            result = subprocess.run([sys.executable, '-I', '-B', str(root / 'tools/check_conversion_executor.py'), '--deploy'],
+                                    cwd=root, env=env, capture_output=True, timeout=120)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b'CONVERSION_EXECUTOR_REFUSED', result.stderr)
+            self.assertNotIn(b'public_boundary', result.stdout)
+            self.assertFalse(marker.exists())
+
+    def test_untampered_copy_reaches_git_checks_and_pinned_reads_accept_real_bytes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.copy_release(folder)
+            with self.assertRaisesRegex(ValueError, '^GIT$'):
+                g.verify(root)  # every digest and the workflow delta pass; no git history in the copy
+        patch, raw = g.pinned_module(HERE.parent, 'naver_report_progress_patch')
+        self.assertEqual(g.sha(raw), g.PUBLIC_FILES[self.PATCH]['sha256'])
+        source = (HERE / 'check_conversion_executor.py').read_text()
+        self.assertGreater(source.index('    pool_first_identity(root)\n    return receipt'),
+                           source.index("need(git(root, 'ls-files', '--others', '-z') == b'', 'UNTRACKED_SOURCE')"))
+
+
 if __name__ == '__main__':
     unittest.main()
