@@ -393,14 +393,24 @@ def _bid(screen):
     return out or None
 
 
+def _category_path(src):
+    """한 출처의 업종 경로 — 통째 경로(category)가 있으면 그것, 없으면 category1~4 를 잇는다."""
+    whole = src.get("category")
+    whole = _clean(whole) if isinstance(whole, str) else ""
+    if whole:
+        return whole
+    return " > ".join(x for x in (_clean(src.get("category%d" % i)) for i in range(1, 5)) if x)
+
+
 def _product(bundle, html_detail, advertiser, analysis):
     pi = _d(_d(advertiser).get("product_info"))
     tp = _d(_d(analysis).get("targetProductInfo"))
     rd = _d(_d(html_detail).get("reviewData"))
     name = _clean(bundle.get("productName") or pi.get("product_name") or tp.get("product_name"))
     price = to_int(pi.get("price")) or to_int(tp.get("price")) or to_int(rd.get("price"))
-    cat = _clean(rd.get("category")) or " > ".join([x for x in (_clean(tp.get("category1")), _clean(tp.get("category2"))) if x])
-    cat = cat.replace(">", " > ").replace("  ", " ").strip() if cat else ""
+    # 업종 — 상품 페이지 → 광고주 분석(productId 로 맞춘 상품) → 키워드 분석 순.
+    # ⚠️ 신고 #301(2026-10-30): 상품 페이지에서 못 읽으면 광고주 분석이 받아 둔 업종을 안 보고 「업종 미확인」이 됐다.
+    cat = _category_path(rd) or _category_path(pi) or _category_path(tp)
     return {"name": name or None, "price": price if price and price > 0 else None,
             "category": re.sub(r"\s*>\s*", " > ", cat) or None,
             "categoryLeaf": (re.split(r"\s*>\s*", cat)[-1] if cat else None)}
