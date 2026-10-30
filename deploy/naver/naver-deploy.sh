@@ -5,13 +5,18 @@
 #       읽기 전용. 서비스·이미지·폴더 상태를 한 줄 JSON 으로 출력한다(무엇도 바꾸지 않는다).
 #   naver-deploy.sh deploy <제품 커밋 40자리> <source.tar> [--log FILE] [--result FILE]
 #       시험을 통과한 정확한 커밋을 배포한다. 실패하면 직전 판으로 자동 복원한다.
+#   naver-deploy.sh cleanup-plan
+#       읽기 전용. 지워도 되는 관제 이미지 태그·release 폴더 목록과 회수량 추정, allowlist_sha256 을 낸다.
+#   naver-deploy.sh cleanup <allowlist_sha256>
+#       계획을 다시 세워 해시가 정확히 같을 때만 그 목록만 지운다(docker image rm 강제 없음, release 폴더 rm -r).
 #
 # 지키는 것(docs/naver-simple-deploy.md 와 같은 목록):
 #   - 이미지 두 개를 커밋 태그로 먼저 빌드한 뒤에만 서비스를 멈춘다.
 #   - 직전 이미지 ID·unit 파일·override 파일을 서버의 복구 기록에 먼저 남긴다
 #     (SSH 가 끊기거나 서버가 재부팅돼도 다음 실행이 그 기록으로 복원한다).
 #   - 정지는 relay → engine(PID 0 확인), 시작은 engine → relay.
-#   - engine.db* 는 제자리 보존. 엔진이 멈춘 동안에만 파일 복사(최근 3벌).
+#   - engine.db* 는 제자리 보존. 엔진이 멈춘 동안에만 파일 복사(보관 1벌, 크기·sha256 검증 뒤에만 직전 사본 삭제).
+#   - 이미지 빌드·release 폴더 생성 전에 공간 예산을 확인한다.
 #     sqlite 로 DB 를 열지 않는다.
 #   - runtime.env, nginx, ERP 터널 unit, 다른 앱, saved-exports companion 은 건드리지 않는다.
 #   - execution_enabled 는 false 여야 하고, 실행 중 판의 유효 스위치(inventory 등)와 새 판이 같아야 한다.
@@ -566,6 +571,348 @@ def backup_prune(folder, keep):
         print(name)
 
 
+# ── 정지 상태 DB 사본: 크기·sha256 검증 후에만 직전 사본을 지운다(보관 1벌) ─────────────
+PARTIAL_DIR_NAME = re.compile(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\.partial\Z')
+
+
+def file_sha(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_copy(source_dir, target_dir, *names):
+    """복사본과 원본(엔진 정지 상태)의 크기·sha256 을 비교하고 manifest.json 을 남긴다."""
+    manifest = {}
+    for name in names:
+        if not DB_NAME.match(name):
+            fail('DB_COPY: 예상하지 못한 이름 %s' % name)
+        source, target = os.path.join(source_dir, name), os.path.join(target_dir, name)
+        if os.lstat(source).st_size != os.lstat(target).st_size:
+            fail('DB_COPY: 크기가 다릅니다 %s' % name)
+        first, second = file_sha(source), file_sha(target)
+        if first != second:
+            fail('DB_COPY: sha256 이 다릅니다 %s' % name)
+        manifest[name] = {'size': os.lstat(target).st_size, 'sha256': second}
+    path = os.path.join(target_dir, 'manifest.json')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as handle:
+        json.dump(manifest, handle, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    for name in list(names) + ['manifest.json']:
+        fd = os.open(os.path.join(target_dir, name), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def remove_backup_dir(target):
+    for item in os.listdir(target):
+        if not (DB_NAME.match(item) or item == 'manifest.json'):
+            fail('BACKUP_PRUNE: 예상하지 못한 파일 %s' % item)
+    for item in os.listdir(target):
+        os.unlink(os.path.join(target, item))
+    os.rmdir(target)
+
+
+def partial_prune(folder):
+    """이전 실행이 남긴 미완성(.partial) 사본만 지운다. 완성된 사본은 건드리지 않는다."""
+    for name in sorted(os.listdir(folder)):
+        if PARTIAL_DIR_NAME.match(name):
+            remove_backup_dir(os.path.join(folder, name))
+            print(name)
+
+
+# ── 공간 예산(같은 파일시스템이면 합산) ──────────────────────────────────────────
+def disk_budget(*pairs):
+    """인자: 경로=필요바이트 ... 같은 장치끼리 합산해 여유와 비교한다. 시험 때만 가짜 여유 바이트를 쓴다."""
+    needs, free = {}, {}
+    fake = os.environ.get('NAVER_DEPLOY_FAKE_FREE_BYTES') if ROOT else None
+    for pair in pairs:
+        path, _, amount = pair.rpartition('=')
+        try:
+            info = os.statvfs(path)
+            device = os.stat(path).st_dev
+        except OSError:
+            fail('DISK: 경로를 확인하지 못했습니다 %s' % path[len(ROOT):])
+        needs[device] = needs.get(device, 0) + int(amount)
+        free[device] = int(fake) if fake else info.f_bavail * info.f_frsize
+    for device, need in needs.items():
+        if free[device] < need:
+            fail('DISK: 필요 %d 바이트, 여유 %d 바이트 (부족 %d)' % (need, free[device], need - free[device]))
+    print('ok')
+
+
+def image_sizes():
+    """표준입력의 docker image inspect JSON 배열에서 Size 합계(바이트)."""
+    rows = json.load(sys.stdin)
+    print(sum(int(row.get('Size') or 0) for row in rows))
+
+
+# ── 정리 계획(cleanup-plan)과 실행(cleanup) ────────────────────────────────────
+# 대상은 metainc/naver-engine·metainc/naver-relay 의 커밋(40자리) 태그와 releases/naver-<40자리> 폴더뿐이다.
+# 현재 판, 고정 fallback, 컨테이너(실행·정지 모두)가 쓰는 이미지 ID, 관제 unit·compose·override·companion·
+# 이 장치 기록이 가리키는 판·경로는 언제나 뺀다. 그 밖(saved-exports, receipts, runtime.env, 키, 데이터 폴더,
+# 백업, 다른 앱 이미지, volume, build cache)은 계획에 들어올 수 없다.
+FALLBACK_COMMIT = '89a924f2416f0450f38854b531bdf8778558dca6'
+NAVER_REPOS = ('metainc/naver-engine', 'metainc/naver-relay')
+RELEASE_REF = re.compile(r'releases/naver-([0-9a-f]{40})(?![0-9a-f])')
+
+
+def docker(argv, timeout=120):
+    done = subprocess.run(['docker'] + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
+                          env={'PATH': os.environ.get('PATH', '/usr/sbin:/usr/bin:/sbin:/bin'), 'LANG': 'C'})
+    return done.returncode, done.stdout.decode('utf-8', 'replace'), done.stderr.decode('utf-8', 'replace')
+
+
+def docker_json(argv):
+    code, out, _ = docker(argv)
+    if code:
+        fail('CLEANUP_PLAN: docker %s 실패' % argv[0])
+    return json.loads(out)
+
+
+def text_or_empty(path):
+    try:
+        with open(path, errors='replace') as handle:
+            return handle.read()
+    except OSError:
+        return ''
+
+
+def human_bytes(value):
+    """docker 의 사람용 크기(예: 1.23GB, 512.5MB; 1000 단위)를 바이트로."""
+    match = re.fullmatch(r'\s*([0-9.]+)\s*([kKMGT]?B)\s*', str(value or ''))
+    if not match:
+        return None
+    scale = {'B': 1, 'kB': 1000, 'KB': 1000, 'MB': 1000 ** 2, 'GB': 1000 ** 3, 'TB': 1000 ** 4}[match.group(2)]
+    return int(float(match.group(1)) * scale)
+
+
+def tree_bytes(path):
+    total = 0
+    for folder, children, files in os.walk(path):
+        for name in files + children:
+            try:
+                total += os.lstat(os.path.join(folder, name)).st_blocks * 512
+            except OSError:
+                pass
+    return total
+
+
+def protected_state():
+    """보호 대상: 커밋·이미지 ID·release 경로. 근거별로 남긴다."""
+    commits = {FALLBACK_COMMIT: ['fallback']}
+    reasons_path = {}
+    texts = []
+    unit_dir = ROOT + '/etc/systemd/system'
+    try:
+        names = sorted(os.listdir(unit_dir))
+    except OSError:
+        fail('CLEANUP_PLAN: unit 폴더를 읽지 못했습니다')
+    for name in names:
+        if 'naver' in name and name.endswith(('.service', '.timer', '.path', '.socket')):
+            texts.append(('unit', text_or_empty(os.path.join(unit_dir, name))))
+    current = []
+    for name in ('engine', 'relay'):
+        captured = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(captured):
+                unit_parse(unit_dir + '/metainc-naver-' + name + '.service', name)
+        except Refuse as error:
+            fail('CLEANUP_PLAN: 현재 unit 모양을 확인하지 못해 계획을 세우지 않습니다 (%s)' % str(error).split(':')[0])
+        commit, companion = captured.getvalue().split()
+        current.append(commit)
+        if companion != '-':
+            texts.append(('companion', text_or_empty(ROOT + companion)))
+    if len(set(current)) != 1:
+        fail('CLEANUP_PLAN: engine·relay unit 이 다른 판을 가리킵니다')
+    commits.setdefault(current[0], []).append('current')
+    release = ROOT + RELEASES + '/naver-' + current[0]
+    for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml', 'deploy/naver-engine-backup.override.yml',
+                 'preview-engine.override.yml', 'preview-relay.override.yml'):
+        texts.append(('compose', text_or_empty(os.path.join(release, name))))
+    for kind, text in texts:
+        for commit in RELEASE_REF.findall(text):
+            reasons_path.setdefault(commit, set()).add(kind)
+    for name in ('state.json', 'current.json'):
+        data = text_or_empty(ROOT + '/var/lib/metainc/naver-deploy/' + name)
+        try:
+            data = json.loads(data) if data else {}
+        except ValueError:
+            fail('CLEANUP_PLAN: %s 를 읽지 못했습니다' % name)
+        for key, value in data.items():
+            if key.endswith('commit') and isinstance(value, str) and HEX40.match(value):
+                commits.setdefault(value, []).append('deploy-record')
+    # 모든 컨테이너(실행·정지)가 쓰는 이미지 ID 와 bind 경로.
+    code, out, _ = docker(['ps', '--all', '--no-trunc', '--format', '{{.ID}}'])
+    if code:
+        fail('CLEANUP_PLAN: docker ps 실패')
+    used_images = set()
+    for identity in out.split():
+        rows = docker_json(['inspect', identity])
+        for row in rows:
+            used_images.add(row.get('Image'))
+            for mount in row.get('Mounts') or []:
+                for commit in RELEASE_REF.findall(str(mount.get('Source') or '')):
+                    reasons_path.setdefault(commit, set()).add('container-mount')
+    return commits, {c: sorted(r) for c, r in reasons_path.items()}, used_images
+
+
+def build_plan():
+    commits, path_refs, used_images = protected_state()
+    lines = docker(['image', 'ls', '--no-trunc', '--format', '{{json .}}'])
+    if lines[0]:
+        fail('CLEANUP_PLAN: docker image ls 실패')
+    tags = []
+    for line in lines[1].splitlines():
+        row = json.loads(line)
+        if row.get('Repository') in NAVER_REPOS and HEX40.match(row.get('Tag') or ''):
+            tags.append((row['Repository'], row['Tag'], row.get('ID')))
+    protected_ids = set(used_images)
+    for repository, tag, identity in tags:
+        if tag in commits:
+            protected_ids.add(identity)
+    candidates, kept = [], {'protected_commits': sorted(commits), 'kept_images': 0, 'kept_releases': 0}
+    sizes = {}
+    for repository, tag, identity in sorted(tags):
+        if tag in commits or identity in protected_ids:
+            kept['kept_images'] += 1
+            continue
+        rows = docker_json(['image', 'inspect', repository + ':' + tag])
+        if rows[0].get('Id') != identity:
+            fail('CLEANUP_PLAN: 태그가 계산 중에 바뀌었습니다')
+        sizes[repository + ':' + tag] = int(rows[0].get('Size') or 0)
+        candidates.append({'type': 'image', 'ref': repository + ':' + tag, 'id': identity,
+                           'size_bytes': sizes[repository + ':' + tag]})
+    try:
+        names = sorted(os.listdir(ROOT + RELEASES))
+    except OSError:
+        fail('CLEANUP_PLAN: releases 폴더를 읽지 못했습니다')
+    for name in names:
+        match = re.fullmatch(r'naver-([0-9a-f]{40})', name)
+        path = RELEASES + '/' + name
+        full = ROOT + path
+        if not match or os.path.islink(full) or not os.path.isdir(full):
+            continue
+        if match.group(1) in commits or match.group(1) in path_refs:
+            kept['kept_releases'] += 1
+            continue
+        candidates.append({'type': 'release', 'ref': path, 'id': '', 'size_bytes': tree_bytes(full)})
+    canonical = json.dumps(sorted([c['type'], c['ref'], c['id']] for c in candidates), separators=(',', ':'))
+    digest = hashlib.sha256(canonical.encode()).hexdigest()
+    # 회수량 추정: docker system df -v 의 UniqueSize(이 이미지만 쓰는 층) 합 = 하한
+    # (후보끼리만 공유하는 층은 빠진다), image inspect Size 합 = 상한(공유 층 포함). release 는 디스크 블록 합.
+    unique_total, unique_known = 0, True
+    code, out, _ = docker(['system', 'df', '-v', '--format', '{{json .}}'], timeout=300)
+    by_ref = {}
+    try:
+        data = json.loads(out.strip().splitlines()[0]) if not code and out.strip() else None
+        for row in (data or {}).get('Images') or []:
+            by_ref[str(row.get('Repository')) + ':' + str(row.get('Tag'))] = human_bytes(row.get('UniqueSize'))
+    except (ValueError, IndexError, AttributeError):
+        by_ref = {}
+    for candidate in candidates:
+        if candidate['type'] == 'image':
+            value = by_ref.get(candidate['ref'])
+            if value is None:
+                unique_known = False
+            else:
+                unique_total += value
+    release_total = sum(c['size_bytes'] for c in candidates if c['type'] == 'release')
+    image_upper = sum(c['size_bytes'] for c in candidates if c['type'] == 'image')
+    estimate = {'method': 'images: sum of docker system df -v UniqueSize (lower bound; layers shared only among '
+                          'candidates are not counted) and sum of docker image inspect Size (upper bound); '
+                          'releases: sum of on-disk blocks',
+                'images_unique_bytes_lower_bound': unique_total if unique_known else None,
+                'images_size_bytes_upper_bound': image_upper, 'releases_bytes': release_total,
+                'total_lower_bound': (unique_total + release_total) if unique_known else release_total,
+                'total_upper_bound': image_upper + release_total}
+    return {'candidates': candidates, 'allowlist_sha256': digest, 'kept': kept,
+            'path_references': path_refs, 'reclaim_estimate': estimate,
+            'counts': {'images': sum(1 for c in candidates if c['type'] == 'image'),
+                       'releases': sum(1 for c in candidates if c['type'] == 'release')}}
+
+
+def free_bytes():
+    info = os.statvfs(ROOT + RELEASES if os.path.isdir(ROOT + RELEASES) else ROOT + '/')
+    return info.f_bavail * info.f_frsize
+
+
+def cleanup_plan():
+    plan = build_plan()
+    plan.update(mode='cleanup-plan', read_only=True, free_bytes=free_bytes(),
+                generated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+    print('NAVER_DEPLOY_CLEANUP_PLAN=' + json.dumps(plan, sort_keys=True, separators=(',', ':')))
+
+
+def cleanup(expected, private_log):
+    """계획을 다시 세워 해시가 정확히 같을 때만, 그 목록만 지운다. 결과는 고정 형식 한 줄."""
+    result = {'mode': 'cleanup', 'allowlist_sha256': expected, 'removed': [], 'refused': [], 'failed': [],
+              'free_bytes_before': free_bytes()}
+
+    def finish(status, code):
+        result.update(status=status, exit_code=code, free_bytes_after=free_bytes())
+        print('NAVER_DEPLOY_CLEANUP_RESULT=' + json.dumps(result, sort_keys=True, separators=(',', ':')))
+        sys.exit(code)
+    if not re.fullmatch(r'[0-9a-f]{64}', expected or ''):
+        finish('REFUSED_BAD_INPUT', 10)
+    try:
+        plan = build_plan()
+    except Refuse:
+        finish('REFUSED_PLAN_FAILED', 10)
+    result['planned_sha256'] = plan['allowlist_sha256']
+    if plan['allowlist_sha256'] != expected:
+        finish('REFUSED_HASH_MISMATCH', 10)
+    log = open(private_log, 'a')
+    for candidate in plan['candidates']:
+        if candidate['type'] != 'image':
+            continue
+        # 지우기 직전 다시: 이 이미지(또는 그 위에 쌓인 이미지)로 만든 컨테이너가 하나도 없어야 한다.
+        code, out, _ = docker(['ps', '--all', '--quiet', '--no-trunc', '--filter', 'ancestor=' + candidate['id']])
+        if code or out.strip():
+            result['refused'].append(candidate['ref'])
+            continue
+        code, out, err = docker(['image', 'rm', candidate['ref']])
+        log.write('[image rm %s] exit %d\n%s%s' % (candidate['ref'], code, out[-2000:], err[-2000:]))
+        if code == 0:
+            result['removed'].append(candidate['ref'])
+        elif 'conflict' in err.lower() or 'in use' in err.lower() or 'being used' in err.lower():
+            result['refused'].append(candidate['ref'])
+        else:
+            result['failed'].append(candidate['ref'])
+    try:
+        commits, path_refs, _ = protected_state()
+    except Refuse:
+        commits, path_refs = None, None
+    for candidate in plan['candidates']:
+        if candidate['type'] != 'release':
+            continue
+        if commits is None:
+            result['refused'].append(candidate['ref'])
+            continue
+        commit = candidate['ref'].rsplit('-', 1)[1]
+        full = ROOT + candidate['ref']
+        parent = os.path.dirname(full)
+        if (commit in commits or commit in path_refs or os.path.islink(full) or not os.path.isdir(full)
+                or os.path.islink(parent)
+                or os.path.realpath(full) != os.path.join(os.path.realpath(parent), os.path.basename(full))
+                or not re.fullmatch(re.escape(RELEASES) + r'/naver-[0-9a-f]{40}', candidate['ref'])):
+            result['refused'].append(candidate['ref'])
+            continue
+        done = subprocess.run(['rm', '-r', '--', full], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        log.write('[rm -r %s] exit %d\n%s' % (candidate['ref'], done.returncode, done.stderr.decode('utf-8', 'replace')[-2000:]))
+        (result['removed'] if done.returncode == 0 else result['failed']).append(candidate['ref'])
+    log.close()
+    if result['refused'] or result['failed']:
+        finish('PARTIAL', 5)
+    finish('CLEANED', 0)
+
+
 def sha(path):
     print(hashlib.sha256(read(path, 'rb')).hexdigest())
 
@@ -900,7 +1247,8 @@ COMMANDS = {'unit-parse': unit_parse, 'override-check': override_check, 'subst':
             'state-get': state_get, 'history-add': history_add, 'prune-list': prune_list,
             'prune-history': prune_history, 'db-files': db_files, 'same-size': same_size,
             'backup-prune': backup_prune, 'sha': sha, 'tree-sha': tree_sha, 'result-json': result_json,
-            'inspect': inspect, 'env-switches': env_switches, 'container-mounts': container_mounts,
+            'inspect': inspect, 'verify-copy': verify_copy, 'partial-prune': partial_prune,
+            'disk-budget': disk_budget, 'image-sizes': image_sizes, 'cleanup-plan': cleanup_plan, 'cleanup': cleanup, 'env-switches': env_switches, 'container-mounts': container_mounts,
             'compose-shape': compose_shape, 'shape-diff': shape_diff, 'check-config-run': check_config_run,
             'prune-logs': prune_logs,
             'schema-file': lambda path: print(schema_of(read(path))),
@@ -1380,11 +1728,38 @@ main_inspect() {
   py inspect
 }
 
+# ── cleanup: cleanup-plan 이 낸 allowlist_sha256 과 다시 계산한 계획이 정확히 같을 때만 그 목록만 지운다 ──
+cleanup_refuse() { # status exit-code
+  printf 'NAVER_DEPLOY_CLEANUP_RESULT={"exit_code":%s,"mode":"cleanup","status":"%s"}\n' "$2" "$1"
+  exit "$2"
+}
+
+main_cleanup() {
+  local expected=$1 phase stamp
+  printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$' || cleanup_refuse REFUSED_BAD_INPUT 10
+  if [ "$TEST_MODE" = 0 ] && [ "$(id -u)" != 0 ]; then
+    cleanup_refuse REFUSED_NOT_ROOT 10
+  fi
+  mkdir -p "$R$STATE_DIR/logs"
+  chmod 700 "$R$STATE_DIR" "$R$STATE_DIR/logs"
+  exec 9>>"$R$STATE_DIR/lock"
+  flock -n 9 || cleanup_refuse LOCKED 11
+  phase=$(py state-get "$STATE_FILE" phase 2>/dev/null) || phase=''
+  if phase_needs_restore "$phase"; then
+    cleanup_refuse REFUSED_DEPLOY_NOT_FINISHED 10
+  fi
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  CMD_LOG="$R$STATE_DIR/logs/commands-$stamp.log"
+  : > "$CMD_LOG"
+  py prune-logs "$R$STATE_DIR/logs" 10
+  py cleanup "$expected" "$CMD_LOG"
+}
+
 # ── deploy ──────────────────────────────────────────────────────────────────
 main_deploy() {
   local tar_path cur cur_r companion name info id user src label unit
   local rel_new rel_cur run_dir stamp sum_runtime sum_tmpfiles sum_tunnel sum_nginx size files f
-  local free_kb need_kb override cid new_switches shape_old shape_new
+  local override cid new_switches shape_old shape_new build_need docker_root
   NEW=${1:-}
   tar_path=${2:-}
   printf '%s' "$NEW" | grep -Eq '^[0-9a-f]{40}$' || { NEW=''; die BAD_INPUT "커밋은 40자리 소문자 16진수여야 합니다"; }
@@ -1494,6 +1869,21 @@ EOF
   fi
   log "스키마 동일: $SCHEMA_NEW"
 
+  # ── 2b. 빌드 전 공간 예산(이미지·release 폴더를 만들기 전에) ──
+  # 빌드 예산 = 지금 실행 중인 두 이미지 Size 합(공유 층까지 모두 새로 받는 최악의 경우, 최소 512MiB)
+  #           + 원본 tar 크기(release 폴더). DB 사본 예산 = DB 파일 합 + 256MiB(직전 사본은 남아 있는 상태로).
+  # 같은 파일시스템이면 합산해 비교한다. 모자라면 아무것도 만들지 않고 거부한다.
+  info=$(py db-files "$R$DATA_DIR") || die DB_FILES "$info"
+  size=${info%% *}
+  [ -d "$R$DB_BACKUP_PARENT" ] || die LAYOUT "$DB_BACKUP_PARENT 가 없습니다"
+  build_need=$(dk image inspect "$PREV_ENGINE_IMAGE" "$PREV_RELAY_IMAGE" 2>>"$CMD_LOG" | py image-sizes) \
+    || die LAYOUT "현재 이미지 크기를 읽지 못했습니다"
+  [ "$build_need" -ge 536870912 ] || build_need=536870912
+  docker_root=$(dk info --format '{{.DockerRootDir}}' 2>>"$CMD_LOG") || die LAYOUT "docker 저장 위치를 읽지 못했습니다"
+  info=$(py disk-budget "$R$docker_root=$build_need" "$R$RELEASES=$(wc -c < "$tar_path" | tr -d ' ')" \
+    "$R$DB_BACKUP_PARENT=$((size + 268435456))") || die DISK_PREBUILD "$info"
+  log "빌드 전 공간 예산 통과(빌드 ${build_need}B + DB 사본 $((size + 268435456))B)"
+
   # ── 3. 복구 기록 시작(서비스를 멈추기 전) ──
   run_dir="$STATE_DIR/runs/$stamp-$(printf '%s' "$NEW" | cut -c1-12)"
   mkdir "$R$run_dir"
@@ -1569,13 +1959,10 @@ EOF
   [ "$new_switches" = "$CUR_SWITCHES" ] || die FLAGS_CHANGED "새 판 스위치($new_switches)가 현재($CUR_SWITCHES)와 다릅니다"
   log "check-config(격리): 스위치 현재와 동일 $new_switches"
 
-  # 디스크: DB cold copy 공간(+256MB) 이 없으면 멈추기 전에 거부.
+  # 디스크(빌드 뒤 다시): DB 사본 공간(DB 합 + 256MiB, 직전 사본은 남긴 채) 이 없으면 멈추기 전에 거부.
   info=$(py db-files "$R$DATA_DIR") || die DB_FILES "$info"
   size=${info%% *}
-  [ -d "$R$DB_BACKUP_PARENT" ] || die LAYOUT "$DB_BACKUP_PARENT 가 없습니다"
-  free_kb=$(df -Pk "$R$DB_BACKUP_PARENT" | awk 'NR==2 {print $4}')
-  need_kb=$((size / 1024 + 262144))
-  [ "$free_kb" -ge "$need_kb" ] || die DISK "DB 복사 공간 부족(필요 ${need_kb}KB, 여유 ${free_kb}KB)"
+  info=$(py disk-budget "$R$DB_BACKUP_PARENT=$((size + 268435456))") || die DISK "$info"
 
   # 변하지 않아야 할 것들의 지문(값은 출력하지 않는다).
   sum_runtime=$(py sha "$R$RUNTIME_ENV" 2>/dev/null || echo absent)
@@ -1601,17 +1988,29 @@ EOF
   stopped_confirmed "$ENGINE_UNIT" naver-engine || die DB_COPY "엔진이 멈춰 있지 않아 복사하지 않습니다"
   mkdir -p "$R$DB_BACKUPS"
   chmod 700 "$R$DB_BACKUPS"
+  # 보관 1벌. 새 사본을 .partial 에 만들고 크기·sha256 검증·fsync 가 끝난 뒤에만 이름을 바꾸고
+  # 그다음에 직전 사본을 지운다. 검증 실패면 새 사본만 지우고 직전 사본은 그대로 둔다.
+  while read -r f; do
+    [ -z "$f" ] || log "지난 실행의 미완성 사본 정리: $f"
+  done < <(py partial-prune "$R$DB_BACKUPS")
   DB_BACKUP="$DB_BACKUPS/$stamp-$(printf '%s' "$cur" | cut -c1-12)"
-  mkdir "$R$DB_BACKUP"
+  mkdir "$R$DB_BACKUP.partial"
   files=$(py db-files "$R$DATA_DIR")
   for f in ${files#* }; do
-    cp -p "$R$DATA_DIR/$f" "$R$DB_BACKUP/$f"
-    py same-size "$R$DATA_DIR/$f" "$R$DB_BACKUP/$f"
+    cp -p "$R$DATA_DIR/$f" "$R$DB_BACKUP.partial/$f"
   done
-  log "DB 파일 복사(정지 상태): $DB_BACKUP (${files#* })"
+  # shellcheck disable=SC2086
+  if ! info=$(py verify-copy "$R$DATA_DIR" "$R$DB_BACKUP.partial" ${files#* }); then
+    py partial-prune "$R$DB_BACKUPS" >/dev/null || true
+    DB_BACKUP=''
+    die DB_COPY "$info"
+  fi
+  mv "$R$DB_BACKUP.partial" "$R$DB_BACKUP"
+  sync
+  log "DB 파일 복사·검증(정지 상태, 크기·sha256): $DB_BACKUP (${files#* })"
   while read -r f; do
-    [ -z "$f" ] || log "오래된 DB 사본 정리: $f"
-  done < <(py backup-prune "$R$DB_BACKUPS" 3 || warn BACKUP_PRUNE_FAILED "오래된 DB 사본 정리 실패")
+    [ -z "$f" ] || log "직전 DB 사본 정리(새 사본 검증 뒤): $f"
+  done < <(py backup-prune "$R$DB_BACKUPS" 1 || warn BACKUP_PRUNE_FAILED "직전 DB 사본 정리 실패")
 
   # ── 8. unit 교체(커밋만 치환, 치환 개수 단언) → daemon-reload → 컨테이너 생성 ──
   set_phase switching
@@ -1684,6 +2083,14 @@ case "$MODE" in
     [ "$#" = 1 ] || { echo "사용: $0 inspect" >&2; exit 64; }
     main_inspect
     ;;
+  cleanup-plan)
+    [ "$#" = 1 ] || { echo "사용: $0 cleanup-plan" >&2; exit 64; }
+    py cleanup-plan
+    ;;
+  cleanup)
+    [ "$#" = 2 ] || { echo "사용: $0 cleanup <allowlist_sha256>" >&2; exit 64; }
+    main_cleanup "$2"
+    ;;
   deploy)
     shift
     [ "$#" -ge 2 ] || { echo "사용: $0 deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2; exit 64; }
@@ -1709,7 +2116,7 @@ case "$MODE" in
     main_deploy "$D_COMMIT" "$D_TAR"
     ;;
   *)
-    echo "사용: $0 inspect | deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2
+    echo "사용: $0 inspect | cleanup-plan | cleanup <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2
     exit 64
     ;;
 esac
