@@ -1,0 +1,63 @@
+name: Read-only conversion incoming diagnosis (prepare 41023987057)
+on:
+  push:
+    branches: [claude/naver-conversion-incoming-diagnostic-20261030]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    if: github.repository == 'metainchelp-boop/logic-analysis' && github.actor == 'metainchelp-boop' && github.event_name == 'push' && github.ref == 'refs/heads/claude/naver-conversion-incoming-diagnostic-20261030' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Verify new read-only boundary
+        run: python3 -I -B -m unittest discover -s tools -p test_diagnose_conversion_incoming_20261030.py -q
+      - name: Bind unchanged qualified release and failed prepare identity
+        run: python3 -I -B tools/diagnose_conversion_incoming_20261030.py
+      - name: Read only incoming baseline condition
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          P22_WIRE: ${{env.P22_WIRE}}
+          P22_BOOT: ${{env.P22_BOOT}}
+        with:
+          host: ${{secrets.VPS_HOST}}
+          username: ${{secrets.VPS_USER}}
+          key: ${{secrets.VPS_SSH_KEY}}
+          envs: P22_WIRE,P22_BOOT
+          command_timeout: 2m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PYCODE'
+            import base64,hashlib,json,os,signal,types
+            signal.alarm(100)
+            s='transport';r={}
+            try:
+             w=os.environ['P22_WIRE'];b=os.environ['P22_BOOT']
+             if len(b)>32768:raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+             raw=base64.b64decode(b,validate=True)
+             if hashlib.sha256(raw).hexdigest()!='58bc51e9a26f49a54ca59e4e9f5188f43c963fc9f050c4738e3ac3305aa14fd5':raise ValueError('COMPLETION_TRANSPORT_SOURCE')
+             T=types.ModuleType('qualified_transport');exec(raw,T.__dict__)
+             if T.TRANSPORT_RAW_SHA256 is not None:raise ValueError('COMPLETION_TRANSPORT_PROFILE')
+             T.TRANSPORT_RAW_SHA256=hashlib.sha256(raw).hexdigest();s='decode';v=T.decode(w)
+             os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+             s='modules';m=T.modules(v);P=m['patch'];s='package';k=v['package']
+             if v['operation']!='preview-report-progress-prepare' or k['run_id']!='41023987057' or k['ciphertext_sha256']!='53b9fd97ccf1baf5923af959fd8b7e315df04c51b4440ce12de91a029ad32027':raise ValueError('PATCH_PACKAGE')
+             P.validate_package(k,m['release'])
+             r['root_user']=os.geteuid()==0;s='baseline';a=m['host'].NativeHost().baseline();c=P.CURRENT_BASELINE
+             r.update(actual_baseline_sha256=a,current_expected_sha256=c,equal=a==c);s='complete'
+            except Exception as e:
+             x=e.args[0] if len(e.args)==1 and type(e.args[0]) is str else ''
+             r['error_code']=x if x in {'PATCH_ENCODING','PATCH_SOURCE','PATCH_BUNDLE','PATCH_SCOPE','PATCH_BASELINE','PATCH_PACKAGE','PATCH_NOT_PINNED','DETAIL_AI_PINS_PENDING','PACKAGE_FIELDS','PACKAGE_SHAPE','PACKAGE_OPERATION','COMPLETION_TRANSPORT_SOURCE','COMPLETION_TRANSPORT_PROFILE','UNEXPECTED_CONTAINERS','AD_NOT_RUNNING'} else 'UNRECOGNIZED'
+            r['stage']=s
+            print('NAVER_CONVERSION_INCOMING_DIAGNOSTIC='+json.dumps(r,sort_keys=True))
+            PYCODE
