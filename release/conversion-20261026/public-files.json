@@ -1,15 +1,15 @@
 {
   ".github/workflows/debug-rank.yml": {
-    "bytes": 7576,
-    "sha256": "ee63071e612422dba2dd7a2c16ddb817bb77fce77801cad4ffa3ece9b9bae073"
+    "bytes": 7579,
+    "sha256": "5485a216b2bcaff9380af5dd5fbaef862d40c27a6e7047deaf37fc38edc09c83"
   },
   "release/conversion-20261026/.github/workflows/debug-rank.yml": {
     "bytes": 10843,
-    "sha256": "2fbaa5d3087483f4c1b6e362329b7539ae14e7aad9caa9b4d319f5217fa2f857"
+    "sha256": "3951c27ffbd5b9c365df7731290abb90f372be82fbfcb1cd6ca86c1fb8829cc6"
   },
   "release/conversion-20261026/README.md": {
-    "bytes": 1386,
-    "sha256": "2c5e3d2b3f7bbf72bc549bbbfa5e57748e67e600e5905192a51467a1834b98bb"
+    "bytes": 1711,
+    "sha256": "0d24d70182128f3ec057a5103f01693fceac0d501dcf6d9cd9549c995e6e8e78"
   },
   "release/conversion-20261026/backend/naver_market_export.py": {
     "bytes": 17992,
@@ -48,12 +48,12 @@
     "sha256": "6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28"
   },
   "release/conversion-20261026/backend/tools/naver_report_progress_patch.py": {
-    "bytes": 121552,
-    "sha256": "4d010dc3d4211442c3149e5b6aea58c5a2608f01a83b0388b7fc064c5795f108"
+    "bytes": 123343,
+    "sha256": "0048f014041bf451d26835dffce314a57d699f6046c85000362faedfee175596"
   },
   "release/conversion-20261026/backend/tools/naver_report_progress_transport.py": {
-    "bytes": 19834,
-    "sha256": "7367334d1205b2d22856d50f773d53cf71fec83bc5df90700a03d312b8fdf762"
+    "bytes": 19812,
+    "sha256": "58bc51e9a26f49a54ca59e4e9f5188f43c963fc9f050c4738e3ac3305aa14fd5"
   },
   "release/conversion-20261026/backend/tools/naver_saved_exports.py": {
     "bytes": 37216,
@@ -61,7 +61,7 @@
   },
   "release/conversion-20261026/bundle.py": {
     "bytes": 4142,
-    "sha256": "8d75bd0583897db0d66780e8bc8e1c06fc65b7de60837fadf08b7ee2ff5aedea"
+    "sha256": "546c7cb729428add49a79fcac72eeb05fb652ff67dbdd236ce0f947bf0d602c9"
   },
   "release/conversion-20261026/qualification.json": {
     "bytes": 4334,
@@ -72,11 +72,11 @@
     "sha256": "561fcde0b4877b5c76972ad5ce970ab5d4e4eb415720aeaaba46603a9a328c7c"
   },
   "tools/check_conversion_executor.py": {
-    "bytes": 15669,
-    "sha256": "d8bd3fe4bdb1cd69a8fb2898cfa3d7eea1d9042616be4c6fa85ba1d4d5d9cd71"
+    "bytes": 22493,
+    "sha256": "441c39cbc2d90f0a097fd3787936fe04fe909c12da7b9d574ac776bd35a9afe1"
   },
   "tools/test_conversion_executor.py": {
-    "bytes": 8648,
-    "sha256": "05d9023f3deabc30b0816f97b8cb74e05f374142ae289b6095792de0f1e322a6"
+    "bytes": 17233,
+    "sha256": "7a4f2b5695c95890b46562b552315a3e25652930fbedc2919ac7083c83a2b551"
   }
 }

@@ -12,10 +12,42 @@ import sys
 BASE = '35f2f5b7d3c3feefbc6bd6eaf838f63ebbbcbfbd'
 PRIVATE_BASE = '7b8eecf673d5d9db0c79b8a705414d07a87b1aed'
 PRIVATE_REPO = 'metainchelp-boop/metainc-ad-dashboard'
-PRIVATE_REF = 'refs/heads/codex/naver-conversion-baseline-transition-20261026'
+PRIVATE_REF = 'refs/heads/claude/naver-conversion-pool-first-executor-20261030'
+# Exact private qualification identity for the c44a -> abceeb7 pool-first release.
+PRIVATE_HEAD = 'ee04b7fb7f863081e5f0712e07b24792b2631578'
+PRIVATE_TREE = 'dc4f52da6da54620d6b4f93ec7753e868a0a3b43'
+PRIVATE_RUN_ID = '41017595072'
+QUALIFICATION_SCOPE = 'pool_first_bundle_checks_private_only'
+REPORT_PROGRESS_JOB_SHA256 = '3951c27ffbd5b9c365df7731290abb90f372be82fbfcb1cd6ca86c1fb8829cc6'
+BUNDLE_PYTHON_SHA256 = '546c7cb729428add49a79fcac72eeb05fb652ff67dbdd236ce0f947bf0d602c9'
+PUBLIC_FILES = {"backend/naver_market_export.py": {"bytes": 17992, "sha256": "d491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8"}, "backend/naver_product_export.py": {"bytes": 20647, "sha256": "42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59"}, "backend/tools/naver_completion_download.py": {"bytes": 3548, "sha256": "cc5f87d78f05cac5ad1ceebf99c79505edd4604fd65007403e752d06c0e05c5e"}, "backend/tools/naver_completion_exports.py": {"bytes": 10121, "sha256": "1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed"}, "backend/tools/naver_erp_tunnel_service_install.py": {"bytes": 30508, "sha256": "236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a"}, "backend/tools/naver_preview_completion_release.py": {"bytes": 130559, "sha256": "3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2"}, "backend/tools/naver_preview_lifecycle.py": {"bytes": 8083, "sha256": "4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4"}, "backend/tools/naver_preview_release.py": {"bytes": 23235, "sha256": "7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84"}, "backend/tools/naver_preview_upgrade.py": {"bytes": 19571, "sha256": "6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28"}, "backend/tools/naver_report_progress_patch.py": {"bytes": 123343, "sha256": "0048f014041bf451d26835dffce314a57d699f6046c85000362faedfee175596"}, "backend/tools/naver_report_progress_transport.py": {"bytes": 19812, "sha256": "58bc51e9a26f49a54ca59e4e9f5188f43c963fc9f050c4738e3ac3305aa14fd5"}, "backend/tools/naver_saved_exports.py": {"bytes": 37216, "sha256": "062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737"}}
+POOL_FIRST = {
+    'base': '49275594f9c9344afd403b32f129756194423e1b',
+    'manifest_sha256': 'fbd61469ff15fd5d067257e08792ac9d4e5b53e24eb5bd53f4ad5401f4ab2f2d',
+    'tests': 20, 'passed': 20, 'failures': 0, 'errors': 0, 'skipped': 0,
+    'command_sha256': hashlib.sha256(b'PYTHONPATH=backend/tools:backend/tests python3 -m unittest test_conversion_pool_first_transition test_report_progress_store_history -q').hexdigest(),
+    'old_commit': 'c44a66393340314796851f4dd524dad523bd5415',
+    'target_commit': 'abceeb737548ada081072df95279d19981b561f7',
+    'private_fixtures_added': 2,
+    'reserved_apply_operation_id': '01330a7419d0494d8bfb74ec1fcb7e28',
+    'reserved_rollback_operation_id': 'ba912f5af5d34a6985d9415013f90486',
+}
+# The two added private fixtures (pinned by the layer-2 manifest above) must be the exact
+# old/new schema rows the qualified controller deploys.
+POOL_FIRST_FIXTURES = {
+    'fixtures/c44a66393340314796851f4dd524dad523bd5415/naver_runtime/report_output_schema.py': (420, 10231, '3b978c85f92233fb5d4afdfce2c6b761b431db5f6c41de4b1e781829b793ee2a'),
+    'fixtures/abceeb737548ada081072df95279d19981b561f7/naver_runtime/report_output_schema.py': (420, 10448, '109b76c3ec0af340491842657a0902dd1aa05112dde089499b2bbfc4981a56fd'),
+}
+POLICY_FIELDS = frozenset({'job_conclusion', 'private_artifact_id', 'private_artifact_sha256', 'private_fixture_bodies_exported',
+                           'private_head', 'private_job_id', 'private_run_id', 'private_tree', 'receipt_sha256', 'run_conclusion',
+                           'schema', 'secret_values_copied', 'spec_review', 'standards_review', 'trust_boundary'})
+RECEIPT_FIELDS = frozenset({'schema', 'repository', 'private', 'ref', 'head', 'base', 'tree', 'run_id', 'attempt', 'status',
+                            'workflow', 'base_manifest_sha256', 'base_files', 'private_fixtures', 'report_progress_job_sha256',
+                            'bundle_python_sha256', 'transition', 'pool_first', 'checks', 'public_files', 'server_calls',
+                            'secret_values_read', 'qualification_scope', 'deployment_ready'})
 REPO = 'metainchelp-boop/logic-analysis'
 RELEASE = 'codex/naver-conversion-existing-executor-20261026'
-IMPL = 'codex/naver-conversion-baseline-executor-20261026'
+IMPL = 'claude/naver-conversion-pool-first-executor-20261030'
 NS = 'release/conversion-20261026'
 WORKFLOW = '.github/workflows/debug-rank.yml'
 ROOT = Path(__file__).resolve().parents[1]
@@ -129,17 +161,27 @@ jobs:
 
 
 def qualification(receipt, policy):
+    need(type(receipt) is dict and set(receipt) == RECEIPT_FIELDS, 'RECEIPT_FIELDS')
     need(receipt['schema'] == 'private-conversion-bundle-qualification-v1', 'RECEIPT_SCHEMA')
     for key, value in {'repository': PRIVATE_REPO, 'ref': PRIVATE_REF, 'base': PRIVATE_BASE,
                        'workflow': '.github/workflows/naver-conversion-bundle-private.yml',
                        'status': 'pass', 'base_files': 796, 'private_fixtures': 6,
-                       'qualification_scope': 'baseline_transition_bundle_checks_private_only'}.items():
+                       'base_manifest_sha256': 'ff1703526eca736923839c250bcebde1f9e20a8a305f4f7eb3341746583510c9',
+                       'head': PRIVATE_HEAD, 'tree': PRIVATE_TREE, 'run_id': PRIVATE_RUN_ID,
+                       'report_progress_job_sha256': REPORT_PROGRESS_JOB_SHA256,
+                       'bundle_python_sha256': BUNDLE_PYTHON_SHA256,
+                       'qualification_scope': QUALIFICATION_SCOPE}.items():
         need(receipt[key] == value and type(receipt[key]) is type(value), 'RECEIPT_IDENTITY')
     need(receipt['private'] is True and receipt['deployment_ready'] is False, 'RECEIPT_SCOPE')
     need(type(receipt['attempt']) is int and receipt['attempt'] == 1, 'RECEIPT_ATTEMPT')
     need(receipt['server_calls'] == receipt['secret_values_read'] == 0, 'RECEIPT_NO_SERVER')
     for key in ('head', 'tree', 'run_id'):
         need(receipt[key] == policy['private_' + key], 'PRIVATE_RUN_BINDING')
+    need(type(policy) is dict and set(policy) == POLICY_FIELDS and policy['schema'] == 'conversion-existing-executor-release-policy-v1', 'POLICY_FIELDS')
+    need(policy['trust_boundary'] == 'owner_reviewed_exact_public_release_commit'
+         and policy['private_fixture_bodies_exported'] == 0 and policy['secret_values_copied'] == 0, 'POLICY_SCOPE')
+    need(type(policy['private_job_id']) is int and type(policy['private_artifact_id']) is int
+         and re.fullmatch('[0-9a-f]{64}', policy['private_artifact_sha256']) is not None, 'POLICY_ARTIFACT')
     need(policy['run_conclusion'] == policy['job_conclusion'] == 'success', 'PRIVATE_SUCCESS')
     need(policy['spec_review'] == policy['standards_review'] == 'pass', 'PRIVATE_REVIEWS')
     need(len(receipt['checks']) == 2, 'CHECK_COUNT')
@@ -159,6 +201,25 @@ def qualification(receipt, policy):
     need(set(transition) == set(expected_transition), 'TRANSITION_FIELDS')
     need(all(type(transition[k]) is type(v) and transition[k] == v for k, v in expected_transition.items()), 'TRANSITION_PROOF')
     need(len(receipt['public_files']) == 12, 'PUBLIC_TOOL_COUNT')
+    need(receipt['public_files'] == PUBLIC_FILES, 'PUBLIC_TOOL_DIGESTS')
+    pool_first = receipt['pool_first']
+    need(type(pool_first) is dict and set(pool_first) == set(POOL_FIRST), 'POOL_FIRST_FIELDS')
+    need(all(type(pool_first[k]) is type(v) and pool_first[k] == v for k, v in POOL_FIRST.items()), 'POOL_FIRST_PROOF')
+
+
+def pool_first_identity(root):
+    """The qualified controller deploys exactly the privately tested fixture rows and IDs."""
+    path = root / NS / 'backend/tools/naver_report_progress_patch.py'
+    patch = types.ModuleType('qualified_patch'); patch.__file__ = str(path)
+    exec(compile(read(root, path.relative_to(root).as_posix()), str(path), 'exec'), patch.__dict__)
+    patch.require_pins()
+    old, new = POOL_FIRST_FIXTURES.values()
+    need((patch.OLD_COMMIT, patch.TARGET_COMMIT) == (POOL_FIRST['old_commit'], POOL_FIRST['target_commit']), 'POOL_FIRST_COMMITS')
+    need(patch.TARGET_DELTA == {'naver_runtime/report_output_schema.py': new}, 'POOL_FIRST_TARGET_FIXTURE')
+    need(patch.U2_D['naver_runtime/report_output_schema.py'] == old and 'naver_runtime/report_output_schema.py' not in patch.U3_D
+         and 'naver_runtime/report_output_schema.py' not in patch.C44_D, 'POOL_FIRST_OLD_FIXTURE')
+    need(all(name.split('/')[1] in (POOL_FIRST['old_commit'], POOL_FIRST['target_commit']) for name in POOL_FIRST_FIXTURES), 'POOL_FIRST_FIXTURE_PATHS')
+    need((APPLY_ID, ROLLBACK_ID) == (POOL_FIRST['reserved_apply_operation_id'], POOL_FIRST['reserved_rollback_operation_id']), 'RESERVED_IDENTITY')
 
 
 def deploy_context(env, event):
@@ -173,8 +234,8 @@ def deploy_context(env, event):
     need(all(value == 'off' for name, value in inputs.items() if name not in ('ad_prepare', 'ad_expected_baseline')), 'OTHER_INPUTS')
 
 
-APPLY_ID = 'd43ebab98f5941f08146490e48e71aab'
-ROLLBACK_ID = 'cb95f18a925e4637a8c5c7ac7b4583d0'
+APPLY_ID = '01330a7419d0494d8bfb74ec1fcb7e28'
+ROLLBACK_ID = 'ba912f5af5d34a6985d9415013f90486'
 
 
 def operation_packages(env, event):
@@ -243,6 +304,7 @@ def verify(root):
     need(sha(raw) == policy['receipt_sha256'], 'QUALIFICATION_HASH')
     receipt = json.loads(raw, object_pairs_hook=unique)
     qualification(receipt, policy)
+    pool_first_identity(root)
     manifest = json.loads(read(root, NS + '/public-files.json', 16384), object_pairs_hook=unique)
     additions = {NS + '/' + name for name in receipt['public_files']} | {
         NS + '/bundle.py', NS + '/' + WORKFLOW, NS + '/qualification.json',

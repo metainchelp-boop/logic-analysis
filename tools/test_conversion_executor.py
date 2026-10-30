@@ -4,6 +4,7 @@ import json
 from pathlib import Path, PurePosixPath
 import tempfile
 import unittest
+import unittest.mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('gate', HERE / 'check_conversion_executor.py')
@@ -136,6 +137,129 @@ class ExecutorBoundaryTests(unittest.TestCase):
             for name, cap in [('link', 3), ('file', 2), ('missing', 3)]:
                 with self.subTest(name=name), self.assertRaises(ValueError):
                     g.read(root, name, cap)
+
+
+class PoolFirstBoundaryTests(unittest.TestCase):
+    """New pool-first release: exact private identity, proof, IDs and public digests."""
+
+    def receipt(self):
+        root = HERE.parent / g.NS
+        return json.loads((root / 'qualification.json').read_bytes()), json.loads((root / 'release-policy.json').read_bytes())
+
+    def refused(self, receipt, policy):
+        with self.assertRaises(ValueError):
+            g.qualification(receipt, policy)
+
+    def test_wrong_or_previous_ref_scope_head_tree_and_run_refused(self):
+        receipt, policy = self.receipt()
+        g.qualification(receipt, policy)
+        self.assertEqual((receipt['ref'], receipt['qualification_scope']), (g.PRIVATE_REF, g.QUALIFICATION_SCOPE))
+        for name, value in [('ref', 'refs/heads/codex/naver-conversion-baseline-transition-20261026'),
+                            ('ref', 'refs/heads/main'), ('ref', g.PRIVATE_REF + 'x'),
+                            ('qualification_scope', 'baseline_transition_bundle_checks_private_only'),
+                            ('qualification_scope', 'unchanged_bundle_checks_private_only'),
+                            ('report_progress_job_sha256', '2fbaa5d3087483f4c1b6e362329b7539ae14e7aad9caa9b4d319f5217fa2f857'),
+                            ('bundle_python_sha256', '8d75bd0583897db0d66780e8bc8e1c06fc65b7de60837fadf08b7ee2ff5aedea'),
+                            ('base_manifest_sha256', '0' * 64), ('private_fixtures', 8)]:
+            with self.subTest(name=name, value=value):
+                self.refused({**receipt, name: value}, policy)
+        # Even a self-consistent policy cannot move the pinned private head, tree or run.
+        for name, value in [('head', '49275594f9c9344afd403b32f129756194423e1b'), ('tree', '565025160b2519e9e7c31596dbf01af266248d5e'),
+                            ('run_id', '40344629727')]:
+            with self.subTest(binding=name):
+                self.refused({**receipt, name: value}, {**policy, 'private_' + name: value})
+                self.refused(receipt, {**policy, 'private_' + name: value})
+
+    def test_receipt_and_policy_field_sets_are_exact(self):
+        receipt, policy = self.receipt()
+        for key in ('pool_first', 'transition', 'public_files'):
+            changed = dict(receipt); changed.pop(key)
+            with self.subTest(missing=key):
+                self.refused(changed, policy)
+        self.refused({**receipt, 'extra': True}, policy)
+        for key in ('private_artifact_id', 'private_job_id', 'trust_boundary'):
+            changed = dict(policy); changed.pop(key)
+            with self.subTest(policy_missing=key):
+                self.refused(receipt, changed)
+        for name, value in [('extra', 1), ('private_artifact_sha256', 'x'), ('private_job_id', '1'),
+                            ('private_fixture_bodies_exported', 1), ('secret_values_copied', 1), ('schema', 'other')]:
+            with self.subTest(policy=name):
+                self.refused(receipt, {**policy, name: value})
+
+    def test_missing_or_tampered_pool_first_fields_refused(self):
+        receipt, policy = self.receipt()
+        self.assertEqual(receipt['pool_first'], g.POOL_FIRST)
+        for key in g.POOL_FIRST:
+            changed = copy.deepcopy(receipt); changed['pool_first'].pop(key)
+            with self.subTest(missing=key):
+                self.refused(changed, policy)
+        for key, value in [('base', '0' * 40), ('manifest_sha256', 'f04d341fc6b84c24634739104cb7195e28f7751a099ac2fdc1ef2e6139975512'),
+                           ('command_sha256', '0' * 64), ('old_commit', '89a924f2416f0450f38854b531bdf8778558dca6'),
+                           ('target_commit', 'c44a66393340314796851f4dd524dad523bd5415'), ('private_fixtures_added', 0),
+                           ('private_fixtures_added', True), ('reserved_apply_operation_id', 'd43ebab98f5941f08146490e48e71aab'),
+                           ('reserved_rollback_operation_id', 'cb95f18a925e4637a8c5c7ac7b4583d0')]:
+            changed = copy.deepcopy(receipt); changed['pool_first'][key] = value
+            with self.subTest(key=key, value=value):
+                self.refused(changed, policy)
+        changed = copy.deepcopy(receipt); changed['pool_first']['extra'] = 0
+        self.refused(changed, policy)
+
+    def test_wrong_counts_or_skips_in_any_suite_refused(self):
+        receipt, policy = self.receipt()
+        for suite in ('pool_first', 'transition'):
+            tests = receipt[suite]['tests']
+            for key, value in [('tests', tests - 1), ('tests', tests + 1), ('passed', tests - 1), ('skipped', 1),
+                               ('failures', 1), ('errors', 1), ('tests', float(tests)), ('passed', True)]:
+                changed = copy.deepcopy(receipt); changed[suite][key] = value
+                with self.subTest(suite=suite, key=key, value=value):
+                    self.refused(changed, policy)
+        self.assertEqual((receipt['transition']['tests'], receipt['pool_first']['tests']), (7, 20))
+        for index, key, value in [(0, 'skipped', 3), (0, 'skipped_cases', 2), (1, 'skipped', 1), (1, 'passed', 108)]:
+            changed = copy.deepcopy(receipt); changed['checks'][index][key] = value
+            with self.subTest(check=index, key=key):
+                self.refused(changed, policy)
+
+    def test_old_reserved_operation_ids_refused(self):
+        self.assertEqual((g.APPLY_ID, g.ROLLBACK_ID), ('01330a7419d0494d8bfb74ec1fcb7e28', 'ba912f5af5d34a6985d9415013f90486'))
+        release = dict(operation='code-prepare', baseline='a' * 64, source_commit='b' * 40,
+                       source_tar_gz_sha256='c' * 64, ciphertext_sha256='d' * 64, run_id='41017595072')
+        old_apply, old_rollback = 'd43ebab98f5941f08146490e48e71aab', 'cb95f18a925e4637a8c5c7ac7b4583d0'
+        cases = [('apply', {'release': release, 'operation_id': old_apply}),
+                 ('rollback', {'release': release, 'apply_operation_id': old_apply, 'operation_id': g.ROLLBACK_ID}),
+                 ('rollback', {'release': release, 'apply_operation_id': g.APPLY_ID, 'operation_id': old_rollback}),
+                 ('rollback', {'release': release, 'apply_operation_id': old_apply, 'operation_id': old_rollback})]
+        for name, package in cases:
+            inputs = {'ad_prepare': 'preview-report-progress-' + name, 'ad_expected_baseline': json.dumps(package)}
+            with self.subTest(name=name, package=package), self.assertRaisesRegex(ValueError, 'RESERVED_'):
+                g.operation_packages({}, {'inputs': inputs})
+        with unittest.mock.patch.object(g, 'APPLY_ID', old_apply), self.assertRaisesRegex(ValueError, 'RESERVED_IDENTITY'):
+            g.pool_first_identity(HERE.parent)
+
+    def test_tampered_public_file_hashes_refused(self):
+        receipt, policy = self.receipt()
+        root = HERE.parent / g.NS
+        for name, row in g.PUBLIC_FILES.items():
+            raw = (root / name).read_bytes()
+            self.assertEqual({'bytes': len(raw), 'sha256': g.sha(raw)}, row, name)
+        for name in ('backend/tools/naver_report_progress_patch.py', 'backend/tools/naver_report_progress_transport.py',
+                     'backend/tools/naver_preview_completion_release.py'):
+            for field, value in (('sha256', '0' * 64), ('bytes', 1)):
+                changed = copy.deepcopy(receipt); changed['public_files'][name][field] = value
+                with self.subTest(name=name, field=field):
+                    self.refused(changed, policy)
+        changed = copy.deepcopy(receipt); changed['public_files'].pop('backend/tools/naver_report_progress_patch.py')
+        self.refused(changed, policy)
+        manifest = json.loads((root / 'public-files.json').read_bytes())
+        for name, row in receipt['public_files'].items():
+            self.assertEqual(manifest[g.NS + '/' + name], row)
+
+    def test_added_fixture_identity_matches_the_qualified_controller(self):
+        g.pool_first_identity(HERE.parent)
+        self.assertEqual(len(g.POOL_FIRST_FIXTURES), g.POOL_FIRST['private_fixtures_added'])
+        for name, value in [('fixtures/c44a66393340314796851f4dd524dad523bd5415/naver_runtime/report_output_schema.py', (420, 10231, '0' * 64)),
+                            ('fixtures/abceeb737548ada081072df95279d19981b561f7/naver_runtime/report_output_schema.py', (420, 10447, '109b76c3ec0af340491842657a0902dd1aa05112dde089499b2bbfc4981a56fd'))]:
+            with self.subTest(name=name), unittest.mock.patch.dict(g.POOL_FIRST_FIXTURES, {name: value}), self.assertRaises(ValueError):
+                g.pool_first_identity(HERE.parent)
 
 
 if __name__ == '__main__':
