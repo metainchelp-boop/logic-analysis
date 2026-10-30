@@ -3,7 +3,7 @@
   "base": "7b8eecf673d5d9db0c79b8a705414d07a87b1aed",
   "base_files": 796,
   "base_manifest_sha256": "ff1703526eca736923839c250bcebde1f9e20a8a305f4f7eb3341746583510c9",
-  "bundle_python_sha256": "8d75bd0583897db0d66780e8bc8e1c06fc65b7de60837fadf08b7ee2ff5aedea",
+  "bundle_python_sha256": "546c7cb729428add49a79fcac72eeb05fb652ff67dbdd236ce0f947bf0d602c9",
   "checks": [
     {
       "command_sha256": "8ba57baee2cb8abcb2138f8e2be6524044e5b9e4504cdb648f910aa4b22e3032",
@@ -30,7 +30,22 @@
     }
   ],
   "deployment_ready": false,
-  "head": "49275594f9c9344afd403b32f129756194423e1b",
+  "head": "ee04b7fb7f863081e5f0712e07b24792b2631578",
+  "pool_first": {
+    "base": "49275594f9c9344afd403b32f129756194423e1b",
+    "command_sha256": "64bad1110c8a0c98837f4b57c1af0af2ca6364e5b52229cfcae958c16fe6288b",
+    "errors": 0,
+    "failures": 0,
+    "manifest_sha256": "fbd61469ff15fd5d067257e08792ac9d4e5b53e24eb5bd53f4ad5401f4ab2f2d",
+    "old_commit": "c44a66393340314796851f4dd524dad523bd5415",
+    "passed": 20,
+    "private_fixtures_added": 2,
+    "reserved_apply_operation_id": "01330a7419d0494d8bfb74ec1fcb7e28",
+    "reserved_rollback_operation_id": "ba912f5af5d34a6985d9415013f90486",
+    "skipped": 0,
+    "target_commit": "abceeb737548ada081072df95279d19981b561f7",
+    "tests": 20
+  },
   "private": true,
   "private_fixtures": 6,
   "public_files": {
@@ -71,23 +86,23 @@
       "sha256": "6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28"
     },
     "backend/tools/naver_report_progress_patch.py": {
-      "bytes": 121552,
-      "sha256": "4d010dc3d4211442c3149e5b6aea58c5a2608f01a83b0388b7fc064c5795f108"
+      "bytes": 123343,
+      "sha256": "0048f014041bf451d26835dffce314a57d699f6046c85000362faedfee175596"
     },
     "backend/tools/naver_report_progress_transport.py": {
-      "bytes": 19834,
-      "sha256": "7367334d1205b2d22856d50f773d53cf71fec83bc5df90700a03d312b8fdf762"
+      "bytes": 19812,
+      "sha256": "58bc51e9a26f49a54ca59e4e9f5188f43c963fc9f050c4738e3ac3305aa14fd5"
     },
     "backend/tools/naver_saved_exports.py": {
       "bytes": 37216,
       "sha256": "062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737"
     }
   },
-  "qualification_scope": "baseline_transition_bundle_checks_private_only",
-  "ref": "refs/heads/codex/naver-conversion-baseline-transition-20261026",
-  "report_progress_job_sha256": "2fbaa5d3087483f4c1b6e362329b7539ae14e7aad9caa9b4d319f5217fa2f857",
+  "qualification_scope": "pool_first_bundle_checks_private_only",
+  "ref": "refs/heads/claude/naver-conversion-pool-first-executor-20261030",
+  "report_progress_job_sha256": "3951c27ffbd5b9c365df7731290abb90f372be82fbfcb1cd6ca86c1fb8829cc6",
   "repository": "metainchelp-boop/metainc-ad-dashboard",
-  "run_id": "40344629727",
+  "run_id": "41017595072",
   "schema": "private-conversion-bundle-qualification-v1",
   "secret_values_read": 0,
   "server_calls": 0,
@@ -104,6 +119,6 @@
     "skipped": 0,
     "tests": 7
   },
-  "tree": "565025160b2519e9e7c31596dbf01af266248d5e",
+  "tree": "dc4f52da6da54620d6b4f93ec7753e868a0a3b43",
   "workflow": ".github/workflows/naver-conversion-bundle-private.yml"
 }

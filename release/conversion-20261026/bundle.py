@@ -1,4 +1,4 @@
-import base64,hashlib,json,os,pathlib,re,sys,types;transport_sha='7367334d1205b2d22856d50f773d53cf71fec83bc5df90700a03d312b8fdf762';core_sha='4d010dc3d4211442c3149e5b6aea58c5a2608f01a83b0388b7fc064c5795f108'
+import base64,hashlib,json,os,pathlib,re,sys,types;transport_sha='58bc51e9a26f49a54ca59e4e9f5188f43c963fc9f050c4738e3ac3305aa14fd5';core_sha='0048f014041bf451d26835dffce314a57d699f6046c85000362faedfee175596'
 if any(re.fullmatch('[0-9a-f]{64}',value)is None for value in(transport_sha,core_sha)):raise ValueError('REPORT_PROGRESS_PINS_PENDING')
 transport_path=pathlib.Path('backend/tools/naver_report_progress_transport.py');core_path=pathlib.Path('backend/tools/naver_report_progress_patch.py')
 if transport_path.is_symlink()or not transport_path.is_file()or not 0<transport_path.stat().st_size<=24576:raise ValueError('COMPLETION_TRANSPORT_SOURCE')

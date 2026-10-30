@@ -28,15 +28,15 @@ MAX_CIPHERTEXT_BYTES=MAX_CIPHERTEXT
 MAX_PAYLOAD_BYTES=MAX_PAYLOAD 
 MAX_BOOTSTRAP_B64_BYTES=MAX_BOOTSTRAP_B64 
 MAX_SSH_BYTES=MAX_SSH 
-TARGET_SOURCE = 'c44a66393340314796851f4dd524dad523bd5415'
-CODE_PATHS = ('naver_engine/observation_store.py', 'naver_engine/performance_reads.py', 'naver_engine/store.py')
+TARGET_SOURCE = 'abceeb737548ada081072df95279d19981b561f7'
+CODE_PATHS = ('naver_runtime/report_output_schema.py',)
 TRANSPORT_RAW_SHA256=None 
 EXPECTED_TARGET_SOURCE=TARGET_SOURCE 
 EXPECTED_CODE_PATHS=CODE_PATHS 
 FUNCTIONS={'preview-report-progress-prepare':'prepare','preview-report-progress-apply':'apply','preview-report-progress-rollback':'rollback'}
 SOURCE_FILES={'host':'naver_erp_tunnel_service_install.py','release':'naver_preview_release.py','lifecycle':'naver_preview_lifecycle.py','upgrade':'naver_preview_upgrade.py','exports_binding':'naver_completion_exports.py','exports_helper':'naver_saved_exports.py','product_exporter':'../naver_product_export.py','market_exporter':'../naver_market_export.py','controller':'naver_preview_completion_release.py','patch':'naver_report_progress_patch.py'}
-SOURCE_SHA256 = {'patch': '4d010dc3d4211442c3149e5b6aea58c5a2608f01a83b0388b7fc064c5795f108', 'controller': '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'lifecycle': '4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4', 'upgrade': '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28', 'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
-COMPACT_SHA256 = {'host': 'd0d33e68476f623e2a3171083300541001a899c03988d2afc7beaa0800ffb997', 'release': '1b03d1ec1a59e619047fda38ee3a4915b29aae90c960c34e9af089573b6d7108', 'lifecycle': '6fcd07d7b4a180d51181ab596e0f96f1c4340839c56ce5d5b045a08162cef16c', 'upgrade': '9dca1c835892094cc0a67382a4161e38324fc9e53250646996098cdcf80c0cee', 'exports_binding': '54a8c70d4bb7ffbec9a633996766d26007782d3b411bef2464a08333b947a05c', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8', 'controller': '22e66e1c29c841d13a0564997ceda708b0f0c3aaab68ae2b3f6270c4289cf747', 'patch': 'a9c2f1691449df7f9c964c810cc4ad4d516f39b928bee3cebba20f77116e4a0d'}
+SOURCE_SHA256 = {'patch': '0048f014041bf451d26835dffce314a57d699f6046c85000362faedfee175596', 'controller': '3be9c0360a6f75192455d6b139317319dd111b4e404628505ae62783b37977e2', 'host': '236cdd596bae2f8d5e0dfea5822bdd7216c44addac2bbb643306dfbff00fdd3a', 'release': '7288d51eba4e2c0320d196b8da2ee14f852b87f33304c221878c218cd1dacb84', 'lifecycle': '4f5f85c197b5efe2c323b2c784814eb1bd177dd60d44b8c7ead943b0af98abc4', 'upgrade': '6aa60100ba8ae39c07be4016498a4c79076c540707bee6a44e651c8de8e62c28', 'exports_binding': '1dc92cd674161c408032f2fd7fa5ef7bb220c91d168af10541a5490c8edcbfed', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8'}
+COMPACT_SHA256 = {'host': 'd0d33e68476f623e2a3171083300541001a899c03988d2afc7beaa0800ffb997', 'release': '1b03d1ec1a59e619047fda38ee3a4915b29aae90c960c34e9af089573b6d7108', 'lifecycle': '6fcd07d7b4a180d51181ab596e0f96f1c4340839c56ce5d5b045a08162cef16c', 'upgrade': '9dca1c835892094cc0a67382a4161e38324fc9e53250646996098cdcf80c0cee', 'exports_binding': '54a8c70d4bb7ffbec9a633996766d26007782d3b411bef2464a08333b947a05c', 'exports_helper': '062dd090978a66002cece04531219d2e75085b2a47c69bf9cf192f628a3a6737', 'product_exporter': '42a901a450db12504cdc55be6a736a309a237ced616c11a1c2925dc5effb3d59', 'market_exporter': 'd491688fac98e0a4d1ebe80fc8acccae8defe5f80854581c1f2c9b03b75760d8', 'controller': '22e66e1c29c841d13a0564997ceda708b0f0c3aaab68ae2b3f6270c4289cf747', 'patch': '22b94439ab9416e532ec152db8a9497194fc970cbd50fb57079918e0d5223b1b'}
 COMPACT_SOURCE_SHA256=COMPACT_SHA256 
 def require_pins():
  def digest(value):
@@ -44,7 +44,7 @@ def require_pins():
  for pins in(SOURCE_SHA256,COMPACT_SHA256,COMPACT_SOURCE_SHA256):
   if(type(pins)is not dict or set(pins)!=set(SOURCE_FILES)or any(not digest(value)for value in pins.values())):
    raise ValueError('DETAIL_AI_PINS_PENDING')
- if(COMPACT_SOURCE_SHA256!=COMPACT_SHA256 or not digest(TRANSPORT_RAW_SHA256)or type(TARGET_SOURCE)is not str or len(TARGET_SOURCE)!=40 or TARGET_SOURCE!=EXPECTED_TARGET_SOURCE or type(CODE_PATHS)is not tuple or len(CODE_PATHS)!=3 or set(CODE_PATHS)!=set(EXPECTED_CODE_PATHS)):
+ if(COMPACT_SOURCE_SHA256!=COMPACT_SHA256 or not digest(TRANSPORT_RAW_SHA256)or type(TARGET_SOURCE)is not str or len(TARGET_SOURCE)!=40 or TARGET_SOURCE!=EXPECTED_TARGET_SOURCE or type(CODE_PATHS)is not tuple or CODE_PATHS!=('naver_runtime/report_output_schema.py',)or set(CODE_PATHS)!=set(EXPECTED_CODE_PATHS)):
   raise ValueError('DETAIL_AI_PINS_PENDING')
 def extra_arguments(args,kwargs):
  if args or kwargs:raise ValueError('PATCH_BUNDLE')
