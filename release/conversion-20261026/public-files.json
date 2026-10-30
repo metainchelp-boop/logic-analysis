@@ -64,12 +64,12 @@
     "sha256": "546c7cb729428add49a79fcac72eeb05fb652ff67dbdd236ce0f947bf0d602c9"
   },
   "release/conversion-20261026/qualification.json": {
-    "bytes": 4334,
-    "sha256": "9401c5b9b8cf7917e05ce19d7ef4c971aa72e11c32367f6e7558b90e47a29f80"
+    "bytes": 4979,
+    "sha256": "21fa418e4a1cdb36cb05552ba5b47770e98ae837b9dd87044a2f3715f378bc47"
   },
   "release/conversion-20261026/release-policy.json": {
     "bytes": 733,
-    "sha256": "561fcde0b4877b5c76972ad5ce970ab5d4e4eb415720aeaaba46603a9a328c7c"
+    "sha256": "7717631023d55c6e65cd89ebcb81e2ecc7ef6f87d6d4dba587bcc9dbc43a631c"
   },
   "tools/check_conversion_executor.py": {
     "bytes": 22493,
