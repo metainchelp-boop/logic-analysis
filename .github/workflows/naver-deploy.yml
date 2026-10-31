@@ -3,6 +3,7 @@ name: 네이버 관제 배포 (naver-deploy)
 # 네이버 관제(engine + relay) 단순 배포. 대표 계정이 main 에서 수동 실행할 때만 동작한다.
 #   입력 commit : 제품 저장소 metainchelp-boop/metainc-ad-dashboard 의 커밋 40자리
 #   입력 mode   : inspect = 서버 상태만 읽어 JSON 으로 출력 / deploy = 시험 → 빌드 → 교체 → 헬스 → 실패 시 자동 복원
+#                 disk-usage = 디스크 사용처를 소유자별(관제·다른 앱·OS·docker·백업)로 나눈 한 줄 JSON(읽기 전용, 잠금 없음)
 #                 cleanup-plan = 지워도 되는 관제 이미지 태그·release 폴더 목록과 allowlist_sha256(읽기 전용)
 #                 cleanup = 입력 allowlist_sha256 과 다시 계산한 계획이 정확히 같을 때만 그 목록만 삭제
 # push·pull_request 트리거 없음. 이 파일과 deploy/naver/** 는 deploy.yml 의 paths-ignore 에 있다
@@ -22,10 +23,10 @@ on:
         required: true
         type: string
       mode:
-        description: 'inspect = 서버 상태 읽기만 / deploy = 시험 후 배포(실패 시 직전 판 자동 복원) / cleanup-plan = 정리 목록·해시(읽기 전용) / cleanup = 해시가 같을 때만 그 목록 삭제'
+        description: 'inspect = 서버 상태 읽기만 / deploy = 시험 후 배포(실패 시 직전 판 자동 복원) / disk-usage = 디스크 사용처 분석(읽기 전용) / cleanup-plan = 정리 목록·해시(읽기 전용) / cleanup = 해시가 같을 때만 그 목록 삭제'
         required: true
         type: choice
-        options: [inspect, deploy, cleanup-plan, cleanup]
+        options: [inspect, deploy, disk-usage, cleanup-plan, cleanup]
         default: inspect
       allowlist_sha256:
         description: 'cleanup 전용: 직전 cleanup-plan 결과의 allowlist_sha256(64자리). 다른 mode 에서는 비워 둔다'
@@ -67,7 +68,7 @@ jobs:
           if ! printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "::error::commit 은 40자리 소문자 16진수여야 합니다"; exit 1
           fi
-          case "$MODE" in inspect|deploy|cleanup-plan|cleanup) ;; *) echo "::error::mode 이상"; exit 1 ;; esac
+          case "$MODE" in inspect|deploy|disk-usage|cleanup-plan|cleanup) ;; *) echo "::error::mode 이상"; exit 1 ;; esac
           if [ "$MODE" = cleanup ]; then
             printf '%s' "$ALLOWLIST" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::cleanup 은 allowlist_sha256(64자리)이 필요합니다"; exit 1; }
           elif [ -n "$ALLOWLIST" ]; then
@@ -208,7 +209,7 @@ jobs:
           test "$TRIGGERING_ACTOR" = metainchelp-boop
           test "$REF" = refs/heads/main
           printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'
-          case "$MODE" in inspect|deploy|cleanup-plan|cleanup) ;; *) exit 1 ;; esac
+          case "$MODE" in inspect|deploy|disk-usage|cleanup-plan|cleanup) ;; *) exit 1 ;; esac
           if [ "$MODE" = cleanup ]; then printf '%s' "$ALLOWLIST" | grep -Eq '^[0-9a-f]{64}$'; else test -z "$ALLOWLIST"; fi
 
       - name: 배포 장치 소스 받기
@@ -287,6 +288,15 @@ jobs:
               rm -f "$incoming/naver-deploy.sh"
               rmdir "$incoming" || true
               printf '%s\n' "$out" | grep '^NAVER_DEPLOY_INSPECT={' || fail "INSPECT_FAILED_$rc"
+              exit "$rc"
+            fi
+            if [ "$NSD_MODE" = disk-usage ]; then
+              [ "$(hash_of "$incoming/naver-deploy.sh")" = "$NSD_SCRIPT_SHA" ] || fail SCRIPT_HASH
+              rc=0
+              out=$(bash "$incoming/naver-deploy.sh" disk-usage 2>/dev/null) || rc=$?
+              rm -f "$incoming/naver-deploy.sh"
+              rmdir "$incoming" || true
+              printf '%s\n' "$out" | grep '^NAVER_DEPLOY_DISK_USAGE={' || fail "DISK_USAGE_FAILED_$rc"
               exit "$rc"
             fi
             if [ "$NSD_MODE" = cleanup-plan ] || [ "$NSD_MODE" = cleanup ]; then

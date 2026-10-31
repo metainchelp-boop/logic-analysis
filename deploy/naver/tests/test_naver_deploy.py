@@ -6,6 +6,7 @@ import contextlib
 import fcntl
 import hashlib
 import io
+import itertools
 import json
 import os
 import re
@@ -121,7 +122,7 @@ class FakeHost:
         self.bin = os.path.join(base, 'bin')
         os.makedirs(self.bin)
         shutil.copy(os.path.join(HERE, 'fakehost.py'), self.bin)
-        tools = ['docker', 'systemctl', 'curl', 'cp', 'sqlite3']
+        tools = ['docker', 'systemctl', 'curl', 'cp', 'sqlite3', 'du', 'journalctl']
         if shutil.which('flock') is None:
             tools.append('flock')
         for tool in tools:
@@ -1074,6 +1075,289 @@ class DeployScriptTest(unittest.TestCase):
             handle.write(original)
 
 
+    # ── disk-usage: 읽기 전용 사용처 분석 ──
+    def add_disk_fixture(self):
+        self.host.file('/proc/self/mountinfo',
+                       '22 1 253:1 / / rw,relatime shared:1 - ext4 /dev/vda1 rw\n'
+                       '23 22 0:21 / /run rw,nosuid - tmpfs tmpfs rw\n'
+                       '24 22 0:50 / /var/lib/docker/overlay2/abc/merged rw - overlay overlay rw\n'
+                       '25 22 0:4 / /proc rw - proc proc rw\n')
+        blobs = {'/var/lib/docker/overlay2/l1/diff/blob': 300000, '/var/lib/containerd/io.containerd.content/blob': 500000,
+                 '/var/lib/docker/buildkit/cache/blob': 200000, '/var/lib/docker/volumes/v1/blob': 50000,
+                 '/var/lib/metainc/other-app/data.db': 120000, '/srv/metainc/other-service/app.bin': 90000,
+                 '/srv/metainc/ad-deploy-staging/receipts/r.json': 1000, '/root/logic-analysis-deploy/app.py': 70000,
+                 '/usr/lib/libbig.so': 400000, '/var/log/journal/system.journal': 150000,
+                 '/var/cache/apt/archives/pkg.deb': 80000, '/var/backups/dpkg.status.0': 5000,
+                 '/var/backups/metainc/other-backup/dump.gz': 60000, '/tmp/scratch/file': 1000,
+                 '/home/someone/notes.txt': 2000}
+        for path, size in blobs.items():
+            self.host.file(path, 'x' * size)
+        # 깊이 5 아래 파일 이름에 비밀값을 넣어 두어도 나오면 안 된다.
+        self.host.file('/root/logic-analysis-deploy/sub/deeper/' + CANARY_RUNTIME + '.txt', CANARY_UNIT)
+        self.host.file('/root/logic-analysis-deploy/.env', 'API_KEY=' + CANARY_RUNTIME + '\n')
+
+    def disk_usage(self, **env):
+        done = self.host.run('disk-usage', NAVER_SECRET_ENV=CANARY_RUNTIME, **env)
+        self.assertExit(done, 0)
+        lines = self.output(done).splitlines()
+        self.assertEqual(len(lines), 1)  # 고정 형식 한 줄
+        self.assertTrue(lines[0].startswith('NAVER_DEPLOY_DISK_USAGE={'))
+        return done, json.loads(lines[0].split('=', 1)[1])
+
+    def test_disk_usage_is_read_only_single_line(self):
+        self.add_disk_fixture()
+        before = self.host.tree()
+        done, report = self.disk_usage()
+        self.assertEqual(before, self.host.tree())
+        self.assertFalse(os.path.exists(self.host.root + '/var/lib/metainc/naver-deploy'))  # 잠금·기록 없음
+        for call in self.host.calls():
+            tool, args = call[0], call[1:]
+            self.assertIn(tool, ('docker', 'du', 'journalctl'), call)
+            if tool == 'docker':
+                self.assertIn(args[:2], (['info', '--format'], ['system', 'df'], ['image', 'ls'], ['image', 'inspect']), call)
+                self.assertNotIn('prune', args)
+            if tool == 'journalctl':
+                self.assertEqual(args, ['--disk-usage'])
+            if tool == 'du':
+                self.assertIn('-x', args)
+        self.assertEqual(report['errors'], [])
+        self.assertEqual([f['mountpoint'] for f in report['filesystems']], ['/'])  # tmpfs·overlay·proc 제외
+        self.assertTrue(all(isinstance(f['total_bytes'], int) for f in report['filesystems']))
+        self.assertEqual(report['journal']['bytes'], 24 * 1024 ** 2)
+        docker = report['docker']
+        self.assertEqual(docker['info']['docker_root_dir'], '/var/lib/docker')
+        self.assertTrue(docker['info']['containerd_snapshotter'])
+        self.assertEqual(docker['build_cache']['size_bytes'], 1100000000)
+        repos = {r['repository']: r for r in docker['images_by_repository']}
+        self.assertEqual(repos['metainc/naver-engine']['owner'], 'naver')
+        self.assertEqual(repos['metainc/naver-engine']['tags'], 2)
+
+    def test_disk_usage_owner_classification(self):
+        self.add_disk_fixture()
+        _, report = self.disk_usage()
+        owners = {}
+        for root in report['du']['roots'].values():
+            for row in root['top']:
+                owners[row['path']] = row['owner']
+        expected = {'/var/lib/metainc/naver-engine': 'naver', '/var/lib/metainc/other-app': 'other_apps',
+                    '/srv/metainc/ad-deploy-staging': 'naver', '/srv/metainc/other-service': 'other_apps',
+                    '/root/logic-analysis-deploy': 'other_apps', '/var/lib/docker/overlay2': 'docker_internal',
+                    '/var/lib/docker/buildkit': 'docker_internal', '/var/lib/docker/volumes': 'docker_internal',
+                    '/var/lib/containerd': 'docker_internal', '/usr/lib': 'os', '/var/log/journal': 'os',
+                    '/var/cache': 'os', '/var/backups/metainc/naver-engine': 'naver',
+                    '/var/backups/metainc/other-backup': 'backups', '/var/lib': 'mixed', '/srv': 'mixed'}
+        for path, owner in expected.items():
+            self.assertEqual(owners.get(path), owner, path)
+        by_owner = report['du']['by_owner_overall']
+        for owner in ('naver', 'other_apps', 'docker_internal', 'os', 'backups'):
+            self.assertGreater(by_owner.get(owner, 0), 0, owner)
+        root_fs = [f for f in report['du']['filesystems'] if f['mountpoint'] == '/'][0]
+        self.assertEqual(sum(root_fs['by_owner'].values()), root_fs['scanned_total_bytes'])  # 겹치지 않는 분할
+        self.assertEqual(root_fs['scanned_total_bytes'], report['du']['roots']['/']['bytes'])
+        self.assertTrue(root_fs['consistent'])
+
+    def test_disk_usage_prints_no_secrets_or_deep_names(self):
+        self.add_disk_fixture()
+        done, report = self.disk_usage()
+        text = self.output(done)
+        for canary in CANARIES + ('canary-proxy-secret', 'host-canary-name'):
+            self.assertNotIn(canary, text)
+        paths = [row['path'] for root in report['du']['roots'].values() for row in root['top']]
+        self.assertTrue(all(p.count('/') <= 4 for p in paths), paths)  # 깊이 4 까지의 폴더만
+        self.assertFalse(any(p.endswith(('.txt', '.env', '.db', '.json')) for p in paths))
+
+    def test_disk_usage_failures_become_null_with_reason(self):
+        self.add_disk_fixture()
+        for config, component, reason in ((dict(du_fail=True), 'du', 'exit_1'),
+                                          (dict(du_sleep=3), 'du', 'timeout'),
+                                          (dict(docker_fail=True), 'docker_info', 'exit_1'),
+                                          (dict(journal_fail=True), 'journal', 'exit_1')):
+            with self.subTest(config=config):
+                self.host.config = {'root': self.host.root, 'extra_labels': {'vendor.secret': CANARY_LABEL}}
+                self.host.set(**config)
+                _, report = self.disk_usage(NAVER_DEPLOY_DU_TIMEOUT='1')
+                self.assertIn({'component': component, 'reason': reason},
+                              [{k: e[k] for k in ('component', 'reason')} for e in report['errors']])
+                if component == 'du':
+                    # 실패한 FS 의 뿌리는 0 이 아니라 null + 그 FS 상태·사유로 남는다.
+                    self.assertTrue(report['du']['roots'])
+                    for root in report['du']['roots'].values():
+                        self.assertEqual((root['bytes'], root['filesystem'], root['reason']), (None, '/', reason))
+                        self.assertEqual(root['status'], 'timeout' if reason == 'timeout' else 'failed')
+                    self.assertEqual(report['du']['incomplete'], ['/'])
+                if component == 'docker_info':
+                    self.assertIsNone(report['docker']['info'])
+                    self.assertIsNone(report['docker']['system_df'])
+                if component == 'journal':
+                    self.assertIsNone(report['journal']['bytes'])
+        self.host.config = {'root': self.host.root, 'extra_labels': {'vendor.secret': CANARY_LABEL}}
+        self.host.set(du_partial=True)
+        _, report = self.disk_usage()
+        self.assertEqual(report['du']['filesystems'][0]['status'], 'partial')  # 권한 오류여도 받은 만큼 쓰고 표시한다
+        self.assertEqual(report['du']['incomplete'], ['/'])
+        self.assertIn('/var', report['du']['roots'])
+
+
+    # ── disk-usage 집계: 파일시스템별 장부 ──
+    def run_disk_usage_in_process(self, table, trees, statuses=None):
+        """helper 를 이 프로세스에서 실행하고 mount 표·du 결과만 합성 값으로 바꾼다(가짜 루트 안, 서버 없음)."""
+        with open(SCRIPT) as handle:
+            text = handle.read()
+        source = text.split("PY_HELPER=$(cat <<'PYEOF'\n", 1)[1].split('\nPYEOF', 1)[0]
+        namespace = {'__name__': 'naver_deploy_helper'}
+        exec(source, namespace)
+        namespace['ROOT'] = self.host.root
+        calls = []
+
+        def fake_du(path, timeout, max_depth=4):
+            calls.append((path, max_depth))
+            return (statuses or {}).get(path, 'ok'), dict(trees.get(path, {}))
+        namespace['mount_table'] = lambda errors: [
+            {'mountpoint': row[0], 'fstype': 'ext4', 'device': row[1], 'fs_root': row[2] if len(row) > 2 else '/',
+             'total_bytes': 10 ** 9, 'used_bytes': 10 ** 6, 'avail_bytes': 10 ** 8} for row in table]
+        namespace['du_tree'] = fake_du
+        namespace['docker_usage'] = lambda errors: {}
+        namespace['timed'] = lambda *a, **k: ('ok', 'Archived and active journals take up 1.0M in the file system.')
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            namespace['disk_usage']()
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        report = json.loads(lines[0].split('=', 1)[1])
+        for fs in report['du']['filesystems']:
+            if fs.get('scanned_total_bytes') is not None:
+                self.assertEqual(sum(fs['by_owner'].values()), fs['scanned_total_bytes'], fs['mountpoint'])
+        self.assertEqual(sum(report['du']['by_owner_overall'].values()), report['du']['overall_scanned_total_bytes'])
+        return calls, report
+
+    def test_disk_usage_scans_nested_filesystems(self):
+        calls, report = self.run_disk_usage_in_process(
+            [('/', 1), ('/var', 2), ('/var/lib', 3)],
+            {'/': {'/': 10, '/var': 0}, '/var': {'/var': 20, '/var/lib': 0},
+             '/var/lib': {'/var/lib': 300, '/var/lib/docker': 300}})
+        self.assertEqual(sorted(path for path, _ in calls), ['/', '/var', '/var/lib'])
+        self.assertEqual(dict(calls), {'/': 4, '/var': 3, '/var/lib': 2})  # 절대 깊이 4 까지
+        statuses = {f['mountpoint']: f['status'] for f in report['du']['filesystems']}
+        self.assertEqual(statuses, {'/': 'scanned', '/var': 'scanned', '/var/lib': 'scanned'})
+        self.assertEqual(report['du']['by_owner_overall'].get('docker_internal'), 300)
+        self.assertEqual(report['du']['overall_scanned_total_bytes'], 330)
+
+    def test_disk_usage_keeps_separate_filesystem_ledgers(self):
+        calls, report = self.run_disk_usage_in_process(
+            [('/', 1), ('/var', 2), ('/srv-bind', 1)],
+            {'/': {'/': 100, '/var': 0, '/usr': 100}, '/var': {'/var': 200, '/var/log': 200}})
+        rows = {f['mountpoint']: f for f in report['du']['filesystems']}
+        self.assertEqual(rows['/srv-bind']['status'], 'skipped_duplicate_device')
+        self.assertEqual(rows['/']['scanned_total_bytes'], 100)
+        self.assertEqual(rows['/var']['scanned_total_bytes'], 200)
+        self.assertEqual(rows['/']['by_owner'], {'os': 100, 'mixed': 0})
+        self.assertEqual(rows['/var']['by_owner'], {'os': 200})
+        self.assertEqual(report['du']['overall_scanned_total_bytes'], 300)
+        self.assertEqual(report['du']['roots']['/var']['bytes'], 200)
+        self.assertEqual(report['du']['roots']['/var']['filesystem'], '/var')
+        listed = {r['path']: r for r in report['du']['roots']['/']['top']}
+        self.assertEqual((listed['/var']['bytes'], listed['/var']['filesystem']), (200, '/var'))
+
+    def test_disk_usage_splits_to_owner_rule_boundary(self):
+        _, report = self.run_disk_usage_in_process(
+            [('/', 1)], {'/': {'/': 100, '/opt': 100, '/opt/metainc': 100, '/opt/metainc/naver-service': 100}})
+        by_owner = report['du']['by_owner_overall']
+        self.assertEqual(by_owner.get('naver'), 100)
+        self.assertEqual(by_owner.get('other_apps', 0), 0)
+
+    def test_disk_usage_marks_inconsistent_ledger(self):
+        _, report = self.run_disk_usage_in_process([('/', 1)], {'/': {'/': 100, '/usr': 150}})
+        root = report['du']['filesystems'][0]
+        self.assertFalse(root['consistent'])
+        self.assertEqual(root['inconsistencies'], [{'path': '/', 'reason': 'children_exceed_parent', 'excess_bytes': 50}])
+        self.assertEqual(root['by_owner'], {'inconsistent_remainder': -50, 'os': 150})  # 0 으로 덮지 않는다
+
+
+    def test_disk_usage_statvfs_failure_stays_in_coverage(self):
+        self.add_disk_fixture()
+        with open(self.host.root + '/proc/self/mountinfo', 'a') as handle:
+            handle.write('30 22 253:9 / /independent-missing-disk rw - ext4 /dev/vdb rw\n')
+        _, report = self.disk_usage()
+        self.assertIn({'component': 'filesystems', 'path': '/independent-missing-disk', 'reason': 'statvfs_failed'},
+                      report['errors'])
+        rows = {r['mountpoint']: r for r in report['du']['filesystems']}
+        self.assertEqual(rows['/independent-missing-disk']['status'], 'failed')
+        self.assertEqual(rows['/independent-missing-disk']['statvfs_error'], 'statvfs_failed')
+        self.assertIn('/independent-missing-disk', report['du']['incomplete'])
+        self.assertIn({'mountpoint': '/independent-missing-disk', 'fstype': 'ext4', 'device': '253:9',
+                       'error': 'statvfs_failed'}, report['filesystems'])
+        self.assertEqual(rows['/']['status'], 'scanned')
+
+    def test_disk_usage_prefers_full_filesystem_mount_over_subset_bind(self):
+        table = [('/', 1, '/'), ('/data', 2, '/subset'), ('/mnt/storage', 2, '/')]
+        trees = {'/': {'/': 10}, '/data': {'/data': 30, '/data/subfolder': 30},
+                 '/mnt/storage': {'/mnt/storage': 300, '/mnt/storage/subset': 30, '/mnt/storage/other': 270}}
+        for order in itertools.permutations(table):
+            with self.subTest(order=[row[0] for row in order]):
+                calls, report = self.run_disk_usage_in_process(list(order), trees)
+                self.assertEqual(sorted(path for path, _ in calls), ['/', '/mnt/storage'])
+                self.assertEqual(report['du']['overall_scanned_total_bytes'], 310)
+                self.assertEqual(report['du']['incomplete'], [])
+                rows = {r['mountpoint']: r for r in report['du']['filesystems']}
+                self.assertEqual((rows['/data']['status'], rows['/data']['fs_root'], rows['/data']['same_device_as']),
+                                 ('skipped_bind_subtree', '/subset', '/mnt/storage'))
+
+    def test_disk_usage_subtree_only_device_is_marked(self):
+        table = [('/', 1, '/'), ('/x', 3, '/a'), ('/y', 3, '/a/b'), ('/z', 3, '/c')]
+        trees = {'/': {'/': 10}, '/x': {'/x': 50}, '/z': {'/z': 20}}
+        for order in itertools.permutations(table):
+            with self.subTest(order=[row[0] for row in order]):
+                calls, report = self.run_disk_usage_in_process(list(order), trees)
+                self.assertEqual(sorted(path for path, _ in calls), ['/', '/x', '/z'])
+                rows = {r['mountpoint']: r for r in report['du']['filesystems']}
+                self.assertEqual((rows['/x']['status'], rows['/z']['status']), ('subtree_only', 'subtree_only'))
+                self.assertEqual(rows['/y']['status'], 'skipped_bind_subtree')
+                self.assertEqual(report['du']['incomplete'], ['/x', '/z'])
+
+    def test_disk_usage_failed_filesystem_root_is_null(self):
+        _, report = self.run_disk_usage_in_process(
+            [('/', 1), ('/var', 2)], {'/': {'/': 100, '/var': 0, '/usr': 100}}, statuses={'/var': 'exit_1'})
+        var = report['du']['roots']['/var']
+        self.assertEqual((var['bytes'], var['filesystem'], var['status'], var['reason']), (None, '/var', 'failed', 'exit_1'))
+        listed = {r['path']: r for r in report['du']['roots']['/']['top']}
+        self.assertEqual((listed['/var']['bytes'], listed['/var']['filesystem'], listed['/var']['status']),
+                         (None, '/var', 'failed'))
+        self.assertIn('/var', report['du']['incomplete'])
+        self.assertEqual(report['du']['overall_scanned_total_bytes'], 100)
+
+
+    def test_disk_usage_keeps_mount_with_escaped_path(self):
+        """mountinfo 의 \\040(공백) 경로도 빠지지 않고 argv 로 훑으며, 출력에는 같은 8진 표기로 나온다."""
+        self.add_disk_fixture()
+        self.host.file('/mnt/data disk/sub/blob', 'x' * 7000)
+        with open(self.host.root + '/proc/self/mountinfo', 'a') as handle:
+            handle.write('30 22 253:9 / /mnt/data\\040disk rw - ext4 /dev/vdb rw\n')
+        self.host.clear_calls()
+        _, report = self.disk_usage()
+        rows = {r['mountpoint']: r for r in report['du']['filesystems']}
+        self.assertIn('/mnt/data\\040disk', rows)
+        self.assertEqual(rows['/mnt/data\\040disk']['status'], 'scanned')
+        self.assertGreater(rows['/mnt/data\\040disk']['scanned_total_bytes'], 7000)
+        self.assertEqual(report['du']['incomplete'], [])
+        self.assertEqual(report['errors'], [])
+        self.assertIn('/mnt/data\\040disk', [f['mountpoint'] for f in report['filesystems']])
+        du_paths = [call[-1] for call in self.host.calls() if call[0] == 'du']
+        self.assertIn(self.host.root + '/mnt/data disk', du_paths)  # 셸 없이 argv 하나로 전달
+        # Codex 재현: 같은 입력을 mount_table/du_section 에 직접 넣어도 조용히 빠지지 않는다.
+        with open(SCRIPT) as handle:
+            text = handle.read()
+        namespace = {'__name__': 'naver_deploy_helper'}
+        exec(text.split("PY_HELPER=$(cat <<'PYEOF'\n", 1)[1].split('\nPYEOF', 1)[0], namespace)
+        namespace['ROOT'] = self.host.root
+        errors = []
+        table = namespace['mount_table'](errors)
+        self.assertIn('/mnt/data disk', [row['mountpoint'] for row in table])
+        namespace['du_tree'] = lambda path, timeout, max_depth=4: ('ok', {path: 100})
+        section = namespace['du_section'](errors, table, 1)
+        self.assertIn('/mnt/data disk', [row['mountpoint'] for row in section['filesystems']])
+        self.assertEqual(section['overall_scanned_total_bytes'], 200)
+
+
 class WorkflowConsistencyTest(unittest.TestCase):
     def test_workflow_archive_scope_matches_script(self):
         with open(SCRIPT) as handle:
@@ -1154,7 +1438,10 @@ class WorkflowConsistencyTest(unittest.TestCase):
     def test_workflow_cleanup_modes(self):
         with open(os.path.normpath(WORKFLOW)) as handle:
             workflow = handle.read()
-        self.assertIn('options: [inspect, deploy, cleanup-plan, cleanup]', workflow)
+        self.assertIn('options: [inspect, deploy, disk-usage, cleanup-plan, cleanup]', workflow)
+        ssh_part = workflow[workflow.index('appleboy/ssh-action'):]
+        self.assertIn('disk-usage 2>/dev/null', ssh_part)
+        self.assertIn("grep '^NAVER_DEPLOY_DISK_USAGE={'", ssh_part)
         self.assertIn('allowlist_sha256:', workflow)
         self.assertEqual(workflow.count("grep -Eq '^[0-9a-f]{64}$'"), 2)  # test·ship 두 작업 모두 확인
         ssh = workflow[workflow.index('appleboy/ssh-action'):]

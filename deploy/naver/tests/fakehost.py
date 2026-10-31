@@ -278,6 +278,15 @@ def docker(args):
         if not image['tags']:
             del state['images'][identity]
         print('Untagged: ' + ref)
+    elif args[:2] == ['system', 'df'] and '-v' not in args:
+        if config().get('docker_fail'):
+            sys.exit(1)
+        for kind, count, size, reclaim in (('Images', len(state['images']), '2.5GB', '1.2GB (48%)'),
+                                           ('Containers', len(state['containers']), '12MB', '0B (0%)'),
+                                           ('Local Volumes', 1, '300MB', '0B (0%)'),
+                                           ('Build Cache', 7, '1.1GB', '1.1GB')):
+            print(json.dumps({'Type': kind, 'TotalCount': str(count), 'Active': '2', 'Size': size,
+                              'Reclaimable': reclaim}))
     elif args[:2] == ['system', 'df']:
         rows = []
         for identity, image in sorted(state['images'].items()):
@@ -288,7 +297,15 @@ def docker(args):
                              'UniqueSize': '%.4gMB' % (image.get('unique', 100000000) / 1e6)})
         print(json.dumps({'Images': rows, 'Containers': [], 'Volumes': [], 'BuildCache': []}))
     elif args[:1] == ['info']:
-        print('/var/lib/docker')
+        if config().get('docker_fail'):
+            sys.exit(1)
+        if '{{json .}}' in args:
+            print(json.dumps({'DockerRootDir': '/var/lib/docker', 'Driver': 'overlayfs',
+                              'DriverStatus': [['driver-type', 'io.containerd.snapshotter.v1']],
+                              'Name': 'host-canary-name', 'HttpProxy': 'http://user:canary-proxy-secret@proxy',
+                              'Labels': ['canary-label-secret-c0de']}))
+        else:
+            print('/var/lib/docker')
     elif args[:2] == ['image', 'ls']:
         for identity, image in sorted(state['images'].items()):
             for tag in image['tags']:
@@ -509,6 +526,31 @@ def flock(args):
         sys.exit(1)
 
 
+def du(args):
+    """GNU du -x -B1 --max-depth=N PATH 대역: 폴더만, 바이트, 깊이 N 까지."""
+    hooks = config()
+    if hooks.get('du_sleep'):
+        import time
+        time.sleep(float(hooks['du_sleep']))
+    if hooks.get('du_fail'):
+        sys.exit(1)
+    depth = int([a for a in args if a.startswith('--max-depth=')][0].split('=')[1])
+    top = args[-1].rstrip('/') or '/'
+    totals = {}
+    for folder, children, files in os.walk(top, topdown=False):
+        size = sum(os.lstat(os.path.join(folder, f)).st_size for f in files) + 4096
+        size += sum(totals.get(os.path.join(folder, c), 0) for c in children)
+        totals[folder] = size
+    for folder, size in sorted(totals.items()):
+        relative = os.path.relpath(folder, top)
+        level = 0 if relative == '.' else relative.count('/') + 1
+        if level <= depth:
+            print('%d\t%s' % (size, folder if folder != top or top != '/' else '/'))
+    if hooks.get('du_partial'):
+        sys.stderr.write('du: cannot read directory: Permission denied\n')
+        sys.exit(1)
+
+
 def main(tool):
     args = sys.argv[1:]
     record(tool, args)
@@ -529,6 +571,12 @@ def main(tool):
                 handle.write(b'#')
             return
         os.execv('/bin/cp', ['/bin/cp'] + args)
+    elif tool == 'du':
+        du(args)
+    elif tool == 'journalctl':
+        if config().get('journal_fail'):
+            sys.exit(1)
+        print('Archived and active journals take up 24.0M in the file system.')
     elif tool == 'sqlite3':
         sys.stderr.write('sqlite3 must never be called by the deploy\n')
         sys.exit(99)

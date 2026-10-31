@@ -43,6 +43,7 @@
    - `mode`:
      - `inspect` — 서버 상태만 읽는다(아무것도 바꾸지 않음). commit 칸은 형식만 맞으면 된다(지금 운영 커밋을 넣으면 됨).
      - `deploy` — 실제 배포.
+     - `disk-usage` — 디스크 사용처를 소유자별로 나눈 한 줄 JSON(읽기 전용, 잠금 없음). 아래 7장 끝
      - `cleanup-plan` — 지워도 되는 관제 이미지 태그·release 폴더 목록과 `allowlist_sha256` 을 낸다(읽기 전용). 아래 7장
      - `cleanup` — `allowlist_sha256` 칸에 직전 `cleanup-plan` 의 값을 넣어야 한다. 다시 계산한 목록과 해시가 정확히 같을 때만 그 목록만 지운다. 아래 7장
    - `allowlist_sha256`: `cleanup` 에서만 넣는다(다른 mode 에서는 비워 둔다).
@@ -249,6 +250,35 @@ engine 43·relay 43, release 폴더 43개. DB 사본 하나(합 + 256MiB = 3.574
 
 **절대 하지 않는 것**: `docker system prune`·`volume prune`·`builder prune`·`-a`·`-f`, 다른 앱 이미지, 커밋 태그가 아닌 태그(`local-review` 등),
 saved-exports·receipts·runtime.env·키·데이터 폴더(`.*-failed-db-*` 포함)·기존 백업·volume·build cache.
+
+### 디스크 사용처 분석 (`disk-usage`, 읽기 전용)
+
+정리(실행 41174998707, 123개 삭제) 뒤에도 여유가 약 0.49GB 늘어나는 데 그쳐, 무엇이 공유 디스크를 쓰는지 먼저 본다.
+`mode=disk-usage` 는 잠금을 잡지 않고 아무것도 바꾸지 않는다(prune·삭제·journal vacuum·로그 자르기·DB 열기·재시작·이동 없음).
+모든 외부 명령에 시간 제한(docker·journalctl 60~120초, du 300초)이 있고, 실패한 항목은 `null` + 사유 코드(`errors`)로 남긴 채 성공으로 끝난다.
+
+결과 `NAVER_DEPLOY_DISK_USAGE={...}` 한 줄:
+- `filesystems`: 실제 파일시스템별 mountpoint·fstype·total/used/avail 바이트(tmpfs·overlay·proc·sysfs·squashfs 등 제외, 같은 장치는 한 번)
+- `docker`: DockerRootDir·Driver·containerd snapshotter 여부, `docker system df` 요약(이미지·컨테이너·volume·build cache 의 개수·크기·회수 가능, docker 표기를 바이트로 환산한 근사값),
+  저장소별 이미지 수·이미지 ID 수·Size 합(공유 층은 이미지마다 다시 셈), dangling 이미지 수·크기. 다른 앱 저장소 이름도 나온다(비밀 아님)
+- `du`: **실제 파일시스템마다 한 번씩** `du -x -B1` 을 그 mountpoint 에서(nice·ionice 낮은 우선순위, 절대 깊이 4 까지) 훑는다.
+  mount 목록과 장치(major:minor)·FS 안 root 는 `/proc/self/mountinfo` 에서 읽는다. 장치마다 FS root(`/`)를 보이는 mount 하나를 훑고
+  (입력 순서와 무관), 같은 장치의 다른 전체 mount 는 `skipped_duplicate_device`, 하위 폴더 bind 는 `skipped_bind_subtree`(fs_root 표시).
+  FS root 를 보이는 mount 가 없는 장치는 겹치지 않는 하위 폴더마다 훑고 `subtree_only`(미완료)로 표시한다. statvfs 가 실패해도 그 mount 는
+  빠지지 않는다(`statvfs_failed` 사유, du 는 그대로 시도). 공백 등 특수 문자가 든 mount 경로도 빠지지 않는다 — 명령에는 셸 없이 argv 로 넘기고,
+  출력의 모든 경로는 mountinfo 와 같은 고정·가역 8진 표기(공백·제어 문자·역슬래시·ASCII 밖 바이트 → `\ooo`)로 적는다(`path_encoding`). 결과는 파일시스템별 `scanned`/`partial`/`subtree_only`/`timeout`/`failed` 로 표시하고,
+  완료가 아닌 것은 `du.incomplete` 에 모은다. 훑지 못한 FS 에 놓인 경로는 바이트 `null` + 그 FS·상태·사유로 보이며, 상위 FS 의 자리표시 값을 쓰지 않는다.
+  파일시스템마다 따로 장부를 만들고(`scanned_total_bytes`·statvfs used·`by_owner`), 소유자 분할은 규칙 경계(예: `/opt/metainc/naver-*`)까지
+  자식으로 내려가 나눈다. 자식 합이 부모보다 크면 0 으로 덮지 않고 `consistent=false` 와 사유를 남긴다. 각 파일시스템의 `by_owner` 합은 그 scan 합계와 정확히 같고,
+  `by_owner_overall` 합은 파일시스템별 합계의 합과 같다. 그 위에 `/`·`/var`·`/var/lib`·`/var/lib/docker`·`/var/lib/containerd`·
+  `/var/log`·`/var/backups`·`/srv`·`/opt`·`/root`·`/home`·`/tmp`·`/usr`·`/srv/metainc`·`/var/lib/metainc`·`/var/backups/metainc` 아래 상위 15개 폴더와 바이트·소유자.
+  다른 파일시스템의 mountpoint 인 자식은 그 파일시스템 장부 값과 `filesystem` 으로 보여 준다. 폴더 경로만 나오며 파일 이름·내용은 나오지 않는다
+- `du.filesystems[].by_owner` / `du.by_owner_overall`: 겹치지 않게 나눈 소유자별 합 — `naver`(`/var/lib/metainc/naver-*`, `/var/backups/metainc/naver-*`, `/srv/metainc/ad-deploy-staging`, `/opt/metainc/naver-*`),
+  `other_apps`(그 밖의 `/srv/metainc/*`·`/var/lib/metainc/*`, `/root/*`, `/opt/*`), `docker_internal`(`/var/lib/docker`·`/var/lib/containerd`),
+  `os`(`/usr`, `/var/log`(journal 포함), `/var/cache`, snap 등), `backups`(그 밖의 `/var/backups/*`), 그리고 폴더에 직접 있는 파일 몫(`direct_files_*`), 불일치 보정(`inconsistent_remainder`, 음수 가능)
+- `journal`: `journalctl --disk-usage` 바이트(1024 단위 근사)
+
+du 는 폴더가 차지한 디스크, docker 표시는 docker 집계라 서로 더하거나 df 확보량과 같다고 보지 않는다.
 
 ---
 
