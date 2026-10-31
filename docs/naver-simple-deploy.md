@@ -261,12 +261,16 @@ saved-exports·receipts·runtime.env·키·데이터 폴더(`.*-failed-db-*` 포
 - `filesystems`: 실제 파일시스템별 mountpoint·fstype·total/used/avail 바이트(tmpfs·overlay·proc·sysfs·squashfs 등 제외, 같은 장치는 한 번)
 - `docker`: DockerRootDir·Driver·containerd snapshotter 여부, `docker system df` 요약(이미지·컨테이너·volume·build cache 의 개수·크기·회수 가능, docker 표기를 바이트로 환산한 근사값),
   저장소별 이미지 수·이미지 ID 수·Size 합(공유 층은 이미지마다 다시 셈), dangling 이미지 수·크기. 다른 앱 저장소 이름도 나온다(비밀 아님)
-- `du`: `du -x -B1 --max-depth=4` 를 `/` 에서 **한 번만**(nice·ionice 낮은 우선순위) 훑고, `/`·`/var`·`/var/lib`·`/var/lib/docker`·`/var/lib/containerd`·
+- `du`: **실제 파일시스템마다 한 번씩** `du -x -B1` 을 그 mountpoint 에서(nice·ionice 낮은 우선순위, 절대 깊이 4 까지) 훑는다.
+  같은 장치의 중복 mount 는 `skipped_duplicate_device`, 결과는 파일시스템별 `scanned`/`partial`/`timeout`/`failed` 로 표시한다.
+  파일시스템마다 따로 장부를 만들고(`scanned_total_bytes`·statvfs used·`by_owner`), 소유자 분할은 규칙 경계(예: `/opt/metainc/naver-*`)까지
+  자식으로 내려가 나눈다. 자식 합이 부모보다 크면 0 으로 덮지 않고 `consistent=false` 와 사유를 남긴다. 각 파일시스템의 `by_owner` 합은 그 scan 합계와 정확히 같고,
+  `by_owner_overall` 합은 파일시스템별 합계의 합과 같다. 그 위에 `/`·`/var`·`/var/lib`·`/var/lib/docker`·`/var/lib/containerd`·
   `/var/log`·`/var/backups`·`/srv`·`/opt`·`/root`·`/home`·`/tmp`·`/usr`·`/srv/metainc`·`/var/lib/metainc`·`/var/backups/metainc` 아래 상위 15개 폴더와 바이트·소유자.
-  다른 파일시스템에 있는 뿌리는 따로 한 번 훑는다. 폴더 경로만 나오며 파일 이름·내용은 나오지 않는다
-- `du.by_owner`: 겹치지 않게 나눈 소유자별 합 — `naver`(`/var/lib/metainc/naver-*`, `/var/backups/metainc/naver-*`, `/srv/metainc/ad-deploy-staging`, `/opt/metainc/naver-*`),
+  다른 파일시스템의 mountpoint 인 자식은 그 파일시스템 장부 값과 `filesystem` 으로 보여 준다. 폴더 경로만 나오며 파일 이름·내용은 나오지 않는다
+- `du.filesystems[].by_owner` / `du.by_owner_overall`: 겹치지 않게 나눈 소유자별 합 — `naver`(`/var/lib/metainc/naver-*`, `/var/backups/metainc/naver-*`, `/srv/metainc/ad-deploy-staging`, `/opt/metainc/naver-*`),
   `other_apps`(그 밖의 `/srv/metainc/*`·`/var/lib/metainc/*`, `/root/*`, `/opt/*`), `docker_internal`(`/var/lib/docker`·`/var/lib/containerd`),
-  `os`(`/usr`, `/var/log`(journal 포함), `/var/cache`, snap 등), `backups`(그 밖의 `/var/backups/*`), 그리고 묶음 폴더에 직접 있는 파일 몫(`files_or_unlisted_in_*`)
+  `os`(`/usr`, `/var/log`(journal 포함), `/var/cache`, snap 등), `backups`(그 밖의 `/var/backups/*`), 그리고 폴더에 직접 있는 파일 몫(`direct_files_*`), 불일치 보정(`inconsistent_remainder`, 음수 가능)
 - `journal`: `journalctl --disk-usage` 바이트(1024 단위 근사)
 
 du 는 폴더가 차지한 디스크, docker 표시는 docker 집계라 서로 더하거나 df 확보량과 같다고 보지 않는다.

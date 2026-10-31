@@ -1485,37 +1485,6 @@ def binary_bytes(text):
     return int(float(match.group(1)) * 1024 ** ' KMGTP'.index(match.group(2) or ' '))
 
 
-def filesystems(errors):
-    try:
-        with open(ROOT + '/proc/self/mounts') as handle:
-            lines = handle.read().splitlines()
-    except OSError:
-        errors.append({'component': 'filesystems', 'reason': 'mounts_unreadable'})
-        return None
-    rows, seen = [], set()
-    for line in lines:
-        parts = line.split()
-        if len(parts) < 3 or parts[2] in PSEUDO_FS:
-            continue
-        mountpoint = parts[1].replace('\\040', ' ')
-        if not SAFE_PATH.match(mountpoint):
-            continue
-        try:
-            info = os.statvfs(ROOT + mountpoint if mountpoint != '/' else ROOT + '/')
-            device = os.stat(ROOT + mountpoint).st_dev
-        except OSError:
-            rows.append({'mountpoint': mountpoint, 'fstype': pick(parts[2], DIR_NAME), 'error': 'statvfs_failed'})
-            continue
-        if device in seen:
-            continue
-        seen.add(device)
-        total = info.f_blocks * info.f_frsize
-        free = info.f_bfree * info.f_frsize
-        rows.append({'mountpoint': mountpoint, 'fstype': pick(parts[2], DIR_NAME), 'total_bytes': total,
-                     'used_bytes': total - free, 'avail_bytes': info.f_bavail * info.f_frsize})
-    return rows
-
-
 def docker_usage(errors):
     result = {}
     status, out = timed(['docker', 'info', '--format', '{{json .}}'], 60)
@@ -1603,9 +1572,61 @@ def docker_usage(errors):
     return result
 
 
-def du_tree(path, timeout):
-    """한 번만 훑는다(-x, 깊이 4, 낮은 우선순위). 폴더 경로→바이트. 부분 실패(권한 등)도 받은 만큼 쓴다."""
-    status, out = timed(['du', '-x', '-B1', '--max-depth=4', ROOT + path], timeout, low_priority=True)
+ABS_DEPTH = 4   # 규칙 경계(예: /var/lib/metainc/naver-*, /var/lib/docker/*) 의 자식까지 내려가는 절대 깊이
+
+
+def mount_table(errors):
+    """실제 파일시스템(가상 FS 제외)의 mountpoint·fstype·장치·statvfs 바이트. 못 읽으면 None."""
+    try:
+        with open(ROOT + '/proc/self/mounts') as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        errors.append({'component': 'filesystems', 'reason': 'mounts_unreadable'})
+        return None
+    rows = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3 or parts[2] in PSEUDO_FS:
+            continue
+        mountpoint = parts[1].replace('\\040', ' ')
+        if not SAFE_PATH.match(mountpoint):
+            continue
+        try:
+            info = os.statvfs(ROOT + mountpoint)
+            device = os.stat(ROOT + mountpoint).st_dev
+        except OSError:
+            rows.append({'mountpoint': mountpoint, 'fstype': pick(parts[2], DIR_NAME), 'device': None})
+            continue
+        total = info.f_blocks * info.f_frsize
+        rows.append({'mountpoint': mountpoint, 'fstype': pick(parts[2], DIR_NAME), 'device': device,
+                     'total_bytes': total, 'used_bytes': total - info.f_bfree * info.f_frsize,
+                     'avail_bytes': info.f_bavail * info.f_frsize})
+    return rows
+
+
+def filesystems(errors, table=None):
+    table = mount_table(errors) if table is None else table
+    if table is None:
+        return None
+    rows, seen = [], set()
+    for row in sorted(table, key=lambda r: (len(r['mountpoint']), r['mountpoint'])):
+        if row['device'] is None:
+            rows.append({'mountpoint': row['mountpoint'], 'fstype': row['fstype'], 'error': 'statvfs_failed'})
+            continue
+        if row['device'] in seen:
+            continue
+        seen.add(row['device'])
+        rows.append({key: row[key] for key in ('mountpoint', 'fstype', 'total_bytes', 'used_bytes', 'avail_bytes')})
+    return rows
+
+
+def path_depth(path):
+    return 0 if path == '/' else path.count('/')
+
+
+def du_tree(path, timeout, max_depth=ABS_DEPTH):
+    """한 파일시스템만(-x) 훑는다(낮은 우선순위). 폴더 경로→바이트. 부분 실패(권한·시간 초과)도 받은 만큼 쓴다."""
+    status, out = timed(['du', '-x', '-B1', '--max-depth=%d' % max_depth, ROOT + path], timeout, low_priority=True)
     sizes = {}
     for line in out.splitlines():
         amount, _, name = line.partition('\t')
@@ -1618,68 +1639,121 @@ def du_tree(path, timeout):
     return status, sizes
 
 
-def disk_usage():
-    errors = []
-    out = {'mode': 'disk-usage', 'read_only': True, 'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
-    out['filesystems'] = filesystems(errors)
-    out['docker'] = docker_usage(errors)
-    timeout = int(os.environ.get('NAVER_DEPLOY_DU_TIMEOUT', '300')) if ROOT else 300
-    sizes, scans = {}, []
-    root_dev = os.lstat(ROOT + '/').st_dev
-    passes = ['/']
-    for root in DU_ROOTS:
-        try:
-            info = os.lstat(ROOT + root)
-        except OSError:
+def children_of(sizes, path):
+    prefix = '/' if path == '/' else path + '/'
+    return [name for name in sizes if name != path and name.startswith(prefix) and '/' not in name[len(prefix):]]
+
+
+def ledger(sizes, top):
+    """한 파일시스템 scan 안에서만 소유자별로 나눈다. 자식이 있으면 늘 자식으로 내려가고(규칙 경계까지 분해),
+    폴더에 직접 있는 파일 몫은 그 폴더 owner 로 둔다. 부모보다 자식 합이 크면 0 으로 덮지 않고 불일치로 남긴다."""
+    by_owner, problems = {}, []
+
+    def add(owner, amount):
+        by_owner[owner] = by_owner.get(owner, 0) + amount
+
+    def walk(path):
+        children = children_of(sizes, path)
+        if not children:
+            add(owner_of(path), sizes[path])
+            return
+        remainder = sizes[path] - sum(sizes[c] for c in children)
+        if remainder < 0:
+            problems.append({'path': path, 'reason': 'children_exceed_parent', 'excess_bytes': -remainder})
+            add('inconsistent_remainder', remainder)
+        elif remainder:
+            add('direct_files_' + owner_of(path), remainder)
+        for child in children:
+            walk(child)
+    walk(top)
+    return by_owner, problems
+
+
+def du_section(errors, table, timeout):
+    """실제 파일시스템마다 한 번씩(-x) 훑고, 파일시스템별 장부를 따로 만든다. 다른 FS 의 자리표시 크기를 섞지 않는다."""
+    if table is None:
+        candidates = [{'mountpoint': '/', 'device': None, 'used_bytes': None}]
+        coverage_note = 'mount table unavailable; only / scanned, coverage unknown'
+    else:
+        candidates = [r for r in table if r['device'] is not None]
+        coverage_note = 'one du -x pass per real filesystem (pseudo filesystems excluded)'
+    chosen, fs_rows = {}, []
+    for row in sorted(candidates, key=lambda r: (len(r['mountpoint']), r['mountpoint'])):
+        key = row['device'] if row['device'] is not None else row['mountpoint']
+        if key in chosen:
+            fs_rows.append({'mountpoint': row['mountpoint'], 'status': 'skipped_duplicate_device',
+                            'same_device_as': chosen[key]['mountpoint']})
             continue
-        if stat.S_ISDIR(info.st_mode) and info.st_dev != root_dev and not any(
-                root.startswith(p.rstrip('/') + '/') for p in passes if p != '/'):
-            passes.append(root)  # 다른 파일시스템에 있는 뿌리는 따로 한 번 훑는다
-    for path in passes:
-        status, found = du_tree(path, timeout)
-        scans.append({'path': path, 'status': status if found or status != 'ok' else 'empty',
-                      'partial': status != 'ok' and bool(found)})
-        if not found:
-            errors.append({'component': 'du', 'path': path, 'reason': status if status != 'ok' else 'empty'})
-        for name, amount in found.items():
-            sizes.setdefault(name, amount)
+        chosen[key] = row
+    scans = {}
+    for row in chosen.values():
+        mountpoint = row['mountpoint']
+        depth = max(1, ABS_DEPTH - path_depth(mountpoint))
+        status, sizes = du_tree(mountpoint, timeout, depth)
+        entry = {'mountpoint': mountpoint, 'max_depth': depth, 'statvfs_used_bytes': row.get('used_bytes')}
+        if mountpoint not in sizes:
+            entry.update(status='failed' if status != 'timeout' else 'timeout', reason=status if status != 'ok' else 'empty')
+            errors.append({'component': 'du', 'path': mountpoint, 'reason': entry['reason']})
+            fs_rows.append(entry)
+            continue
+        by_owner, problems = ledger(sizes, mountpoint)
+        entry.update(status='scanned' if status == 'ok' else ('timeout' if status == 'timeout' else 'partial'),
+                     reason=None if status == 'ok' else status, scanned_total_bytes=sizes[mountpoint],
+                     by_owner=by_owner, consistent=not problems, inconsistencies=problems[:20])
+        if status != 'ok':
+            errors.append({'component': 'du', 'path': mountpoint, 'reason': status, 'partial': True})
+        fs_rows.append(entry)
+        scans[mountpoint] = sizes
+    fs_rows.sort(key=lambda r: r['mountpoint'])
+    scanned = [r for r in fs_rows if r.get('scanned_total_bytes') is not None]
+    overall = {}
+    for row in scanned:
+        for owner, amount in row['by_owner'].items():
+            overall[owner] = overall.get(owner, 0) + amount
+
+    def home_fs(path):
+        """그 경로가 실제로 놓인(가장 긴 mountpoint 접두어) scan."""
+        best = None
+        for mountpoint in scans:
+            if path == mountpoint or mountpoint == '/' or path.startswith(mountpoint + '/'):
+                if best is None or len(mountpoint) > len(best):
+                    best = mountpoint
+        return best
 
     def safe(name):
         return all(DIR_NAME.match(part) for part in name.strip('/').split('/') if part)
     roots = {}
     for root in DU_ROOTS:
-        if root not in sizes:
+        fs = home_fs(root)
+        if fs is None or root not in scans[fs]:
             continue
-        prefix = root.rstrip('/') + '/'
-        children = [(name, amount) for name, amount in sizes.items()
-                    if name.startswith(prefix) and '/' not in name[len(prefix):] and name != root]
-        children.sort(key=lambda item: -item[1])
-        roots[root] = {'bytes': sizes[root], 'owner': owner_of(root), 'children_listed': min(len(children), TOP_N),
-                       'children_total': len(children),
-                       'top': [{'path': name if safe(name) else prefix + '<unexpected-name>', 'bytes': amount,
-                                'owner': owner_of(name)} for name, amount in children[:TOP_N]]}
-    # 겹치지 않는 분할로 owner 별 합: 펼칠 뿌리는 자식으로 나누고, 남는 바이트(파일·목록 밖)는 그 뿌리 owner('mixed' 등)에 둔다.
-    by_owner = {}
-    expandable = set(DU_ROOTS)
+        sizes = scans[fs]
+        rows = []
+        for child in children_of(sizes, root):
+            child_fs = child if child in scans and child != fs else fs   # 다른 FS 의 mountpoint 는 그 FS 장부 값으로
+            rows.append((child, scans[child_fs][child], child_fs))
+        rows.sort(key=lambda item: -item[1])
+        roots[root] = {'bytes': sizes[root], 'filesystem': fs, 'owner': owner_of(root),
+                       'children_listed': min(len(rows), TOP_N), 'children_total': len(rows),
+                       'top': [{'path': name if safe(name) else root.rstrip('/') + '/<unexpected-name>', 'bytes': amount,
+                                'owner': owner_of(name), 'filesystem': child_fs}
+                               for name, amount, child_fs in rows[:TOP_N]]}
+    return {'coverage': coverage_note, 'absolute_max_depth': ABS_DEPTH, 'top_n': TOP_N,
+            'units': 'bytes (du -B1, disk usage per filesystem; not additive with docker figures)',
+            'filesystems': fs_rows, 'by_owner_overall': overall,
+            'overall_scanned_total_bytes': sum(r['scanned_total_bytes'] for r in scanned),
+            'incomplete': [r['mountpoint'] for r in fs_rows if r['status'] not in ('scanned', 'skipped_duplicate_device')],
+            'roots': roots, 'owner_rules': {owner: list(prefixes) for owner, prefixes in OWNER_RULES}}
 
-    def assign(path):
-        if path in expandable and path in sizes:
-            prefix = path.rstrip('/') + '/'
-            children = [n for n in sizes if n.startswith(prefix) and '/' not in n[len(prefix):] and n != path]
-            remainder = sizes[path] - sum(sizes[c] for c in children)
-            if remainder:
-                key = 'files_or_unlisted_in_' + owner_of(path)
-                by_owner[key] = by_owner.get(key, 0) + max(remainder, 0)
-            for child in children:
-                assign(child)
-        elif path in sizes:
-            owner = owner_of(path)
-            by_owner[owner] = by_owner.get(owner, 0) + sizes[path]
-    if '/' in sizes:
-        assign('/')
-    out['du'] = {'scans': scans, 'max_depth': 4, 'top_n': TOP_N, 'units': 'bytes (du -B1, apparent disk usage)',
-                 'roots': roots, 'by_owner': by_owner,
-                 'owner_rules': {owner: list(prefixes) for owner, prefixes in OWNER_RULES}}
+
+def disk_usage():
+    errors = []
+    out = {'mode': 'disk-usage', 'read_only': True, 'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+    table = mount_table(errors)
+    out['filesystems'] = filesystems(errors, table)
+    out['docker'] = docker_usage(errors)
+    timeout = int(os.environ.get('NAVER_DEPLOY_DU_TIMEOUT', '300')) if ROOT else 300
+    out['du'] = du_section(errors, table, timeout)
     status, text = timed(['journalctl', '--disk-usage'], 60)
     value = binary_bytes(text.split('take up', 1)[1] if 'take up' in text else '') if status == 'ok' else None
     out['journal'] = {'bytes': value, 'units': '1024-based from journalctl, approximate'}

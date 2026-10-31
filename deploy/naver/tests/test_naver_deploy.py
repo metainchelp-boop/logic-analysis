@@ -1144,10 +1144,13 @@ class DeployScriptTest(unittest.TestCase):
                     '/var/backups/metainc/other-backup': 'backups', '/var/lib': 'mixed', '/srv': 'mixed'}
         for path, owner in expected.items():
             self.assertEqual(owners.get(path), owner, path)
-        by_owner = report['du']['by_owner']
+        by_owner = report['du']['by_owner_overall']
         for owner in ('naver', 'other_apps', 'docker_internal', 'os', 'backups'):
             self.assertGreater(by_owner.get(owner, 0), 0, owner)
-        self.assertEqual(sum(by_owner.values()), report['du']['roots']['/']['bytes'])  # 겹치지 않는 분할
+        root_fs = [f for f in report['du']['filesystems'] if f['mountpoint'] == '/'][0]
+        self.assertEqual(sum(root_fs['by_owner'].values()), root_fs['scanned_total_bytes'])  # 겹치지 않는 분할
+        self.assertEqual(root_fs['scanned_total_bytes'], report['du']['roots']['/']['bytes'])
+        self.assertTrue(root_fs['consistent'])
 
     def test_disk_usage_prints_no_secrets_or_deep_names(self):
         self.add_disk_fixture()
@@ -1181,8 +1184,84 @@ class DeployScriptTest(unittest.TestCase):
         self.host.config = {'root': self.host.root, 'extra_labels': {'vendor.secret': CANARY_LABEL}}
         self.host.set(du_partial=True)
         _, report = self.disk_usage()
-        self.assertTrue(report['du']['scans'][0]['partial'])  # 권한 오류여도 받은 만큼 쓴다
+        self.assertEqual(report['du']['filesystems'][0]['status'], 'partial')  # 권한 오류여도 받은 만큼 쓰고 표시한다
+        self.assertEqual(report['du']['incomplete'], ['/'])
         self.assertIn('/var', report['du']['roots'])
+
+
+    # ── disk-usage 집계: 파일시스템별 장부 ──
+    def run_disk_usage_in_process(self, table, trees):
+        """helper 를 이 프로세스에서 실행하고 mount 표·du 결과만 합성 값으로 바꾼다(가짜 루트 안, 서버 없음)."""
+        with open(SCRIPT) as handle:
+            text = handle.read()
+        source = text.split("PY_HELPER=$(cat <<'PYEOF'\n", 1)[1].split('\nPYEOF', 1)[0]
+        namespace = {'__name__': 'naver_deploy_helper'}
+        exec(source, namespace)
+        namespace['ROOT'] = self.host.root
+        calls = []
+
+        def fake_du(path, timeout, max_depth=4):
+            calls.append((path, max_depth))
+            return 'ok', dict(trees.get(path, {}))
+        namespace['mount_table'] = lambda errors: [
+            {'mountpoint': m, 'fstype': 'ext4', 'device': d, 'total_bytes': 10 ** 9, 'used_bytes': 10 ** 6,
+             'avail_bytes': 10 ** 8} for m, d in table]
+        namespace['du_tree'] = fake_du
+        namespace['docker_usage'] = lambda errors: {}
+        namespace['timed'] = lambda *a, **k: ('ok', 'Archived and active journals take up 1.0M in the file system.')
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            namespace['disk_usage']()
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        report = json.loads(lines[0].split('=', 1)[1])
+        for fs in report['du']['filesystems']:
+            if fs.get('scanned_total_bytes') is not None:
+                self.assertEqual(sum(fs['by_owner'].values()), fs['scanned_total_bytes'], fs['mountpoint'])
+        self.assertEqual(sum(report['du']['by_owner_overall'].values()), report['du']['overall_scanned_total_bytes'])
+        return calls, report
+
+    def test_disk_usage_scans_nested_filesystems(self):
+        calls, report = self.run_disk_usage_in_process(
+            [('/', 1), ('/var', 2), ('/var/lib', 3)],
+            {'/': {'/': 10, '/var': 0}, '/var': {'/var': 20, '/var/lib': 0},
+             '/var/lib': {'/var/lib': 300, '/var/lib/docker': 300}})
+        self.assertEqual(sorted(path for path, _ in calls), ['/', '/var', '/var/lib'])
+        self.assertEqual(dict(calls), {'/': 4, '/var': 3, '/var/lib': 2})  # 절대 깊이 4 까지
+        statuses = {f['mountpoint']: f['status'] for f in report['du']['filesystems']}
+        self.assertEqual(statuses, {'/': 'scanned', '/var': 'scanned', '/var/lib': 'scanned'})
+        self.assertEqual(report['du']['by_owner_overall'].get('docker_internal'), 300)
+        self.assertEqual(report['du']['overall_scanned_total_bytes'], 330)
+
+    def test_disk_usage_keeps_separate_filesystem_ledgers(self):
+        calls, report = self.run_disk_usage_in_process(
+            [('/', 1), ('/var', 2), ('/srv-bind', 1)],
+            {'/': {'/': 100, '/var': 0, '/usr': 100}, '/var': {'/var': 200, '/var/log': 200}})
+        rows = {f['mountpoint']: f for f in report['du']['filesystems']}
+        self.assertEqual(rows['/srv-bind']['status'], 'skipped_duplicate_device')
+        self.assertEqual(rows['/']['scanned_total_bytes'], 100)
+        self.assertEqual(rows['/var']['scanned_total_bytes'], 200)
+        self.assertEqual(rows['/']['by_owner'], {'os': 100, 'mixed': 0})
+        self.assertEqual(rows['/var']['by_owner'], {'os': 200})
+        self.assertEqual(report['du']['overall_scanned_total_bytes'], 300)
+        self.assertEqual(report['du']['roots']['/var']['bytes'], 200)
+        self.assertEqual(report['du']['roots']['/var']['filesystem'], '/var')
+        listed = {r['path']: r for r in report['du']['roots']['/']['top']}
+        self.assertEqual((listed['/var']['bytes'], listed['/var']['filesystem']), (200, '/var'))
+
+    def test_disk_usage_splits_to_owner_rule_boundary(self):
+        _, report = self.run_disk_usage_in_process(
+            [('/', 1)], {'/': {'/': 100, '/opt': 100, '/opt/metainc': 100, '/opt/metainc/naver-service': 100}})
+        by_owner = report['du']['by_owner_overall']
+        self.assertEqual(by_owner.get('naver'), 100)
+        self.assertEqual(by_owner.get('other_apps', 0), 0)
+
+    def test_disk_usage_marks_inconsistent_ledger(self):
+        _, report = self.run_disk_usage_in_process([('/', 1)], {'/': {'/': 100, '/usr': 150}})
+        root = report['du']['filesystems'][0]
+        self.assertFalse(root['consistent'])
+        self.assertEqual(root['inconsistencies'], [{'path': '/', 'reason': 'children_exceed_parent', 'excess_bytes': 50}])
+        self.assertEqual(root['by_owner'], {'inconsistent_remainder': -50, 'os': 150})  # 0 으로 덮지 않는다
 
 
 class WorkflowConsistencyTest(unittest.TestCase):
