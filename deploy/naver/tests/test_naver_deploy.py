@@ -6,6 +6,7 @@ import contextlib
 import fcntl
 import hashlib
 import io
+import itertools
 import json
 import os
 import re
@@ -1076,8 +1077,11 @@ class DeployScriptTest(unittest.TestCase):
 
     # ── disk-usage: 읽기 전용 사용처 분석 ──
     def add_disk_fixture(self):
-        self.host.file('/proc/self/mounts', '/dev/vda1 / ext4 rw,relatime 0 0\ntmpfs /run tmpfs rw 0 0\n'
-                       'overlay /var/lib/docker/overlay2/abc/merged overlay rw 0 0\nproc /proc proc rw 0 0\n')
+        self.host.file('/proc/self/mountinfo',
+                       '22 1 253:1 / / rw,relatime shared:1 - ext4 /dev/vda1 rw\n'
+                       '23 22 0:21 / /run rw,nosuid - tmpfs tmpfs rw\n'
+                       '24 22 0:50 / /var/lib/docker/overlay2/abc/merged rw - overlay overlay rw\n'
+                       '25 22 0:4 / /proc rw - proc proc rw\n')
         blobs = {'/var/lib/docker/overlay2/l1/diff/blob': 300000, '/var/lib/containerd/io.containerd.content/blob': 500000,
                  '/var/lib/docker/buildkit/cache/blob': 200000, '/var/lib/docker/volumes/v1/blob': 50000,
                  '/var/lib/metainc/other-app/data.db': 120000, '/srv/metainc/other-service/app.bin': 90000,
@@ -1175,7 +1179,12 @@ class DeployScriptTest(unittest.TestCase):
                 self.assertIn({'component': component, 'reason': reason},
                               [{k: e[k] for k in ('component', 'reason')} for e in report['errors']])
                 if component == 'du':
-                    self.assertEqual(report['du']['roots'], {})
+                    # 실패한 FS 의 뿌리는 0 이 아니라 null + 그 FS 상태·사유로 남는다.
+                    self.assertTrue(report['du']['roots'])
+                    for root in report['du']['roots'].values():
+                        self.assertEqual((root['bytes'], root['filesystem'], root['reason']), (None, '/', reason))
+                        self.assertEqual(root['status'], 'timeout' if reason == 'timeout' else 'failed')
+                    self.assertEqual(report['du']['incomplete'], ['/'])
                 if component == 'docker_info':
                     self.assertIsNone(report['docker']['info'])
                     self.assertIsNone(report['docker']['system_df'])
@@ -1190,7 +1199,7 @@ class DeployScriptTest(unittest.TestCase):
 
 
     # ── disk-usage 집계: 파일시스템별 장부 ──
-    def run_disk_usage_in_process(self, table, trees):
+    def run_disk_usage_in_process(self, table, trees, statuses=None):
         """helper 를 이 프로세스에서 실행하고 mount 표·du 결과만 합성 값으로 바꾼다(가짜 루트 안, 서버 없음)."""
         with open(SCRIPT) as handle:
             text = handle.read()
@@ -1202,10 +1211,10 @@ class DeployScriptTest(unittest.TestCase):
 
         def fake_du(path, timeout, max_depth=4):
             calls.append((path, max_depth))
-            return 'ok', dict(trees.get(path, {}))
+            return (statuses or {}).get(path, 'ok'), dict(trees.get(path, {}))
         namespace['mount_table'] = lambda errors: [
-            {'mountpoint': m, 'fstype': 'ext4', 'device': d, 'total_bytes': 10 ** 9, 'used_bytes': 10 ** 6,
-             'avail_bytes': 10 ** 8} for m, d in table]
+            {'mountpoint': row[0], 'fstype': 'ext4', 'device': row[1], 'fs_root': row[2] if len(row) > 2 else '/',
+             'total_bytes': 10 ** 9, 'used_bytes': 10 ** 6, 'avail_bytes': 10 ** 8} for row in table]
         namespace['du_tree'] = fake_du
         namespace['docker_usage'] = lambda errors: {}
         namespace['timed'] = lambda *a, **k: ('ok', 'Archived and active journals take up 1.0M in the file system.')
@@ -1262,6 +1271,59 @@ class DeployScriptTest(unittest.TestCase):
         self.assertFalse(root['consistent'])
         self.assertEqual(root['inconsistencies'], [{'path': '/', 'reason': 'children_exceed_parent', 'excess_bytes': 50}])
         self.assertEqual(root['by_owner'], {'inconsistent_remainder': -50, 'os': 150})  # 0 으로 덮지 않는다
+
+
+    def test_disk_usage_statvfs_failure_stays_in_coverage(self):
+        self.add_disk_fixture()
+        with open(self.host.root + '/proc/self/mountinfo', 'a') as handle:
+            handle.write('30 22 253:9 / /independent-missing-disk rw - ext4 /dev/vdb rw\n')
+        _, report = self.disk_usage()
+        self.assertIn({'component': 'filesystems', 'path': '/independent-missing-disk', 'reason': 'statvfs_failed'},
+                      report['errors'])
+        rows = {r['mountpoint']: r for r in report['du']['filesystems']}
+        self.assertEqual(rows['/independent-missing-disk']['status'], 'failed')
+        self.assertEqual(rows['/independent-missing-disk']['statvfs_error'], 'statvfs_failed')
+        self.assertIn('/independent-missing-disk', report['du']['incomplete'])
+        self.assertIn({'mountpoint': '/independent-missing-disk', 'fstype': 'ext4', 'device': '253:9',
+                       'error': 'statvfs_failed'}, report['filesystems'])
+        self.assertEqual(rows['/']['status'], 'scanned')
+
+    def test_disk_usage_prefers_full_filesystem_mount_over_subset_bind(self):
+        table = [('/', 1, '/'), ('/data', 2, '/subset'), ('/mnt/storage', 2, '/')]
+        trees = {'/': {'/': 10}, '/data': {'/data': 30, '/data/subfolder': 30},
+                 '/mnt/storage': {'/mnt/storage': 300, '/mnt/storage/subset': 30, '/mnt/storage/other': 270}}
+        for order in itertools.permutations(table):
+            with self.subTest(order=[row[0] for row in order]):
+                calls, report = self.run_disk_usage_in_process(list(order), trees)
+                self.assertEqual(sorted(path for path, _ in calls), ['/', '/mnt/storage'])
+                self.assertEqual(report['du']['overall_scanned_total_bytes'], 310)
+                self.assertEqual(report['du']['incomplete'], [])
+                rows = {r['mountpoint']: r for r in report['du']['filesystems']}
+                self.assertEqual((rows['/data']['status'], rows['/data']['fs_root'], rows['/data']['same_device_as']),
+                                 ('skipped_bind_subtree', '/subset', '/mnt/storage'))
+
+    def test_disk_usage_subtree_only_device_is_marked(self):
+        table = [('/', 1, '/'), ('/x', 3, '/a'), ('/y', 3, '/a/b'), ('/z', 3, '/c')]
+        trees = {'/': {'/': 10}, '/x': {'/x': 50}, '/z': {'/z': 20}}
+        for order in itertools.permutations(table):
+            with self.subTest(order=[row[0] for row in order]):
+                calls, report = self.run_disk_usage_in_process(list(order), trees)
+                self.assertEqual(sorted(path for path, _ in calls), ['/', '/x', '/z'])
+                rows = {r['mountpoint']: r for r in report['du']['filesystems']}
+                self.assertEqual((rows['/x']['status'], rows['/z']['status']), ('subtree_only', 'subtree_only'))
+                self.assertEqual(rows['/y']['status'], 'skipped_bind_subtree')
+                self.assertEqual(report['du']['incomplete'], ['/x', '/z'])
+
+    def test_disk_usage_failed_filesystem_root_is_null(self):
+        _, report = self.run_disk_usage_in_process(
+            [('/', 1), ('/var', 2)], {'/': {'/': 100, '/var': 0, '/usr': 100}}, statuses={'/var': 'exit_1'})
+        var = report['du']['roots']['/var']
+        self.assertEqual((var['bytes'], var['filesystem'], var['status'], var['reason']), (None, '/var', 'failed', 'exit_1'))
+        listed = {r['path']: r for r in report['du']['roots']['/']['top']}
+        self.assertEqual((listed['/var']['bytes'], listed['/var']['filesystem'], listed['/var']['status']),
+                         (None, '/var', 'failed'))
+        self.assertIn('/var', report['du']['incomplete'])
+        self.assertEqual(report['du']['overall_scanned_total_bytes'], 100)
 
 
 class WorkflowConsistencyTest(unittest.TestCase):

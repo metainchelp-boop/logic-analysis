@@ -262,7 +262,11 @@ saved-exports·receipts·runtime.env·키·데이터 폴더(`.*-failed-db-*` 포
 - `docker`: DockerRootDir·Driver·containerd snapshotter 여부, `docker system df` 요약(이미지·컨테이너·volume·build cache 의 개수·크기·회수 가능, docker 표기를 바이트로 환산한 근사값),
   저장소별 이미지 수·이미지 ID 수·Size 합(공유 층은 이미지마다 다시 셈), dangling 이미지 수·크기. 다른 앱 저장소 이름도 나온다(비밀 아님)
 - `du`: **실제 파일시스템마다 한 번씩** `du -x -B1` 을 그 mountpoint 에서(nice·ionice 낮은 우선순위, 절대 깊이 4 까지) 훑는다.
-  같은 장치의 중복 mount 는 `skipped_duplicate_device`, 결과는 파일시스템별 `scanned`/`partial`/`timeout`/`failed` 로 표시한다.
+  mount 목록과 장치(major:minor)·FS 안 root 는 `/proc/self/mountinfo` 에서 읽는다. 장치마다 FS root(`/`)를 보이는 mount 하나를 훑고
+  (입력 순서와 무관), 같은 장치의 다른 전체 mount 는 `skipped_duplicate_device`, 하위 폴더 bind 는 `skipped_bind_subtree`(fs_root 표시).
+  FS root 를 보이는 mount 가 없는 장치는 겹치지 않는 하위 폴더마다 훑고 `subtree_only`(미완료)로 표시한다. statvfs 가 실패해도 그 mount 는
+  빠지지 않는다(`statvfs_failed` 사유, du 는 그대로 시도). 결과는 파일시스템별 `scanned`/`partial`/`subtree_only`/`timeout`/`failed` 로 표시하고,
+  완료가 아닌 것은 `du.incomplete` 에 모은다. 훑지 못한 FS 에 놓인 경로는 바이트 `null` + 그 FS·상태·사유로 보이며, 상위 FS 의 자리표시 값을 쓰지 않는다.
   파일시스템마다 따로 장부를 만들고(`scanned_total_bytes`·statvfs used·`by_owner`), 소유자 분할은 규칙 경계(예: `/opt/metainc/naver-*`)까지
   자식으로 내려가 나눈다. 자식 합이 부모보다 크면 0 으로 덮지 않고 `consistent=false` 와 사유를 남긴다. 각 파일시스템의 `by_owner` 합은 그 scan 합계와 정확히 같고,
   `by_owner_overall` 합은 파일시스템별 합계의 합과 같다. 그 위에 `/`·`/var`·`/var/lib`·`/var/lib/docker`·`/var/lib/containerd`·
