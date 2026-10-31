@@ -290,3 +290,12 @@ du 는 폴더가 차지한 디스크, docker 표시는 docker 집계라 서로 �
 python3 -m unittest discover -s deploy/naver/tests -v
 shellcheck -S warning deploy/naver/*.sh
 ```
+
+
+## 철거 전 읽기 전용 구성 조회 (`app-inventory`)
+
+대표 계정이 main에서 `mode=app-inventory`로 수동 실행한다. `commit`은 형식만 확인하며 제품 저장소·제품 키·이미지 빌드·DB를 사용하지 않는다. 명령 출력 원문은 메모리에서만 처리하고, 고정 허용 필드의 `NAVER_DEPLOY_APP_INVENTORY={...}` 한 줄만 공개 로그에 내보낸다. 수집기와 nginx parser도 전송 전후 SHA-256을 대조한다.
+
+앱 실행 상태·알려진 mount/데이터 경로의 메타데이터·nginx 연결 단서·관련 기동 장치를 조회한다. DB/키 파일 내용과 환경값·고객 파일명·원문 설정/로그는 출력하지 않는다. 미확인/실패/잘림은 결과에 남으며, 복잡한 nginx 구성을 확정된 실제 연결로 주장하지 않는다. 이 결과는 종료·삭제 가능 판정이나 원격 보관/복구 증거가 아니다.
+
+Mac의 별도 순위 agent와 ERP 데이터/캐시는 조회하지 않는다. 조회만으로 원격 서비스·키·데이터를 변경하지 않으며, 임시 전달 스크립트만 실행 뒤 제거한다. 설계와 합성 검증 범위는 `docs/superpowers/specs/2026-11-01-app-inventory-design.md`에 있다.

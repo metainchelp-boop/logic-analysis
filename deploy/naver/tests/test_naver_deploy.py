@@ -1438,7 +1438,7 @@ class WorkflowConsistencyTest(unittest.TestCase):
     def test_workflow_cleanup_modes(self):
         with open(os.path.normpath(WORKFLOW)) as handle:
             workflow = handle.read()
-        self.assertIn('options: [inspect, deploy, disk-usage, cleanup-plan, cleanup]', workflow)
+        self.assertIn('options: [inspect, deploy, disk-usage, app-inventory, cleanup-plan, cleanup]', workflow)
         ssh_part = workflow[workflow.index('appleboy/ssh-action'):]
         self.assertIn('disk-usage 2>/dev/null', ssh_part)
         self.assertIn("grep '^NAVER_DEPLOY_DISK_USAGE={'", ssh_part)
@@ -1458,12 +1458,36 @@ class WorkflowConsistencyTest(unittest.TestCase):
         for forbidden in ("'prune'", 'system prune', 'volume prune', 'builder prune', "'--force'", "'-f', ref"):
             self.assertNotIn(forbidden, script)
 
+    def test_app_inventory_is_read_only_and_shipped_with_verified_helpers(self):
+        with open(os.path.normpath(WORKFLOW)) as handle:
+            workflow = handle.read()
+        self.assertEqual(workflow.count('inspect|deploy|disk-usage|app-inventory|cleanup-plan|cleanup'), 2)
+        for name in ('app_inventory.py', 'nginx_inventory.py'):
+            self.assertIn('naver-ship/' + name, workflow)
+            self.assertIn('"$incoming/' + name + '"', workflow)
+        self.assertIn('NSD_APP_SHA,NSD_NGINX_SHA', workflow)
+        ssh = workflow[workflow.index('appleboy/ssh-action'):]
+        branch = ssh[ssh.index('if [ "$NSD_MODE" = app-inventory ]; then'):]
+        branch = branch[:branch.index('            fi')]
+        for check in ('APP_HASH', 'NGINX_HELPER_HASH', 'SCRIPT_HASH'):
+            self.assertIn(check, branch)
+        self.assertIn("grep '^NAVER_DEPLOY_APP_INVENTORY={'", branch)
+        for forbidden in ('source.tar', 'systemd-run', 'docker ', 'install '):
+            self.assertNotIn(forbidden, branch)
+        with open(SCRIPT) as handle:
+            script = handle.read()
+        branch = script[script.index('  app-inventory)'):script.index('  cleanup-plan)')]
+        self.assertIn('python3 -I -B', branch)
+        self.assertNotIn('main_deploy', branch)
+        self.assertNotIn('main_cleanup', branch)
+
     def test_deploy_paths_ignored_by_logic_analysis_deploy(self):
         path = os.path.normpath(os.path.join(os.path.dirname(WORKFLOW), 'deploy.yml'))
         with open(path) as handle:
             body = handle.read()
         self.assertIn("- '.github/workflows/naver-deploy.yml'", body)
         self.assertIn("- 'deploy/naver/**'", body)
+        self.assertIn("- '.github/workflows/naver-tools-check.yml'", body)
         # 이 커밋은 deploy.yml 자신도 바꾸므로, 자신도 무시 목록에 있어야 머지가 재배포를 일으키지 않는다.
         self.assertIn("- '.github/workflows/deploy.yml'", body)
 

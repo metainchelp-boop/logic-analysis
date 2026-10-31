@@ -7,6 +7,8 @@
 #       시험을 통과한 정확한 커밋을 배포한다. 실패하면 직전 판으로 자동 복원한다.
 #   naver-deploy.sh disk-usage
 #       읽기 전용. 파일시스템·docker·폴더(du, 깊이 4)·journal 사용량을 소유자별(관제·다른 앱·OS·docker·백업)로 한 줄 JSON.
+#   naver-deploy.sh app-inventory
+#       철거 전 앱/nginx/데이터 경로 메타데이터만 읽어 한 줄 JSON(비밀 원문/DB 내용 미출력).
 #   naver-deploy.sh cleanup-plan
 #       읽기 전용. 지워도 되는 관제 이미지 태그·release 폴더 목록과 회수량 추정, allowlist_sha256 을 낸다.
 #   naver-deploy.sh cleanup <allowlist_sha256>
@@ -2786,6 +2788,10 @@ case "$MODE" in
     [ "$#" = 1 ] || { echo "사용: $0 inspect" >&2; exit 64; }
     main_inspect
     ;;
+  app-inventory)
+    [ "$#" = 1 ] || { echo "사용: $0 app-inventory" >&2; exit 64; }
+    python3 -I -B "$(dirname -- "${BASH_SOURCE[0]}")/app_inventory.py"
+    ;;
   cleanup-plan)
     [ "$#" = 1 ] || { echo "사용: $0 cleanup-plan" >&2; exit 64; }
     py cleanup-plan
@@ -2824,7 +2830,7 @@ case "$MODE" in
     main_deploy "$D_COMMIT" "$D_TAR"
     ;;
   *)
-    echo "사용: $0 inspect | disk-usage | cleanup-plan | cleanup <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2
+    echo "사용: $0 inspect | disk-usage | app-inventory | cleanup-plan | cleanup <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2
     exit 64
     ;;
 esac
