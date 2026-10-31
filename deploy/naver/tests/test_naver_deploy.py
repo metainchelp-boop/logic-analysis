@@ -1326,6 +1326,38 @@ class DeployScriptTest(unittest.TestCase):
         self.assertEqual(report['du']['overall_scanned_total_bytes'], 100)
 
 
+    def test_disk_usage_keeps_mount_with_escaped_path(self):
+        """mountinfo 의 \\040(공백) 경로도 빠지지 않고 argv 로 훑으며, 출력에는 같은 8진 표기로 나온다."""
+        self.add_disk_fixture()
+        self.host.file('/mnt/data disk/sub/blob', 'x' * 7000)
+        with open(self.host.root + '/proc/self/mountinfo', 'a') as handle:
+            handle.write('30 22 253:9 / /mnt/data\\040disk rw - ext4 /dev/vdb rw\n')
+        self.host.clear_calls()
+        _, report = self.disk_usage()
+        rows = {r['mountpoint']: r for r in report['du']['filesystems']}
+        self.assertIn('/mnt/data\\040disk', rows)
+        self.assertEqual(rows['/mnt/data\\040disk']['status'], 'scanned')
+        self.assertGreater(rows['/mnt/data\\040disk']['scanned_total_bytes'], 7000)
+        self.assertEqual(report['du']['incomplete'], [])
+        self.assertEqual(report['errors'], [])
+        self.assertIn('/mnt/data\\040disk', [f['mountpoint'] for f in report['filesystems']])
+        du_paths = [call[-1] for call in self.host.calls() if call[0] == 'du']
+        self.assertIn(self.host.root + '/mnt/data disk', du_paths)  # 셸 없이 argv 하나로 전달
+        # Codex 재현: 같은 입력을 mount_table/du_section 에 직접 넣어도 조용히 빠지지 않는다.
+        with open(SCRIPT) as handle:
+            text = handle.read()
+        namespace = {'__name__': 'naver_deploy_helper'}
+        exec(text.split("PY_HELPER=$(cat <<'PYEOF'\n", 1)[1].split('\nPYEOF', 1)[0], namespace)
+        namespace['ROOT'] = self.host.root
+        errors = []
+        table = namespace['mount_table'](errors)
+        self.assertIn('/mnt/data disk', [row['mountpoint'] for row in table])
+        namespace['du_tree'] = lambda path, timeout, max_depth=4: ('ok', {path: 100})
+        section = namespace['du_section'](errors, table, 1)
+        self.assertIn('/mnt/data disk', [row['mountpoint'] for row in section['filesystems']])
+        self.assertEqual(section['overall_scanned_total_bytes'], 200)
+
+
 class WorkflowConsistencyTest(unittest.TestCase):
     def test_workflow_archive_scope_matches_script(self):
         with open(SCRIPT) as handle:

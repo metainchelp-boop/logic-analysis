@@ -1576,7 +1576,25 @@ ABS_DEPTH = 4   # 규칙 경계(예: /var/lib/metainc/naver-*, /var/lib/docker/*
 
 
 def unescape_mount(value):
-    return re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), value)
+    """mountinfo 의 \\ooo(8진수 바이트) 표기를 실제 경로로 되돌린다."""
+    raw = re.sub(rb'\\([0-7]{3})', lambda m: bytes([int(m.group(1), 8)]), value.encode('utf-8', 'surrogateescape'))
+    return raw.decode('utf-8', 'surrogateescape')
+
+
+def encode_path(value):
+    """출력용 고정·가역 표기: 공백·제어 문자·역슬래시·ASCII 밖 바이트를 mountinfo 와 같은 \\ooo 로 바꾼다.
+    경로는 명령에 늘 argv 로만 넘기고(셸 없음), 출력에서만 이렇게 바꾼다."""
+    if not isinstance(value, str):
+        return value
+    out = []
+    for byte in value.encode('utf-8', 'surrogateescape'):
+        out.append('\\%03o' % byte if byte <= 32 or byte >= 127 or byte == 92 else chr(byte))
+    return ''.join(out)
+
+
+def real_path(value):
+    """절대 경로면 어떤 글자든 받는다(NUL 없음). 셸을 거치지 않으므로 공백·특수 문자도 안전하다."""
+    return isinstance(value, str) and value.startswith('/') and '\0' not in value
 
 
 def mount_table(errors):
@@ -1597,10 +1615,11 @@ def mount_table(errors):
         if not tail or tail[0] in PSEUDO_FS:
             continue
         device, fs_root, mountpoint = parts[2], unescape_mount(parts[3]), unescape_mount(parts[4])
-        if not re.fullmatch(r'[0-9]+:[0-9]+', device) or not SAFE_PATH.match(mountpoint):
+        if not re.fullmatch(r'[0-9]+:[0-9]+', device) or not real_path(mountpoint) or not real_path(fs_root):
+            # 형식을 알 수 없는 줄도 조용히 버리지 않는다.
+            errors.append({'component': 'filesystems', 'path': mountpoint, 'reason': 'unsupported_mountinfo_row'})
             continue
-        row = {'mountpoint': mountpoint, 'fstype': pick(tail[0], DIR_NAME), 'device': device,
-               'fs_root': fs_root if SAFE_PATH.match(fs_root) else '<unexpected-root>'}
+        row = {'mountpoint': mountpoint, 'fstype': pick(tail[0], DIR_NAME), 'device': device, 'fs_root': fs_root}
         try:
             info = os.statvfs(ROOT + mountpoint)
             total = info.f_blocks * info.f_frsize
@@ -1784,8 +1803,6 @@ def du_section(errors, table, timeout):
             return scans[home][path], home, state, reason
         return None, home, state, reason if home in scans else (reason or state)
 
-    def safe(name):
-        return all(DIR_NAME.match(part) for part in name.strip('/').split('/') if part)
     roots = {}
     for root in DU_ROOTS:
         amount, home, state, reason = measured(root)
@@ -1799,7 +1816,7 @@ def du_section(errors, table, timeout):
                 rows.append((child, child_amount, child_home, child_state, child_reason))
             rows.sort(key=lambda item: -(item[1] or 0))
             entry.update(children_listed=min(len(rows), TOP_N), children_total=len(rows),
-                         top=[{'path': name if safe(name) else root.rstrip('/') + '/<unexpected-name>', 'bytes': value,
+                         top=[{'path': name, 'bytes': value,
                                'owner': owner_of(name), 'filesystem': child_home, 'status': child_state}
                               for name, value, child_home, child_state, child_reason in rows[:TOP_N]])
         roots[root] = entry
@@ -1826,7 +1843,35 @@ def disk_usage():
     if value is None:
         errors.append({'component': 'journal', 'reason': status if status != 'ok' else 'unparseable'})
     out['errors'] = errors
+    encode_disk_paths(out)
     print('NAVER_DEPLOY_DISK_USAGE=' + json.dumps(out, sort_keys=True, separators=(',', ':')))
+
+
+def encode_disk_paths(out):
+    """경로 필드만 encode_path 로 바꾼다(키 이름·설명 문장은 그대로)."""
+    out['path_encoding'] = 'paths use mountinfo-style octal escapes (\\ooo) for space, control, backslash and non-ASCII bytes'
+    for row in out.get('filesystems') or []:
+        row['mountpoint'] = encode_path(row.get('mountpoint'))
+    for error in out.get('errors') or []:
+        if 'path' in error:
+            error['path'] = encode_path(error['path'])
+    du = out.get('du') or {}
+    for row in du.get('filesystems') or []:
+        for key in ('mountpoint', 'fs_root', 'same_device_as'):
+            if key in row:
+                row[key] = encode_path(row[key])
+        for problem in row.get('inconsistencies') or []:
+            problem['path'] = encode_path(problem['path'])
+    du['incomplete'] = [encode_path(p) for p in du.get('incomplete') or []]
+    roots = {}
+    for root, entry in (du.get('roots') or {}).items():
+        entry['filesystem'] = encode_path(entry.get('filesystem'))
+        for row in entry.get('top') or []:
+            row['path'] = encode_path(row['path'])
+            row['filesystem'] = encode_path(row.get('filesystem'))
+        roots[encode_path(root)] = entry
+    if 'roots' in du:
+        du['roots'] = roots
 
 
 def inspect():

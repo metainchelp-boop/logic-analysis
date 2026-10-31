@@ -265,7 +265,8 @@ saved-exports·receipts·runtime.env·키·데이터 폴더(`.*-failed-db-*` 포
   mount 목록과 장치(major:minor)·FS 안 root 는 `/proc/self/mountinfo` 에서 읽는다. 장치마다 FS root(`/`)를 보이는 mount 하나를 훑고
   (입력 순서와 무관), 같은 장치의 다른 전체 mount 는 `skipped_duplicate_device`, 하위 폴더 bind 는 `skipped_bind_subtree`(fs_root 표시).
   FS root 를 보이는 mount 가 없는 장치는 겹치지 않는 하위 폴더마다 훑고 `subtree_only`(미완료)로 표시한다. statvfs 가 실패해도 그 mount 는
-  빠지지 않는다(`statvfs_failed` 사유, du 는 그대로 시도). 결과는 파일시스템별 `scanned`/`partial`/`subtree_only`/`timeout`/`failed` 로 표시하고,
+  빠지지 않는다(`statvfs_failed` 사유, du 는 그대로 시도). 공백 등 특수 문자가 든 mount 경로도 빠지지 않는다 — 명령에는 셸 없이 argv 로 넘기고,
+  출력의 모든 경로는 mountinfo 와 같은 고정·가역 8진 표기(공백·제어 문자·역슬래시·ASCII 밖 바이트 → `\ooo`)로 적는다(`path_encoding`). 결과는 파일시스템별 `scanned`/`partial`/`subtree_only`/`timeout`/`failed` 로 표시하고,
   완료가 아닌 것은 `du.incomplete` 에 모은다. 훑지 못한 FS 에 놓인 경로는 바이트 `null` + 그 FS·상태·사유로 보이며, 상위 FS 의 자리표시 값을 쓰지 않는다.
   파일시스템마다 따로 장부를 만들고(`scanned_total_bytes`·statvfs used·`by_owner`), 소유자 분할은 규칙 경계(예: `/opt/metainc/naver-*`)까지
   자식으로 내려가 나눈다. 자식 합이 부모보다 크면 0 으로 덮지 않고 `consistent=false` 와 사유를 남긴다. 각 파일시스템의 `by_owner` 합은 그 scan 합계와 정확히 같고,
