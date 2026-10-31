@@ -249,6 +249,84 @@ class AppInventoryTest(unittest.TestCase):
         self.assertEqual(result['apps']['naver']['count'], 1)
         self.assertEqual(result['unparsed_noncomment_lines'], 1)
 
+    def test_release_paths_are_finite_and_unknown_filenames_never_queried(self):
+        base = '/srv/metainc/ad-deploy-staging/releases/naver-' + 'a' * 40
+        for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
+                     'deploy/naver-engine-backup.override.yml', 'preview-engine.override.yml',
+                     'preview-relay.override.yml'):
+            self.assertEqual(inventory.safe_path(base + '/' + name), base + '/' + name)
+        companion = '/srv/metainc/ad-deploy-staging/saved-exports/' + 'b' * 32 + '/naver-saved-exports.override.yml'
+        self.assertEqual(inventory.safe_path(companion), companion)
+        unknown = base + '/naver-private-customer-secret.yml'
+        self.assertIsNone(inventory.safe_path(unknown))
+        runner = FakeRunner()
+        collector = inventory.Collector(runner, self.root)
+        with mock.patch.object(inventory.os, 'lstat', side_effect=AssertionError('unknown metadata forbidden')):
+            result = collector.metadata(unknown, usage=True)
+            mounts = collector.mounts([{'Type': 'bind', 'Source': unknown,
+                                       'Destination': '/app/data', 'RW': True}])
+        self.assertNotIn('private-customer-secret', json.dumps([result, mounts]))
+        self.assertEqual(result['status'], 'unapproved_path')
+        self.assertEqual(runner.calls, [])
+        self.assertIsNone(inventory.safe_path(companion.replace('naver-saved-exports', 'naver-private')))
+
+    def test_compose_service_identifies_autobid_in_shared_content_project(self):
+        raw = raw_container(name='/content-studio-deploy-autobid_web-1',
+                            image='content-studio-deploy-autobid-web:latest')
+        raw['labels']['com.docker.compose.project'] = 'content-studio-deploy'
+        raw['labels']['com.docker.compose.service'] = 'autobid_web'
+        row = inventory.Collector(FakeRunner(), self.root).container(raw)
+        self.assertEqual(row['app'], 'autobid')
+        self.assertEqual(inventory.classify(name='content-studio', labels={
+            'com.docker.compose.service': 'autobid_web'}), 'autobid')
+
+    def test_related_unknown_supervisors_redacted_and_incomplete(self):
+        calls = []
+        def runner(argv, **kwargs):
+            calls.append(argv)
+            if argv[1] in ('list-unit-files', 'list-units'):
+                return inventory.CommandResult(stdout='autobid-keepalive.service enabled\n'
+                    'autobid-keepalive.timer enabled\nautobid-' + CANARY + '.service enabled\n')
+            raise AssertionError('unknown units must not be queried')
+        result = inventory.Collector(runner, self.root).systemd()
+        self.assertEqual(result['status'], 'incomplete')
+        self.assertEqual(result['related_unapproved_unit_count'], 3)
+        self.assertEqual(result['units'], [])
+        self.assertNotIn(CANARY, json.dumps(result))
+        self.assertNotIn('autobid-keepalive', json.dumps(result))
+        self.assertEqual(len(calls), 2)
+
+    def test_compose_config_file_truncation_is_explicit_and_partial(self):
+        raw = raw_container()
+        raw['labels']['com.docker.compose.project.config_files'] = ','.join(
+            ['/root/content-studio-deploy/docker-compose.yml'] * 9)
+        result = inventory.collect(FakeRunner({CONTAINER_ID: raw}), self.root)
+        row = result['docker']['containers'][0]
+        self.assertEqual(len(row['labels']['com.docker.compose.project.config_files']), 8)
+        self.assertEqual(row['compose_config_files_total_count'], 9)
+        self.assertTrue(row['compose_config_files_truncated'])
+        self.assertEqual(row['compose_config_files_status'], 'incomplete')
+        self.assertEqual(result['docker']['inventory_status'], 'partial')
+
+    def test_cron_numeric_secrets_and_out_of_range_schedules_never_emitted(self):
+        secret = '934857238495702384950234'
+        bad = (secret + ' * * * * autobid\n60 0 1 1 0 naver-engine\n'
+               '0 24 1 1 0 autobid\n0 0 32 1 0 autobid\n0 0 1 13 0 autobid\n'
+               '0 0 1 1 8 autobid\n*/0 * * * * autobid\n1-0 * * * * autobid\n'
+               '*/' + secret + ' * * * * autobid\n1,,2 * * * * autobid\n')
+        result = inventory.Collector.cron_summary(bad)
+        self.assertNotIn(secret, json.dumps(result))
+        self.assertEqual(result['unparsed_noncomment_lines'], 10)
+        self.assertEqual(result['apps']['autobid']['count'], 0)
+
+    def test_cron_valid_ranges_steps_lists_and_zero_padding(self):
+        result = inventory.Collector.cron_summary(
+            '*/15 0-23/2 1,15 1-12 0,7 autobid\n05 01 01 01 0 naver-engine\n'
+            '0,30 1,12 1-31/2 */2 1-5 content-studio\n')
+        self.assertEqual(result['unparsed_noncomment_lines'], 0)
+        self.assertEqual(result['apps']['autobid']['schedules'], ['*/15 0-23/2 1,15 1-12 0,7'])
+        self.assertEqual(result['apps']['naver']['schedules'], ['05 01 01 01 0'])
+
     def test_statvfs_preserves_nonroot_available(self):
         info = mock.Mock(f_blocks=100, f_bfree=20, f_bavail=5, f_frsize=4096)
         with mock.patch.object(inventory.os, 'statvfs', return_value=info):

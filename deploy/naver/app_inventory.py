@@ -43,6 +43,9 @@ KNOWN_FILES = ('app.db', 'autobid.db', 'engine.db', 'secret.key', 'enc.key', 'ad
 SIDECARS = ('-wal', '-shm', '-journal')
 SUBDIRS = ('data', 'backups', 'sessions', 'projects', 'references')
 COMPOSE_FILES = ('docker-compose.yml', 'docker-compose.yaml', 'docker-compose.autobid.yml', 'compose.yml', 'compose.yaml')
+RELEASE_FILES = frozenset(('compose.naver-engine.yml', 'compose.naver-relay.yml',
+                          'deploy/naver-engine-backup.override.yml',
+                          'preview-engine.override.yml', 'preview-relay.override.yml'))
 CONTAINER_PATHS = {'/app/data', '/srv/autobid/data', '/var/lib/naver-engine',
                    '/var/lib/naver-product-source', '/var/lib/naver-market-source',
                    '/run/metainc', '/etc/metainc', '/app', '/srv/autobid',
@@ -165,7 +168,10 @@ def safe_path(value):
         for directory in (base, base + '/data'):
             if value in (directory + '/' + item + suffix for item in KNOWN_FILES for suffix in ('',) + SIDECARS):
                 return value
-    if re.fullmatch(r'/srv/metainc/ad-deploy-staging/releases/naver-[0-9a-f]{40}(?:/(?:docker-compose\.yml|naver-[a-z-]+\.yml))?', value):
+    release = re.fullmatch(r'/srv/metainc/ad-deploy-staging/releases/naver-[0-9a-f]{40}(?:/(.+))?', value)
+    if release and (release[1] is None or release[1] in RELEASE_FILES):
+        return value
+    if re.fullmatch(r'/srv/metainc/ad-deploy-staging/saved-exports/[0-9a-f]{32}/naver-saved-exports\.override\.yml', value):
         return value
     if value.startswith('/var/lib/docker/volumes/'):
         parts = value.split('/')
@@ -179,8 +185,10 @@ def safe_path(value):
 
 def classify(name='', image='', labels=None):
     labels = labels or {}
-    values = [name.lstrip('/'), image, labels.get('com.docker.compose.project', ''),
-              labels.get('com.docker.compose.service', '')]
+    # A shared Compose project may run several applications. Its explicit service
+    # identifies the workload before the broader project or repository hints.
+    values = [labels.get('com.docker.compose.service', ''), name, image,
+              labels.get('com.docker.compose.project', '')]
     for value in values:
         if not isinstance(value, str):
             continue
@@ -292,6 +300,8 @@ class Collector:
             return None, 'stat_failed'
 
     def metadata(self, path, usage=False):
+        if safe_path(path) is None:
+            return {'path': REDACTED, 'status': 'unapproved_path'}
         cache_key = (path, usage)
         if cache_key in self.metadata_cache:
             return dict(self.metadata_cache[cache_key])
@@ -383,7 +393,12 @@ class Collector:
             elif key == 'com.docker.compose.project.working_dir':
                 safe_labels[key] = safe_path(value) or REDACTED
             elif key == 'com.docker.compose.project.config_files':
-                safe_labels[key] = [safe_path(item) or REDACTED for item in value.split(',')[:8]] if isinstance(value, str) else []
+                files = value.split(',') if isinstance(value, str) else []
+                safe_labels[key] = [safe_path(item) or REDACTED for item in files[:8]]
+                row['compose_config_files_total_count'] = len(files) if isinstance(value, str) else None
+                row['compose_config_files_truncated'] = len(files) > 8
+                row['compose_config_files_status'] = ('incomplete' if len(files) > 8 or
+                    any(safe_path(item) is None for item in files) else 'ok' if isinstance(value, str) else 'unavailable')
             elif key == 'org.opencontainers.image.revision':
                 safe_labels[key] = value if isinstance(value, str) and REVISION.fullmatch(value) else None
             elif key == 'metainc.naver.preview.source':
@@ -443,6 +458,8 @@ class Collector:
             row = self.container(raw)
             if row:
                 out['containers'].append(row)
+                if row.get('compose_config_files_status') == 'incomplete':
+                    out['inventory_status'] = 'partial'
         image_ids = {row['image_id'] for row in out['containers'] if row['image_id']}
         image_listing = self.command('docker_image_list', ['docker', 'image', 'ls', '--no-trunc', '--format',
             '{"id":{{json .ID}},"repository":{{json .Repository}}}'])
@@ -524,12 +541,15 @@ class Collector:
                     self.command('systemd_units', ['systemctl', 'list-units', '--all', '--type=service',
                     '--type=timer', '--no-legend', '--no-pager', '--plain'])]
         present = set()
+        related_unknown = set()
         for listing in listings:
             if listing is not None:
                 for line in listing.splitlines():
                     parts = line.split()
                     if parts and parts[0] in UNITS:
                         present.add(parts[0])
+                    elif parts and re.match(r'(?:metainc[-_.])?(?:naver|ad-dashboard|content-studio|autobid|logic-analysis)(?:[-_.@]|$)', parts[0]) and parts[0].endswith(('.service', '.timer')):
+                        related_unknown.add(parts[0])
         units = []
         for unit in sorted(present):
             text = self.command('systemd_metadata', ['systemctl', 'show', unit,
@@ -556,9 +576,38 @@ class Collector:
                 values = fields.get(key, '').split()
                 row[key] = [value if value in {'/etc/systemd/system/' + unit for unit in UNITS} else REDACTED for value in values]
             units.append(row)
-        return {'status': 'ok' if all(value is not None for value in listings) and all(row['status'] == 'ok' for row in units) else 'partial',
+        return {'status': 'incomplete' if related_unknown else 'ok' if all(value is not None for value in listings) and all(row['status'] == 'ok' for row in units) else 'partial',
                 'units': units, 'not_listed_known_units': [unit for unit in UNITS if unit not in present],
+                'related_unapproved_unit_count': len(related_unknown),
+                'related_unapproved_unit_meaning': 'name_redacted_and_metadata_not_queried',
                 'not_listed_meaning': 'not_reported_by_inventory_not_proof_of_no_other_supervisor'}
+
+    @staticmethod
+    def cron_field(value, minimum, maximum):
+        """Validate bounded numeric cron syntax before publishing it."""
+        if not isinstance(value, str) or len(value) > 48:
+            return False
+        def number(text, low, high):
+            return bool(re.fullmatch(r'[0-9]{1,2}', text)) and low <= int(text) <= high
+        for item in value.split(','):
+            pieces = item.split('/')
+            if len(pieces) > 2:
+                return False
+            if len(pieces) == 2 and not number(pieces[1], 1, maximum - minimum + 1):
+                return False
+            base = pieces[0]
+            if base == '*':
+                continue
+            bounds = base.split('-')
+            if len(bounds) == 1:
+                if not number(base, minimum, maximum):
+                    return False
+            elif len(bounds) == 2:
+                if not all(number(part, minimum, maximum) for part in bounds) or int(bounds[0]) > int(bounds[1]):
+                    return False
+            else:
+                return False
+        return bool(value)
 
     @staticmethod
     def cron_summary(text):
@@ -574,7 +623,8 @@ class Collector:
             if parts[0] in {'@reboot', '@yearly', '@annually', '@monthly', '@weekly', '@daily', '@midnight', '@hourly'}:
                 schedule = parts[0]
                 command = ' '.join(parts[1:])
-            elif len(parts) >= 6 and all(re.fullmatch(r'[0-9*/,-]{1,48}', part) for part in parts[:5]):
+            elif len(parts) >= 6 and all(Collector.cron_field(part, minimum, maximum)
+                    for part, (minimum, maximum) in zip(parts[:5], ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7)))):
                 schedule = ' '.join(parts[:5])
                 command = ' '.join(parts[5:])
             else:
