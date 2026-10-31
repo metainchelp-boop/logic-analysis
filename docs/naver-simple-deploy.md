@@ -43,6 +43,10 @@
    - `mode`:
      - `inspect` — 서버 상태만 읽는다(아무것도 바꾸지 않음). commit 칸은 형식만 맞으면 된다(지금 운영 커밋을 넣으면 됨).
      - `deploy` — 실제 배포.
+     - `cleanup-plan` — 지워도 되는 관제 이미지 태그·release 폴더 목록과 `allowlist_sha256` 을 낸다(읽기 전용). 아래 7장
+     - `cleanup` — `allowlist_sha256` 칸에 직전 `cleanup-plan` 의 값을 넣어야 한다. 다시 계산한 목록과 해시가 정확히 같을 때만 그 목록만 지운다. 아래 7장
+   - `allowlist_sha256`: `cleanup` 에서만 넣는다(다른 mode 에서는 비워 둔다).
+   - `cleanup-plan`·`cleanup` 은 제품 deploy key 를 쓰지 않는다.
 5. **Run workflow** 누르기. 대표 계정(`metainchelp-boop`)이 main 에서 실행할 때만 동작한다.
 
 **처음에는 반드시 `inspect` 를 먼저 돌려** 서버 배치가 아래 「서버 배치 가정」과 같은지 확인한 뒤 `deploy` 한다.
@@ -125,6 +129,11 @@
    (제품 `naver_runtime/config.py` 와 같은 참/거짓 규칙)와 두 컨테이너 mount 목록을 기록한다. `execution` 은 false 여야 한다
 3. 원본 tar 범위 검사, **SCHEMA_VERSION 비교**(새 판 `naver_engine/store.py` vs 실행 중 이미지 안의 `store.py` 또는 이 장치가 붙인 이미지 라벨). 다르면 거부. 우회 입력 없음
 4. 복구 기록 저장: `state.json` + `runs/<시각>-<커밋>/` 에 현재 unit 2개·override 2개·mount 목록 사본, 직전 이미지 ID, 스위치
+4b. **빌드 전 공간 예산**: 이미지 빌드·release 폴더 생성 **전에** 확인하고, 모자라면 아무것도 만들지 않고 거부(`DISK_PREBUILD`).
+   빌드 예산(**추정치**) = 지금 실행 중인 engine·relay 이미지 `docker image inspect` Size 합(최소 512MiB). 새 Dockerfile 의
+   중간 층·내려받기·build cache 의 최고 사용량을 보장하는 값은 아니다
+   + 원본 tar 크기. DB 사본 예산 = `engine.db*` 합 + 256MiB(직전 사본은 남아 있는 상태 그대로). docker 저장 위치·releases·백업 폴더가
+   같은 파일시스템이면 합산해 비교한다
 5. `releases/naver-<새 커밋>` 생성(이미 있으면 같은 원본인지 확인만), 현재 override 에서 **커밋만 치환**(각 1회 단언)
 6. **서비스를 멈추기 전에**
    - 두 이미지 빌드(`metainc/naver-{engine,relay}:<커밋>`, 원문 출력은 비공개 명령 로그로)
@@ -136,7 +145,11 @@
      (runtime.env 포함)를 `-e 이름` 으로만 넘겨 값이 명령줄·로그에 남지 않는다. 새 판 스위치가 **지금 판과 하나라도 다르면 거부**(`FLAGS_CHANGED`),
      `execution=false` 단언
 7. DB 복사 공간 확인 → relay 정지 → engine 정지(둘 다 MainPID 0·컨테이너 PID 0 확인)
-8. 엔진이 멈춘 상태에서만 `engine.db*` 파일 복사(`/var/backups/metainc/naver-deploy-db`, 최근 3벌). sqlite 로 열지 않는다
+8. 엔진이 멈춘 상태에서만 `engine.db*` 파일 복사(`/var/backups/metainc/naver-deploy-db`, **보관 1벌**). sqlite 로 열지 않는다.
+   새 사본은 `<시각>-<커밋>.partial` 에 만들고 원본과 **크기·sha256** 이 같고 fsync 가 끝난 뒤에만 이름을 바꾼 다음 **직전 사본을 지운다**.
+   검증이 실패하면 새 사본만 지우고 직전 사본은 그대로 둔 채 복원한다(`DB_COPY`). 그래서 필요한 공간은 DB 합 + 여유이며 직전 사본은 그 동안 남아 있다.
+   사본 정리는 사본 폴더를 링크를 따르지 않는 폴더 fd 로 열고 그 안의 상대 이름으로만 지운다. 사본 항목 중 하나라도 링크·일반 파일이거나
+   안에 DB 파일·manifest 말고 다른 것(하위 폴더 등)이 있으면 **아무것도 지우지 않고** 멈춘 뒤 직전 판으로 복원한다(`BACKUP_SAFETY`)
 9. unit 2개에서 **커밋만 치환**(engine 6회·relay 4회 단언) → `daemon-reload` → `compose up --no-start --no-build --force-recreate` →
    새 컨테이너의 mount 목록이 직전과 같고, engine 스위치가 기록과 같은지 확인
 10. engine 시작 → relay 시작
@@ -175,26 +188,71 @@
 ## 5. 첫 배포 계획 (대표 승인 후)
 
 1. (공개 출력 제한 수정이 재검증·머지된 뒤) `inspect`(commit 칸: 지금 운영 커밋) → 결과를 개발 담당이 대표께 보고
-2. `deploy` abceeb7(`report_output_schema.py` 1파일, 스키마 21 불변)
-3. 되돌리기 훈련: `deploy` c44a663 (기존 `releases/naver-c44a663…` 은 같은 원본인지 확인 후 재사용)
-4. `deploy` abceeb7 재배포
+2. 공간 확보: `cleanup-plan` → 목록 승인 → `cleanup` → `inspect` 로 여유 확인(7장). 이 시점부터 옛 실행기는 은퇴(dispatch 금지)
+3. `deploy` abceeb7(`report_output_schema.py` 1파일, 스키마 21 불변)
+4. 되돌리기 훈련: `deploy` c44a663 (기존 `releases/naver-c44a663…` 은 같은 원본인지 확인 후 재사용)
+5. `deploy` abceeb7 재배포
 
 ---
 
-## 6. 옛 실행기 은퇴 (첫 배포·되돌리기 훈련 성공 뒤)
+## 6. 옛 실행기 은퇴 (`cleanup` 실행 또는 첫 배포 중 먼저 오는 때)
 
-옛 실행기 파일은 지금 바꾸지 않는다. 새 방식 첫 배포와 훈련이 끝나면:
+옛 실행기 파일은 지금 바꾸지 않는다. `cleanup` 을 실행하거나 새 방식으로 처음 배포하는 때(먼저 오는 쪽)부터:
 
 1. 옛 경로를 막는다(0장대로 첫 배포 전에 이미 꺼 두는 것을 권한다): GitHub → Actions → 「Conversion diagnostic through existing VPS connection」
    (브랜치 `codex/naver-conversion-existing-executor-20261026` 의 `debug-rank.yml`) → 오른쪽 `…` → **Disable workflow**.
    두 경로가 같은 서버를 동시에 바꾸지 않게 하기 위함이다(새 장치의 `flock` 은 옛 실행기를 막지 못한다). 첫 배포·훈련 동안 옛 경로 dispatch 는 금지.
 2. 새 배포가 끝나면 옛 실행기의 host baseline·receipt 는 더 이상 현재 상태와 맞지 않는다. 옛 rollback 도 쓰지 않는다 — 되돌리기는 이 장치로 직전 커밋을 다시 `deploy` 한다.
-3. 옛 이미지 태그는 이 장치가 새로 3번 배포한 뒤 자동으로 정리 대상이 된다(기록에 있는 것만). 옛 release 폴더·receipts 는 이 장치가 지우지 않는다. 필요하면 `inspect` 로 현재 unit 이 가리키지 않는 것을 확인한 뒤 따로 정리한다.
+3. 옛 이미지 태그는 이 장치가 새로 3번 배포한 뒤 자동으로 정리 대상이 된다(기록에 있는 것만). 그보다 먼저 공간이 필요하면 7장의 `cleanup-plan`/`cleanup` 을 쓴다. receipts 는 지우지 않는다.
 4. 옛 실행기 브랜치·워크플로 정리 PR 은 별도로 검토한다.
 
 ---
 
-## 7. 로컬 시험
+## 7. 디스크 정리 (`cleanup-plan` → `cleanup`)
+
+2026-10-30 첫 inspect(실행 41103753846) 기준: 파티션 하나에 여유 2.95GiB / 35.06GiB, `engine.db*` 합 3.324GiB, 관제 이미지 태그
+engine 43·relay 43, release 폴더 43개. DB 사본 하나(합 + 256MiB = 3.574GiB)도 못 만들고 빌드 공간도 따로 필요하므로 **첫 배포 전에 정리가 필요하다**.
+
+> ⚠️ **옛 실행기와 함께 결정해야 한다.** 옛 실행기의 이력 검증(`base_success` → 단계별 `_receipt_step` → `upgrade.manifest`)은
+> 과거 release 폴더 파일과 이미지 ID 를 실제로 확인한다. 과거 release·이미지를 지우면 **옛 실행기는 더 이상 동작하지 않는다**
+> (fallback 89a924f 를 남겨도 마찬가지다). 그러므로 `cleanup` 을 실행하는 순간 옛 실행기는 은퇴한 것으로 본다:
+> 옛 파일은 그대로 두되 **그 dispatch(「Conversion diagnostic through existing VPS connection」)는 다시 쓰지 않는다**(Disable workflow 권장).
+> 되돌리기는 이 장치로 직전 커밋을 `deploy` 한다.
+
+순서(대표 승인 후):
+
+1. `mode=cleanup-plan` 실행 → 로그의 `NAVER_DEPLOY_CLEANUP_PLAN={...}` 한 줄을 확인한다.
+   - `candidates`: 지울 항목만(`type`=image|release, `ref`=태그 또는 경로, `id`=이미지 ID, `size_bytes`)
+   - `kept.protected_commits`: 언제나 남기는 판(현재 판, fallback `89a924f2416f0450f38854b531bdf8778558dca6`, 이 장치 기록의 판)
+   - `path_references`: naver 가 들어간 unit·timer·path·socket 의 조각과 **drop-in(`<unit>.d/*.conf`)** —
+     `/etc/systemd/system`, `/run/systemd/system`, `/usr/lib/systemd/system`, `/lib/systemd/system` 과 `systemctl show` 의
+     FragmentPath·DropInPaths — , 현재 compose·override, saved-exports companion, 컨테이너 mount 가 가리켜 남기는 release.
+     이 중 하나라도 읽지 못하거나, `systemctl show` 출력에 FragmentPath·DropInPaths·LoadState 가 정확히 한 번씩 있지 않거나
+     LoadState 가 loaded·masked·not-found 가 아니면 계획을 세우지 않는다(모르는 배치 → 거부)
+   - `reclaim_estimate`: 이미지는 **이미지 ID 별로 한 번만**, 그리고 정리 뒤에도 남는 ID(후보가 아닌 다른 태그·별칭, 컨테이너 사용, 보호 판)는 뺀다.
+     하한 = 그런 ID 의 `docker system df -v` UniqueSize 합(후보끼리만 공유하는 층은 빠져 보수적, 하나라도 모르면 null),
+     상한 = 후보 ID 의 `docker image inspect` Size 합(공유 층 포함). release 는 디스크 블록 **추정치**(hardlink 는 한 번, 같은 파일시스템만).
+     모두 추정이며 보장값이 아니다. 계산 방법은 `method` 에 적힌다
+   - `allowlist_sha256`: 후보 목록(종류·태그/경로·이미지 ID 또는 release 폴더의 dev:inode)을 정렬한 정규 JSON 의 sha256. 크기는 해시에 넣지 않는다
+2. 목록을 검토·승인한 뒤 `mode=cleanup`, `allowlist_sha256=<위 값>` 실행.
+   - 같은 `flock` 아래에서 계획을 **다시 계산해 해시가 정확히 같을 때만** 진행한다. 그 사이 무엇이든 바뀌었으면(새 컨테이너가 이미지를 씀,
+     태그가 다른 이미지를 가리킴, 폴더 추가 등) `REFUSED_HASH_MISMATCH` 로 아무것도 지우지 않는다 → 1부터 다시
+   - 진행 중이거나 끝나지 못한 배포 기록이 있으면 거부(`REFUSED_DEPLOY_NOT_FINISHED`)
+   - 이미지: **항목마다 지우기 직전** 태그가 아직 승인된 이미지 ID 를 가리키는지, 그 ID 를 쓰는 컨테이너(정지 포함)가 없는지,
+     보호 판(현재·fallback·기록)이 아닌지 다시 확인하고 `docker image rm <태그>`(**강제 없음**). 하나라도 어긋나면 지우지 않고 `refused`
+   - release: **항목마다 지우기 직전** 참조 근거(unit·drop-in·timer·compose·override·companion·컨테이너 mount)를 처음부터 다시 모으고,
+     폴더를 releases 폴더 fd 기준·링크 미추적으로 **연 뒤 그 fd 의 dev:inode 를 승인값과 대조**하고, 같은 fd 로만 비운다.
+     하위 폴더도 lstat → 열기 → fstat 대조를 거쳐서만 내려가고, 각 폴더의 마지막 rmdir 직전에 이름이 아직 같은 dev:inode 인지 다시 본다
+     (다른 파일시스템으로 내려가지 않고, 안의 링크는 링크 자체만 지운다). 어긋나면 그 항목은 `refused`. `refused`·`failed` 가 하나라도 있으면 결과는 `PARTIAL`(5)
+   - 결과: `NAVER_DEPLOY_CLEANUP_RESULT={status, removed, refused, failed, free_bytes_before, free_bytes_after}` (0 CLEANED / 5 PARTIAL / 10 거부 / 11 잠금)
+3. 다시 `inspect` 로 여유 공간을 확인한 뒤 배포한다.
+
+**절대 하지 않는 것**: `docker system prune`·`volume prune`·`builder prune`·`-a`·`-f`, 다른 앱 이미지, 커밋 태그가 아닌 태그(`local-review` 등),
+saved-exports·receipts·runtime.env·키·데이터 폴더(`.*-failed-db-*` 포함)·기존 백업·volume·build cache.
+
+---
+
+## 8. 로컬 시험
 
 서버·docker·systemd 없이 가짜 루트로 돈다:
 

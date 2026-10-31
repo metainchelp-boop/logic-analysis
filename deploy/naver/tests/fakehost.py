@@ -207,7 +207,7 @@ def inspect_container(state, identity):
     commit = image_commit(state, container['image'])
     if container['running'] and commit in config().get('flap', []) and container['inspects'] >= 2:
         container['started'] = tick(state)
-    return {'Id': identity, 'Name': '/' + container['project'] + '-1', 'Image': container['image'],
+    return {'Id': identity, 'Name': '/' + str(container.get('project') or 'other') + '-1', 'Image': container['image'],
             'RestartCount': container['restarts'],
             'State': {'Running': container['running'], 'Restarting': False, 'Pid': container['pid'],
                       'StartedAt': container['started'], 'Status': 'running' if container['running'] else 'exited'},
@@ -221,18 +221,74 @@ def inspect_container(state, identity):
                        for m in container.get('mounts') or []]}
 
 
+def late_hooks(state, args):
+    """시험용 경합 대역: 정리 도중(첫 image rm 뒤) 새 참조가 생기거나 태그가 다른 이미지로 옮겨지는 상황."""
+    hooks = config()
+    if args[:2] == ['image', 'rm']:
+        state['armed'] = True
+        retag = hooks.get('retag_on_rm')
+        if retag and args[2] == retag['trigger'] and not state.get('retagged'):
+            for image in state['images'].values():
+                if retag['retag'] in image['tags']:
+                    image['tags'].remove(retag['retag'])
+            identity = new_id(state, 'image')
+            state['images'][identity] = {'tags': [retag['retag']], 'user': '10001:10001', 'labels': {}, 'schema': 21}
+            state['retagged'] = True
+    late = hooks.get('late_unit')
+    if (late and args[:2] == ['ps', '--all'] and not state.get('late_written')
+            and not os.path.exists(hooks['root'] + late['when_missing'])):
+        path = hooks['root'] + late['path']
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as handle:
+            handle.write(late['body'])
+        state['late_written'] = True
+
+
 def docker(args):
     state = load(STATE, None)
+    late_hooks(state, args)
     if args[:1] == ['compose']:
         compose(state, args[1:])
     elif args[:2] == ['image', 'inspect']:
-        identity = resolve_image(state, args[-1])
+        refs = [a for a in args[2:] if not a.startswith('-')]
+        rows = []
+        for ref in refs:
+            identity = resolve_image(state, ref)
+            if identity is None:
+                sys.stderr.write('No such image\n')
+                sys.exit(1)
+            image = state['images'][identity]
+            rows.append({'Id': identity, 'RepoTags': image['tags'], 'Size': image.get('size', 300000000),
+                         'Config': {'User': image['user'], 'Labels': image['labels']}})
+        print(json.dumps(rows))
+    elif args[:2] == ['image', 'rm']:
+        ref = args[2]
+        identity = resolve_image(state, ref)
         if identity is None:
-            sys.stderr.write('No such image\n')
+            sys.stderr.write('Error: No such image: %s\n' % ref)
+            sys.exit(1)
+        if ref in (config().get('in_use_on_rm') or []) or any(
+                c['image'] == identity for c in state['containers'].values()):
+            sys.stderr.write('Error response from daemon: conflict: unable to remove repository reference '
+                             '"%s" - container is using its referenced image\n' % ref)
             sys.exit(1)
         image = state['images'][identity]
-        print(json.dumps([{'Id': identity, 'RepoTags': image['tags'],
-                           'Config': {'User': image['user'], 'Labels': image['labels']}}]))
+        if ref in image['tags']:
+            image['tags'].remove(ref)
+        if not image['tags']:
+            del state['images'][identity]
+        print('Untagged: ' + ref)
+    elif args[:2] == ['system', 'df']:
+        rows = []
+        for identity, image in sorted(state['images'].items()):
+            for tag in image['tags']:
+                repository, _, name = tag.partition(':')
+                rows.append({'Repository': repository, 'Tag': name, 'ID': identity[7:19],
+                             'Size': '%.3gGB' % (image.get('size', 300000000) / 1e9),
+                             'UniqueSize': '%.4gMB' % (image.get('unique', 100000000) / 1e6)})
+        print(json.dumps({'Images': rows, 'Containers': [], 'Volumes': [], 'BuildCache': []}))
+    elif args[:1] == ['info']:
+        print('/var/lib/docker')
     elif args[:2] == ['image', 'ls']:
         for identity, image in sorted(state['images'].items()):
             for tag in image['tags']:
@@ -289,15 +345,19 @@ def docker(args):
         if not image['tags'] and not any(c['image'] == identity for c in state['containers'].values()):
             del state['images'][identity]
     elif args[:1] == ['ps']:
-        project = [a.split('=', 2)[2] for a in args if a.startswith('label=com.docker.compose.project=')][0]
+        projects = [a.split('=', 2)[2] for a in args if a.startswith('label=com.docker.compose.project=')]
+        ancestors = [a.split('=', 1)[1] for a in args if a.startswith('ancestor=')]
         for identity, container in sorted(state['containers'].items()):
-            if container.get('project') == project:
-                print(identity)
+            if projects and container.get('project') != projects[0]:
+                continue
+            if ancestors and container['image'] != resolve_image(state, ancestors[0]):
+                continue
+            print(identity)
     elif args[:1] == ['inspect']:
-        identity = args[-1]
-        if identity not in state['containers']:
+        identities = [a for a in args[1:] if not a.startswith('-')]
+        if any(identity not in state['containers'] for identity in identities):
             sys.exit(1)
-        print(json.dumps([inspect_container(state, identity)]))
+        print(json.dumps([inspect_container(state, identity) for identity in identities]))
     elif args[:1] == ['create']:
         image = resolve_image(state, args[-1])
         identity = new_id(state, 'container')
@@ -364,7 +424,8 @@ def systemctl(args):
                   'NRestarts': str(unit.get('restarts', 0)),
                   'FragmentPath': (UNIT_DIR + '/' + name) if disk is not None else '',
                   'DropInPaths': unit.get('dropins', ''), 'ExecMainStartTimestamp': '',
-                  'NeedDaemonReload': 'no' if disk is None or unit.get('loaded') == disk else 'yes'}
+                  'NeedDaemonReload': 'no' if disk is None or unit.get('loaded') == disk else 'yes',
+                  'LoadState': 'loaded' if disk is not None else 'not-found'}
         fields = args[args.index('-p') + 1].split(',')
         if '--value' in args:
             print(values[fields[0]])
@@ -460,6 +521,13 @@ def main(tool):
     elif tool == 'flock':
         flock(args)
     elif tool == 'cp':
+        if config().get('cp_corrupt') and args[-1].endswith('/engine.db'):
+            import subprocess
+            subprocess.run(['/bin/cp'] + args, check=True)
+            with open(args[-1], 'r+b') as handle:
+                handle.seek(5)
+                handle.write(b'#')
+            return
         os.execv('/bin/cp', ['/bin/cp'] + args)
     elif tool == 'sqlite3':
         sys.stderr.write('sqlite3 must never be called by the deploy\n')

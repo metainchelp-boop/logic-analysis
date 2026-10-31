@@ -2,6 +2,7 @@
 
 실행: python3 -m unittest discover -s deploy/naver/tests -v
 """
+import contextlib
 import fcntl
 import hashlib
 import io
@@ -15,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(os.path.dirname(HERE), 'naver-deploy.sh')
@@ -26,6 +28,11 @@ C1 = 'abceeb7375480000000000000000000000000c1c'
 C2 = '2222222222222222222222222222222222222222'
 C3 = '3333333333333333333333333333333333333333'
 C4 = '4444444444444444444444444444444444444444'
+OLD1 = '0101010101010101010101010101010101010101'
+OLD2 = '0202020202020202020202020202020202020202'
+OLD3 = '0303030303030303030303030303030303030303'
+OLD4 = '0404040404040404040404040404040404040404'
+FALLBACK = '89a924f2416f0450f38854b531bdf8778558dca6'
 # 공개 출력·로그로 새면 안 되는 합성 비밀값(모든 시험의 가짜 서버에 심는다).
 CANARY_RUNTIME = 'canary-runtime-secret-7f3a'
 CANARY_UNIT = 'canary-unit-secret-91c2'
@@ -170,6 +177,7 @@ class FakeHost:
         os.makedirs(self.root + '/var/backups/metainc/naver-engine')
         os.makedirs(self.root + '/run/metainc/naver-engine')
         os.makedirs(self.root + '/run/metainc/naver-relay')
+        os.makedirs(self.root + '/var/lib/docker')
         images = {}
         for name in ('engine', 'relay'):
             identity = 'sha256:' + hashlib.sha256(('old-' + name).encode()).hexdigest()
@@ -365,7 +373,7 @@ class DeployScriptTest(unittest.TestCase):
         backups = os.listdir(self.host.root + '/var/backups/metainc/naver-deploy-db')
         self.assertEqual(len(backups), 1)
         self.assertEqual(sorted(os.listdir(self.host.root + '/var/backups/metainc/naver-deploy-db/' + backups[0])),
-                         ['engine.db', 'engine.db-wal'])
+                         ['engine.db', 'engine.db-wal', 'manifest.json'])
         # 라벨 없는 옛 이미지는 컨테이너를 시작하지 않고 store.py 만 복사해 스키마를 읽었다.
         self.index(calls, ['docker', 'create', '--network', 'none'])
         runs = [c for c in calls if c[:2] == ['docker', 'run']]
@@ -664,7 +672,7 @@ class DeployScriptTest(unittest.TestCase):
         # 두 번째 배포부터는 이미지 라벨로 스키마를 읽는다(create 없음).
         self.assertEqual(sum(1 for c in self.host.calls() if c[:2] == ['docker', 'create']), 1)
         backups = os.listdir(self.host.root + '/var/backups/metainc/naver-deploy-db')
-        self.assertEqual(len(backups), 3)
+        self.assertEqual(len(backups), 1)  # 보관 1벌
 
     def test_existing_identical_release_dir_is_reused(self):
         release = self.host.root + RELEASES + '/naver-' + C1
@@ -682,6 +690,388 @@ class DeployScriptTest(unittest.TestCase):
         done = self.host.deploy(C1)
         self.assert_refused_without_change(done, before)
         self.assertIn('RELEASE_DIR_DIFFERS', self.output(done))
+
+    # ── 공간 예산·DB 사본 1벌 ──
+    def test_prebuild_disk_refusal_creates_nothing(self):
+        before_tags = self.host.tags()
+        before = self.host.tree()
+        # 700MB: DB 사본 예산(약 268MB)은 넘지만 빌드 예산(지금 두 이미지 Size 합 600MB)까지 더하면 모자란다.
+        done = self.host.run('deploy', C1, self.host.tar(C1), NAVER_DEPLOY_FAKE_FREE_BYTES='700000000')
+        self.assert_refused_without_change(done, before)
+        self.assertEqual(result_of(done)['reason'], 'DISK_PREBUILD')
+        self.assertFalse(os.path.exists(self.host.root + RELEASES + '/naver-' + C1))
+        self.assertEqual(self.host.tags(), before_tags)
+        self.assertFalse(any(c[:2] == ['docker', 'build'] for c in self.host.calls()))
+
+    def test_single_cold_copy_replaced_only_after_verification(self):
+        folder = self.host.root + '/var/backups/metainc/naver-deploy-db'
+        self.assertExit(self.host.deploy(C1), 0)
+        first = os.listdir(folder)
+        self.assertEqual(len(first), 1)
+        with open(os.path.join(folder, first[0], 'manifest.json')) as handle:
+            manifest = json.load(handle)
+        self.assertEqual(sorted(manifest), ['engine.db', 'engine.db-wal'])
+        self.assertRegex(manifest['engine.db']['sha256'], r'^[0-9a-f]{64}$')
+        # 다음 배포에서 복사본이 원본과 다르면(검증 실패) 새 사본만 버리고 직전 사본은 남긴 채 복원한다.
+        self.host.set(cp_corrupt=True)
+        done = self.host.deploy(C2)
+        self.assertExit(done, 2)
+        self.assertEqual(result_of(done)['reason'], 'DB_COPY')
+        self.assertEqual(os.listdir(folder), first)
+        # 정상 복사면 새 사본 검증 뒤 직전 사본이 지워져 1벌만 남는다.
+        self.host.set(cp_corrupt=False)
+        self.assertExit(self.host.deploy(C2), 0)
+        second = os.listdir(folder)
+        self.assertEqual(len(second), 1)
+        self.assertNotEqual(second, first)
+
+    # ── cleanup-plan / cleanup ──
+    def add_cleanup_fixture(self):
+        """정리 대상 판단용 가짜 이력: 지울 판 OLD1·OLD2, fallback, 정지 컨테이너가 쓰는 OLD3,
+        다른 naver unit 이 release 경로를 가리키는 OLD4, 다른 앱 이미지."""
+        state = self.host.load_state()
+        for commit in (OLD1, OLD2, OLD3, OLD4, FALLBACK):
+            for name in ('engine', 'relay'):
+                identity = 'sha256:' + hashlib.sha256(('%s-%s' % (commit, name)).encode()).hexdigest()
+                state['images'][identity] = {'tags': ['metainc/naver-%s:%s' % (name, commit)], 'user': '10001:10001',
+                                             'labels': {'metainc.naver.preview.source': commit}, 'schema': 21,
+                                             'size': 250000000, 'unique': 40000000}
+            for name, body in source_files(commit, 21).items():
+                self.host.file(RELEASES + '/naver-' + commit + '/' + name, body)
+        state['images']['sha256:' + 'e' * 64] = {'tags': ['other/app:1'], 'user': '0:0', 'labels': {}, 'schema': 0}
+        old3 = 'sha256:' + hashlib.sha256(('%s-engine' % OLD3).encode()).hexdigest()
+        state['containers']['c' * 64] = {'project': 'other-app', 'image': old3, 'running': False, 'pid': 0,
+                                         'started': '', 'restarts': 0, 'user': '10001:10001', 'env': []}
+        self.host.state = state
+        self.host.save_state()
+        self.host.file('/etc/systemd/system/naver-product-export.service',
+                       '[Service]\nExecStart=/usr/bin/true ' + RELEASES + '/naver-' + OLD4 + '/x\n')
+        os.makedirs(self.host.root + '/srv/metainc/ad-deploy-staging/receipts', exist_ok=True)
+        self.host.file('/srv/metainc/ad-deploy-staging/receipts/preview-%s.json' % OLD1, '{}')
+
+    def plan(self):
+        done = self.host.run('cleanup-plan')
+        self.assertExit(done, 0)
+        lines = self.output(done).splitlines()
+        self.assertEqual(len(lines), 1)
+        return json.loads(lines[0].split('NAVER_DEPLOY_CLEANUP_PLAN=', 1)[1])
+
+    def test_cleanup_plan_excludes_protected_items(self):
+        self.add_cleanup_fixture()
+        before = self.host.tree()
+        self.host.clear_calls()
+        plan = self.plan()
+        self.assertEqual(before, self.host.tree())  # 읽기 전용
+        for call in self.host.calls():
+            self.assertFalse(call[0] == 'docker' and call[1] in MUTATING_DOCKER + ('image',) and 'rm' in call[1:3], call)
+            self.assertFalse(call[0] == 'systemctl' and call[1] in MUTATING_SYSTEMCTL, call)
+        refs = {c['ref'] for c in plan['candidates']}
+        expected = {'metainc/naver-%s:%s' % (n, c) for n in ('engine', 'relay') for c in (OLD1, OLD2, OLD4)}
+        expected |= {'metainc/naver-relay:' + OLD3}  # 같은 판이라도 컨테이너가 쓰지 않는 relay 태그는 후보
+        expected |= {RELEASES + '/naver-' + c for c in (OLD1, OLD2, OLD3)}
+        self.assertEqual(refs, expected)
+        for protected in (C0, FALLBACK):
+            self.assertFalse(any(protected in ref for ref in refs))
+        self.assertIn(OLD4, plan['path_references'])
+        self.assertEqual(sorted(plan['kept']['protected_commits']), sorted([C0, FALLBACK]))
+        canonical = json.dumps(sorted([c['type'], c['ref'], c['id']] for c in plan['candidates']), separators=(',', ':'))
+        self.assertEqual(plan['allowlist_sha256'], hashlib.sha256(canonical.encode()).hexdigest())
+        estimate = plan['reclaim_estimate']
+        self.assertEqual(estimate['images_unique_bytes_lower_bound'], 7 * 40000000)
+        self.assertEqual(estimate['images_size_bytes_upper_bound'], 7 * 250000000)
+        self.assertIn('UniqueSize', estimate['method'])
+        for canary in CANARIES:
+            self.assertNotIn(canary, self.output(self.host.run('cleanup-plan')))
+
+    def test_cleanup_hash_mismatch_refused(self):
+        self.add_cleanup_fixture()
+        before_tags, before = self.host.tags(), self.host.tree()
+        done = self.host.run('cleanup', '0' * 64)
+        self.assertExit(done, 10)
+        result = json.loads(self.output(done).splitlines()[-1].split('=', 1)[1])
+        self.assertEqual(result['status'], 'REFUSED_HASH_MISMATCH')
+        self.assertEqual(self.host.tags(), before_tags)
+        outside = lambda tree: {k: v for k, v in tree.items() if not k.startswith('var/lib/metainc/naver-deploy')}
+        self.assertEqual(outside(before), outside(self.host.tree()))
+
+    def test_cleanup_removes_exactly_the_allowlist(self):
+        self.add_cleanup_fixture()
+        plan = self.plan()
+        before_tags, before = self.host.tags(), self.host.tree()
+        done = self.host.run('cleanup', plan['allowlist_sha256'])
+        self.assertExit(done, 0)
+        result = json.loads(self.output(done).splitlines()[-1].split('=', 1)[1])
+        self.assertEqual(result['status'], 'CLEANED')
+        listed = {c['ref'] for c in plan['candidates']}
+        self.assertEqual(set(result['removed']), listed)
+        self.assertEqual(before_tags - self.host.tags(), {r for r in listed if r.startswith('metainc/')})
+        after = self.host.tree()
+        gone = {k for k in before if k not in after}
+        self.assertTrue(gone)
+        released = tuple(r.lstrip('/') for r in listed if r.startswith(RELEASES))
+        self.assertTrue(all(k.startswith(released) for k in gone), sorted(gone)[:5])
+        for kept in (C0, FALLBACK, OLD4):
+            self.assertTrue(os.path.isdir(self.host.root + RELEASES + '/naver-' + kept))
+        self.assertIn('other/app:1', self.host.tags())
+        self.assertIn('metainc/naver-engine:local-review', self.host.tags())
+        self.assertIn('metainc/naver-engine:' + OLD3, self.host.tags())
+        self.assertTrue(os.path.exists(self.host.root + '/srv/metainc/ad-deploy-staging/receipts/preview-%s.json' % OLD1))
+        self.assertTrue(os.path.exists(self.host.root + COMPANION))
+        self.assertFalse(any(c[:2] == ['docker', 'system'] and 'prune' in c for c in self.host.calls()))
+        self.assertFalse(any('-f' in c or '--force' in c for c in self.host.calls() if c[:3] == ['docker', 'image', 'rm']))
+        # 다시 세운 계획에는 남은 후보가 없다.
+        self.assertEqual(self.plan()['candidates'], [])
+
+    def test_cleanup_refuses_image_in_use(self):
+        self.add_cleanup_fixture()
+        plan = self.plan()
+        # 계획 뒤 컨테이너가 OLD1 이미지를 쓰기 시작하면 계획 자체가 달라져 거부된다.
+        state = self.host.load_state()
+        old1 = 'sha256:' + hashlib.sha256(('%s-engine' % OLD1).encode()).hexdigest()
+        state['containers']['d' * 64] = {'project': 'other-app', 'image': old1, 'running': True, 'pid': 9,
+                                         'started': '', 'restarts': 0, 'user': '10001:10001', 'env': []}
+        self.host.state = state
+        self.host.save_state()
+        done = self.host.run('cleanup', plan['allowlist_sha256'])
+        self.assertExit(done, 10)
+        self.assertIn('metainc/naver-engine:' + OLD1, self.host.tags())
+        # docker 가 지우기 직전에 사용 중이라고 거절하면 그 항목은 refused 로 남기고 강제로 지우지 않는다.
+        del state['containers']['d' * 64]
+        self.host.state = state
+        self.host.save_state()
+        plan = self.plan()
+        self.host.set(in_use_on_rm=['metainc/naver-relay:' + OLD2])
+        done = self.host.run('cleanup', plan['allowlist_sha256'])
+        self.assertExit(done, 5)
+        result = json.loads(self.output(done).splitlines()[-1].split('=', 1)[1])
+        self.assertEqual((result['status'], result['refused']), ('PARTIAL', ['metainc/naver-relay:' + OLD2]))
+        self.assertIn('metainc/naver-relay:' + OLD2, self.host.tags())
+
+    def test_cleanup_refused_while_deploy_unfinished(self):
+        self.add_cleanup_fixture()
+        plan = self.plan()
+        self.host.file('/var/lib/metainc/naver-deploy/state.json', '{"phase": "starting"}', 0o600)
+        done = self.host.run('cleanup', plan['allowlist_sha256'])
+        self.assertExit(done, 10)
+        self.assertIn('REFUSED_DEPLOY_NOT_FINISHED', self.output(done))
+
+
+    # ── 사본 정리 안전성: 링크·예상 밖 항목이면 아무것도 지우지 않고 멈춘다 ──
+    def backup_safety_case(self, make):
+        folder = self.host.root + '/var/backups/metainc/naver-deploy-db'
+        os.makedirs(folder)
+        data = self.host.root + '/var/lib/metainc/naver-engine'
+        make(folder, data)
+        before = self.host.read('/var/lib/metainc/naver-engine/engine.db')
+        done = self.host.deploy(C1)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertExit(done, 2)  # 정지 뒤 단계라 직전 판으로 복원하고 끝난다
+        self.assertEqual(result_of(done)['reason'], 'BACKUP_SAFETY')
+        self.assertEqual(self.host.read('/var/lib/metainc/naver-engine/engine.db'), before)
+        self.assertTrue(os.path.exists(data + '/engine.db-wal'))
+        self.assert_previous_running()
+        return folder
+
+    def test_symlinked_partial_backup_never_deletes_target(self):
+        folder = self.backup_safety_case(
+            lambda folder, data: os.symlink(data, os.path.join(folder, '20261030T000000Z-aaaaaaaaaaaa.partial')))
+        self.assertTrue(os.path.islink(os.path.join(folder, '20261030T000000Z-aaaaaaaaaaaa.partial')))
+
+    def test_symlinked_completed_backup_refused(self):
+        folder = self.backup_safety_case(
+            lambda folder, data: os.symlink(data, os.path.join(folder, '20261001T000000Z-bbbbbbbbbbbb')))
+        self.assertTrue(os.path.islink(os.path.join(folder, '20261001T000000Z-bbbbbbbbbbbb')))
+
+    def test_backup_with_unexpected_child_refused(self):
+        def make(folder, data):
+            target = os.path.join(folder, '20261001T000000Z-cccccccccccc')
+            os.makedirs(os.path.join(target, 'nested'))
+            with open(os.path.join(target, 'engine.db'), 'w') as handle:
+                handle.write('old copy')
+        folder = self.backup_safety_case(make)
+        self.assertTrue(os.path.isdir(os.path.join(folder, '20261001T000000Z-cccccccccccc', 'nested')))
+        self.assertTrue(os.path.exists(os.path.join(folder, '20261001T000000Z-cccccccccccc', 'engine.db')))
+
+    # ── 정리: 항목마다 지우기 직전 다시 확인 ──
+    def test_cleanup_refuses_release_referenced_after_approval(self):
+        self.add_cleanup_fixture()
+        plan = self.plan()
+        # 첫 release(OLD1)가 지워진 뒤에야 OLD2 를 쓰는 새 naver service 가 생긴다.
+        self.host.set(late_unit={'path': '/etc/systemd/system/naver-late.service',
+                                 'when_missing': RELEASES + '/naver-' + OLD1,
+                                 'body': '[Service]\nExecStart=/usr/bin/python3 ' + RELEASES + '/naver-' + OLD2 + '/naver_runtime/__main__.py\n'})
+        done = self.host.run('cleanup', plan['allowlist_sha256'])
+        self.assertExit(done, 5)
+        result = json.loads(self.output(done).splitlines()[-1].split('=', 1)[1])
+        self.assertEqual(result['status'], 'PARTIAL')
+        self.assertIn(RELEASES + '/naver-' + OLD2, result['refused'])
+        self.assertTrue(os.path.isdir(self.host.root + RELEASES + '/naver-' + OLD2))
+        self.assertFalse(os.path.exists(self.host.root + RELEASES + '/naver-' + OLD1))
+
+    def test_cleanup_refuses_retagged_image(self):
+        self.add_cleanup_fixture()
+        plan = self.plan()
+        images = [c['ref'] for c in plan['candidates'] if c['type'] == 'image']
+        self.host.set(retag_on_rm={'trigger': images[0], 'retag': images[-1]})
+        done = self.host.run('cleanup', plan['allowlist_sha256'])
+        self.assertExit(done, 5)
+        result = json.loads(self.output(done).splitlines()[-1].split('=', 1)[1])
+        self.assertIn(images[-1], result['refused'])
+        self.assertIn(images[-1], self.host.tags())  # 다른 ID 로 옮겨진 태그는 지우지 않는다
+
+    def test_cleanup_reads_dropins(self):
+        self.add_cleanup_fixture()
+        self.host.file('/run/systemd/system/naver-product-export.service.d/override.conf',
+                       '[Service]\nExecStart=\nExecStart=/usr/bin/true ' + RELEASES + '/naver-' + OLD1 + '/x\n')
+        plan = self.plan()
+        refs = {c['ref'] for c in plan['candidates']}
+        self.assertNotIn(RELEASES + '/naver-' + OLD1, refs)
+        self.assertIn(OLD1, plan['path_references'])
+
+    def test_cleanup_unreadable_dropin_refuses_plan(self):
+        if os.geteuid() == 0:
+            self.skipTest('root 는 권한 000 파일도 읽는다')
+        self.add_cleanup_fixture()
+        path = '/etc/systemd/system/naver-product-export.service.d/override.conf'
+        self.host.file(path, '[Service]\n', 0o000)
+        done = self.host.run('cleanup-plan')
+        self.assertNotEqual(done.returncode, 0)
+        self.assertNotIn('NAVER_DEPLOY_CLEANUP_PLAN=', self.output(done))
+        done = self.host.run('cleanup', 'a' * 64)
+        self.assertExit(done, 10)
+        self.assertIn('REFUSED_PLAN_FAILED', self.output(done))
+        os.chmod(self.host.root + path, 0o644)
+
+    def test_reclaim_lower_bound_skips_ids_kept_by_alias(self):
+        self.add_cleanup_fixture()
+        state = self.host.load_state()
+        old1 = 'sha256:' + hashlib.sha256(('%s-engine' % OLD1).encode()).hexdigest()
+        state['images'][old1]['tags'].append('other/app:alias')
+        self.host.state = state
+        self.host.save_state()
+        estimate = self.plan()['reclaim_estimate']
+        self.assertEqual(estimate['image_ids_kept_by_other_refs'], 1)
+        self.assertEqual(estimate['images_unique_bytes_lower_bound'], 6 * 40000000)
+        self.assertIn('per unique image ID', estimate['method'])
+
+
+    # ── 승인한 (dev, inode) 와 실제로 지우는 폴더를 fd 로 묶는다(바꿔치기 경합) ──
+    def run_cleanup_in_process(self, plan, patches):
+        """helper 를 이 프로세스에서 실행해 os.open/os.stat 직전에 폴더 바꿔치기를 끼워 넣는다(가짜 루트 안에서만)."""
+        with open(SCRIPT) as handle:
+            text = handle.read()
+        source = text.split("PY_HELPER=$(cat <<'PYEOF'\n", 1)[1].split('\nPYEOF', 1)[0]
+        namespace = {'__name__': 'naver_deploy_helper'}
+        exec(source, namespace)
+        namespace['ROOT'] = self.host.root
+        env = {'PATH': self.host.bin + ':' + os.path.dirname(sys.executable) + ':/usr/bin:/bin:/usr/sbin:/sbin'}
+        output = io.StringIO()
+        code = None
+        with mock.patch.dict(os.environ, env), contextlib.ExitStack() as stack:
+            for target, replacement in patches:
+                stack.enter_context(mock.patch(target, replacement))
+            stack.enter_context(contextlib.redirect_stdout(output))
+            try:
+                namespace['cleanup'](plan['allowlist_sha256'], os.path.join(self.host.base, 'cleanup.log'))
+            except SystemExit as error:
+                code = error.code
+        return code, json.loads(output.getvalue().splitlines()[-1].split('=', 1)[1])
+
+    def swap_fixture(self):
+        self.add_cleanup_fixture()
+        plan = self.plan()
+        target = next(c for c in plan['candidates'] if c['type'] == 'release')
+        path = self.host.root + target['ref']
+        outside = os.path.join(self.host.base, 'not-approved')
+        os.makedirs(outside)
+        with open(os.path.join(outside, 'keep.txt'), 'w') as handle:
+            handle.write('unapproved data')
+        return plan, target, path, outside, os.path.join(self.host.base, 'approved-parked')
+
+    def assert_swap_refused(self, code, result, target, kept_file):
+        self.assertEqual(code, 5)
+        self.assertEqual(result['status'], 'PARTIAL')
+        self.assertIn(target['ref'], result['refused'])
+        self.assertNotIn(target['ref'], result['removed'])
+        with open(kept_file) as handle:
+            self.assertEqual(handle.read(), 'unapproved data')
+
+    def test_release_swapped_before_open_is_refused(self):
+        plan, target, path, outside, parked = self.swap_fixture()
+        name, real_open, state = os.path.basename(path), os.open, {'done': False}
+
+        def swap_open(file, flags, *args, **kwargs):
+            if file == name and flags & os.O_DIRECTORY and kwargs.get('dir_fd') is not None and not state['done']:
+                os.rename(path, parked)
+                os.rename(outside, path)
+                state['done'] = True
+            return real_open(file, flags, *args, **kwargs)
+        code, result = self.run_cleanup_in_process(plan, [('os.open', swap_open)])
+        self.assertTrue(state['done'])
+        self.assert_swap_refused(code, result, target, os.path.join(path, 'keep.txt'))
+        self.assertTrue(os.path.isdir(os.path.join(parked, 'naver_engine')))  # 승인 폴더도 손대지 않았다
+
+    def test_release_swapped_before_final_rmdir_is_refused(self):
+        plan, target, path, outside, parked = self.swap_fixture()
+        name, real_stat, state = os.path.basename(path), os.stat, {'done': False}
+
+        def swap_stat(file, *args, **kwargs):
+            if (file == name and kwargs.get('dir_fd') is not None and not state['done']
+                    and os.path.isdir(path) and not os.listdir(path)):
+                os.rename(path, parked)
+                os.rename(outside, path)
+                state['done'] = True
+            return real_stat(file, *args, **kwargs)
+        code, result = self.run_cleanup_in_process(plan, [('os.stat', swap_stat)])
+        self.assertTrue(state['done'])
+        self.assert_swap_refused(code, result, target, os.path.join(path, 'keep.txt'))
+
+    def test_child_dir_swapped_during_recursion_is_refused(self):
+        plan, target, path, outside, parked = self.swap_fixture()
+        child = os.path.join(path, 'naver_engine')
+        real_open, state = os.open, {'done': False}
+
+        def swap_open(file, flags, *args, **kwargs):
+            if file == 'naver_engine' and kwargs.get('dir_fd') is not None and not state['done'] and os.path.isdir(child):
+                os.rename(child, parked)
+                os.rename(outside, child)
+                state['done'] = True
+            return real_open(file, flags, *args, **kwargs)
+        code, result = self.run_cleanup_in_process(plan, [('os.open', swap_open)])
+        self.assertTrue(state['done'])
+        self.assert_swap_refused(code, result, target, os.path.join(child, 'keep.txt'))
+
+    # ── systemctl show 출력 계약: 필수 속성이 없으면 모르는 배치로 거부 ──
+    def test_incomplete_systemctl_show_refuses_plan(self):
+        self.add_cleanup_fixture()
+        external = '/opt/review-systemd/dropin.conf'
+        self.host.file(external, '[Service]\nExecStart=/usr/bin/true ' + RELEASES + '/naver-' + OLD2 + '/x\n')
+        state = self.host.load_state()
+        state['units']['metainc-naver-engine.service']['dropins'] = external
+        self.host.state = state
+        self.host.save_state()
+        plan = self.plan()  # 정상 응답: show 로만 알 수 있는 drop-in 도 보호한다
+        self.assertNotIn(RELEASES + '/naver-' + OLD2, {c['ref'] for c in plan['candidates']})
+        self.assertIn(OLD2, plan['path_references'])
+        command = os.path.join(self.host.bin, 'systemctl')
+        with open(command) as handle:
+            original = handle.read()
+        for label, body in (('empty-rc0', 'sys.exit(0)'),
+                            ('missing-loadstate', 'print("FragmentPath=\\nDropInPaths="); sys.exit(0)'),
+                            ('duplicate', 'print("FragmentPath=\\nDropInPaths=\\nDropInPaths=\\nLoadState=loaded"); sys.exit(0)')):
+            with self.subTest(label=label):
+                with open(command, 'w') as handle:
+                    handle.write('#!%s\nimport sys\nif sys.argv[1:2] == ["show"] and "LoadState" in " ".join(sys.argv):\n    %s\n'
+                                 % (sys.executable, body) + original.split('\n', 1)[1])
+                os.chmod(command, 0o755)
+                done = self.host.run('cleanup-plan')
+                self.assertNotEqual(done.returncode, 0)
+                self.assertNotIn('NAVER_DEPLOY_CLEANUP_PLAN=', self.output(done))
+                done = self.host.run('cleanup', plan['allowlist_sha256'])
+                self.assertExit(done, 10)
+                self.assertIn('REFUSED_PLAN_FAILED', self.output(done))
+        with open(command, 'w') as handle:
+            handle.write(original)
 
 
 class WorkflowConsistencyTest(unittest.TestCase):
@@ -760,6 +1150,26 @@ class WorkflowConsistencyTest(unittest.TestCase):
                 self.assertIn(f'status={rc}', out.stdout)
                 with open(os.path.join(tmp, 'demo.txt')) as handle:
                     self.assertIn(canary, handle.read())
+
+    def test_workflow_cleanup_modes(self):
+        with open(os.path.normpath(WORKFLOW)) as handle:
+            workflow = handle.read()
+        self.assertIn('options: [inspect, deploy, cleanup-plan, cleanup]', workflow)
+        self.assertIn('allowlist_sha256:', workflow)
+        self.assertEqual(workflow.count("grep -Eq '^[0-9a-f]{64}$'"), 2)  # test·ship 두 작업 모두 확인
+        ssh = workflow[workflow.index('appleboy/ssh-action'):]
+        self.assertIn('cleanup "$NSD_ALLOWLIST" 2>/dev/null', ssh)
+        self.assertIn('grep "^$prefix={"', ssh)
+        # 제품 deploy key 는 deploy 에서만 쓴다.
+        for block in workflow.split('      - name: ')[1:]:
+            if 'NAVER_PRODUCT_DEPLOY_KEY' in block:
+                self.assertIn("if: inputs.mode == 'deploy'", block)
+        for forbidden in ('system prune', 'volume prune', 'builder prune', 'image prune', 'rmi -f', 'image rm -f'):
+            self.assertNotIn(forbidden, workflow)
+        with open(SCRIPT) as handle:
+            script = handle.read()
+        for forbidden in ("'prune'", 'system prune', 'volume prune', 'builder prune', "'--force'", "'-f', ref"):
+            self.assertNotIn(forbidden, script)
 
     def test_deploy_paths_ignored_by_logic_analysis_deploy(self):
         path = os.path.normpath(os.path.join(os.path.dirname(WORKFLOW), 'deploy.yml'))
