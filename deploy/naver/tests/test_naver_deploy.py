@@ -121,7 +121,7 @@ class FakeHost:
         self.bin = os.path.join(base, 'bin')
         os.makedirs(self.bin)
         shutil.copy(os.path.join(HERE, 'fakehost.py'), self.bin)
-        tools = ['docker', 'systemctl', 'curl', 'cp', 'sqlite3']
+        tools = ['docker', 'systemctl', 'curl', 'cp', 'sqlite3', 'du', 'journalctl']
         if shutil.which('flock') is None:
             tools.append('flock')
         for tool in tools:
@@ -1074,6 +1074,117 @@ class DeployScriptTest(unittest.TestCase):
             handle.write(original)
 
 
+    # ── disk-usage: 읽기 전용 사용처 분석 ──
+    def add_disk_fixture(self):
+        self.host.file('/proc/self/mounts', '/dev/vda1 / ext4 rw,relatime 0 0\ntmpfs /run tmpfs rw 0 0\n'
+                       'overlay /var/lib/docker/overlay2/abc/merged overlay rw 0 0\nproc /proc proc rw 0 0\n')
+        blobs = {'/var/lib/docker/overlay2/l1/diff/blob': 300000, '/var/lib/containerd/io.containerd.content/blob': 500000,
+                 '/var/lib/docker/buildkit/cache/blob': 200000, '/var/lib/docker/volumes/v1/blob': 50000,
+                 '/var/lib/metainc/other-app/data.db': 120000, '/srv/metainc/other-service/app.bin': 90000,
+                 '/srv/metainc/ad-deploy-staging/receipts/r.json': 1000, '/root/logic-analysis-deploy/app.py': 70000,
+                 '/usr/lib/libbig.so': 400000, '/var/log/journal/system.journal': 150000,
+                 '/var/cache/apt/archives/pkg.deb': 80000, '/var/backups/dpkg.status.0': 5000,
+                 '/var/backups/metainc/other-backup/dump.gz': 60000, '/tmp/scratch/file': 1000,
+                 '/home/someone/notes.txt': 2000}
+        for path, size in blobs.items():
+            self.host.file(path, 'x' * size)
+        # 깊이 5 아래 파일 이름에 비밀값을 넣어 두어도 나오면 안 된다.
+        self.host.file('/root/logic-analysis-deploy/sub/deeper/' + CANARY_RUNTIME + '.txt', CANARY_UNIT)
+        self.host.file('/root/logic-analysis-deploy/.env', 'API_KEY=' + CANARY_RUNTIME + '\n')
+
+    def disk_usage(self, **env):
+        done = self.host.run('disk-usage', NAVER_SECRET_ENV=CANARY_RUNTIME, **env)
+        self.assertExit(done, 0)
+        lines = self.output(done).splitlines()
+        self.assertEqual(len(lines), 1)  # 고정 형식 한 줄
+        self.assertTrue(lines[0].startswith('NAVER_DEPLOY_DISK_USAGE={'))
+        return done, json.loads(lines[0].split('=', 1)[1])
+
+    def test_disk_usage_is_read_only_single_line(self):
+        self.add_disk_fixture()
+        before = self.host.tree()
+        done, report = self.disk_usage()
+        self.assertEqual(before, self.host.tree())
+        self.assertFalse(os.path.exists(self.host.root + '/var/lib/metainc/naver-deploy'))  # 잠금·기록 없음
+        for call in self.host.calls():
+            tool, args = call[0], call[1:]
+            self.assertIn(tool, ('docker', 'du', 'journalctl'), call)
+            if tool == 'docker':
+                self.assertIn(args[:2], (['info', '--format'], ['system', 'df'], ['image', 'ls'], ['image', 'inspect']), call)
+                self.assertNotIn('prune', args)
+            if tool == 'journalctl':
+                self.assertEqual(args, ['--disk-usage'])
+            if tool == 'du':
+                self.assertIn('-x', args)
+        self.assertEqual(report['errors'], [])
+        self.assertEqual([f['mountpoint'] for f in report['filesystems']], ['/'])  # tmpfs·overlay·proc 제외
+        self.assertTrue(all(isinstance(f['total_bytes'], int) for f in report['filesystems']))
+        self.assertEqual(report['journal']['bytes'], 24 * 1024 ** 2)
+        docker = report['docker']
+        self.assertEqual(docker['info']['docker_root_dir'], '/var/lib/docker')
+        self.assertTrue(docker['info']['containerd_snapshotter'])
+        self.assertEqual(docker['build_cache']['size_bytes'], 1100000000)
+        repos = {r['repository']: r for r in docker['images_by_repository']}
+        self.assertEqual(repos['metainc/naver-engine']['owner'], 'naver')
+        self.assertEqual(repos['metainc/naver-engine']['tags'], 2)
+
+    def test_disk_usage_owner_classification(self):
+        self.add_disk_fixture()
+        _, report = self.disk_usage()
+        owners = {}
+        for root in report['du']['roots'].values():
+            for row in root['top']:
+                owners[row['path']] = row['owner']
+        expected = {'/var/lib/metainc/naver-engine': 'naver', '/var/lib/metainc/other-app': 'other_apps',
+                    '/srv/metainc/ad-deploy-staging': 'naver', '/srv/metainc/other-service': 'other_apps',
+                    '/root/logic-analysis-deploy': 'other_apps', '/var/lib/docker/overlay2': 'docker_internal',
+                    '/var/lib/docker/buildkit': 'docker_internal', '/var/lib/docker/volumes': 'docker_internal',
+                    '/var/lib/containerd': 'docker_internal', '/usr/lib': 'os', '/var/log/journal': 'os',
+                    '/var/cache': 'os', '/var/backups/metainc/naver-engine': 'naver',
+                    '/var/backups/metainc/other-backup': 'backups', '/var/lib': 'mixed', '/srv': 'mixed'}
+        for path, owner in expected.items():
+            self.assertEqual(owners.get(path), owner, path)
+        by_owner = report['du']['by_owner']
+        for owner in ('naver', 'other_apps', 'docker_internal', 'os', 'backups'):
+            self.assertGreater(by_owner.get(owner, 0), 0, owner)
+        self.assertEqual(sum(by_owner.values()), report['du']['roots']['/']['bytes'])  # 겹치지 않는 분할
+
+    def test_disk_usage_prints_no_secrets_or_deep_names(self):
+        self.add_disk_fixture()
+        done, report = self.disk_usage()
+        text = self.output(done)
+        for canary in CANARIES + ('canary-proxy-secret', 'host-canary-name'):
+            self.assertNotIn(canary, text)
+        paths = [row['path'] for root in report['du']['roots'].values() for row in root['top']]
+        self.assertTrue(all(p.count('/') <= 4 for p in paths), paths)  # 깊이 4 까지의 폴더만
+        self.assertFalse(any(p.endswith(('.txt', '.env', '.db', '.json')) for p in paths))
+
+    def test_disk_usage_failures_become_null_with_reason(self):
+        self.add_disk_fixture()
+        for config, component, reason in ((dict(du_fail=True), 'du', 'exit_1'),
+                                          (dict(du_sleep=3), 'du', 'timeout'),
+                                          (dict(docker_fail=True), 'docker_info', 'exit_1'),
+                                          (dict(journal_fail=True), 'journal', 'exit_1')):
+            with self.subTest(config=config):
+                self.host.config = {'root': self.host.root, 'extra_labels': {'vendor.secret': CANARY_LABEL}}
+                self.host.set(**config)
+                _, report = self.disk_usage(NAVER_DEPLOY_DU_TIMEOUT='1')
+                self.assertIn({'component': component, 'reason': reason},
+                              [{k: e[k] for k in ('component', 'reason')} for e in report['errors']])
+                if component == 'du':
+                    self.assertEqual(report['du']['roots'], {})
+                if component == 'docker_info':
+                    self.assertIsNone(report['docker']['info'])
+                    self.assertIsNone(report['docker']['system_df'])
+                if component == 'journal':
+                    self.assertIsNone(report['journal']['bytes'])
+        self.host.config = {'root': self.host.root, 'extra_labels': {'vendor.secret': CANARY_LABEL}}
+        self.host.set(du_partial=True)
+        _, report = self.disk_usage()
+        self.assertTrue(report['du']['scans'][0]['partial'])  # 권한 오류여도 받은 만큼 쓴다
+        self.assertIn('/var', report['du']['roots'])
+
+
 class WorkflowConsistencyTest(unittest.TestCase):
     def test_workflow_archive_scope_matches_script(self):
         with open(SCRIPT) as handle:
@@ -1154,7 +1265,10 @@ class WorkflowConsistencyTest(unittest.TestCase):
     def test_workflow_cleanup_modes(self):
         with open(os.path.normpath(WORKFLOW)) as handle:
             workflow = handle.read()
-        self.assertIn('options: [inspect, deploy, cleanup-plan, cleanup]', workflow)
+        self.assertIn('options: [inspect, deploy, disk-usage, cleanup-plan, cleanup]', workflow)
+        ssh_part = workflow[workflow.index('appleboy/ssh-action'):]
+        self.assertIn('disk-usage 2>/dev/null', ssh_part)
+        self.assertIn("grep '^NAVER_DEPLOY_DISK_USAGE={'", ssh_part)
         self.assertIn('allowlist_sha256:', workflow)
         self.assertEqual(workflow.count("grep -Eq '^[0-9a-f]{64}$'"), 2)  # test·ship 두 작업 모두 확인
         ssh = workflow[workflow.index('appleboy/ssh-action'):]

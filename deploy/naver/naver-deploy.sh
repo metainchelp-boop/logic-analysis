@@ -5,6 +5,8 @@
 #       읽기 전용. 서비스·이미지·폴더 상태를 한 줄 JSON 으로 출력한다(무엇도 바꾸지 않는다).
 #   naver-deploy.sh deploy <제품 커밋 40자리> <source.tar> [--log FILE] [--result FILE]
 #       시험을 통과한 정확한 커밋을 배포한다. 실패하면 직전 판으로 자동 복원한다.
+#   naver-deploy.sh disk-usage
+#       읽기 전용. 파일시스템·docker·폴더(du, 깊이 4)·journal 사용량을 소유자별(관제·다른 앱·OS·docker·백업)로 한 줄 JSON.
 #   naver-deploy.sh cleanup-plan
 #       읽기 전용. 지워도 되는 관제 이미지 태그·release 폴더 목록과 회수량 추정, allowlist_sha256 을 낸다.
 #   naver-deploy.sh cleanup <allowlist_sha256>
@@ -1419,6 +1421,274 @@ def version(argv, pattern):
     return match.group(1) if match else None
 
 
+# ── disk-usage: 공유 서버 디스크를 무엇이 쓰는지 읽기 전용으로 나눠 본다 ─────────────────────
+# 지우기·prune·journal vacuum·로그 자르기·DB 열기·재시작·이동은 하지 않는다. 잠금도 잡지 않는다.
+# 모든 외부 명령은 시간 제한을 두고, 실패하면 그 항목만 null + 사유 코드로 남긴다(전체는 성공으로 끝낸다).
+# 파일 내용·환경 값·깊이 4 아래 이름은 내보내지 않는다(du 는 폴더만, 깊이 4까지).
+PSEUDO_FS = {'tmpfs', 'devtmpfs', 'overlay', 'proc', 'sysfs', 'cgroup', 'cgroup2', 'devpts', 'mqueue', 'securityfs',
+             'debugfs', 'tracefs', 'pstore', 'bpf', 'autofs', 'hugetlbfs', 'configfs', 'fusectl', 'binfmt_misc',
+             'nsfs', 'squashfs', 'ramfs', 'rpc_pipefs', 'efivarfs', 'fuse.lxcfs', 'shm', 'nfsd'}
+DU_ROOTS = ('/', '/var', '/var/lib', '/var/lib/docker', '/var/lib/containerd', '/var/log', '/var/backups', '/srv', '/opt',
+            '/root', '/home', '/tmp', '/usr', '/srv/metainc', '/var/lib/metainc', '/var/backups/metainc')
+TOP_N = 15
+DIR_NAME = re.compile(r'[A-Za-z0-9_.@+-]{1,128}\Z')
+OWNER_RULES = (
+    ('naver', ('/var/lib/metainc/naver-', '/var/backups/metainc/naver-', '/srv/metainc/ad-deploy-staging',
+               '/opt/metainc/naver-')),
+    ('other_apps', ('/srv/metainc/', '/var/lib/metainc/', '/root/', '/opt/')),
+    ('docker_internal', ('/var/lib/docker', '/var/lib/containerd', '/var/lib/buildkit')),
+    ('os', ('/usr', '/var/log', '/var/cache/apt', '/var/cache', '/snap', '/var/lib/snapd', '/boot', '/lib', '/bin', '/sbin',
+            '/etc', '/var/lib/apt', '/var/lib/dpkg')),
+    ('backups', ('/var/backups',)),
+)
+MIXED = {'/', '/var', '/var/lib', '/srv', '/srv/metainc', '/var/lib/metainc', '/var/backups/metainc', '/opt', '/root',
+         '/home', '/var/backups'}
+
+
+def owner_of(path):
+    if path in MIXED:
+        return 'mixed'
+    for owner, prefixes in OWNER_RULES:
+        for prefix in prefixes:
+            # '/' 나 '-' 로 끝나는 규칙은 접두어, 아니면 그 폴더 자신과 그 아래.
+            if prefix.endswith(('/', '-')):
+                if path.startswith(prefix):
+                    return owner
+            elif path == prefix or path.startswith(prefix + '/'):
+                return owner
+    return 'unclassified'
+
+
+def timed(argv, timeout, low_priority=False):
+    """시간 제한 실행. (상태, stdout) — 상태는 ok / timeout / not_found / exit_<코드>. stderr 는 버린다(파일 이름이 섞일 수 있다)."""
+    if low_priority:
+        if shutil.which('ionice'):
+            argv = ['ionice', '-c', '3'] + argv
+        if shutil.which('nice'):
+            argv = ['nice', '-n', '19'] + argv
+    try:
+        done = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout,
+                              env={'PATH': os.environ.get('PATH', '/usr/sbin:/usr/bin:/sbin:/bin'), 'LANG': 'C'})
+    except subprocess.TimeoutExpired as error:
+        # 시간 초과 전까지 받은 출력은 쓴다(du 는 끝난 폴더부터 낸다). 상태는 timeout 으로 남는다.
+        return 'timeout', (error.stdout or b'').decode('utf-8', 'replace')
+    except OSError:
+        return 'not_found', ''
+    return ('ok' if done.returncode == 0 else 'exit_%d' % done.returncode), done.stdout.decode('utf-8', 'replace')
+
+
+def binary_bytes(text):
+    """journalctl 같은 1024 단위 표기(예: 1.2G, 24.0M, 512.0K, 300B)를 바이트로."""
+    match = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*([KMGTP]?)i?B?\b', text or '')
+    if not match:
+        return None
+    return int(float(match.group(1)) * 1024 ** ' KMGTP'.index(match.group(2) or ' '))
+
+
+def filesystems(errors):
+    try:
+        with open(ROOT + '/proc/self/mounts') as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        errors.append({'component': 'filesystems', 'reason': 'mounts_unreadable'})
+        return None
+    rows, seen = [], set()
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3 or parts[2] in PSEUDO_FS:
+            continue
+        mountpoint = parts[1].replace('\\040', ' ')
+        if not SAFE_PATH.match(mountpoint):
+            continue
+        try:
+            info = os.statvfs(ROOT + mountpoint if mountpoint != '/' else ROOT + '/')
+            device = os.stat(ROOT + mountpoint).st_dev
+        except OSError:
+            rows.append({'mountpoint': mountpoint, 'fstype': pick(parts[2], DIR_NAME), 'error': 'statvfs_failed'})
+            continue
+        if device in seen:
+            continue
+        seen.add(device)
+        total = info.f_blocks * info.f_frsize
+        free = info.f_bfree * info.f_frsize
+        rows.append({'mountpoint': mountpoint, 'fstype': pick(parts[2], DIR_NAME), 'total_bytes': total,
+                     'used_bytes': total - free, 'avail_bytes': info.f_bavail * info.f_frsize})
+    return rows
+
+
+def docker_usage(errors):
+    result = {}
+    status, out = timed(['docker', 'info', '--format', '{{json .}}'], 60)
+    try:
+        info = json.loads(out) if status == 'ok' else None
+    except ValueError:
+        info, status = None, 'unparseable'
+    if info is None:
+        errors.append({'component': 'docker_info', 'reason': status})
+        result['info'] = None
+    else:
+        driver_status = []
+        for pair in info.get('DriverStatus') or []:
+            if isinstance(pair, list) and len(pair) == 2:
+                driver_status.append([pick(pair[0], re.compile(r'[A-Za-z0-9 _.-]{1,64}\Z')),
+                                      pick(pair[1], re.compile(r'[A-Za-z0-9 _./:-]{1,128}\Z'))])
+        result['info'] = {'docker_root_dir': pick(info.get('DockerRootDir'), SAFE_PATH),
+                          'driver': pick(info.get('Driver'), DIR_NAME), 'driver_status': driver_status,
+                          'containerd_snapshotter': any('containerd' in str(p) for p in info.get('DriverStatus') or [])}
+    status, out = timed(['docker', 'system', 'df', '--format', '{{json .}}'], 120)
+    summary = {}
+    if status == 'ok':
+        for line in out.splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            kind = {'Images': 'images', 'Containers': 'containers', 'Local Volumes': 'local_volumes',
+                    'Build Cache': 'build_cache'}.get(row.get('Type'))
+            if kind:
+                summary[kind] = {'count': int(row['TotalCount']) if str(row.get('TotalCount', '')).isdigit() else None,
+                                 'active': int(row['Active']) if str(row.get('Active', '')).isdigit() else None,
+                                 'size_bytes': human_bytes(row.get('Size')),
+                                 'reclaimable_bytes': human_bytes(str(row.get('Reclaimable') or '').split('(')[0])}
+    if not summary:
+        errors.append({'component': 'docker_system_df', 'reason': status if status != 'ok' else 'unparseable'})
+    result['system_df'] = summary or None
+    result['system_df_units'] = 'converted from docker human units (1000-based), approximate'
+    result['build_cache'] = summary.get('build_cache') if summary else None
+    status, out = timed(['docker', 'image', 'ls', '--all', '--no-trunc', '--format', '{{json .}}'], 60)
+    if status != 'ok':
+        errors.append({'component': 'docker_images', 'reason': status})
+        result['images_by_repository'] = None
+        result['dangling'] = None
+        return result
+    rows = []
+    for line in out.splitlines():
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue
+    ids = sorted({str(r.get('ID')) for r in rows if IMAGE_ID.match(str(r.get('ID')))})
+    sizes = {}
+    for start in range(0, len(ids), 50):
+        status, out = timed(['docker', 'image', 'inspect'] + ids[start:start + 50], 60)
+        try:
+            for item in json.loads(out) if status == 'ok' else []:
+                sizes[item.get('Id')] = int(item.get('Size') or 0)
+        except ValueError:
+            status = 'unparseable'
+        if status != 'ok':
+            errors.append({'component': 'docker_image_inspect', 'reason': status})
+            break
+    groups, dangling_ids = {}, set()
+    for row in rows:
+        repository, identity = str(row.get('Repository')), str(row.get('ID'))
+        if repository == '<none>':
+            dangling_ids.add(identity)
+            continue
+        group = groups.setdefault(pick(repository, re.compile(r'[a-z0-9][a-z0-9._/:-]{0,200}\Z')), {'tags': 0, 'ids': set()})
+        group['tags'] += 1
+        group['ids'].add(identity)
+    by_repo = []
+    for repository, group in groups.items():
+        known = [sizes[i] for i in group['ids'] if i in sizes]
+        by_repo.append({'repository': repository, 'owner': 'naver' if repository.startswith('metainc/naver-') else 'other_apps',
+                        'tags': group['tags'], 'image_ids': len(group['ids']),
+                        'size_bytes_sum': sum(known) if len(known) == len(group['ids']) else None})
+    by_repo.sort(key=lambda r: -(r['size_bytes_sum'] or 0))
+    result['images_by_repository'] = by_repo
+    result['images_size_note'] = 'per-image Size summed per repository; shared layers are counted in each image'
+    known = [sizes[i] for i in dangling_ids if i in sizes]
+    result['dangling'] = {'image_ids': len(dangling_ids),
+                          'size_bytes_sum': sum(known) if len(known) == len(dangling_ids) else None}
+    return result
+
+
+def du_tree(path, timeout):
+    """한 번만 훑는다(-x, 깊이 4, 낮은 우선순위). 폴더 경로→바이트. 부분 실패(권한 등)도 받은 만큼 쓴다."""
+    status, out = timed(['du', '-x', '-B1', '--max-depth=4', ROOT + path], timeout, low_priority=True)
+    sizes = {}
+    for line in out.splitlines():
+        amount, _, name = line.partition('\t')
+        if not amount.isdigit() or not name.startswith(ROOT):
+            continue
+        name = name[len(ROOT):] or '/'
+        if name != '/' and name.endswith('/'):
+            name = name.rstrip('/')
+        sizes[name or '/'] = int(amount)
+    return status, sizes
+
+
+def disk_usage():
+    errors = []
+    out = {'mode': 'disk-usage', 'read_only': True, 'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+    out['filesystems'] = filesystems(errors)
+    out['docker'] = docker_usage(errors)
+    timeout = int(os.environ.get('NAVER_DEPLOY_DU_TIMEOUT', '300')) if ROOT else 300
+    sizes, scans = {}, []
+    root_dev = os.lstat(ROOT + '/').st_dev
+    passes = ['/']
+    for root in DU_ROOTS:
+        try:
+            info = os.lstat(ROOT + root)
+        except OSError:
+            continue
+        if stat.S_ISDIR(info.st_mode) and info.st_dev != root_dev and not any(
+                root.startswith(p.rstrip('/') + '/') for p in passes if p != '/'):
+            passes.append(root)  # 다른 파일시스템에 있는 뿌리는 따로 한 번 훑는다
+    for path in passes:
+        status, found = du_tree(path, timeout)
+        scans.append({'path': path, 'status': status if found or status != 'ok' else 'empty',
+                      'partial': status != 'ok' and bool(found)})
+        if not found:
+            errors.append({'component': 'du', 'path': path, 'reason': status if status != 'ok' else 'empty'})
+        for name, amount in found.items():
+            sizes.setdefault(name, amount)
+
+    def safe(name):
+        return all(DIR_NAME.match(part) for part in name.strip('/').split('/') if part)
+    roots = {}
+    for root in DU_ROOTS:
+        if root not in sizes:
+            continue
+        prefix = root.rstrip('/') + '/'
+        children = [(name, amount) for name, amount in sizes.items()
+                    if name.startswith(prefix) and '/' not in name[len(prefix):] and name != root]
+        children.sort(key=lambda item: -item[1])
+        roots[root] = {'bytes': sizes[root], 'owner': owner_of(root), 'children_listed': min(len(children), TOP_N),
+                       'children_total': len(children),
+                       'top': [{'path': name if safe(name) else prefix + '<unexpected-name>', 'bytes': amount,
+                                'owner': owner_of(name)} for name, amount in children[:TOP_N]]}
+    # 겹치지 않는 분할로 owner 별 합: 펼칠 뿌리는 자식으로 나누고, 남는 바이트(파일·목록 밖)는 그 뿌리 owner('mixed' 등)에 둔다.
+    by_owner = {}
+    expandable = set(DU_ROOTS)
+
+    def assign(path):
+        if path in expandable and path in sizes:
+            prefix = path.rstrip('/') + '/'
+            children = [n for n in sizes if n.startswith(prefix) and '/' not in n[len(prefix):] and n != path]
+            remainder = sizes[path] - sum(sizes[c] for c in children)
+            if remainder:
+                key = 'files_or_unlisted_in_' + owner_of(path)
+                by_owner[key] = by_owner.get(key, 0) + max(remainder, 0)
+            for child in children:
+                assign(child)
+        elif path in sizes:
+            owner = owner_of(path)
+            by_owner[owner] = by_owner.get(owner, 0) + sizes[path]
+    if '/' in sizes:
+        assign('/')
+    out['du'] = {'scans': scans, 'max_depth': 4, 'top_n': TOP_N, 'units': 'bytes (du -B1, apparent disk usage)',
+                 'roots': roots, 'by_owner': by_owner,
+                 'owner_rules': {owner: list(prefixes) for owner, prefixes in OWNER_RULES}}
+    status, text = timed(['journalctl', '--disk-usage'], 60)
+    value = binary_bytes(text.split('take up', 1)[1] if 'take up' in text else '') if status == 'ok' else None
+    out['journal'] = {'bytes': value, 'units': '1024-based from journalctl, approximate'}
+    if value is None:
+        errors.append({'component': 'journal', 'reason': status if status != 'ok' else 'unparseable'})
+    out['errors'] = errors
+    print('NAVER_DEPLOY_DISK_USAGE=' + json.dumps(out, sort_keys=True, separators=(',', ':')))
+
+
 def inspect():
     out = {'mode': 'inspect', 'read_only': True, 'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
     try:
@@ -1496,7 +1766,7 @@ COMMANDS = {'unit-parse': unit_parse, 'override-check': override_check, 'subst':
             'prune-history': prune_history, 'db-files': db_files, 'same-size': same_size,
             'backup-prune': backup_prune, 'sha': sha, 'tree-sha': tree_sha, 'result-json': result_json,
             'inspect': inspect, 'verify-copy': verify_copy, 'partial-prune': partial_prune,
-            'disk-budget': disk_budget, 'image-sizes': image_sizes, 'cleanup-plan': cleanup_plan, 'cleanup': cleanup, 'env-switches': env_switches, 'container-mounts': container_mounts,
+            'disk-budget': disk_budget, 'image-sizes': image_sizes, 'cleanup-plan': cleanup_plan, 'disk-usage': disk_usage, 'cleanup': cleanup, 'env-switches': env_switches, 'container-mounts': container_mounts,
             'compose-shape': compose_shape, 'shape-diff': shape_diff, 'check-config-run': check_config_run,
             'prune-logs': prune_logs,
             'schema-file': lambda path: print(schema_of(read(path))),
@@ -2335,6 +2605,11 @@ case "$MODE" in
     [ "$#" = 1 ] || { echo "사용: $0 cleanup-plan" >&2; exit 64; }
     py cleanup-plan
     ;;
+  disk-usage)
+    # 읽기 전용 사용처 분석. 잠금을 잡지 않고 아무것도 바꾸지 않는다.
+    [ "$#" = 1 ] || { echo "사용: $0 disk-usage" >&2; exit 64; }
+    py disk-usage
+    ;;
   cleanup)
     [ "$#" = 2 ] || { echo "사용: $0 cleanup <allowlist_sha256>" >&2; exit 64; }
     main_cleanup "$2"
@@ -2364,7 +2639,7 @@ case "$MODE" in
     main_deploy "$D_COMMIT" "$D_TAR"
     ;;
   *)
-    echo "사용: $0 inspect | cleanup-plan | cleanup <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2
+    echo "사용: $0 inspect | disk-usage | cleanup-plan | cleanup <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2
     exit 64
     ;;
 esac

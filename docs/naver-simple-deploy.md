@@ -43,6 +43,7 @@
    - `mode`:
      - `inspect` — 서버 상태만 읽는다(아무것도 바꾸지 않음). commit 칸은 형식만 맞으면 된다(지금 운영 커밋을 넣으면 됨).
      - `deploy` — 실제 배포.
+     - `disk-usage` — 디스크 사용처를 소유자별로 나눈 한 줄 JSON(읽기 전용, 잠금 없음). 아래 7장 끝
      - `cleanup-plan` — 지워도 되는 관제 이미지 태그·release 폴더 목록과 `allowlist_sha256` 을 낸다(읽기 전용). 아래 7장
      - `cleanup` — `allowlist_sha256` 칸에 직전 `cleanup-plan` 의 값을 넣어야 한다. 다시 계산한 목록과 해시가 정확히 같을 때만 그 목록만 지운다. 아래 7장
    - `allowlist_sha256`: `cleanup` 에서만 넣는다(다른 mode 에서는 비워 둔다).
@@ -249,6 +250,26 @@ engine 43·relay 43, release 폴더 43개. DB 사본 하나(합 + 256MiB = 3.574
 
 **절대 하지 않는 것**: `docker system prune`·`volume prune`·`builder prune`·`-a`·`-f`, 다른 앱 이미지, 커밋 태그가 아닌 태그(`local-review` 등),
 saved-exports·receipts·runtime.env·키·데이터 폴더(`.*-failed-db-*` 포함)·기존 백업·volume·build cache.
+
+### 디스크 사용처 분석 (`disk-usage`, 읽기 전용)
+
+정리(실행 41174998707, 123개 삭제) 뒤에도 여유가 약 0.49GB 늘어나는 데 그쳐, 무엇이 공유 디스크를 쓰는지 먼저 본다.
+`mode=disk-usage` 는 잠금을 잡지 않고 아무것도 바꾸지 않는다(prune·삭제·journal vacuum·로그 자르기·DB 열기·재시작·이동 없음).
+모든 외부 명령에 시간 제한(docker·journalctl 60~120초, du 300초)이 있고, 실패한 항목은 `null` + 사유 코드(`errors`)로 남긴 채 성공으로 끝난다.
+
+결과 `NAVER_DEPLOY_DISK_USAGE={...}` 한 줄:
+- `filesystems`: 실제 파일시스템별 mountpoint·fstype·total/used/avail 바이트(tmpfs·overlay·proc·sysfs·squashfs 등 제외, 같은 장치는 한 번)
+- `docker`: DockerRootDir·Driver·containerd snapshotter 여부, `docker system df` 요약(이미지·컨테이너·volume·build cache 의 개수·크기·회수 가능, docker 표기를 바이트로 환산한 근사값),
+  저장소별 이미지 수·이미지 ID 수·Size 합(공유 층은 이미지마다 다시 셈), dangling 이미지 수·크기. 다른 앱 저장소 이름도 나온다(비밀 아님)
+- `du`: `du -x -B1 --max-depth=4` 를 `/` 에서 **한 번만**(nice·ionice 낮은 우선순위) 훑고, `/`·`/var`·`/var/lib`·`/var/lib/docker`·`/var/lib/containerd`·
+  `/var/log`·`/var/backups`·`/srv`·`/opt`·`/root`·`/home`·`/tmp`·`/usr`·`/srv/metainc`·`/var/lib/metainc`·`/var/backups/metainc` 아래 상위 15개 폴더와 바이트·소유자.
+  다른 파일시스템에 있는 뿌리는 따로 한 번 훑는다. 폴더 경로만 나오며 파일 이름·내용은 나오지 않는다
+- `du.by_owner`: 겹치지 않게 나눈 소유자별 합 — `naver`(`/var/lib/metainc/naver-*`, `/var/backups/metainc/naver-*`, `/srv/metainc/ad-deploy-staging`, `/opt/metainc/naver-*`),
+  `other_apps`(그 밖의 `/srv/metainc/*`·`/var/lib/metainc/*`, `/root/*`, `/opt/*`), `docker_internal`(`/var/lib/docker`·`/var/lib/containerd`),
+  `os`(`/usr`, `/var/log`(journal 포함), `/var/cache`, snap 등), `backups`(그 밖의 `/var/backups/*`), 그리고 묶음 폴더에 직접 있는 파일 몫(`files_or_unlisted_in_*`)
+- `journal`: `journalctl --disk-usage` 바이트(1024 단위 근사)
+
+du 는 폴더가 차지한 디스크, docker 표시는 docker 집계라 서로 더하거나 df 확보량과 같다고 보지 않는다.
 
 ---
 
