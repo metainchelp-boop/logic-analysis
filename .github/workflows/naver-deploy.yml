@@ -4,6 +4,7 @@ name: 네이버 관제 배포 (naver-deploy)
 #   입력 commit : 제품 저장소 metainchelp-boop/metainc-ad-dashboard 의 커밋 40자리
 #   입력 mode   : inspect = 서버 상태만 읽어 JSON 으로 출력 / deploy = 시험 → 빌드 → 교체 → 헬스 → 실패 시 자동 복원
 #                 disk-usage = 디스크 사용처를 소유자별(관제·다른 앱·OS·docker·백업)로 나눈 한 줄 JSON(읽기 전용, 잠금 없음)
+#                 app-inventory = 철거 전 앱/nginx/데이터 경로 메타데이터(읽기 전용·비밀 원문 미출력)
 #                 cleanup-plan = 지워도 되는 관제 이미지 태그·release 폴더 목록과 allowlist_sha256(읽기 전용)
 #                 cleanup = 입력 allowlist_sha256 과 다시 계산한 계획이 정확히 같을 때만 그 목록만 삭제
 # push·pull_request 트리거 없음. 이 파일과 deploy/naver/** 는 deploy.yml 의 paths-ignore 에 있다
@@ -23,10 +24,10 @@ on:
         required: true
         type: string
       mode:
-        description: 'inspect = 서버 상태 읽기만 / deploy = 시험 후 배포(실패 시 직전 판 자동 복원) / disk-usage = 디스크 사용처 분석(읽기 전용) / cleanup-plan = 정리 목록·해시(읽기 전용) / cleanup = 해시가 같을 때만 그 목록 삭제'
+        description: 'inspect = 서버 상태 읽기만 / deploy = 시험 후 배포(실패 시 직전 판 자동 복원) / disk-usage = 디스크 사용처 분석(읽기 전용) / app-inventory = 철거 전 구성 확인(읽기 전용) / cleanup-plan = 정리 목록·해시(읽기 전용) / cleanup = 해시가 같을 때만 그 목록 삭제'
         required: true
         type: choice
-        options: [inspect, deploy, disk-usage, cleanup-plan, cleanup]
+        options: [inspect, deploy, disk-usage, app-inventory, cleanup-plan, cleanup]
         default: inspect
       allowlist_sha256:
         description: 'cleanup 전용: 직전 cleanup-plan 결과의 allowlist_sha256(64자리). 다른 mode 에서는 비워 둔다'
@@ -68,7 +69,7 @@ jobs:
           if ! printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "::error::commit 은 40자리 소문자 16진수여야 합니다"; exit 1
           fi
-          case "$MODE" in inspect|deploy|disk-usage|cleanup-plan|cleanup) ;; *) echo "::error::mode 이상"; exit 1 ;; esac
+          case "$MODE" in inspect|deploy|disk-usage|app-inventory|cleanup-plan|cleanup) ;; *) echo "::error::mode 이상"; exit 1 ;; esac
           if [ "$MODE" = cleanup ]; then
             printf '%s' "$ALLOWLIST" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::cleanup 은 allowlist_sha256(64자리)이 필요합니다"; exit 1; }
           elif [ -n "$ALLOWLIST" ]; then
@@ -209,7 +210,7 @@ jobs:
           test "$TRIGGERING_ACTOR" = metainchelp-boop
           test "$REF" = refs/heads/main
           printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'
-          case "$MODE" in inspect|deploy|disk-usage|cleanup-plan|cleanup) ;; *) exit 1 ;; esac
+          case "$MODE" in inspect|deploy|disk-usage|app-inventory|cleanup-plan|cleanup) ;; *) exit 1 ;; esac
           if [ "$MODE" = cleanup ]; then printf '%s' "$ALLOWLIST" | grep -Eq '^[0-9a-f]{64}$'; else test -z "$ALLOWLIST"; fi
 
       - name: 배포 장치 소스 받기
@@ -239,6 +240,14 @@ jobs:
           cp deploy/naver/naver-deploy.sh naver-ship/naver-deploy.sh
           echo "NSD_SCRIPT_SHA=$(sha256sum naver-ship/naver-deploy.sh | cut -d' ' -f1)" >> "$GITHUB_ENV"
           echo "NSD_RUN=$RUN" >> "$GITHUB_ENV"
+          if [ "$MODE" = app-inventory ]; then
+            cp deploy/naver/app_inventory.py deploy/naver/nginx_inventory.py naver-ship/
+            echo "NSD_APP_SHA=$(sha256sum naver-ship/app_inventory.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
+            echo "NSD_NGINX_SHA=$(sha256sum naver-ship/nginx_inventory.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          else
+            echo "NSD_APP_SHA=none" >> "$GITHUB_ENV"
+            echo "NSD_NGINX_SHA=none" >> "$GITHUB_ENV"
+          fi
           if [ "$MODE" = deploy ]; then
             test "$(git -C product rev-parse HEAD)" = "$COMMIT"
             sha=$(bash deploy/naver/make-source-archive.sh product "$COMMIT" "$GITHUB_WORKSPACE/naver-ship/source.tar")
@@ -272,7 +281,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: NSD_MODE,NSD_COMMIT,NSD_RUN,NSD_SCRIPT_SHA,NSD_ARCHIVE_SHA,NSD_ALLOWLIST
+          envs: NSD_MODE,NSD_COMMIT,NSD_RUN,NSD_SCRIPT_SHA,NSD_ARCHIVE_SHA,NSD_ALLOWLIST,NSD_APP_SHA,NSD_NGINX_SHA
           command_timeout: 55m
           script: |
             set -eu
@@ -288,6 +297,17 @@ jobs:
               rm -f "$incoming/naver-deploy.sh"
               rmdir "$incoming" || true
               printf '%s\n' "$out" | grep '^NAVER_DEPLOY_INSPECT={' || fail "INSPECT_FAILED_$rc"
+              exit "$rc"
+            fi
+            if [ "$NSD_MODE" = app-inventory ]; then
+              [ "$(hash_of "$incoming/naver-deploy.sh")" = "$NSD_SCRIPT_SHA" ] || fail SCRIPT_HASH
+              [ "$(hash_of "$incoming/app_inventory.py")" = "$NSD_APP_SHA" ] || fail APP_HASH
+              [ "$(hash_of "$incoming/nginx_inventory.py")" = "$NSD_NGINX_SHA" ] || fail NGINX_HELPER_HASH
+              rc=0
+              out=$(bash "$incoming/naver-deploy.sh" app-inventory 2>/dev/null) || rc=$?
+              rm -f "$incoming/naver-deploy.sh" "$incoming/app_inventory.py" "$incoming/nginx_inventory.py"
+              rmdir "$incoming" || true
+              printf '%s\n' "$out" | grep '^NAVER_DEPLOY_APP_INVENTORY={' || fail "APP_INVENTORY_FAILED_$rc"
               exit "$rc"
             fi
             if [ "$NSD_MODE" = disk-usage ]; then

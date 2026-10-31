@@ -10,6 +10,7 @@ on:
       # 네이버 관제 단순 배포(2026-10-30) — 수동 실행 전용. 로직분석 이미지·컨테이너와 무관하므로
       # 이 파일·폴더만 고친 커밋이 로직분석을 재배포하지 않게 한다(docs/naver-simple-deploy.md).
       - '.github/workflows/naver-deploy.yml'
+      - '.github/workflows/naver-tools-check.yml'  # 합성 CI 정의만 바뀌어도 앱 재배포하지 않음
       - 'deploy/naver/**'
       # 이 파일(deploy.yml) 자체만 고친 커밋도 재배포하지 않는다. paths-ignore 는 바뀐 파일이 '전부'
       # 무시 대상일 때만 건너뛰므로, 이 줄이 없으면 위 목록을 고치는 커밋이 곧바로 재배포를 일으킨다.
