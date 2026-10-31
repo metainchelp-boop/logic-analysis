@@ -50,6 +50,50 @@ class NginxInventoryTest(unittest.TestCase):
         self.assertEqual(result['servers'][1]['locations'][0]['proxy_pass'][0]['port'], 8000)
         self.assertEqual(len(result['includes']), 3)
 
+    def test_api_exact_and_included_prefix_keep_separate_targets_and_server_context(self):
+        result = self.summarize('include sites-enabled/*;', [
+            ('/etc/nginx/sites-enabled/dashboard.metainc.co.kr', server('''
+                location = /api/naver-auto { proxy_pass http://127.0.0.1:5051; }
+                include snippets/naver-relay.conf;
+            ''')),
+            ('/etc/nginx/snippets/naver-relay.conf', 'location ^~ /api/naver-auto/ { proxy_pass http://unix:/run/metainc/naver-relay/relay.sock:; }'),
+            ('/etc/nginx/sites-enabled/logic.metainc.co.kr', server('location /api/naver-auto/ { proxy_pass http://127.0.0.1:8000; }', 'logic.metainc.co.kr'))])
+        self.assertEqual(result['status'], 'ok')
+        dashboard, logic = result['servers']
+        exact, prefix = dashboard['locations']
+        self.assertEqual((exact['path'], exact['modifier'], exact['source'], exact['line']),
+                         ('/api/naver-auto', '=', 'file-2', 2))
+        self.assertEqual(exact['proxy_pass'][0]['port'], 5051)
+        self.assertEqual((prefix['path'], prefix['modifier'], prefix['source'], prefix['line']),
+                         ('/api/naver-auto/', '^~', 'file-3', 1))
+        self.assertTrue(prefix['context_known'])
+        self.assertIsNone(prefix['parent_location'])
+        self.assertEqual(prefix['proxy_pass'][0]['socket'], '/run/metainc/naver-relay/relay.sock')
+        self.assertEqual(result['includes'][1]['targets'], ['file-3'])
+        self.assertEqual(logic['server_names'], ['logic.metainc.co.kr'])
+        self.assertEqual(logic['locations'][0]['source'], 'file-4')
+        self.assertEqual(logic['locations'][0]['proxy_pass'][0]['port'], 8000)
+
+    def test_api_prefix_does_not_expose_uri_header_or_private_include_path(self):
+        result = self.summarize(server('include snippets/CANARY_API_FILE.conf;'), [
+            ('/etc/nginx/snippets/CANARY_API_FILE.conf', '''
+                location = /api/naver-auto { proxy_pass http://127.0.0.1:5051; }
+                location /api/naver-auto/ {
+                    proxy_pass http://unix:/run/metainc/naver-relay/relay.sock:/CANARY_API_URI;
+                    proxy_set_header Authorization "Bearer CANARY_API_TOKEN";
+                }
+            ''')])
+        exact, prefix = result['servers'][0]['locations']
+        self.assertEqual(exact['proxy_pass'][0]['port'], 5051)
+        self.assertEqual(prefix['path'], '/api/naver-auto/')
+        self.assertEqual(prefix['proxy_pass'][0]['socket'], '/run/metainc/naver-relay/relay.sock')
+        self.assertTrue(prefix['proxy_pass'][0]['uri_present'])
+        self.assertIn('proxy_uri_redacted', result['servers'][0]['unresolved'])
+        self.assertNotIn('other_location_present', result['servers'][0]['unresolved'])
+        self.assertFalse(result['resolution_complete'])
+        self.assertIsNone(result['files'][1]['path'])
+        self.assert_private(result, 'CANARY_API_FILE', 'CANARY_API_URI', 'CANARY_API_TOKEN', 'Authorization')
+
     def test_glob_does_not_cross_directory_separator(self):
         result = self.summarize('include conf.d/*.conf;', [
             ('/etc/nginx/conf.d/a.conf', server()),

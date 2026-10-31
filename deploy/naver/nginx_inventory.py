@@ -8,7 +8,7 @@ import posixpath
 import re
 
 HOSTS = frozenset(h + '.metainc.co.kr' for h in ('ad', 'dashboard', 'logic', 'studio'))
-LOCATIONS = frozenset(('/naver', '/naver/', '/api/naver-auto', '/studio', '/studio/', '/autobid', '/autobid/', '/'))
+LOCATIONS = frozenset(('/naver', '/naver/', '/api/naver-auto', '/api/naver-auto/', '/studio', '/studio/', '/autobid', '/autobid/', '/'))
 UPSTREAMS = frozenset(('naver_relay', 'naver_engine', 'ad_dashboard', 'content_studio', 'logic_analysis', 'autobid'))
 SOCKET = '/run/metainc/naver-relay/relay.sock'
 STATIC = frozenset(('/root/logic-analysis-deploy/frontend/dist', '/root/content-studio-deploy/frontend/dist',
