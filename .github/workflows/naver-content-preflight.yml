@@ -60,6 +60,8 @@ jobs:
           set -euo pipefail
           mkdir preflight-ship
           cp deploy/naver/content_runtime_preflight.py preflight-ship/
+          # 고정 drone-scp의 tar가 UID/GID를 보존하므로 전송용 공개 helper 사본만 정규화한다.
+          sudo chown 0:0 preflight-ship/content_runtime_preflight.py
           echo "NSP_SHA=$(sha256sum preflight-ship/content_runtime_preflight.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
           echo "NSP_RUN=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - name: 충돌 없는 관리자 전용 임시 폴더 준비

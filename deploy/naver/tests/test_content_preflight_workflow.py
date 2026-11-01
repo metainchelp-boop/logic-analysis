@@ -109,6 +109,11 @@ class ContentPreflightWorkflowTest(unittest.TestCase):
         self.assertNotIn('debug: true', self.source)
 
     def test_single_helper_exclusive_directory_hash_and_timeout_boundaries(self):
+        ship = next(part for part in self.parts if 'mkdir preflight-ship' in part)
+        # The pinned drone-scp packs numeric owners; root extraction preserves them.
+        self.assertIn('sudo chown 0:0 preflight-ship/content_runtime_preflight.py', ship)
+        self.assertLess(ship.index('cp deploy/naver/content_runtime_preflight.py'), ship.index('sudo chown 0:0'))
+        self.assertLess(ship.index('sudo chown 0:0'), ship.index('NSP_SHA='))
         prep = next(part for part in self.parts if 'id: prepare_remote' in part)
         self.assertIn('[ "$(id -u)" = 0 ]', prep)
         self.assertIn('umask 077', prep)
