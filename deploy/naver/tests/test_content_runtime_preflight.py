@@ -66,9 +66,10 @@ class PreflightTest(unittest.TestCase):
         os.symlink(self.root, folder / 'root')
         (folder / 'mountinfo').write_text('1 0 0:1 / / rw - overlay overlay rw\n2 1 0:2 / /tmp rw - tmpfs tmpfs rw\n')
 
-    def make_fd(self, number, path, flags='0100002', pid=100):
+    def make_fd(self, number, path, flags='0100002', pid=100, mount_id='2'):
         os.symlink(path, self.proc / str(pid) / 'fd' / str(number))
-        (self.proc / str(pid) / 'fdinfo' / str(number)).write_text('pos:\t0\nflags:\t' + flags + '\n')
+        (self.proc / str(pid) / 'fdinfo' / str(number)).write_text(
+            'pos:\t0\nflags:\t' + flags + '\nmnt_id:\t' + mount_id + '\n')
 
     def collect(self):
         return subject.Preflight(self.runner, self.reader).collect(ID, IMAGE, 100)
@@ -156,6 +157,178 @@ class PreflightTest(unittest.TestCase):
         result = self.collect()
         self.assertEqual(result['processes'][0]['fd']['unclassified_regular_writable'], 0)
         self.assertIn('unverified', result['writer_absence'])
+
+    def test_shared_and_duplicate_fd_references_are_not_unique_files(self):
+        path = self.root / ('tmp/' + CANARY)
+        path.write_text(CANARY)
+        self.make_process(200, 100)
+        self.runner.pids.append((200, 100, 'gunicorn'))
+        self.make_fd(3, path)
+        self.make_fd(4, path)
+        self.make_fd(5, path, pid=200)
+        result = self.collect()
+        summary = result['unclassified_open_files']
+        self.assertEqual(summary['observed_fd_reference_count'], 3)
+        self.assertEqual(summary['unique_file_count'], 1)
+        self.assertEqual(summary['files'][0]['pid_reference_counts'],
+                         [{'pid': 100, 'references': 2}, {'pid': 200, 'references': 1}])
+        metadata = result['processes'][0]['fd']['unclassified_fd_metadata'][0]
+        self.assertEqual(metadata['size_bytes'], len(CANARY))
+        self.assertEqual(metadata['flags'], int('0100002', 8))
+        self.assertEqual(metadata['mount_id'], 2)
+        self.assertFalse(metadata['readonly_filesystem_hint'])
+        self.assertFalse(metadata['heartbeat_path_compatible'])
+        self.assertEqual(result['status'], 'incomplete')
+        self.assertNotIn(CANARY, json.dumps(result))
+
+    def test_distinct_files_and_metadata_limit_are_explicit(self):
+        for number in (3, 4):
+            path = self.root / ('tmp/' + CANARY + str(number))
+            path.write_text(CANARY)
+            self.make_fd(number, path)
+        result = self.collect()
+        self.assertEqual(result['unclassified_open_files']['unique_file_count'], 2)
+        with mock.patch.object(subject, 'MAX_FD_METADATA', 1):
+            result = self.collect()
+        summary = result['unclassified_open_files']
+        self.assertEqual(summary['observed_fd_reference_count'], 2)
+        self.assertEqual(summary['observed_unique_file_count'], 1)
+        self.assertIsNone(summary['unique_file_count'])
+        self.assertEqual(summary['truncated_fd_reference_count'], 1)
+        self.assertEqual(summary['status'], 'incomplete')
+
+    def test_heartbeat_path_is_only_a_hint_and_never_clears_unknown_files(self):
+        path = self.root / ('tmp/' + CANARY)
+        path.write_bytes(b'')
+        self.make_fd(3, path)
+        for target, expected in (
+                ('/dev/shm/wgunicorn-abc123__ (deleted)', True),
+                ('/tmp/wgunicorn-abc123__ (deleted)', False),
+                ('/dev/shm/wgunicorn-' + CANARY + ' (deleted)', False),
+                ('/dev/shm/wgunicorn-abc123__', False)):
+            with self.subTest(expected=expected), mock.patch.object(subject.os, 'readlink', return_value=target):
+                result = self.collect()
+            metadata = result['processes'][0]['fd']['unclassified_fd_metadata'][0]
+            self.assertEqual(metadata['heartbeat_path_compatible'], expected)
+            self.assertEqual(result['status'], 'incomplete')
+            self.assertEqual(result['stop_safety'], 'not_determined')
+            self.assertNotIn(CANARY, json.dumps(result))
+
+    def test_unexpected_mount_and_nonzero_file_do_not_become_confirmed_heartbeat(self):
+        path = self.root / ('tmp/' + CANARY)
+        path.write_text(CANARY)
+        self.make_fd(3, path, mount_id='999')
+        with mock.patch.object(subject.os, 'readlink', return_value='/dev/shm/wgunicorn-abc123__ (deleted)'):
+            result = self.collect()
+        metadata = result['processes'][0]['fd']['unclassified_fd_metadata'][0]
+        self.assertEqual(metadata['size_bytes'], len(CANARY))
+        self.assertIsNone(metadata['readonly_filesystem_hint'])
+        self.assertIsNone(result['unclassified_open_files']['unique_file_count'])
+        self.assertEqual(result['status'], 'incomplete')
+
+    def test_fd_metadata_change_is_refused_without_a_partial_identity(self):
+        path = self.root / ('tmp/' + CANARY)
+        path.write_text(CANARY)
+        self.make_fd(3, path)
+        original, calls = subject.os.stat, 0
+        def changed(name, **kwargs):
+            nonlocal calls
+            info = original(name, **kwargs)
+            if name == '3':
+                calls += 1
+                if calls > 1:
+                    values = list(info); values[6] += 1
+                    return os.stat_result(values)
+            return info
+        with mock.patch.object(subject.os, 'stat', side_effect=changed):
+            result = self.collect()
+        counts = result['processes'][0]['fd']
+        self.assertEqual(counts['failed_fds'], 1)
+        self.assertEqual(counts['unclassified_fd_metadata'], [])
+        self.assertIsNone(result['unclassified_open_files']['unique_file_count'])
+
+    def test_eight_fd_references_can_be_four_observed_unique_files(self):
+        for index, pid in enumerate((200, 201, 202, 203)):
+            self.make_process(pid, 100)
+            self.runner.pids.append((pid, 100, 'gunicorn'))
+            path = self.root / ('tmp/' + CANARY + str(index))
+            path.write_bytes(b'')
+            self.make_fd(index + 3, path)
+            self.make_fd(3, path, pid=pid)
+        result = self.collect()
+        summary = result['unclassified_open_files']
+        self.assertEqual(summary['observed_fd_reference_count'], 8)
+        self.assertEqual(summary['unique_file_count'], 4)
+        self.assertTrue(all(r['fd_references'] == 2 for r in summary['files']))
+        self.assertEqual(result['status'], 'incomplete')
+
+    def test_metadata_cap_is_shared_across_processes(self):
+        self.make_process(200, 100)
+        self.runner.pids.append((200, 100, 'gunicorn'))
+        for pid in (100, 200):
+            path = self.root / ('tmp/' + CANARY + str(pid))
+            path.write_text(CANARY)
+            self.make_fd(3, path, pid=pid)
+        with mock.patch.object(subject, 'MAX_FD_METADATA', 1):
+            result = self.collect()
+        self.assertEqual(sum(len(r['fd']['unclassified_fd_metadata']) for r in result['processes']), 1)
+        self.assertEqual(result['unclassified_open_files']['truncated_fd_reference_count'], 1)
+        self.assertIsNone(result['unclassified_open_files']['unique_file_count'])
+
+    def test_readonly_mount_hint_does_not_remove_writable_fd_observations(self):
+        path = self.root / ('tmp/' + CANARY)
+        path.write_text(CANARY)
+        self.make_fd(3, path)
+        (self.proc / '100/mountinfo').write_text(
+            '1 0 0:1 / / rw - overlay overlay rw\n2 1 0:2 / /tmp ro - tmpfs tmpfs rw\n')
+        result = self.collect()
+        counts = result['processes'][0]['fd']
+        self.assertTrue(counts['unclassified_fd_metadata'][0]['readonly_filesystem_hint'])
+        self.assertEqual(counts['unclassified_regular_writable'], 1)
+        self.assertEqual(result['status'], 'incomplete')
+
+    def test_fdinfo_flags_or_mount_changes_are_refused(self):
+        path = self.root / ('tmp/' + CANARY)
+        path.write_text(CANARY)
+        self.make_fd(3, path)
+        original = subject.fdinfo_values
+        for change_flags in (True, False):
+            calls = 0
+            def changed(raw):
+                nonlocal calls
+                flags, mount_id = original(raw)
+                calls += 1
+                return (flags ^ 1, mount_id) if calls > 1 and change_flags else (
+                    (flags, mount_id + 1) if calls > 1 else (flags, mount_id))
+            with self.subTest(flags=change_flags), mock.patch.object(subject, 'fdinfo_values', side_effect=changed):
+                result = self.collect()
+            self.assertEqual(result['processes'][0]['fd']['failed_fds'], 1)
+            self.assertIsNone(result['unclassified_open_files']['unique_file_count'])
+
+    def test_missing_duplicate_and_mixed_invalid_mount_ids_remain_unknown(self):
+        path = self.root / ('tmp/' + CANARY)
+        path.write_text(CANARY)
+        self.make_fd(3, path)
+        for fields in ('', 'mnt_id:\t' + CANARY, 'mnt_id:\t2\nmnt_id:\t3',
+                       'mnt_id:\t2\nmnt_id:\t' + CANARY, 'mnt_id:\t0'):
+            (self.proc / '100/fdinfo/3').write_text('flags:\t0100002\n' + fields + '\n')
+            result = self.collect()
+            counts = result['processes'][0]['fd']
+            self.assertFalse(counts['metadata_complete'])
+            self.assertIsNone(counts['unclassified_fd_metadata'][0]['mount_id'])
+            self.assertIsNone(result['unclassified_open_files']['unique_file_count'])
+            self.assertNotIn(CANARY, json.dumps(result))
+
+    def test_large_metadata_report_fails_closed_without_canary_output(self):
+        output = io.StringIO()
+        with mock.patch('sys.argv', ['helper', '--container-id', ID, '--expected-image', IMAGE,
+                                    '--expected-init-pid', '100']), \
+                mock.patch.object(subject.Preflight, 'collect', return_value={'status': 'incomplete', 'extra': CANARY * 5000}), \
+                mock.patch.object(subject.signal, 'signal'), mock.patch.object(subject.signal, 'setitimer'), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(subject.main(), 2)
+        self.assertEqual(json.loads(output.getvalue())['error'], 'report_output_limit')
+        self.assertNotIn(CANARY, output.getvalue())
 
     def test_fd_count_and_fdinfo_bytes_are_bounded(self):
         path = self.root / 'tmp/studio_clients.db'

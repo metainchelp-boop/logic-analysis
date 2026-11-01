@@ -16,6 +16,7 @@ import time
 
 MAX_PIDS = 64
 MAX_FDS = 4096
+MAX_FD_METADATA = 64
 MAX_PROC_BYTES = 65536
 MAX_FDINFO_BYTES = 4096
 MAX_COMMAND_BYTES = 65536
@@ -190,10 +191,13 @@ class Proc:
         with self.process(pid) as process:
             return bounded_read(process, 'mountinfo', MAX_PROC_BYTES)
 
-    def fd_counts(self, pid, known_inodes, deadline, max_fds=MAX_FDS):
+    def fd_counts(self, pid, known_inodes, deadline, max_fds=MAX_FDS, mounts=None,
+                  metadata_limit=MAX_FD_METADATA):
         out = dict(status='ok', observed_fds=0, known_db_fds=0, known_db_writable=0,
                    known_db_deleted=0, unclassified_regular_writable=0,
-                   unclassified_regular_deleted=0, unclassified_deleted_writable=0, failed_fds=0)
+                   unclassified_regular_deleted=0, unclassified_deleted_writable=0, failed_fds=0,
+                   scan_complete=True, metadata_complete=True, unclassified_eligible_fds=0,
+                   metadata_truncated_fds=0, unclassified_fd_metadata=[])
         with self.process(pid) as process, contextlib.ExitStack() as stack:
             descriptors = child_directory(process, 'fd', stack)
             infos = child_directory(process, 'fdinfo', stack)
@@ -201,9 +205,11 @@ class Proc:
                 for entry in entries:
                     if time.monotonic() >= deadline or out['observed_fds'] >= max_fds:
                         out['status'] = 'limit_incomplete'
+                        out['scan_complete'] = False
                         break
                     if not re.fullmatch(r'[0-9]{1,10}', entry.name):
                         out['status'] = 'invalid_fd_entry'
+                        out['scan_complete'] = False
                         continue
                     out['observed_fds'] += 1
                     try:
@@ -215,19 +221,23 @@ class Proc:
                         if len(target) > 4096:
                             raise ObservationError('fd_target_limit')
                         raw = bounded_read(infos, entry.name, MAX_FDINFO_BYTES)
-                        flags = re.findall(r'^flags:\s*([0-7]{1,12})\s*$', raw, re.MULTILINE)
-                        if len(flags) != 1:
-                            raise ObservationError('fd_flags_unconfirmed')
-                        access = int(flags[0], 8) & os.O_ACCMODE
+                        flags, mount_id = fdinfo_values(raw)
+                        access = flags & os.O_ACCMODE
                         if access not in (os.O_RDONLY, os.O_WRONLY, os.O_RDWR):
                             raise ObservationError('fd_flags_unconfirmed')
                         writable = access in (os.O_WRONLY, os.O_RDWR)
                         deleted = target.endswith(' (deleted)')
                         normalized = target[:-10] if deleted else target
                         after = os.stat(entry.name, dir_fd=descriptors)
-                        if (info.st_dev, info.st_ino, info.st_mode) != (after.st_dev, after.st_ino, after.st_mode):
+                        if ((info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_nlink) !=
+                                (after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_nlink)
+                                or os.readlink(entry.name, dir_fd=descriptors) != target):
                             raise ObservationError('fd_changed_during_query')
                         known = normalized in KNOWN_FD_PATHS or (info.st_dev, info.st_ino) in known_inodes
+                        eligible = not known and (writable or deleted)
+                        record = eligible and len(out['unclassified_fd_metadata']) < metadata_limit
+                        if record and fdinfo_values(bounded_read(infos, entry.name, MAX_FDINFO_BYTES)) != (flags, mount_id):
+                            raise ObservationError('fd_changed_during_query')
                         if known:
                             out['known_db_fds'] += 1
                             out['known_db_writable'] += int(writable)
@@ -236,12 +246,93 @@ class Proc:
                             out['unclassified_regular_writable'] += int(writable)
                             out['unclassified_regular_deleted'] += int(deleted)
                             out['unclassified_deleted_writable'] += int(deleted and writable)
+                        if eligible:
+                            out['unclassified_eligible_fds'] += 1
+                            if record:
+                                hints = (mounts or {}).get(mount_id, {})
+                                readonly = hints.get('readonly')
+                                out['metadata_complete'] &= mount_id is not None and readonly is not None
+                                out['unclassified_fd_metadata'].append({
+                                    'fd': int(entry.name), 'device': info.st_dev, 'inode': info.st_ino,
+                                    'size_bytes': info.st_size, 'links': info.st_nlink,
+                                    'mode': oct(stat.S_IMODE(info.st_mode)), 'flags': flags, 'mount_id': mount_id,
+                                    'readonly_filesystem_hint': readonly,
+                                    'memory_backed_hint': hints.get('memory_backed'),
+                                    'heartbeat_path_compatible': bool(re.fullmatch(
+                                        r'/dev/shm/wgunicorn-[a-z0-9_]{8} \(deleted\)', target))})
+                            else:
+                                out['metadata_truncated_fds'] += 1
+                                out['metadata_complete'] = False
                     except Exception:
                         out['failed_fds'] += 1
                         out['status'] = 'partial'
+                        out['scan_complete'] = False
         if out['known_db_deleted'] or out['unclassified_regular_writable'] or out['unclassified_regular_deleted']:
             out['status'] = 'unresolved_open_files'
         return out
+
+
+def fdinfo_values(raw):
+    flag_lines = [line for line in raw.splitlines() if line.startswith('flags:')]
+    flags = re.fullmatch(r'flags:[ \t]*([0-7]{1,12})[ \t]*', flag_lines[0]) if len(flag_lines) == 1 else None
+    if flags is None:
+        raise ObservationError('fd_flags_unconfirmed')
+    mount_lines = [line for line in raw.splitlines() if line.startswith('mnt_id:')]
+    mount = re.fullmatch(r'mnt_id:[ \t]*([1-9][0-9]{0,19})[ \t]*', mount_lines[0]) if len(mount_lines) == 1 else None
+    return int(flags[1], 8), int(mount[1]) if mount is not None else None
+
+
+def mount_hints(raw):
+    """Return only numeric mount IDs and hints; never expose mount paths or sources."""
+    out = {}
+    try:
+        for line in raw.splitlines():
+            left, right = line.split(' - ', 1)
+            fields, filesystem = left.split(), right.split()
+            if (len(fields) < 6 or len(filesystem) < 3
+                    or not re.fullmatch(r'[1-9][0-9]{0,19}', fields[0])):
+                return {}
+            mount_id = int(fields[0])
+            if mount_id in out:
+                return {}
+            options, super_options = set(fields[5].split(',')), set(filesystem[2].split(','))
+            readonly = True if 'ro' in options | super_options else (
+                False if 'rw' in options and 'rw' in super_options else None)
+            out[mount_id] = {'readonly': readonly,
+                             'memory_backed': True if filesystem[0] in {'tmpfs', 'ramfs'} else None}
+        return out
+    except Exception:
+        return {}
+
+
+def unclassified_summary(processes, scope_incomplete):
+    """Deduplicate retained FD observations; unknown coverage must not become an exact count."""
+    groups, references, truncated = {}, 0, 0
+    complete = not scope_incomplete
+    for process in processes:
+        counts = process.get('fd')
+        if counts is None:
+            complete = False
+            continue
+        complete &= counts['scan_complete'] and counts['metadata_complete']
+        references += counts['unclassified_eligible_fds']
+        truncated += counts['metadata_truncated_fds']
+        for row in counts['unclassified_fd_metadata']:
+            key = row['device'], row['inode']
+            group = groups.setdefault(key, {'alias': 'open-file-' + str(len(groups) + 1),
+                                           'device': key[0], 'inode': key[1], 'pids': {}})
+            group['pids'][process['pid']] = group['pids'].get(process['pid'], 0) + 1
+            row['file_alias'] = group['alias']
+    files = [{'alias': group['alias'], 'device': group['device'], 'inode': group['inode'],
+              'fd_references': sum(group['pids'].values()),
+              'pid_reference_counts': [{'pid': pid, 'references': count}
+                                       for pid, count in sorted(group['pids'].items())]}
+             for group in groups.values()]
+    return {'scope': 'retained_workers_unclassified_regular_deleted_or_writable',
+            'status': 'bounded_metadata_complete' if complete else 'incomplete',
+            'observed_fd_reference_count': references,
+            'observed_unique_file_count': len(files), 'unique_file_count': len(files) if complete else None,
+            'truncated_fd_reference_count': truncated, 'files': files}
 
 
 def mount_summary(raw, declared):
@@ -342,10 +433,14 @@ class Preflight:
             report['worker_limit_exceeded'] = len(workers) > MAX_PIDS
             report['reported_pid_count'] = len(workers)
             report['candidate_files'] = self.proc.candidates(init_pid)
-            report['tmp_mounts'] = mount_summary(self.proc.mountinfo(init_pid), declared)
+            raw_mounts = self.proc.mountinfo(init_pid)
+            report['tmp_mounts'] = mount_summary(raw_mounts, declared)
+            mounts = mount_hints(raw_mounts)
             known = {(row['device'], row['inode']) for row in report['candidate_files'] if row['status'] == 'ok'}
-            partial = report['worker_limit_exceeded'] or report['tmp_mounts']['status'] != 'ok' or any(
+            partial = report['worker_limit_exceeded'] or not mounts or report['tmp_mounts']['status'] != 'ok' or any(
                 row['status'] not in {'ok', 'absent_or_process_exited'} for row in report['candidate_files'])
+            metadata_scope_incomplete = partial
+            remaining_metadata = MAX_FD_METADATA
             for pid, ppid, comm in workers[:MAX_PIDS]:
                 row = {'pid': pid, 'ppid': ppid, 'executable_basename': comm}
                 try:
@@ -354,7 +449,9 @@ class Preflight:
                     before = self.proc.identity(pid)
                     if any(before[key] != initial[key] for key in ('pid_namespace', 'mount_namespace')) or before['ppid'] != ppid:
                         raise ObservationError('worker_identity_unconfirmed')
-                    counts = self.proc.fd_counts(pid, known, self.deadline)
+                    counts = self.proc.fd_counts(pid, known, self.deadline, mounts=mounts,
+                                                 metadata_limit=remaining_metadata)
+                    remaining_metadata -= len(counts['unclassified_fd_metadata'])
                     if self.proc.identity(pid) != before:
                         raise ObservationError('process_identity_changed')
                     row.update(status=counts['status'], start_ticks=before['start_ticks'],
@@ -366,6 +463,7 @@ class Preflight:
             if (self.proc.identity(init_pid) != initial or self.inspect(container, image, init_pid) != declared
                     or self.workers(container, init_pid) != workers):
                 raise ObservationError('container_or_init_changed')
+            report['unclassified_open_files'] = unclassified_summary(report['processes'], metadata_scope_incomplete)
             report['status'] = 'incomplete' if partial else 'bounded_observations_complete'
         except Exception as error:
             report.update(status='incomplete', error=failure(error), candidate_files=[], processes=[])
