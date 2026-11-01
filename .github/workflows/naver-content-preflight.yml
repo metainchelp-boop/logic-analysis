@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-logic-analysis
+  group: naver-content-preflight
   cancel-in-progress: false
 
 jobs:

@@ -89,7 +89,8 @@ class ContentPreflightWorkflowTest(unittest.TestCase):
         self.assertEqual(re.findall(r'^  ([a-z_]+):', header, re.MULTILINE), ['workflow_dispatch'])
         self.assertIn('contents: read', self.source.split('\nconcurrency:', 1)[0])
         self.assertNotIn('contents: write', self.source)
-        self.assertIn('group: deploy-logic-analysis\n  cancel-in-progress: false', self.source)
+        self.assertIn('group: naver-content-preflight\n  cancel-in-progress: false', self.source)
+        self.assertNotIn('group: deploy-logic-analysis', self.source)
         self.assertIn('HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}', self.parts[0])
         tests = next(i for i, part in enumerate(self.parts) if 'unittest discover' in part)
         network = [i for i, part in enumerate(self.parts) if 'uses: appleboy/' in part]

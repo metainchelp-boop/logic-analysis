@@ -18,7 +18,7 @@ Actions의 `콘텐츠 보존 전 메타데이터 관찰 (읽기 전용)`은 `wor
 
 전체 합성 시험에 통과한 뒤 공개 helper 한 파일만 전달한다. 고정 SCP 액션의 tar가 UID/GID를 보존하므로 runner의 **전송 전용 사본 한 파일만** root:root로 정규화하고 해시를 계산한다. 저장소의 helper 원본이나 앱 파일을 chown하지 않는다. 원격은 root UID와 no-symlink `/tmp`를 확인하고 `umask 077`과 exclusive `mkdir`로 실행 ID/attempt별 0700 디렉터리를 만든다. 실행 전에 디렉터리/파일의 root 소유권·종류·symlink 거절과 전송 전후 SHA-256을 대조한다. 실제 helper는 10초 관찰 상한 외에 `timeout -k 1s 20s`를 적용하며 SSH는 30/45초, SCP는 45초 상한이다. 앱 소스·환경·키·DB는 전송하지 않는다. 원격 helper stderr를 공개 로그로 내보내지 않고, 허용 결과 JSON만 `CONTENT_RUNTIME_PREFLIGHT=` 뒤에 출력한다. exit 2는 불완전 관찰로 workflow도 실패 처리한다.
 
-원격 폴더 생성 성공이 확인됐으면 SCP/해시/실행 실패 뒤에도 always 정리를 시도한다. 현재 실행의 고정 helper 파일과 빈 0700 폴더만 지우며 재귀 삭제하지 않는다. 예상하지 못한 파일·소유권·symlink이면 실패로 남긴다. 강제 runner 종료·SSH 불능·생성 성공을 확인하지 못한 경우까지 정리를 보장하지 않으며 남은 경로를 임의로 넓혀 삭제하지 않는다. 모든 신규 경로는 기존 앱 배포의 `paths-ignore`에 포함되고, PR 합성 CI에서 검사된다. 수동 preflight는 기존 배포와 같은 concurrency 그룹을 사용하며 진행 중 실행을 취소하지 않는다.
+원격 폴더 생성 성공이 확인됐으면 SCP/해시/실행 실패 뒤에도 always 정리를 시도한다. 현재 실행의 고정 helper 파일과 빈 0700 폴더만 지우며 재귀 삭제하지 않는다. 예상하지 못한 파일·소유권·symlink이면 실패로 남긴다. 강제 runner 종료·SSH 불능·생성 성공을 확인하지 못한 경우까지 정리를 보장하지 않으며 남은 경로를 임의로 넓혀 삭제하지 않는다. 모든 신규 경로는 기존 앱 배포의 `paths-ignore`에 포함되고, PR 합성 CI에서 검사된다. 수동 preflight는 전용 `naver-content-preflight` concurrency 그룹을 사용해 기존 제품 배포의 대기 실행을 교체·취소하지 않는다. 같은 preflight의 진행 중 실행도 취소하지 않는다. 제품 배포와 동시 실행될 수 있으며 대상 ID/PID/namespace 또는 프로세스 목록이 관찰 중 바뀌면 incomplete로 남긴다. 읽기 전용 helper가 제품 배포를 잠그거나 앱을 변경하지 않는다.
 
 ## 허용되는 관찰
 
