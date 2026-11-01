@@ -299,3 +299,7 @@ shellcheck -S warning deploy/naver/*.sh
 앱 실행 상태·알려진 mount/데이터 경로의 메타데이터·nginx 연결 단서·관련 기동 장치를 조회한다. DB/키 파일 내용과 환경값·고객 파일명·원문 설정/로그는 출력하지 않는다. 미확인/실패/잘림은 결과에 남으며, 복잡한 nginx 구성을 확정된 실제 연결로 주장하지 않는다. 이 결과는 종료·삭제 가능 판정이나 원격 보관/복구 증거가 아니다.
 
 Mac의 별도 순위 agent와 ERP 데이터/캐시는 조회하지 않는다. 조회만으로 원격 서비스·키·데이터를 변경하지 않으며, 임시 전달 스크립트만 실행 뒤 제거한다. 설계와 합성 검증 범위는 `docs/superpowers/specs/2026-11-01-app-inventory-design.md`에 있다.
+
+철거 계획 2단계의 제한 보완은 `systemd.related_units`에 관련 미분류 service/timer 최대 16개의 메타데이터를 `related-unit-N` 별칭으로 추가한다. ASCII 이름/길이/suffix를 검증한 대상만 조회하고 원문 이름·Id·Fragment/drop-in·알 수 없는 의존 이름은 공개하지 않는다. 앱 힌트는 이름 prefix에 근거하며 실제 실행 명령/대상 확인을 뜻하지 않는다. WorkingDirectory는 기존 알려진 경로만 공개하고 추가 파일 조회에 사용하지 않는다. 상한 초과·거부·실패·잘림·identity 불일치를 남기며, 전체 systemd 상태는 관련 미분류 대상이 있으면 계속 incomplete이다. 기존 고정 unit 형식은 유지한다.
+
+`root_cron_spool`은 `/var/spool/cron/crontabs`와 그 `root` 파일의 메타데이터만 확인한다. 부모 구성 요소와 최종 경로의 symlink를 거부하고 absent/permission_denied/stat_failed를 구분한다. 파일 내용·디렉터리 목록은 읽지 않는다. 기존 crontab rc1은 unavailable을 유지하며, 표준 spool 파일이 없다는 사실도 다른 사용자·주기 cron·다른 기동 장치가 없다는 증거가 아니다. 로그의 `root` 마스킹은 원본 그대로 둔다. 설계·범위는 `docs/superpowers/specs/2026-11-01-retirement-preflight-design.md`에 있다. 컨테이너 내부 `/tmp`와 원격 보관·복구는 이 보완에 포함하지 않는다.
