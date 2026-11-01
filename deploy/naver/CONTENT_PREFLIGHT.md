@@ -26,7 +26,13 @@ Docker에는 고정 inspect 템플릿과 `docker top ... -eo pid,ppid,comm`만 �
 
 `/proc/PID/root`, namespace 링크, FD 링크는 Linux 커널 메타데이터 접근의 명시적 예외다. PID 디렉터리와 그 아래 일반 디렉터리는 no-follow stat → open → fstat의 device/inode/mode를 비교하고 FD를 닫는다. 고정 `/tmp` 후보는 부모 no-follow 검증과 최종 lstat만 하며 파일을 열지 않는다. 후보가 symlink이면 거절한다. 후보 이름 대신 `candidate-1`부터 `candidate-32`까지의 고정 alias와 존재 상태·크기·시각·권한·숫자 identity만 출력한다.
 
-각 worker는 FD의 stat/readlink와 제한된 fdinfo의 octal flags만 관찰한다. DB 파일 자체나 열린 FD 내용을 읽지 않는다. FD link 원문·고객 파일명·예외 메시지는 출력하지 않는다. 알려진 경로/후보 inode의 FD 수, 쓰기 가능 수, 삭제-open 수 및 미분류 일반파일의 쓰기/삭제-open 수만 반환한다. 미분류 writer·삭제-open·관찰 실패는 incomplete로 남긴다. 이는 알려진 파일이 없는 경우에도 동일하다.
+각 worker는 FD의 stat/readlink와 제한된 fdinfo의 octal flags·숫자 mount ID만 관찰한다. DB 파일 자체나 열린 FD 내용을 읽지 않는다. FD link 원문·고객 파일명·예외 메시지는 출력하지 않는다. 알려진 경로/후보 inode의 FD 수, 쓰기 가능 수, 삭제-open 수 및 미분류 일반파일의 쓰기/삭제-open 수를 반환한다. 미분류 writer·삭제-open·관찰 실패는 incomplete로 남긴다. 이는 알려진 파일이 없는 경우에도 동일하다.
+
+미분류 regular FD 중 삭제-open이거나 쓰기 가능한 참조에만 `unclassified_fd_metadata`를 추가한다. 전체 worker 합계 최대 64참조의 숫자 device/inode·크기·link 수·권한·flags·mount ID와 고정 alias만 출력한다. FD의 stat identity/크기/link 수, readlink와 기록할 flags/mount ID를 재대조하며 변경·권한·상한 실패는 불완전으로 남긴다. mount ID가 없거나 중복·잘못된 값이면 null이며 정상 값과 비정상 값이 섞여 있어도 정상 하나로 채택하지 않는다. `readonly_filesystem_hint`는 같은 mount namespace의 mountinfo 옵션에서 계산한 힌트이고, 알 수 없는 mount이면 null이다. `memory_backed_hint`도 tmpfs/ramfs일 때만 true다. 이 값은 FD 쓰기 가능 수를 지우거나 종료 후 자료 보존을 보장하지 않는다.
+
+`unclassified_open_files`는 이번 관찰에서 보존된 미분류 참조를 device+inode별로 묶어 alias와 PID별 참조 수를 표시한다. `observed_fd_reference_count`와 `observed_unique_file_count`를 구분한다. 예컨대 master 4참조와 worker 4개의 각 1참조가 같은 inode를 공유하면 8참조·4식별자로 보일 수 있지만 실제 관찰 전에는 고유 파일 4개나 8개로 단정하지 않는다. 실패·잘림·누락 worker가 있으면 `unique_file_count=null`이며 관찰된 수는 한정된 하한이다. alias는 이번 관찰 안에서만 유효하다. `bounded_metadata_complete`는 이 제한된 FD 메타데이터 집계의 완료이며 전체 관찰·writer 부재·백업·종료 성공을 뜻하지 않는다.
+
+`heartbeat_path_compatible`는 원문을 메모리에만 두고 `/dev/shm/wgunicorn-` 뒤 ASCII 소문자·숫자·밑줄 8자리와 ` (deleted)`가 정확히 일치하는지만 나타낸다. 크기/link 수·mount·공유 관계는 별도 관찰이며 경로 호환 boolean이 true라도 heartbeat로 확정하거나 미분류 FD에서 제외하지 않는다. 검토한 콘텐츠 소스의 의존성은 `gunicorn>=23.0`으로 정확히 고정돼 있지 않고 실제 실행 버전·설정 override도 미확인이다. 공식 [23.0.0 WorkerTmp](https://github.com/benoitc/gunicorn/blob/23.0.0/gunicorn/workers/workertmp.py)와 [26.2.2 fork 처리](https://github.com/benoitc/gunicorn/blob/26.2.2/gunicorn/arbiter.py#L726)의 임시파일 생성·unlink·master/worker FD 공유 구조는 호환 가설의 근거이며 운영 파일 종류의 증명이 아니다.
 
 mountinfo는 `/tmp`뿐 아니라 32개 후보 각각에 대해 root/부모/중첩 mount 중 가장 긴 경로를 선택한다. tmpfs/ramfs일 때만 `memory_backed=true`, 그 외는 null이다. Docker bind 선언은 별도 필드다. `persistence_after_stop`은 모든 경우 unverified이며 mount 메타데이터로 복구 가능성을 판정하지 않는다.
 
@@ -37,6 +43,7 @@ mountinfo는 `/tmp`뿐 아니라 32개 후보 각각에 대해 root/부모/중�
 | 전체 관찰 | 10초, CLI SIGALRM 포함 |
 | worker | 64개 |
 | worker별 FD | 4,096개 |
+| 미분류 FD 추가 메타데이터 | 전체 worker 합계 64참조, 초과 수 명시 |
 | stat/mountinfo 한 파일 | 65,536B |
 | fdinfo 한 파일 | 4,096B |
 | Docker 명령 한 번의 stdout+stderr | 65,536B |
@@ -58,7 +65,7 @@ mountinfo는 `/tmp`뿐 아니라 32개 후보 각각에 대해 root/부모/중�
 python3 -I -B -m unittest discover -s deploy/naver/tests -p test_content_runtime_preflight.py
 ```
 
-helper 22건과 workflow 13건, 총 35건의 로컬 집중 시험이 통과했다. helper는 DB 내용 열기 금지, 경로/키 canary 비노출, symlink/디렉터리 교체, FD/byte/time 상한, PID/starttime/namespace/top/inspect 변화, 미분류 writer/삭제-open, 부모/중첩 mount, 다른 컨테이너 이름 거절, CLI 잘못된 값 비노출, command timeout/출력 상한을 포함한다. workflow는 실제 Bash 계정·입력·지문 guard와 전송·정리·앱 배포 제외의 소스 경계를 검사한다. 정적 source assertion은 실제 SSH/SCP/실패 정리나 운영 Docker/커널 동작·GitHub CI 검증을 대신하지 않는다.
+helper 33건과 기존 workflow 13건을 집중 검사 대상으로 삼는다. helper는 기존 22건 외에 공유/중복 참조와 고유 식별자 수, 전체 worker 메타데이터 상한, readonly mount·heartbeat 경로가 완료로 승격되지 않음, 비정상/중복 mount ID, FD 크기/flags/mount 변경 및 JSON 출력 상한을 검증한다. workflow는 실제 Bash 계정·입력·지문 guard와 전송·정리·앱 배포 제외의 소스 경계를 검사하며 이번 보완에서 변경하지 않았다. 정적 source assertion은 실제 SSH/SCP/실패 정리나 운영 Docker/커널 동작·GitHub CI 검증을 대신하지 않는다.
 
 통합된 위치에서 집중 시험은 다음과 같이 실행한다.
 
