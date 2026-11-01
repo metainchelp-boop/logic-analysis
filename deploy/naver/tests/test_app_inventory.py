@@ -287,14 +287,181 @@ class AppInventoryTest(unittest.TestCase):
             if argv[1] in ('list-unit-files', 'list-units'):
                 return inventory.CommandResult(stdout='autobid-keepalive.service enabled\n'
                     'autobid-keepalive.timer enabled\nautobid-' + CANARY + '.service enabled\n')
-            raise AssertionError('unknown units must not be queried')
+            return inventory.CommandResult(stdout='Id=' + argv[2] + '\nActiveState=active\nSubState=running\n'
+                'MainPID=123\nNRestarts=0\nUnitFileState=enabled\n'
+                'FragmentPath=/' + CANARY + '\nDropInPaths=/' + CANARY + '\n'
+                'Requires=metainc-naver-engine.service ' + CANARY + '\n'
+                'WorkingDirectory=/' + CANARY + '\n')
         result = inventory.Collector(runner, self.root).systemd()
         self.assertEqual(result['status'], 'incomplete')
         self.assertEqual(result['related_unapproved_unit_count'], 3)
         self.assertEqual(result['units'], [])
+        self.assertEqual(result['related_unit_metadata_status'], 'ok')
+        self.assertEqual(len(result['related_units']), 3)
+        for row in result['related_units']:
+            self.assertEqual(row['app_hint'], 'autobid')
+            self.assertEqual(row['MainPID'], 123)
+            self.assertEqual(row['Requires'], ['metainc-naver-engine.service'])
+            self.assertEqual(row['Requires_other_count'], 1)
+            self.assertEqual(row['WorkingDirectory'], inventory.REDACTED)
+            self.assertNotIn('name', row)
+            self.assertNotIn('Id', row)
+            self.assertNotIn('FragmentPath', row)
+            self.assertNotIn('DropInPaths', row)
         self.assertNotIn(CANARY, json.dumps(result))
         self.assertNotIn('autobid-keepalive', json.dumps(result))
+        self.assertEqual(len(calls), 5)
+
+    def test_related_unit_rejects_options_paths_unicode_and_long_names(self):
+        invalid = ('--naver-secret.service', 'autobid-/secret.service', 'naver-가.service',
+                   'naver-escape\\x20.service', 'naver-' + 'a' * 200 + '.service',
+                   'naver-evil\x1b.service', 'naver-.socket')
+        calls = []
+        def runner(argv, **kwargs):
+            calls.append(argv)
+            if argv[1] in ('list-unit-files', 'list-units'):
+                return inventory.CommandResult(stdout='\n'.join(name + ' enabled' for name in invalid))
+            raise AssertionError('invalid name query forbidden')
+        result = inventory.Collector(runner, self.root).systemd()
         self.assertEqual(len(calls), 2)
+        self.assertEqual(result['related_units'], [])
+        self.assertEqual(result['related_rejected_name_count'], 5)
+        self.assertEqual(result['related_unit_metadata_status'], 'partial')
+        for name in invalid:
+            self.assertFalse(inventory.valid_related_unit_name(name))
+            self.assertNotIn(name, json.dumps(result))
+
+    def test_related_unit_cap_and_partial_per_unit_failures(self):
+        names = ['naver-job-%02d.service' % index for index in range(19)]
+        calls = []
+        def runner(argv, **kwargs):
+            calls.append(argv)
+            if argv[1] in ('list-unit-files', 'list-units'):
+                return inventory.CommandResult(stdout='\n'.join(name + ' enabled' for name in names))
+            if argv[2] == names[0]:
+                return inventory.CommandResult(1, CANARY)
+            if argv[2] == names[1]:
+                return inventory.CommandResult(stdout=CANARY, truncated=True)
+            if argv[2] == names[2]:
+                return inventory.CommandResult(stdout='Id=naver-' + CANARY + '.service\n')
+            return inventory.CommandResult(stdout='Id=' + argv[2] + '\nWorkingDirectory=/root/content-studio-deploy\n')
+        result = inventory.Collector(runner, self.root).systemd()
+        self.assertEqual(sum(argv[1] == 'show' for argv in calls), 16)
+        self.assertEqual(result['related_truncated_count'], 3)
+        self.assertEqual(result['related_unit_metadata_status'], 'partial')
+        self.assertEqual(result['related_units'][0]['status'], 'command_failed')
+        self.assertEqual(result['related_units'][1]['status'], 'output_limit')
+        self.assertTrue(result['related_units'][1]['query_truncated'])
+        self.assertEqual(result['related_units'][2]['status'], 'identity_unconfirmed')
+        self.assertEqual(result['related_units'][3]['WorkingDirectory'], '/root/content-studio-deploy')
+        self.assertNotIn(CANARY, json.dumps(result))
+
+    def test_six_naver_related_units_keep_hint_and_fixed_unit_contract(self):
+        names = ['metainc-naver-source-%d.%s' % (index, suffix)
+                 for index in range(3) for suffix in ('service', 'timer')]
+        def runner(argv, **kwargs):
+            if argv[1] in ('list-unit-files', 'list-units'):
+                return inventory.CommandResult(stdout='metainc-naver-engine.service enabled\n' +
+                    '\n'.join(name + ' enabled' for name in names))
+            return inventory.CommandResult(stdout='Id=' + argv[2] + '\nActiveState=active\nSubState=running\n'
+                'UnitFileState=enabled\nMainPID=55\nNRestarts=0\n'
+                'FragmentPath=/etc/systemd/system/' + argv[2] + '\n')
+        result = inventory.Collector(runner, self.root).systemd()
+        self.assertEqual(len(result['related_units']), 6)
+        self.assertTrue(all(row['app_hint'] == 'naver' for row in result['related_units']))
+        self.assertEqual(result['related_unit_metadata_status'], 'ok')
+        self.assertEqual(result['units'][0]['name'], 'metainc-naver-engine.service')
+        self.assertEqual(result['units'][0]['FragmentPath'], ['/etc/systemd/system/metainc-naver-engine.service'])
+        self.assertEqual(result['status'], 'incomplete')
+        self.assertIn('not_executable_or_target_confirmation', result['app_hint_semantics'])
+        for name in names:
+            self.assertNotIn(name, json.dumps(result))
+
+    def test_root_spool_metadata_only_and_crontab_failure_preserved(self):
+        self.file('/var/spool/cron/crontabs/root', CANARY.encode())
+        runner = FakeRunner()
+        runner.fail[('crontab', '-l', '-u')] = inventory.CommandResult(1, CANARY)
+        collector = inventory.Collector(runner, self.root)
+        with mock.patch('builtins.open', side_effect=AssertionError('spool content read forbidden')):
+            spool = collector.cron_spool()
+        self.assertEqual(spool['status'], 'metadata_only')
+        self.assertFalse(spool['content_read'])
+        self.assertEqual(spool['paths'][1]['size_bytes'], len(CANARY))
+        self.assertNotIn(CANARY, json.dumps(spool))
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(collector.cron()[0]['status'], 'unavailable')
+
+    def test_root_spool_absent_symlink_and_permission_error_are_distinct(self):
+        collector = inventory.Collector(FakeRunner(), self.root)
+        self.assertTrue(all(row['status'] == 'absent' for row in collector.cron_spool()['paths']))
+        os.makedirs(self.root + '/var/spool/cron')
+        os.symlink(self.root, self.root + '/var/spool/cron/crontabs')
+        self.assertTrue(all(row['status'] == 'symlink_refused' for row in collector.cron_spool()['paths']))
+        with mock.patch.object(inventory.os, 'stat', side_effect=PermissionError(CANARY)):
+            result = inventory.Collector(FakeRunner(), self.root).cron_spool()
+        self.assertTrue(all(row['status'] == 'permission_denied' for row in result['paths']))
+        self.assertNotIn(CANARY, json.dumps(result))
+        with mock.patch.object(inventory.os, 'stat', side_effect=OSError(CANARY)):
+            result = inventory.Collector(FakeRunner(), self.root).cron_spool()
+        self.assertTrue(all(row['status'] == 'stat_failed' for row in result['paths']))
+
+    def test_root_spool_no_follow_flags_and_ancestor_replacement_refused(self):
+        self.file('/var/spool/cron/crontabs/root', CANARY.encode())
+        original = inventory.os.open
+        opened = []
+        def opening(path, flags, **kwargs):
+            opened.append((path, flags))
+            return original(path, flags, **kwargs)
+        with mock.patch.object(inventory.os, 'open', side_effect=opening):
+            result = inventory.Collector(FakeRunner(), self.root).cron_spool()
+        self.assertTrue(all(flags & os.O_NOFOLLOW and flags & os.O_DIRECTORY for _, flags in opened))
+        self.assertFalse(any(path == 'root' for path, _ in opened))
+        self.assertEqual(result['paths'][1]['status'], 'ok')
+        def raced(path, flags, **kwargs):
+            if path == 'crontabs':
+                raise OSError(inventory.errno.ELOOP, CANARY)
+            return original(path, flags, **kwargs)
+        with mock.patch.object(inventory.os, 'open', side_effect=raced):
+            result = inventory.Collector(FakeRunner(), self.root).cron_spool()
+        self.assertEqual(result['paths'][1]['status'], 'unsafe_ancestor_refused')
+        self.assertNotIn(CANARY, json.dumps(result))
+
+    def test_spool_paths_cannot_enter_general_mount_usage_queries(self):
+        runner = FakeRunner()
+        collector = inventory.Collector(runner, self.root)
+        with mock.patch.object(collector, 'metadata', side_effect=AssertionError('spool bind metadata forbidden')):
+            rows = collector.mounts([{'Type': 'bind', 'Source': path, 'Destination': '/app/data', 'RW': False}
+                                     for path in inventory.CRON_SPOOL_PATHS])
+        self.assertEqual(runner.calls, [])
+        self.assertTrue(all(row['source'] == inventory.REDACTED for row in rows))
+        self.assertTrue(all('metadata' not in row for row in rows))
+        self.assertTrue(all(inventory.safe_path(path) is None for path in inventory.CRON_SPOOL_PATHS))
+
+    def test_spool_directory_swap_between_stat_and_open_refused_and_fds_closed(self):
+        self.file('/var/spool/cron/crontabs/root', CANARY.encode())
+        folder = self.root + '/var/spool/cron/crontabs'
+        original_open = inventory.os.open
+        opened = []
+        raced = False
+        def race_open(path, flags, **kwargs):
+            nonlocal raced
+            if path == 'crontabs' and not raced:
+                raced = True
+                os.rename(folder, folder + '-original')
+                os.mkdir(folder)
+                self.file('/var/spool/cron/crontabs/root', b'new')
+            fd = original_open(path, flags, **kwargs)
+            opened.append(fd)
+            return fd
+        with mock.patch.object(inventory.os, 'open', side_effect=race_open):
+            result = inventory.Collector(FakeRunner(), self.root).spool_metadata('/var/spool/cron/crontabs/root')
+        self.assertTrue(raced)
+        self.assertEqual(result['status'], 'changed_during_query')
+        self.assertNotIn('size_bytes', result)
+        self.assertNotIn(CANARY, json.dumps(result))
+        for fd in opened:
+            with self.assertRaises(OSError):
+                os.fstat(fd)
 
     def test_compose_config_file_truncation_is_explicit_and_partial(self):
         raw = raw_container()

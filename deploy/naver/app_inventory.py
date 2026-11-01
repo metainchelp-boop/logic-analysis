@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Read-only, allowlisted host inventory. Never emit command output verbatim."""
 import dataclasses
+import contextlib
 import datetime
+import errno
 import importlib.util
 import ipaddress
 import json
@@ -20,6 +22,8 @@ MAX_BYTES = 2 * 1024 * 1024
 MAX_REPORT_BYTES = 60 * 1024
 TIMEOUT = 20
 MAX_CONTAINERS = 128
+MAX_RELATED_UNITS = 16
+CRON_SPOOL_PATHS = ('/var/spool/cron/crontabs', '/var/spool/cron/crontabs/root')
 HEX_ID = re.compile(r'(?:sha256:)?[0-9a-f]{64}\Z')
 REVISION = re.compile(r'[0-9a-f]{40}\Z')
 APPS = ('ad-dashboard', 'content-studio', 'autobid', 'naver', 'logic-analysis')
@@ -206,6 +210,26 @@ def classify(name='', image='', labels=None):
     return None
 
 
+def related_unit_hint(name):
+    """Name prefix hint only; never evidence of the unit's executable target."""
+    if not isinstance(name, str):
+        return None
+    match = re.match(r'(?:metainc[-_.])?(naver|ad-dashboard|content-studio|autobid|logic-analysis)(?:[-_.@]|$)', name)
+    return {'naver': 'naver', 'ad-dashboard': 'ad-dashboard', 'content-studio': 'content-studio',
+            'autobid': 'autobid', 'logic-analysis': 'logic-analysis'}.get(match[1]) if match else None
+
+
+def valid_related_unit_name(name):
+    return (isinstance(name, str) and len(name) <= 200 and
+            bool(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@:-]*\.(?:service|timer)', name)))
+
+
+def systemd_number(value):
+    if isinstance(value, str) and re.fullmatch(r'[0-9]{1,10}', value) and int(value) <= 4294967295:
+        return int(value)
+    return None
+
+
 def known_name(value):
     if not isinstance(value, str):
         return REDACTED
@@ -296,6 +320,8 @@ class Collector:
             return real, 'ok'
         except FileNotFoundError:
             return None, 'absent'
+        except PermissionError:
+            return None, 'permission_denied'
         except OSError:
             return None, 'stat_failed'
 
@@ -331,6 +357,8 @@ class Collector:
                 if (before.st_dev, before.st_ino, before.st_mode) != (after.st_dev, after.st_ino, after.st_mode):
                     result.pop('usage_bytes', None)
                     result['status'] = 'changed_during_query'
+        except PermissionError:
+            result['status'] = 'permission_denied'
         except OSError:
             result['status'] = 'stat_failed'
         self.metadata_cache[cache_key] = dict(result)
@@ -548,7 +576,7 @@ class Collector:
                     parts = line.split()
                     if parts and parts[0] in UNITS:
                         present.add(parts[0])
-                    elif parts and re.match(r'(?:metainc[-_.])?(?:naver|ad-dashboard|content-studio|autobid|logic-analysis)(?:[-_.@]|$)', parts[0]) and parts[0].endswith(('.service', '.timer')):
+                    elif parts and related_unit_hint(parts[0]) and parts[0].endswith(('.service', '.timer')):
                         related_unknown.add(parts[0])
         units = []
         for unit in sorted(present):
@@ -566,8 +594,7 @@ class Collector:
                 value = fields.get(key)
                 row[key] = value if value in SERVICE_VALUES else 'unknown'
             for key in ('MainPID', 'NRestarts'):
-                value = fields.get(key, '')
-                row[key] = int(value) if value.isdigit() else None
+                row[key] = systemd_number(fields.get(key))
             for key in ('Triggers', 'TriggeredBy', 'Requires', 'Wants', 'After'):
                 values = fields.get(key, '').split()
                 row[key] = [value for value in values if value in UNITS]
@@ -576,11 +603,94 @@ class Collector:
                 values = fields.get(key, '').split()
                 row[key] = [value if value in {'/etc/systemd/system/' + unit for unit in UNITS} else REDACTED for value in values]
             units.append(row)
+        valid_related = sorted(name for name in related_unknown if valid_related_unit_name(name))
+        related_rows = []
+        for index, name in enumerate(valid_related[:MAX_RELATED_UNITS], 1):
+            row = {'alias': 'related-unit-' + str(index), 'app_hint': related_unit_hint(name),
+                   'unit_type': 'timer' if name.endswith('.timer') else 'service'}
+            text = self.command('systemd_related_metadata', ['systemctl', 'show', name,
+                                *[item for prop in PROPERTIES + ('WorkingDirectory',) for item in ('-p', prop)], '--no-pager'])
+            query_status = self.coverage[-1]
+            row['query_truncated'] = query_status.get('truncated', False)
+            row['query_returncode'] = query_status.get('returncode')
+            if text is None:
+                row['status'] = query_status['status']
+            else:
+                fields = dict(line.split('=', 1) for line in text.splitlines() if '=' in line)
+                if fields.get('Id') != name:
+                    row['status'] = 'identity_unconfirmed'
+                else:
+                    row['status'] = 'ok'
+                    for key in ('ActiveState', 'SubState', 'UnitFileState'):
+                        value = fields.get(key)
+                        row[key] = value if value in SERVICE_VALUES else 'unknown'
+                    for key in ('MainPID', 'NRestarts'):
+                        row[key] = systemd_number(fields.get(key))
+                    for key in ('Triggers', 'TriggeredBy', 'Requires', 'Wants', 'After'):
+                        values = fields.get(key, '').split()
+                        row[key] = [value for value in values if value in UNITS]
+                        row[key + '_other_count'] = len(values) - len(row[key])
+                    row['WorkingDirectory'] = safe_path(fields.get('WorkingDirectory')) or REDACTED
+            related_rows.append(row)
+        related_refused = len(related_unknown) - len(valid_related)
+        related_truncated = max(0, len(valid_related) - MAX_RELATED_UNITS)
+        related_status = ('partial' if related_refused or related_truncated or
+                          any(value is None for value in listings) or
+                          any(row['status'] != 'ok' for row in related_rows) else 'ok')
         return {'status': 'incomplete' if related_unknown else 'ok' if all(value is not None for value in listings) and all(row['status'] == 'ok' for row in units) else 'partial',
                 'units': units, 'not_listed_known_units': [unit for unit in UNITS if unit not in present],
                 'related_unapproved_unit_count': len(related_unknown),
-                'related_unapproved_unit_meaning': 'name_redacted_and_metadata_not_queried',
+                'related_unapproved_unit_meaning': 'name_redacted_and_bounded_metadata_only',
+                'related_units': related_rows, 'related_unit_metadata_status': related_status,
+                'related_rejected_name_count': related_refused,
+                'related_query_limit': MAX_RELATED_UNITS, 'related_truncated_count': related_truncated,
+                'app_hint_semantics': 'name_prefix_only_not_executable_or_target_confirmation',
                 'not_listed_meaning': 'not_reported_by_inventory_not_proof_of_no_other_supervisor'}
+
+    def cron_spool(self):
+        return {'status': 'metadata_only', 'paths': [self.spool_metadata(path) for path in CRON_SPOOL_PATHS],
+                'content_read': False,
+                'meaning': 'standard_root_spool_presence_not_complete_cron_or_scheduler_coverage'}
+
+    def spool_metadata(self, path):
+        """Bind ancestor directories with no-follow FDs; never open a cron file."""
+        if path not in CRON_SPOOL_PATHS:
+            return {'path': REDACTED, 'status': 'unapproved_path'}
+        result = {'path': path}
+        parts = (self.root + path).split('/')
+        parts = [part for part in parts if part]
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        try:
+            with contextlib.ExitStack() as stack:
+                parent = os.open('/', flags)
+                stack.callback(os.close, parent)
+                for part in parts[:-1]:
+                    info = os.stat(part, dir_fd=parent, follow_symlinks=False)
+                    if stat.S_ISLNK(info.st_mode):
+                        return dict(result, status='symlink_refused')
+                    if not stat.S_ISDIR(info.st_mode):
+                        return dict(result, status='unsafe_ancestor_refused')
+                    parent = os.open(part, flags, dir_fd=parent)
+                    stack.callback(os.close, parent)
+                    opened = os.fstat(parent)
+                    if (info.st_dev, info.st_ino, info.st_mode) != (opened.st_dev, opened.st_ino, opened.st_mode):
+                        return dict(result, status='changed_during_query')
+                info = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    return dict(result, status='symlink_refused')
+                if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+                    return dict(result, status='unsupported_file_type')
+                return dict(result, status='ok', kind='directory' if stat.S_ISDIR(info.st_mode) else 'file',
+                            size_bytes=info.st_size, blocks_bytes=info.st_blocks * 512,
+                            mode=oct(stat.S_IMODE(info.st_mode)), uid=info.st_uid, gid=info.st_gid,
+                            device=info.st_dev, inode=info.st_ino, mtime_ns=info.st_mtime_ns,
+                            links=info.st_nlink)
+        except FileNotFoundError:
+            return dict(result, status='absent')
+        except PermissionError:
+            return dict(result, status='permission_denied')
+        except OSError as error:
+            return dict(result, status='unsafe_ancestor_refused' if error.errno in (errno.ELOOP, errno.ENOTDIR) else 'stat_failed')
 
     @staticmethod
     def cron_field(value, minimum, maximum):
@@ -728,7 +838,8 @@ def collect(runner=None, root=''):
             'host_role': 'existing_vps', 'filesystem': collector.filesystem(), 'docker': docker,
             'paths': paths, 'protected_runtime_paths': [collector.metadata(path) for path in sorted(HOST_METADATA_PATHS)],
             'git': collector.git(docker['containers']), 'systemd': collector.systemd(),
-            'cron': collector.cron(), 'nginx': collector.nginx(), 'coverage': collector.coverage,
+            'cron': collector.cron(), 'root_cron_spool': collector.cron_spool(),
+            'nginx': collector.nginx(), 'coverage': collector.coverage,
             'unverified': ['container_internal_tmp_studio_databases', 'database_driver_and_environment_values',
                            'mac_agent', 'erp_runtime', 'remote_backup_restore', 'public_certificate_contents',
                            'unknown_mount_paths_and_volumes', 'unknown_service_users_and_cron_periodic_directories',
