@@ -38,6 +38,7 @@ class FakeDocker:
     def kill(self,identifier):self.kills.append(identifier);self.states[identifier].update(running=False,paused=False,pid=0)
     def running_names(self):return self.names
     def listeners(self):return set()
+    def auto_remove(self,identifier):return False
 
 
 class Mutation(unittest.TestCase):
@@ -106,6 +107,70 @@ class Mutation(unittest.TestCase):
         semantics={'schema':'metainc-retirement-kill-v1','daemon_version':'29.4.0','daemon_git_commit':'c'*40,'signal':'KILL',
                    'order':'task_kill_before_resume','source_commit':'c'*40,'source_sha256':'f'*64}
         self.proof('retirement-kill-semantics.json',semantics,'SEMANTICS_SHA')
+    def test_auto_remove_adapter_requires_exact_boolean_and_fixed_inspect(self):
+        identifier='a'*64
+        for raw,expected in ((b'false\n',False),(b'true\n',True)):
+            with self.subTest(raw=raw):
+                docker=m.Docker('/synthetic-config')
+                with mock.patch.object(docker,'run',return_value=raw) as run:
+                    self.assertIs(docker.auto_remove(identifier),expected)
+                    run.assert_called_once_with('inspect','--format','{{json .HostConfig.AutoRemove}}',identifier,limit=64)
+        for raw in (b'0',b'1',b'null',b'"false"',b'[]',b'{}',b'false true',b'NaN'):
+            with self.subTest(raw=raw),mock.patch.object(m.Docker,'run',return_value=raw),self.assertRaises(m.Refused):
+                m.Docker('/synthetic-config').auto_remove(identifier)
+    def test_stop_readiness_refuses_auto_remove_true_and_nonboolean(self):
+        self.stop_ready()
+        for bad in (True,0,1,None,'false'):
+            with self.subTest(value=bad),mock.patch.object(self.docker,'auto_remove',return_value=bad),self.assertRaises(m.Refused):
+                self.helper().run('stop',False,'103-1')
+            self.assertEqual(self.docker.kills,[])
+            self.assertFalse(self.probe.local(m.BASE+'/stop-attempt.json').exists())
+    def test_auto_remove_rechecked_for_both_ids_before_first_kill(self):
+        self.stop_ready();calls=[]
+        def changed(identifier):
+            calls.append(identifier);return len(calls)>4
+        with mock.patch.object(self.docker,'auto_remove',side_effect=changed),self.assertRaises(m.Refused):
+            self.helper().run('stop',True,'103-1')
+        expected=[row['id'] for row in self.request.values()]
+        self.assertEqual(calls[:4],expected+expected)
+        self.assertEqual(len(calls),5);self.assertEqual(self.docker.kills,[])
+        self.assertFalse(self.probe.local(m.BASE+'/stop-complete.json').exists())
+    def test_fence_does_not_change_or_require_auto_remove_contract(self):
+        with mock.patch.object(self.docker,'auto_remove',side_effect=AssertionError):
+            self.assertEqual(self.fence()['status'],'completed')
+    def test_sticky_tmp_only_exact_private_run_staging_is_readable(self):
+        directory='/tmp/metainc-control-mutation-101-1'
+        self.mkdir(directory);self.probe.local('/tmp').chmod(0o1777)
+        self.put(directory+'/public.py',b'PUBLIC_SOURCE_ONLY')
+        with self.assertRaises(m.Refused):self.files.read(directory+'/public.py')
+        scoped=m.Files(str(self.probe.base),os.getuid(),os.getgid(),self.exchange,staging=directory)
+        self.assertEqual(scoped.read(directory+'/public.py')[0],b'PUBLIC_SOURCE_ONLY')
+        self.mkdir('/tmp/metainc-control-mutation-102-1');self.put('/tmp/metainc-control-mutation-102-1/public.py',b'OTHER')
+        for path in ('/tmp','/tmp/metainc-control-mutation-102-1'):
+            with self.assertRaises(m.Refused),scoped.directory(path):pass
+        self.probe.local(directory).chmod(0o755)
+        with self.assertRaises(m.Refused):scoped.read(directory+'/public.py')
+    @unittest.skipUnless(sys.platform=='linux','Linux actual /tmp sticky directory contract')
+    def test_actual_linux_sticky_tmp_staging_with_private_synthetic_file(self):
+        directory='/tmp/metainc-control-mutation-'+str(os.getpid())+str(time.time_ns()%10**12)+'-1'
+        target=Path(directory);target.mkdir(mode=0o700)
+        try:
+            public=target/'public.py';public.write_bytes(b'SYNTHETIC_PUBLIC_SOURCE');public.chmod(0o600)
+            unscoped=m.Files(uid=os.getuid(),gid=os.getgid())
+            with self.assertRaises(m.Refused):unscoped.read(str(public))
+            scoped=m.Files(uid=os.getuid(),gid=os.getgid(),staging=directory)
+            self.assertEqual(scoped.read(str(public))[0],b'SYNTHETIC_PUBLIC_SOURCE')
+            target.chmod(0o755)
+            with self.assertRaises(m.Refused):scoped.read(str(public))
+        finally:
+            public.unlink(missing_ok=True);target.rmdir()
+    def test_staging_symlink_and_wrong_run_are_refused(self):
+        directory='/tmp/metainc-control-mutation-101-1';self.mkdir(directory);self.probe.local('/tmp').chmod(0o1777)
+        scoped=m.Files(str(self.probe.base),os.getuid(),os.getgid(),self.exchange,staging=directory)
+        h=self.helper();h.files=scoped
+        with self.assertRaises(m.Refused):h.run('fence',False,'102-1')
+        self.probe.local(directory).rmdir();self.probe.local(directory).symlink_to(self.probe.local('/assets'))
+        with self.assertRaises(m.Refused),scoped.directory(directory):pass
     def test_unpinned_policy_fails_before_any_file_or_docker_access(self):
         h=self.helper();h.policy=None
         with mock.patch.object(h.files,'read',side_effect=AssertionError),mock.patch.object(h.docker,'version',side_effect=AssertionError),self.assertRaises(m.Refused):h.run('fence',True,'101-1')
