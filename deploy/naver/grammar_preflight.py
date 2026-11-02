@@ -16,8 +16,9 @@ import subprocess
 import sys
 import time
 
-SOURCE = 'a3770876f746c4b726c5070dced8aa68179fe44b'
-CANDIDATE = 'setup-direction-v13'
+SOURCE = 'bb151c2a483a3422c25ba203b7a9358569f5a9da'
+CANDIDATE = 'grounded-segments-v14'
+MAX_REFERENCE_BRANCHES = 36
 MAX_PACKAGE = 24576
 MAX_RESPONSE = 131072
 MAX_RESULT = 4096
@@ -36,10 +37,10 @@ PINS = {
     'naver_engine/shared_budget_evidence.py': '3c4fabb77204f103d6fbe7b98f5d8a7ce937fcf0543b4e266982ce71bb99634e',
     'naver_engine/strategy_validation.py': 'df64567b9bd5810a95e619a2c76038618c9ee306cf956aecc0c63c8f04f4ba22',
     'naver_runtime/__init__.py': '27d28d6ed467edc27f1b22a7a3fedd78253d562938c3cf060ea2573ef38038ec',
-    'naver_runtime/claude_provider.py': '4b463645cb304778b2331c3757b83b928d22f27f6e932cf1b23bcfe32367e2cb',
+    'naver_runtime/claude_provider.py': '230e6b9faafe6facde94d2883c654a6e13ea672f4f2ad607afbbc085cc9856e7',
     'naver_runtime/learning_provider.py': 'f50a22c28080dfcadc6b08101a8b8779b59029ff3a6a74060423ba22ae6034be',
     'naver_runtime/provider_observability.py': '9344a464a642cfbea41c7e7a14011a466b1d9ebc495a27c36205bd94e45b21cd',
-    'naver_runtime/report_output_schema.py': '000e4cbc43a2566d72951d6d7d446fd173db78d1d4d621b151c325ca7083eca2',
+    'naver_runtime/report_output_schema.py': '1860b52bcd114176b5da3460c8eb527c50dcc80a21b143642e15f8bfde72eeeb',
 }
 TOKEN_FIELDS = ('input_tokens', 'output_tokens', 'cache_read_input_tokens',
                 'cache_creation_input_tokens', 'cache_creation_5m_input_tokens',
@@ -82,6 +83,34 @@ def schema_matches(value, schema, root=None, depth=0):
             return False
         target = root.get('definitions', {}).get(ref.rsplit('/', 1)[-1])
         return schema_matches(value, target, root, depth + 1)
+    if 'anyOf' in schema:
+        # v14 puts required/string/closed constraints on the parent and exact
+        # source/field enum pairs on its branches. No general union support.
+        branches = schema['anyOf']
+        if (set(schema) != {'type', 'properties', 'required', 'additionalProperties', 'anyOf'} or
+                schema['type'] != 'object' or schema['additionalProperties'] is not False or
+                type(schema['properties']) is not dict or schema['properties'] !=
+                    {'s': {'type': 'string'}, 'f': {'type': 'string'}} or
+                type(schema['required']) is not list or len(schema['required']) != 2 or
+                any(type(key) is not str for key in schema['required']) or set(schema['required']) != {'s', 'f'} or
+                type(branches) is not list or not 1 <= len(branches) <= MAX_REFERENCE_BRANCHES):
+            return False
+        for branch in branches:
+            if (type(branch) is not dict or set(branch) != {'properties'} or
+                    type(branch['properties']) is not dict or set(branch['properties']) != {'s', 'f'}):
+                return False
+            for leaf in branch['properties'].values():
+                if (type(leaf) is not dict or set(leaf) != {'enum'} or
+                        type(leaf['enum']) is not list or not leaf['enum'] or
+                        any(type(choice) is not str for choice in leaf['enum'])):
+                    return False
+            sources, fields = (branch['properties'][key]['enum'] for key in ('s', 'f'))
+            if ('' in sources or '' in fields) and (sources != [''] or fields != ['']):
+                return False
+        return (type(value) is dict and set(value) == {'s', 'f'} and
+                all(type(value[key]) is str for key in ('s', 'f')) and
+                any(all(value[key] in branch['properties'][key]['enum'] for key in ('s', 'f'))
+                    for branch in branches))
     allowed = {'type', 'properties', 'required', 'additionalProperties', 'items',
                'minItems', 'enum', 'pattern', 'definitions'}
     if set(schema) - allowed:

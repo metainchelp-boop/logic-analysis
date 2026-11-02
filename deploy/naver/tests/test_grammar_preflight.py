@@ -165,6 +165,96 @@ class GrammarPreflightTests(unittest.TestCase):
         self.assertFalse(G.schema_matches(True, {'type': 'integer', 'enum': [1]}))
         self.assertFalse(G.schema_matches(1, {'type': 'integer', 'enum': [True]}))
 
+    @staticmethod
+    def reference_branch(sources, fields):
+        return {'properties': {'s': {'enum': sources}, 'f': {'enum': fields}}}
+
+    @staticmethod
+    def reference_schema(branches):
+        return {'type': 'object', 'properties': {'s': {'type': 'string'}, 'f': {'type': 'string'}},
+                'required': ['s', 'f'], 'additionalProperties': False, 'anyOf': branches}
+
+    def reference_format(self):
+        return {'type': 'json_schema', 'schema': {'type': 'object',
+            'properties': {'ref': {'$ref': '#/definitions/reference'}},
+            'required': ['ref'], 'additionalProperties': False,
+            'definitions': {'reference': self.reference_schema([
+                self.reference_branch(['metric:spend'], ['current', 'previous']),
+                self.reference_branch(['case:1', 'case:2'], ['summary']),
+                self.reference_branch([''], [''])])}}}
+
+    def test_v14_reference_union_accepts_only_allowed_source_field_pairs(self):
+        schema = self.reference_format()['schema']
+        for ref in ({'s': 'metric:spend', 'f': 'current'}, {'s': 'metric:spend', 'f': 'previous'},
+                    {'s': 'case:1', 'f': 'summary'}, {'s': 'case:2', 'f': 'summary'}, {'s': '', 'f': ''}):
+            self.assertTrue(G.schema_matches({'ref': ref}, schema), ref)
+        for ref in ({'s': 'metric:spend', 'f': 'summary'}, {'s': 'case:1', 'f': 'current'},
+                    {'s': 'case:3', 'f': 'summary'}, {'s': '', 'f': 'summary'},
+                    {'s': 'case:1', 'f': ''}, {'s': 'case:1'}, {'f': 'summary'},
+                    {'s': 'case:1', 'f': 'summary', 'extra': 'PRIVATE_CANARY'},
+                    {'s': True, 'f': 'summary'}, {'s': 'case:1', 'f': 1}, [], 'case:1.summary'):
+            self.assertFalse(G.schema_matches({'ref': ref}, schema), ref)
+
+    def test_reference_union_one_to_thirty_six_branches_and_no_general_union_support(self):
+        valid = self.reference_branch(['case:1'], ['summary'])
+        ref = {'s': 'case:1', 'f': 'summary'}
+        for count in (1, 16, 19, 36):
+            self.assertTrue(G.schema_matches(ref, self.reference_schema([copy.deepcopy(valid) for _ in range(count)])))
+        for branches in ([], [valid] * 37, valid, [{'type': 'string', 'enum': ['case:1']}],
+                         [valid, {'type': 'any'}], [valid, {'$ref': '#/definitions/x'}]):
+            self.assertFalse(G.schema_matches(ref, self.reference_schema(branches)))
+        for schema in ({'anyOf': [valid]}, {'oneOf': [valid]},
+                       {**self.reference_schema([valid]), 'type': 'array'},
+                       {**self.reference_schema([valid]), 'additionalProperties': True},
+                       {**self.reference_schema([valid]), 'required': ['s']},
+                       {**self.reference_schema([valid]), 'required': ['s', 's']},
+                       {**self.reference_schema([valid]), 'required': ['s', 'f', 'extra']},
+                       {**self.reference_schema([valid]), 'required': ['s', True]},
+                       {**self.reference_schema([valid]), 'properties': {'s': {'type': 'string'}, 'f': {'type': 'integer'}}},
+                       {**self.reference_schema([valid]), 'description': 'PRIVATE_CANARY'}):
+            self.assertFalse(G.schema_matches(ref, schema))
+
+    def test_all_reference_branches_are_checked_even_when_an_earlier_branch_matches(self):
+        good = self.reference_branch(['case:1'], ['summary'])
+        ref = {'s': 'case:1', 'f': 'summary'}
+        bad = []
+        for changes in ({'additionalProperties': False}, {'required': ['s', 'f']},
+                        {'type': 'object'}, {'extra': 'PRIVATE_CANARY'},
+                        {'properties': {'s': {'enum': ['case:1']}}}):
+            bad.append({**copy.deepcopy(good), **changes})
+        for leaf in ({'enum': []}, {'enum': 'summary'}, {'enum': [True]},
+                     {'type': 'string', 'enum': ['summary']}, {'enum': ['summary'], 'pattern': '.*'},
+                     {'anyOf': [{'enum': ['summary']}]}):
+            branch = copy.deepcopy(good); branch['properties']['f'] = leaf; bad.append(branch)
+        bad.extend([self.reference_branch(['case:1'], ['']), self.reference_branch([''], ['summary']),
+                    self.reference_branch(['', 'case:1'], ['', 'summary'])])
+        for branch in bad:
+            self.assertFalse(G.schema_matches(ref, self.reference_schema([good, branch])), branch)
+
+    def test_v14_http200_checks_grouped_references_without_retry_or_repair(self):
+        fmt = self.reference_format()
+        self.pkg = {**self.pkg, 'format': fmt, 'schema_sha256': G.digest(G.canonical(fmt))}
+        G.validate_package(self.pkg)
+        for ref, accepted in (({'s': 'case:2', 'f': 'summary'}, True),
+                              ({'s': 'case:2', 'f': 'current'}, False)):
+            response = Response(json.dumps({'stop_reason': 'end_turn',
+                'content': [{'type': 'text', 'text': json.dumps({'ref': ref})}]}).encode())
+            result, calls, _ = self.invoke(response=response)
+            self.assertEqual(result['ok'], accepted)
+            self.assertEqual(result['reason'], 'none' if accepted else 'response-schema')
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(response.closed)
+            self.assertEqual(json.loads(calls[0][0].data)['output_config']['format'], fmt)
+
+    def test_live_source_and_candidate_are_fixed_to_reviewed_boundary(self):
+        self.assertEqual(G.SOURCE, 'bb151c2a483a3422c25ba203b7a9358569f5a9da')
+        self.assertEqual(G.CANDIDATE, 'grounded-segments-v14')
+        self.assertEqual(G.MAX_REFERENCE_BRANCHES, 36)
+        self.assertEqual(G.MAX_PACKAGE, 24576)
+        self.assertEqual(G.blank_result(self.pkg)['live_source'], G.SOURCE)
+        with self.assertRaises(ValueError):
+            G.validate_package({**self.pkg, 'candidate': 'setup-direction-v13'})
+
     def test_close_failure_cannot_claim_success(self):
         response = Response(b'{"stop_reason":"end_turn","content":[{"type":"text","text":"{}"}]}', fail_close=True)
         result, calls, _ = self.invoke(response=response)
