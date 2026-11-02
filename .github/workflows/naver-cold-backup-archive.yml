@@ -3,6 +3,12 @@ name: NAVER 이전 배포 백업 무손실 보관
 on:
   workflow_dispatch:
     inputs:
+      scope:
+        description: '고정 이전 배포 백업 선택 (경로 직접 입력 불가)'
+        type: choice
+        options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1]
+        default: c44-cold-backup-lossless-v1
+        required: true
       mode:
         description: 'plan = 압축 가능 용량과 상태 해시 / apply = 검증한 이전 백업만 무손실 보관'
         type: choice
@@ -15,7 +21,7 @@ on:
         default: ''
         required: false
       confirm:
-        description: 'apply 전용: ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY'
+        description: 'apply 전용: 선택한 scope에 맞는 ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY 또는 ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY'
         type: string
         default: ''
         required: false
@@ -39,6 +45,7 @@ jobs:
           REF: ${{ github.ref }}
           ATTEMPT: ${{ github.run_attempt }}
           HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          SCOPE: ${{ inputs.scope }}
           MODE: ${{ inputs.mode }}
           PLAN_SHA: ${{ inputs.plan_sha256 }}
           CONFIRM: ${{ inputs.confirm }}
@@ -49,11 +56,16 @@ jobs:
           if [ "$REF" != refs/heads/main ]; then echo MAIN_REQUIRED; exit 1; fi
           if [ "$ATTEMPT" != 1 ]; then echo FIRST_ATTEMPT_REQUIRED; exit 1; fi
           if ! [[ "$HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo TRUSTED_HOST_FINGERPRINT_REQUIRED; exit 1; fi
+          case "$SCOPE" in
+            c44-cold-backup-lossless-v1) expected_confirm=ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY ;;
+            a377-cold-backup-lossless-v1) expected_confirm=ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY ;;
+            *) echo INPUT_REFUSED; exit 1 ;;
+          esac
           case "$MODE" in
             plan) test -z "$PLAN_SHA" && test -z "$CONFIRM" || { echo INPUT_REFUSED; exit 1; } ;;
             apply)
               [[ "$PLAN_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo INPUT_REFUSED; exit 1; }
-              test "$CONFIRM" = ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY || { echo INPUT_REFUSED; exit 1; } ;;
+              test "$CONFIRM" = "$expected_confirm" || { echo INPUT_REFUSED; exit 1; } ;;
             *) echo INPUT_REFUSED; exit 1 ;;
           esac
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -106,6 +118,7 @@ jobs:
           overwrite: false
       - name: 배포 잠금과 상태 해시 확인 후 선택한 모드 실행
         env:
+          NCA_SCOPE: ${{ inputs.scope }}
           NCA_MODE: ${{ inputs.mode }}
           NCA_PLAN: ${{ inputs.plan_sha256 }}
           NCA_CONFIRM: ${{ inputs.confirm }}
@@ -115,7 +128,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
-          envs: NCA_RUN,NCA_SHA,NCA_MODE,NCA_PLAN,NCA_CONFIRM
+          envs: NCA_RUN,NCA_SHA,NCA_MODE,NCA_PLAN,NCA_CONFIRM,NCA_SCOPE
           command_timeout: 21m
           script: |
             set -eu
@@ -133,13 +146,13 @@ jobs:
             [ "$(stat -c '%u:%h:%a' "$helper")" = 0:1:644 ]
             [ "$(sha256sum "$helper" | cut -d' ' -f1)" = "$NCA_SHA" ]
             rc=0
-            out=$(python3 -I -B "$helper" "$NCA_MODE" "$NCA_PLAN" "$NCA_CONFIRM" 2>/dev/null) || rc=$?
+            out=$(python3 -I -B "$helper" "$NCA_MODE" "$NCA_PLAN" "$NCA_CONFIRM" "$NCA_SCOPE" 2>/dev/null) || rc=$?
             case "$rc" in 0|2) ;; *) echo NAVER_COLD_BACKUP_ARCHIVE_FAILED; exit 1 ;; esac
             # Validate the entire closed result with the same hash-bound public helper.
             # stdout JSON travels only over stdin; no unvalidated output or raw argv data.
             printf '%s' "$out" | python3 -I -B -c '
             import hashlib,json,os,stat,sys
-            path,expected,rc=sys.argv[1:]
+            path,expected,rc,scope=sys.argv[1:]
             fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK)
             try:
                 before=os.fstat(fd)
@@ -152,9 +165,9 @@ jobs:
             ns={"__name__":"closed_result_validator"};exec(compile(code,path,"exec"),ns)
             raw=sys.stdin.buffer.read(32769)
             assert 0<len(raw)<=32768 and b"\n" not in raw
-            value=json.loads(raw);ns["validate_report"](value)
+            value=json.loads(raw);ns["validate_report"](value,expected_scope=scope)
             assert (rc=="0" and value["status"] in ("planned","applied")) or (rc=="2" and value["status"]=="refused")
-            ' "$helper" "$NCA_SHA" "$rc" 2>/dev/null || { echo NAVER_COLD_BACKUP_ARCHIVE_OUTPUT_REFUSED; exit 1; }
+            ' "$helper" "$NCA_SHA" "$rc" "$NCA_SCOPE" 2>/dev/null || { echo NAVER_COLD_BACKUP_ARCHIVE_OUTPUT_REFUSED; exit 1; }
             printf 'NAVER_COLD_BACKUP_ARCHIVE_RESULT=%s\n' "$out"
             exit "$rc"
       - name: 이번 실행의 helper와 빈 임시 폴더만 정리
