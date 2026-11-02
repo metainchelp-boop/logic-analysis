@@ -21,6 +21,8 @@ CONFIRM = 'ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY'
 SCOPE = 'c44-cold-backup-lossless-v1'
 A377_SCOPE = 'a377-cold-backup-lossless-v1'
 A377_CONFIRM = 'ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY'
+BB151_SCOPE = 'bb151-cold-backup-lossless-v1'
+BB151_CONFIRM = 'ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY'
 
 
 def blocks(source):
@@ -66,7 +68,7 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
         self.assertEqual(re.findall(r'^  ([a-z_]+):', header, re.M), ['workflow_dispatch'])
         self.assertEqual(re.findall(r'^      ([a-z_0-9]+):', header, re.M),
                          ['scope', 'mode', 'plan_sha256', 'confirm'])
-        self.assertIn('options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1]', header)
+        self.assertIn('options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1, bb151-cold-backup-lossless-v1]', header)
         self.assertIn('default: c44-cold-backup-lossless-v1', header)
         self.assertIn('options: [plan, apply]', header)
         self.assertIn('default: plan', header)
@@ -77,10 +79,19 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
     def test_plan_and_explicit_hash_bound_apply_pass_gate(self):
         for values in ({}, dict(MODE='apply', PLAN_SHA='a' * 64, CONFIRM=CONFIRM),
                        dict(SCOPE=A377_SCOPE),
-                       dict(SCOPE=A377_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=A377_CONFIRM)):
+                       dict(SCOPE=A377_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=A377_CONFIRM),
+                       dict(SCOPE=BB151_SCOPE),
+                       dict(SCOPE=BB151_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=BB151_CONFIRM)):
             result = self.gate(**values)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout + result.stderr, '')
+
+    def test_each_profile_rejects_every_other_confirmation(self):
+        profiles = ((SCOPE, CONFIRM), (A377_SCOPE, A377_CONFIRM), (BB151_SCOPE, BB151_CONFIRM))
+        for scope, expected in profiles:
+            for _, supplied in profiles:
+                if supplied != expected:
+                    self.assert_refused(self.gate(SCOPE=scope, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=supplied))
 
     def test_actor_ref_attempt_and_host_pin_fail_closed(self):
         invalid = {

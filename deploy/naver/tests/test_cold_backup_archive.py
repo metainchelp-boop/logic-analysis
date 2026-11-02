@@ -584,13 +584,21 @@ class ArchiveA377Test(ArchiveTest):
     scope = 'a377-cold-backup-lossless-v1'
 
 
+class ArchiveBB151Test(ArchiveTest):
+    # The new fixed previous-release copy keeps every restoration and refusal guard.
+    scope = 'bb151-cold-backup-lossless-v1'
+
+
 class FixedProfileTest(unittest.TestCase):
-    def test_only_two_fixed_profiles_and_original_c44_format_preserved(self):
-        self.assertEqual(set(A.PROFILES), {'c44-cold-backup-lossless-v1', 'a377-cold-backup-lossless-v1'})
+    def test_only_three_fixed_profiles_and_original_c44_format_preserved(self):
+        self.assertEqual(set(A.PROFILES), {'c44-cold-backup-lossless-v1', 'a377-cold-backup-lossless-v1', 'bb151-cold-backup-lossless-v1'})
         self.assertEqual(A.profile_for(), A.Profile(A.SCOPE, A.BACKUP_NAME, A.ARCHIVE_NAME, A.CONFIRM))
         self.assertEqual(A.profile_for('a377-cold-backup-lossless-v1'), A.Profile(
             'a377-cold-backup-lossless-v1', '20261102T185748Z-a3770876f746',
             '20261102T185748Z-a3770876f746-v1', 'ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY'))
+        self.assertEqual(A.profile_for('bb151-cold-backup-lossless-v1'), A.Profile(
+            'bb151-cold-backup-lossless-v1', '20261102T205647Z-bb151c2a483a',
+            '20261102T205647Z-bb151c2a483a-v1', 'ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY'))
         with self.assertRaises(TypeError):
             A.PROFILES['arbitrary'] = A.profile_for()
         with self.assertRaises(AttributeError):

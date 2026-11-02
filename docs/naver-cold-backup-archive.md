@@ -1,6 +1,6 @@
 # Fixed cold NAVER backups: lossless archive and isolated recovery
 
-This helper accepts exactly two reviewed cold-backup profiles. Source and
+This helper accepts exactly three reviewed cold-backup profiles. Source and
 archive paths are fixed in the helper; neither the workflow nor CLI accepts an
 arbitrary path, commit, timestamp or confirmation phrase.
 
@@ -8,18 +8,23 @@ arbitrary path, commit, timestamp or confirmation phrase.
 | --- | --- | --- |
 | `c44-cold-backup-lossless-v1` (default) | `20261102T170022Z-c44a66393340` | `ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY` |
 | `a377-cold-backup-lossless-v1` | `20261102T185748Z-a3770876f746` | `ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY` |
+| `bb151-cold-backup-lossless-v1` | `20261102T205647Z-bb151c2a483a` | `ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY` |
 
 The a377 source is the previous-product backup recorded by the successful
 bb151c2a deployment, run `41502564117`; it is not the running database. Adding
 this profile does not read, remove or overwrite the existing c44 archive.
+The bb151 source is the previous-product backup recorded by successful d633
+deployment run `41521463521`. Read-only inspect run `41529054879` confirmed d633
+remains active and approximately 1.99 GiB is free. The new fixed profile must
+still pass its own PLAN and byte-verification gates before any archival action;
+it does not read or overwrite either earlier archive.
 It never opens SQLite, reads the live engine database, changes containers, or
 removes images/volumes. The deployment flock is held throughout. All five
 container identities, images, PIDs, start times and restart counts, and the full
 image ID set must remain unchanged. A changed snapshot refuses the operation.
 
 Each separate destination is below `/var/backups/metainc/naver-cold-archives/`,
-with the exact source directory name plus `-v1`: either
-`20261102T170022Z-c44a66393340-v1` or `20261102T185748Z-a3770876f746-v1`.
+with the exact selected source directory name plus `-v1`.
 Its parent and directory are root-owned mode `0700`; files are mode `0600`.
 The destination is never overwritten or automatically pruned. Only the chosen
 profile's source files may be removed, after the verified archive is published.
@@ -42,9 +47,9 @@ python3 -I -B cold_backup_archive.py apply PLAN_SHA256 ARCHIVE_A377_COLD_BACKUP_
 These are operator examples, not a request to run a production operation.
 Existing three-argument CLI calls retain the c44 default. Existing version-1
 c44 manifests and receipts remain valid; no existing archive is rewritten.
-Both plan hashes include the fixed scope, backup and archive names along with
-source identity and protected state. A c44 plan or confirmation cannot authorize
-an a377 APPLY, or vice versa. Unsupported scope strings are refused without
+All plan hashes include the fixed scope, backup and archive names along with
+source identity and protected state. A plan or confirmation for one profile cannot
+authorize another profile's APPLY. Unsupported scope strings are refused without
 printing the supplied value. Even identical source bytes do not make plans
 interchangeable.
 
