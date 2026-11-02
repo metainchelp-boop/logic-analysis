@@ -9,8 +9,8 @@ storage and rendered output require their own product checks.
 
 ## Fixed boundaries
 
-- Live transport source: `bb151c2a483a3422c25ba203b7a9358569f5a9da`.
-- Candidate: `grounded-text-v15`.
+- Live transport source: `d633ff4450bb74206ecce5dda157387336256097`.
+- Candidate: `grounded-blocks-v16`.
 - The live image label, image identity, engine UID and read-only root filesystem
   must match. All 16 files in the transport import closure are SHA-256 pinned;
   unexpected imports or changed files refuse execution.
@@ -23,13 +23,17 @@ storage and rendered output require their own product checks.
   response size is at most 131,072 bytes. No private product source, credentials,
   customer material or response text is emitted in the receipt.
 
-## Grounded text grammar
+## Separate prose and references
 
-The v15 candidate preserves the existing direct-string proposal shape. The
-private fixture supplies a pattern that permits a positive prose alphabet or
-original reference tokens from the metric, case, plan, product and setup
-namespaces. It does not use segment objects or `anyOf`. The helper's existing
-pattern validator is unchanged and checks the exact supplied schema.
+The v16 candidate represents reference-capable prose as closed objects containing
+qualitative text and a separate reference array. The product assembles the text
+and its selected evidence in separate lines. Originally qualitative fields stay
+plain strings; appeal evidence remains in its existing server-owned basis.
+This removes direct unit attachment to references in generated prose. It does
+not establish the factual correctness of arbitrary prose or eliminate the
+domain's separate Korean-quantity and semantic rules. The schema uses closed
+objects, arrays, local definitions and patterns, without `anyOf` or text indices.
+The helper's existing schema validator is unchanged.
 
 A lexically valid reference is not proof that the referenced source is available
 or supports a statement. The product's existing exact allowed-reference prompt,
@@ -39,9 +43,9 @@ message does not execute the full product request builder or those domain checks
 
 The validator retains its narrowly bounded legacy support for a closed `s`/`f`
 object with 1–36 partial enum branches. Its positive and negative tests remain;
-this does not establish provider support or make that form part of v15. General
-unions and unknown schema keywords still fail closed. Only the fixed v15
-candidate is accepted at the package boundary; a v14 package is refused.
+this does not establish provider support or make that form part of v16. General
+unions and unknown schema keywords still fail closed. Only the fixed v16
+candidate is accepted at the package boundary; earlier candidate packages refuse.
 
 ## Execution and evidence
 
