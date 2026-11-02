@@ -18,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = ROOT / '.github/workflows/naver-cold-backup-archive.yml'
 CANARY = 'PRIVATE_SYNTHETIC_CANARY'
 CONFIRM = 'ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY'
+SCOPE = 'c44-cold-backup-lossless-v1'
+A377_SCOPE = 'a377-cold-backup-lossless-v1'
+A377_CONFIRM = 'ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY'
 
 
 def blocks(source):
@@ -50,7 +53,7 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
     def gate(self, **values):
         env = dict(PATH=os.environ.get('PATH', ''), ACTOR='metainchelp-boop',
                    TRIGGERING_ACTOR='metainchelp-boop', REF='refs/heads/main', ATTEMPT='1',
-                   HOST_FINGERPRINT='SHA256:' + 'c' * 43, MODE='plan', PLAN_SHA='', CONFIRM='')
+                   HOST_FINGERPRINT='SHA256:' + 'c' * 43, SCOPE=SCOPE, MODE='plan', PLAN_SHA='', CONFIRM='')
         return subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c', self.guard],
                               env=dict(env, **values), capture_output=True, text=True, timeout=3)
 
@@ -62,7 +65,9 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
         header = self.source.split('\npermissions:', 1)[0]
         self.assertEqual(re.findall(r'^  ([a-z_]+):', header, re.M), ['workflow_dispatch'])
         self.assertEqual(re.findall(r'^      ([a-z_0-9]+):', header, re.M),
-                         ['mode', 'plan_sha256', 'confirm'])
+                         ['scope', 'mode', 'plan_sha256', 'confirm'])
+        self.assertIn('options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1]', header)
+        self.assertIn('default: c44-cold-backup-lossless-v1', header)
         self.assertIn('options: [plan, apply]', header)
         self.assertIn('default: plan', header)
         self.assertIn('permissions:\n  contents: read', self.source)
@@ -70,13 +75,16 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
         self.assertNotIn('contents: write', self.source)
 
     def test_plan_and_explicit_hash_bound_apply_pass_gate(self):
-        for values in ({}, dict(MODE='apply', PLAN_SHA='a' * 64, CONFIRM=CONFIRM)):
+        for values in ({}, dict(MODE='apply', PLAN_SHA='a' * 64, CONFIRM=CONFIRM),
+                       dict(SCOPE=A377_SCOPE),
+                       dict(SCOPE=A377_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=A377_CONFIRM)):
             result = self.gate(**values)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout + result.stderr, '')
 
     def test_actor_ref_attempt_and_host_pin_fail_closed(self):
         invalid = {
+            'SCOPE': ('', CANARY, '../cold', SCOPE + '\n' + CANARY),
             'ACTOR': ('', CANARY, 'metainchelp-boop\n' + CANARY),
             'TRIGGERING_ACTOR': ('', CANARY),
             'REF': ('refs/heads/other', 'refs/tags/main', 'refs/heads/main\n' + CANARY),
@@ -167,7 +175,7 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
                       '"$(stat -c \'%u:%h:%a\' "$helper")" = 0:1:644',
                       '"$(sha256sum "$helper" | cut -d\' \' -f1)" = "$NCA_SHA"'):
             self.assertLess(invoke.index(guard), execute)
-        self.assertIn('"$helper" "$NCA_MODE" "$NCA_PLAN" "$NCA_CONFIRM" 2>/dev/null', invoke)
+        self.assertIn('"$helper" "$NCA_MODE" "$NCA_PLAN" "$NCA_CONFIRM" "$NCA_SCOPE" 2>/dev/null', invoke)
         self.assertIn('command_timeout: 21m', self.source)
 
     def test_cleanup_targets_only_this_helper_and_empty_temporary_directory(self):
@@ -180,14 +188,17 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
         self.assertNotIn('/var/backups', self.source)
         self.assertNotIn('/var/lib/docker', self.source)
 
-    def validate_output(self, raw, rc='0', *, hash_match=True, same_file=True):
+    def validate_output(self, raw, rc='0', *, hash_match=True, same_file=True, scope=SCOPE, helper_source=None):
         # The real extracted validator runs against a synthetic helper. UID is the
         # only normalized stat value so the fixture also runs on a non-root Mac.
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'helper.py'
-            path.write_text('def validate_report(v):\n'
-                            '    assert type(v) is dict and set(v)=={"status"}\n'
+            path.write_text('def validate_report(v,expected_scope=None):\n'
+                            '    assert type(v) is dict and set(v)=={"status","scope"}\n'
+                            '    assert v["scope"]==expected_scope\n'
                             '    assert v["status"] in ("planned","applied","refused")\n')
+            if helper_source is not None:
+                path.write_text(helper_source)
             digest = hashlib.sha256(path.read_bytes()).hexdigest() if hash_match else '0' * 64
             real_fstat = os.fstat
             calls = 0
@@ -203,7 +214,7 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
                 return SimpleNamespace(st_uid=0, **fields)
 
             stdout = io.StringIO()
-            with patch.object(sys, 'argv', ['-c', str(path), digest, rc]), \
+            with patch.object(sys, 'argv', ['-c', str(path), digest, rc, scope]), \
                     patch.object(sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(raw))), \
                     patch.object(os, 'fstat', side_effect=normalized_stat), \
                     contextlib.redirect_stdout(stdout):
@@ -217,9 +228,9 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
 
     def test_only_closed_receipt_and_exit_status_pairs_accepted(self):
         for status, rc in (('planned', '0'), ('applied', '0'), ('refused', '2')):
-            self.assertTrue(self.validate_output(json.dumps({'status': status}).encode(), rc))
+            self.assertTrue(self.validate_output(json.dumps({'status': status, 'scope': SCOPE}).encode(), rc))
         for status, rc in (('planned', '2'), ('applied', '2'), ('refused', '0'), ('planned', '1')):
-            self.assertFalse(self.validate_output(json.dumps({'status': status}).encode(), rc))
+            self.assertFalse(self.validate_output(json.dumps({'status': status, 'scope': SCOPE}).encode(), rc))
 
     def test_raw_unknown_extra_multiline_and_oversize_output_refused_without_echo(self):
         for raw in (CANARY.encode(), b'', b'{"status":"planned","extra":"' + CANARY.encode() + b'"}',
@@ -228,17 +239,42 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
             self.assertFalse(self.validate_output(raw))
 
     def test_changed_helper_hash_or_identity_refuses_output(self):
-        raw = b'{"status":"planned"}'
+        raw = json.dumps({'status': 'planned', 'scope': SCOPE}).encode()
         self.assertFalse(self.validate_output(raw, hash_match=False))
         self.assertFalse(self.validate_output(raw, same_file=False))
 
     def test_validation_precedes_only_receipt_publication(self):
-        self.assertLess(self.invoke.index('ns["validate_report"](value)'),
+        self.assertLess(self.invoke.index('ns["validate_report"](value,expected_scope=scope)'),
                         self.invoke.index("printf 'NAVER_COLD_BACKUP_ARCHIVE_RESULT="))
         self.assertIn('O_NOFOLLOW', self.validator)
         self.assertIn('st_nlink==1', self.validator)
         self.assertIn('hashlib.sha256(code).hexdigest()==expected', self.validator)
         self.assertEqual(self.invoke.count('printf \'NAVER_COLD_BACKUP_ARCHIVE_RESULT='), 1)
+
+
+    def test_confirmation_is_bound_to_selected_scope(self):
+        self.assert_refused(self.gate(SCOPE=A377_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=CONFIRM))
+        self.assert_refused(self.gate(SCOPE=SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=A377_CONFIRM))
+
+    def test_selected_scope_reaches_remote_helper_and_receipt_validator(self):
+        self.assertIn('NCA_SCOPE: ${{ inputs.scope }}', self.source)
+        self.assertIn('envs: NCA_RUN,NCA_SHA,NCA_MODE,NCA_PLAN,NCA_CONFIRM,NCA_SCOPE', self.source)
+        self.assertIn('"$rc" "$NCA_SCOPE" 2>/dev/null', self.invoke)
+        for scope in (SCOPE, A377_SCOPE):
+            raw = json.dumps({'status': 'planned', 'scope': scope}).encode()
+            self.assertTrue(self.validate_output(raw, scope=scope))
+            other = A377_SCOPE if scope == SCOPE else SCOPE
+            self.assertFalse(self.validate_output(raw, scope=other))
+
+    def test_actual_public_helper_loads_and_enforces_scope_in_workflow_validator(self):
+        source = (ROOT / 'deploy/naver/cold_backup_archive.py').read_text()
+        ns = {'__name__': 'workflow_helper_fixture'}
+        exec(compile(source, '<public-helper-fixture>', 'exec'), ns)
+        for scope in (SCOPE, A377_SCOPE):
+            raw = json.dumps(ns['receipt']('plan', scope)).encode()
+            self.assertTrue(self.validate_output(raw, '2', scope=scope, helper_source=source))
+            other = A377_SCOPE if scope == SCOPE else SCOPE
+            self.assertFalse(self.validate_output(raw, '2', scope=other, helper_source=source))
 
     def test_every_embedded_shell_block_parses(self):
         self.assertEqual(len(self.blocks), 5)

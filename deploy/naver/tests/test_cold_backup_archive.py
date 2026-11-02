@@ -16,14 +16,17 @@ SPEC.loader.exec_module(A)
 
 
 class ArchiveTest(unittest.TestCase):
+    scope = A.SCOPE
+
     def setUp(self):
+        self.profile = A.profile_for(self.scope)
         self.temp = tempfile.TemporaryDirectory(prefix='naver-archive-test-', dir=Path.home())
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.backups = self.base / 'backups'
         self.archives = self.base / 'archives'
         self.backups.mkdir(mode=0o700)
-        self.original = self.backups / A.BACKUP_NAME
+        self.original = self.backups / self.profile.backup
         self.original.mkdir(mode=0o700)
         self.payloads = {'engine.db': b'fixture-not-sqlite\0' * 8000,
                          'engine.db-wal': bytes(range(256)) * 4, 'engine.db-shm': b'\0' * 4096}
@@ -66,6 +69,7 @@ class ArchiveTest(unittest.TestCase):
         return types.SimpleNamespace(returncode=0, stdout=output.encode(), stderr=b'')
 
     def execute(self, mode='plan', plan='', confirm='', **kwargs):
+        kwargs.setdefault('scope', self.scope)
         return A.execute(mode, plan, confirm, runner=self.runner, free=self.free, **kwargs)
 
     def plan(self):
@@ -74,14 +78,14 @@ class ArchiveTest(unittest.TestCase):
         return result
 
     def apply(self, plan=None):
-        return self.execute('apply', (plan or self.plan())['plan_sha256'], A.CONFIRM)
+        return self.execute('apply', (plan or self.plan())['plan_sha256'], self.profile.confirm)
 
     @property
     def archive(self):
-        return self.archives / A.ARCHIVE_NAME
+        return self.archives / self.profile.archive
 
     def restore(self, receipt, target='restore-check-0123456789abcdef'):
-        A.restore_isolated(str(self.archive), str(self.base), target, receipt['archive_manifest_sha256'])
+        A.restore_isolated(str(self.archive), str(self.base), target, receipt['archive_manifest_sha256'], scope=self.scope)
         return self.base / target
 
     def test_plan_is_read_only_and_counts_exact_deterministic_gzip(self):
@@ -179,7 +183,7 @@ class ArchiveTest(unittest.TestCase):
         self.restore(result)
 
     def test_wrong_plan_or_confirm_cannot_create_archive(self):
-        for plan, confirm, reason in [('0' * 64, A.CONFIRM, 'PLAN_MISMATCH'),
+        for plan, confirm, reason in [('0' * 64, self.profile.confirm, 'PLAN_MISMATCH'),
                                      ('0' * 64, 'wrong', 'INPUT_REFUSED')]:
             with self.subTest(reason=reason):
                 result = self.execute('apply', plan, confirm)
@@ -436,6 +440,161 @@ class ArchiveTest(unittest.TestCase):
                 with self.assertRaisesRegex(A.Refused, 'LOCKED'):
                     with A.deployment_lock():
                         self.fail('second lock acquired')
+
+
+    def other_profile(self):
+        return next(profile for profile in A.PROFILES.values() if profile.scope != self.scope)
+
+    @unittest.skipUnless(os.geteuid() == 0, 'root Linux ownership fixture')
+    def test_engine_uid_gid_10001_round_trip_on_root_linux(self):
+        for name in self.payloads:
+            path = self.original / name
+            os.chown(path, 10001, 10001)
+            self.identities[name] = A.identity(path.stat())
+        result = self.apply()
+        self.assertEqual(result['status'], 'applied', result)
+        restored = self.restore(result)
+        for name in self.payloads:
+            path = restored / name
+            self.assertEqual(path.read_bytes(), self.payloads[name])
+            actual = A.identity(path.stat())
+            for key in ('uid', 'gid', 'mode', 'mtime_ns', 'size'):
+                self.assertEqual(actual[key], self.identities[name][key])
+
+    def test_scope_matches_source_archive_manifest_and_receipt(self):
+        plan = self.plan()
+        self.assertEqual(plan['scope'], self.scope)
+        A.validate_report(plan, expected_scope=self.scope)
+        with self.assertRaises(A.Refused):
+            A.validate_report(plan, expected_scope=self.other_profile().scope)
+        applied = self.apply(plan)
+        manifest = json.loads((self.archive / 'archive-manifest.json').read_bytes())
+        self.assertEqual((manifest['scope'], manifest['backup'], manifest['archive']),
+                         (self.scope, self.profile.backup, self.profile.archive))
+        self.assertEqual(A.digest(A.canonical(manifest).encode()), plan['plan_sha256'])
+        self.assertEqual(applied['archive_manifest_sha256'], plan['plan_sha256'])
+
+    def test_other_profile_confirmation_is_refused_before_any_io(self):
+        result = self.execute('apply', 'a' * 64, self.other_profile().confirm)
+        self.assertEqual(result['reason'], 'INPUT_REFUSED')
+        self.assertEqual(self.commands, [])
+        self.assertFalse(self.archives.exists())
+        self.assertTrue(self.original.exists())
+
+    def test_other_profile_plan_cannot_authorize_this_source(self):
+        # Same bytes and file metadata in both allowlisted source folders are
+        # intentionally not interchangeable: the plan binds the fixed scope.
+        other = self.other_profile()
+        target = self.backups / other.backup
+        target.mkdir(mode=0o700)
+        for name, data in dict(self.payloads, **{'manifest.json': self.raw}).items():
+            path = target / name
+            path.write_bytes(data)
+            path.chmod(self.identities[name]['mode'])
+            os.utime(path, ns=(self.identities[name]['mtime_ns'], self.identities[name]['mtime_ns']))
+        other_plan = self.execute(scope=other.scope)
+        self.assertEqual(other_plan['status'], 'planned', other_plan)
+        own_plan = self.plan()
+        self.assertNotEqual(own_plan['plan_sha256'], other_plan['plan_sha256'])
+        result = self.apply(other_plan)
+        self.assertEqual(result['reason'], 'PLAN_MISMATCH')
+        self.assertFalse(self.archives.exists())
+        self.assertTrue(self.original.exists())
+        self.assertTrue(target.exists())
+
+    def test_other_source_and_published_archive_untouched(self):
+        other = self.other_profile()
+        other_source = self.backups / other.backup
+        other_source.mkdir(mode=0o700)
+        other_archive = self.archives / other.archive
+        other_archive.mkdir(mode=0o700, parents=True)
+        self.archives.chmod(0o700)
+        paths = []
+        for folder, name in ((other_source, 'engine.db'), (other_archive, 'archive-manifest.json'),
+                             (other_archive, 'engine.db.gz')):
+            path = folder / name
+            path.write_bytes(b'synthetic-other-profile-must-remain')
+            path.chmod(0o600)
+            paths.append(path)
+        before = {str(path): (path.read_bytes(), A.identity(path.stat())) for path in paths}
+        directories = {str(path): A.identity(path.stat()) for path in (other_source, other_archive)}
+        result = self.apply()
+        self.assertEqual(result['status'], 'applied', result)
+        self.assertEqual(before, {str(path): (path.read_bytes(), A.identity(path.stat())) for path in paths})
+        self.assertEqual(directories, {str(path): A.identity(path.stat()) for path in (other_source, other_archive)})
+
+    def test_restore_wrong_expected_scope_refused_before_target_creation(self):
+        result = self.apply()
+        name = 'restore-check-1111111111111111'
+        with self.assertRaises(A.Refused):
+            A.restore_isolated(str(self.archive), str(self.base), name,
+                               result['archive_manifest_sha256'], scope=self.other_profile().scope)
+        self.assertFalse((self.base / name).exists())
+        self.restore(result)
+
+    def test_restore_scope_path_mixture_refused_even_with_matching_receipt_hash(self):
+        result = self.apply()
+        path = self.archive / 'archive-manifest.json'
+        original = path.read_bytes()
+        other = self.other_profile()
+        for key, bad in [('scope', other.scope), ('backup', other.backup), ('archive', other.archive),
+                         ('backup', '../engine'), ('scope', 'arbitrary-profile')]:
+            with self.subTest(key=key, value=bad):
+                manifest = json.loads(original)
+                manifest[key] = bad
+                raw = A.canonical(manifest).encode()
+                path.write_bytes(raw)
+                result['archive_manifest_sha256'] = A.digest(raw)
+                with self.assertRaises(A.Refused):
+                    self.restore(result)
+                self.assertFalse((self.base / 'restore-check-0123456789abcdef').exists())
+
+    def test_unknown_scope_is_closed_and_does_not_echo_input(self):
+        for scope in ('PRIVATE_SYNTHETIC_CANARY', '../engine.db', '', None, [], True):
+            with self.subTest(scope=scope):
+                result = self.execute(scope=scope)
+                self.assertEqual(result['reason'], 'INPUT_REFUSED')
+                self.assertNotIn('PRIVATE_SYNTHETIC_CANARY', A.canonical(result))
+                self.assertFalse(self.archives.exists())
+                self.assertTrue(self.original.exists())
+        self.assertEqual(self.commands, [])
+
+    def test_cli_keeps_legacy_c44_and_binds_explicit_scope(self):
+        for args, expected_scope in ((['plan', '', ''], A.SCOPE),
+                                     (['plan', '', '', self.scope], self.scope)):
+            with mock.patch.object(A, 'deployment_lock', return_value=contextlib.nullcontext()), \
+                    mock.patch.object(A.os, 'geteuid', return_value=A.ROOT_UID), \
+                    mock.patch.object(A.os, 'nice'), mock.patch.object(A.os, 'umask'), \
+                    mock.patch.object(A, 'execute', return_value=A.receipt('plan', expected_scope)) as call, \
+                    mock.patch('builtins.print') as output:
+                self.assertEqual(A.main(args), 2)
+                call.assert_called_once_with('plan', '', '', scope=expected_scope)
+                self.assertEqual(json.loads(output.call_args.args[0])['scope'], expected_scope)
+        with mock.patch.object(A, 'deployment_lock') as lock, mock.patch('builtins.print') as output:
+            self.assertEqual(A.main(['plan', '', '', 'PRIVATE_SYNTHETIC_CANARY']), 2)
+            lock.assert_not_called()
+            value = output.call_args.args[0]
+            self.assertNotIn('PRIVATE_SYNTHETIC_CANARY', value)
+            self.assertEqual(json.loads(value)['reason'], 'INPUT_REFUSED')
+
+
+class ArchiveA377Test(ArchiveTest):
+    # Run every byte/metadata, corruption, interrupted-cleanup, path and capacity
+    # guard above against the second fixed profile as well.
+    scope = 'a377-cold-backup-lossless-v1'
+
+
+class FixedProfileTest(unittest.TestCase):
+    def test_only_two_fixed_profiles_and_original_c44_format_preserved(self):
+        self.assertEqual(set(A.PROFILES), {'c44-cold-backup-lossless-v1', 'a377-cold-backup-lossless-v1'})
+        self.assertEqual(A.profile_for(), A.Profile(A.SCOPE, A.BACKUP_NAME, A.ARCHIVE_NAME, A.CONFIRM))
+        self.assertEqual(A.profile_for('a377-cold-backup-lossless-v1'), A.Profile(
+            'a377-cold-backup-lossless-v1', '20261102T185748Z-a3770876f746',
+            '20261102T185748Z-a3770876f746-v1', 'ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY'))
+        with self.assertRaises(TypeError):
+            A.PROFILES['arbitrary'] = A.profile_for()
+        with self.assertRaises(AttributeError):
+            A.profile_for().backup = 'arbitrary'
 
 
 if __name__ == '__main__':
