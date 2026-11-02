@@ -6,7 +6,7 @@ on:
       scope:
         description: '고정 이전 배포 백업 선택 (경로 직접 입력 불가)'
         type: choice
-        options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1, bb151-cold-backup-lossless-v1]
+        options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1, bb151-cold-backup-lossless-v1, d633-cold-backup-lossless-v1]
         default: c44-cold-backup-lossless-v1
         required: true
       mode:
@@ -21,7 +21,7 @@ on:
         default: ''
         required: false
       confirm:
-        description: 'apply 전용: 선택한 scope에 맞는 ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY, ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY 또는 ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY'
+        description: 'apply 전용: 선택한 scope에 맞는 ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY, ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY, ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY 또는 ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY'
         type: string
         default: ''
         required: false
@@ -60,6 +60,7 @@ jobs:
             c44-cold-backup-lossless-v1) expected_confirm=ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY ;;
             a377-cold-backup-lossless-v1) expected_confirm=ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY ;;
             bb151-cold-backup-lossless-v1) expected_confirm=ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY ;;
+            d633-cold-backup-lossless-v1) expected_confirm=ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY ;;
             *) echo INPUT_REFUSED; exit 1 ;;
           esac
           case "$MODE" in
