@@ -10,6 +10,8 @@ on:
       # 네이버 관제 단순 배포(2026-10-30) — 수동 실행 전용. 로직분석 이미지·컨테이너와 무관하므로
       # 이 파일·폴더만 고친 커밋이 로직분석을 재배포하지 않게 한다(docs/naver-simple-deploy.md).
       - '.github/workflows/naver-deploy.yml'
+      - '.github/workflows/naver-grammar-preflight.yml'  # 고정 합성 AI 문법 검사, 제품 배포 없음
+      - '.github/workflows/naver-build-cache-maintenance.yml'  # 미사용 빌드 캐시 정리, 앱 배포 없음
       - '.github/workflows/naver-tools-check.yml'  # 합성 CI 정의만 바뀌어도 앱 재배포하지 않음
       - '.github/workflows/naver-content-preflight.yml'  # 콘텐츠 보존 전 메타데이터 관찰, 앱 배포 없음
       - '.github/workflows/naver-autobid-key-preflight.yml'  # 고정 키 보관 후보 metadata, 앱 배포 없음
