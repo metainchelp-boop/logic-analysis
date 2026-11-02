@@ -793,13 +793,20 @@ class PublicGpgTest(unittest.TestCase):
 class EntrypointTest(unittest.TestCase):
     def test_no_path_argument_and_nonroot_are_rejected_without_phase_execution(self):
         for argv, uid, error in (['helper', '--path', CANARY], 0, 'invalid_phase'), \
-                (['helper', 'send', 'autobid-web'], 501, 'root_required'):
+                (['helper', 'send', 'autobid-web'], 501, 'root_required'), \
+                (['helper', 'send', 'autobid-web'], 1000, 'root_required'), \
+                (['helper', 'send', 'autobid-web'], 104729, 'root_required'):
             stream = io.StringIO()
+            # This tests the privilege gate after a trusted bundle load. The
+            # loader's real owner checks are independently tested for all three
+            # consumers; mocked euid must not depend on the checkout owner's UID.
             with mock.patch.object(subject.sys, 'argv', argv), mock.patch.object(subject.os, 'geteuid', return_value=uid), \
+                    mock.patch.object(subject, 'load_profiles', return_value=PROFILES) as loader, \
                     mock.patch.object(subject, 'Preservation') as constructor, contextlib.redirect_stdout(stream):
                 rc = subject.main()
             self.assertEqual(rc, 2)
             constructor.assert_not_called()
+            self.assertEqual(loader.call_count, int(error == 'root_required'))
             self.assertEqual(json.loads(stream.getvalue())['error'], error)
             self.assertNotIn(CANARY, stream.getvalue())
 
