@@ -230,12 +230,22 @@ class ClosedContract(unittest.TestCase):
         program = '''import importlib.util,os,sys
 s=importlib.util.spec_from_file_location('p',sys.argv[1]);a=importlib.util.module_from_spec(s);s.loader.exec_module(a)
 sys.argv=['probe']
+seen=[]
 def bad(binding):
+ sys.addaudithook(a.forbid_side_effects)
+ protected=[fd for fd in a._PUBLIC_OUTPUT_FDS if fd>2]
+ assert len(protected)==2
+ for fd in protected:
+  try:
+   with open(fd,'wb',closefd=False) as out:out.write(b'private-canary-saved-output')
+  except a.Refused:seen.append(fd)
  print('private-canary-python');print('private-canary-stderr',file=sys.stderr)
  os.write(1,b'private-canary-native');os.write(2,b'private-canary-native-error')
  raise RuntimeError('private-canary-exception')
 a.run=bad
-sys.exit(a.main())
+status=a.main()
+assert len(seen)==2
+sys.exit(status)
 '''
         result = subprocess.run([sys.executable, '-I', '-B', '-c', program, str(HERE/'inspection_aggregate.py')],
             input=A.canonical(binding()), capture_output=True, check=False)
@@ -356,6 +366,61 @@ class CryptoAndLocalReceipt(unittest.TestCase):
             A.encrypt(envelope(self.expected), self.cert, self.expected, runner=broken)
         expected = dict(self.expected, recipient_sha256='0'*64)
         with self.assertRaises(A.Refused): A.encrypt(envelope(expected), self.cert, expected, runner=self.runner)
+
+    def test_crypto_keeps_only_deadline_reason_and_closes_other_errors(self):
+        for reason,expected in (('deadline','deadline'),('runtime_refused','crypto_refused')):
+            def failed(*args,**kwargs):raise A.Refused(reason)
+            with self.subTest(reason=reason),self.assertRaisesRegex(A.Refused,'^'+expected+'$'):
+                A.encrypt(envelope(self.expected),self.cert,self.expected,runner=failed)
+
+    @unittest.skipUnless(sys.platform=='linux','anonymous-pipe audit boundary requires Linux /proc')
+    def test_live_audit_cms_roundtrip_tamper_and_write_boundaries_together(self):
+        program = r'''import importlib.util,json,os,pathlib,socket,sys
+spec=importlib.util.spec_from_file_location('probe',sys.argv[1]);a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
+cert,key,folder=map(pathlib.Path,sys.argv[2:5]);value=a.decode(sys.stdin.buffer.read());expected=value['binding']
+regular=folder/'existing';regular.write_bytes(b'unchanged');regular_fd=os.open(regular,os.O_RDWR)
+named=folder/'named-fifo';os.mkfifo(named);named_fd=os.open(named,os.O_RDWR|os.O_NONBLOCK)
+left,right=socket.socketpair();read_fd,write_fd=os.pipe();missing=folder/'must-not-exist'
+saved=(os.dup(1),os.dup(2));a._PUBLIC_OUTPUT_FDS=frozenset((0,1,2,*saved))
+sys.addaudithook(a.forbid_side_effects)
+blocked=0
+for action in (lambda:open(missing,'wb'),lambda:open(regular_fd,'wb',closefd=False),
+               lambda:open(named_fd,'wb',closefd=False),lambda:open(left.fileno(),'wb',closefd=False),
+               lambda:open('/proc/self/fd/'+str(write_fd),'wb'),lambda:socket.socket()):
+ try:action()
+ except a.Refused:blocked+=1
+ else:raise AssertionError('write boundary was relaxed')
+for descriptor in (0,1,2,True,-1,*saved):
+ try:a.forbid_side_effects('open',(descriptor,'w',os.O_WRONLY))
+ except a.Refused:blocked+=1
+ else:raise AssertionError('standard or malformed descriptor allowed')
+with open(write_fd,'wb',closefd=False) as pipe:pipe.write(b'synthetic')
+assert os.read(read_fd,9)==b'synthetic'
+line=a.encrypt(value,cert,expected);cipher=a.base64.b64decode(line[len(a.FRAME_PREFIX):],validate=True)
+def decrypt(raw):return a.command(['/usr/bin/openssl','cms','-decrypt','-binary','-inform','DER','-recip',str(cert),'-inkey',str(key)],data=raw,limit=20480)
+assert a.validate_envelope(a.unpack(decrypt(cipher)),expected)==value
+tampered=bytearray(cipher);tampered[-1]^=1
+try:decrypt(bytes(tampered))
+except a.Refused:pass
+else:raise AssertionError('tampered ciphertext accepted')
+assert blocked==13 and regular.read_bytes()==b'unchanged' and not missing.exists()
+# Exercise a real signal during command execution, not only a mocked exception.
+a.limits(.03)
+def slow(*args,**kwargs):return a.command([sys.executable,'-I','-B','-c','import time;time.sleep(1)'])
+try:a.encrypt(value,cert,expected,runner=slow)
+except a.Refused as error:assert error.code=='deadline'
+else:raise AssertionError('deadline was hidden')
+a.signal.alarm(0)
+for fd in (regular_fd,named_fd,read_fd,write_fd,*saved):os.close(fd)
+left.close();right.close();named.unlink();regular.unlink()
+print('AUDIT_CRYPTO_AND_WRITE_BOUNDARIES=PASS')
+'''
+        result=subprocess.run([sys.executable,'-I','-B','-c',program,str(HERE/'inspection_aggregate.py'),
+            str(self.cert),str(self.key),str(self.folder)],input=A.canonical(envelope(self.expected)),
+            capture_output=True,timeout=10,check=False)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout,b'AUDIT_CRYPTO_AND_WRITE_BOUNDARIES=PASS\n')
+        self.assertEqual(result.stderr,b'')
 
     def metadata(self):
         return dict(id=123456, run_attempt=1, event='workflow_dispatch', head_branch='main', status='completed',
