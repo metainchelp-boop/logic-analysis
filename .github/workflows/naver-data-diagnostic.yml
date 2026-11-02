@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: naver-retirement-data-preservation
+  group: naver-data-preservation
   cancel-in-progress: false
 jobs:
   diagnostic:

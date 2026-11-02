@@ -3,6 +3,7 @@ import ast
 import contextlib
 import copy
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -67,6 +68,13 @@ class Diagnostic(unittest.TestCase):
     def test_interruption_is_bounded_and_closes_snapshot(self):
         with mock.patch.object(self.snapshot,'configuration',side_effect=m.Refused('interrupted')),mock.patch.object(self.snapshot.stack,'close',wraps=self.snapshot.stack.close) as close:
             self.assertEqual(self.run_diag()['error'],'interrupted');close.assert_called_once()
+    def test_outer_temporary_directory_cleanup_failure_is_not_confirmed(self):
+        folder=mock.MagicMock();folder.__enter__.return_value='/synthetic-config';folder.__exit__.side_effect=RuntimeError(CANARY)
+        modules={'retirement_data_preflight.py':types.SimpleNamespace(Docker=lambda *a,**kw:None),'retirement_data_archive.py':None,'retirement_data_source.py':None}
+        out=io.StringIO()
+        with mock.patch.object(m.os,'geteuid',return_value=0),mock.patch.object(m.os,'umask'),mock.patch.object(m.sys,'platform','linux'),mock.patch.object(m.sys,'argv',['diagnostic','123-1']),mock.patch.object(m,'load_modules',return_value=modules),mock.patch.object(m.tempfile,'TemporaryDirectory',return_value=folder),mock.patch.object(m,'diagnose',return_value={'status':'diagnosed'}),mock.patch.object(m.signal,'signal'),mock.patch.object(m.signal,'setitimer'),mock.patch.object(m.resource,'setrlimit'),contextlib.redirect_stdout(out):
+            self.assertEqual(m.main(),2)
+        result=json.loads(out.getvalue());self.assertFalse(result['cleanup_confirmed']);self.assertEqual(result['error'],'operation_failed');self.assertNotIn(CANARY,out.getvalue())
     def test_assets_wrong_path_or_run_fail_before_any_open(self):
         for path,run in [('/tmp/other','123-1'),('/tmp/metainc-data-diagnostic-123-1','124-1'),('/tmp/metainc-data-diagnostic-01-1','01-1')]:
             with mock.patch.object(m.os,'open',side_effect=AssertionError('no open')),self.assertRaises(m.Refused):m.load_modules(path,run)
@@ -101,6 +109,8 @@ class Workflow(unittest.TestCase):
         for key in env:
             bad=dict(env);bad[key]=CANARY;p=subprocess.run(['/bin/bash','-c',self.guard],env=bad,capture_output=True,timeout=3);self.assertNotEqual(p.returncode,0);self.assertNotIn(CANARY.encode(),p.stdout+p.stderr)
         self.assertIn('workflow_dispatch: {}',self.text);self.assertNotIn('contents: write',self.text)
+        source=(BASE/'.github/workflows/naver-data-preservation.yml').read_text()
+        self.assertEqual(re.search(r'^  group: (.+)$',self.text,re.M)[1],re.search(r'^  group: (.+)$',source,re.M)[1])
     def test_good_and_specific_stage_failure_pass_closed_validator(self):
         self.assertEqual(self.validate().returncode,0)
         v=copy.deepcopy(self.good);v.update(status='blocked',stage='frozen_initial',error='cgroup_unconfirmed');self.assertEqual(self.validate(v,rc='2').returncode,0)

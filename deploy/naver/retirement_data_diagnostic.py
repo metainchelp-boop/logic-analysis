@@ -110,7 +110,7 @@ def main():
             report=diagnose(archive,preflight,source,preflight.Docker(end,runner=run),end=end)
     except BaseException as error:
         code=getattr(error,'code',None)
-        report={'schema':'metainc-data-diagnostic-v1','session':SESSION,'status':'blocked','stage':'dependencies','error':code if code in ERRORS else 'operation_failed','read_only':True,'archive_written':False,'state_changed':False,'cleanup_confirmed':True,'entry_count':0,'file_count':0,'deleted_count':0,'configuration_count':0,'configuration_absent_count':0}
+        report={'schema':'metainc-data-diagnostic-v1','session':SESSION,'status':'blocked','stage':'dependencies','error':code if code in ERRORS else 'operation_failed','read_only':True,'archive_written':False,'state_changed':False,'cleanup_confirmed':False,'entry_count':0,'file_count':0,'deleted_count':0,'configuration_count':0,'configuration_absent_count':0}
     finally:signal.setitimer(signal.ITIMER_REAL,0)
     print(json.dumps(report,sort_keys=True,separators=(',',':')));return 0 if report['status']=='diagnosed' else 2
 if __name__=='__main__':sys.exit(main())
