@@ -247,13 +247,43 @@ class GrammarPreflightTests(unittest.TestCase):
             self.assertEqual(json.loads(calls[0][0].data)['output_config']['format'], fmt)
 
     def test_live_source_and_candidate_are_fixed_to_reviewed_boundary(self):
-        self.assertEqual(G.SOURCE, 'bb151c2a483a3422c25ba203b7a9358569f5a9da')
-        self.assertEqual(G.CANDIDATE, 'grounded-text-v15')
+        self.assertEqual(G.SOURCE, 'd633ff4450bb74206ecce5dda157387336256097')
+        self.assertEqual(G.CANDIDATE, 'grounded-blocks-v16')
         self.assertEqual(G.MAX_REFERENCE_BRANCHES, 36)
         self.assertEqual(G.MAX_PACKAGE, 24576)
         self.assertEqual(G.blank_result(self.pkg)['live_source'], G.SOURCE)
         with self.assertRaises(ValueError):
             G.validate_package({**self.pkg, 'candidate': 'grounded-segments-v14'})
+
+    def test_separate_text_and_references_require_closed_shapes_and_bare_references(self):
+        schema = {'type': 'object', 'properties': {'note': {'$ref': '#/definitions/block'}},
+            'required': ['note'], 'additionalProperties': False, 'definitions': {
+                'block': {'type': 'object', 'properties': {
+                    'text': {'type': 'string', 'pattern': '^[가-힣 .]+$'},
+                    'refs': {'type': 'array', 'items': {'type': 'string',
+                        'pattern': r'^\{\{metric:[a-z_]+\.current\}\}$'}}},
+                    'required': ['text', 'refs'], 'additionalProperties': False}}}
+        fmt = {'type': 'json_schema', 'schema': schema}
+        self.pkg = {**self.pkg, 'format': fmt, 'schema_sha256': G.digest(G.canonical(fmt))}
+        examples = [({'text': '자료를 확인합니다.', 'refs': ['{{metric:spend.current}}']}, True),
+                    ({'text': '자료를 확인합니다.', 'refs': []}, True),
+                    ({'text': '자료를 확인합니다.', 'refs': ['{{metric:spend.current}}원']}, False),
+                    ({'text': '{{metric:spend.current}}원', 'refs': []}, False),
+                    ({'text': '자료를 확인합니다.', 'refs': [], 'extra': 'PRIVATE_CANARY'}, False),
+                    ('{{metric:spend.current}}원', False)]
+        for note, accepted in examples:
+            response = Response(json.dumps({'stop_reason': 'end_turn', 'content': [{
+                'type': 'text', 'text': json.dumps({'note': note}, ensure_ascii=False)}]}).encode())
+            result, calls, _ = self.invoke(response=response)
+            self.assertEqual(result['ok'], accepted)
+            self.assertEqual(result['schema_valid'], accepted)
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(result['response_closed'])
+
+    def test_previous_candidate_packages_refuse_before_transport(self):
+        for candidate in ('grounded-text-v15', 'reference-segments-v14'):
+            with self.subTest(candidate=candidate), self.assertRaises(ValueError):
+                G.validate_package({**self.pkg, 'candidate': candidate})
 
     def test_close_failure_cannot_claim_success(self):
         response = Response(b'{"stop_reason":"end_turn","content":[{"type":"text","text":"{}"}]}', fail_close=True)

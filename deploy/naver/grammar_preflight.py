@@ -16,8 +16,8 @@ import subprocess
 import sys
 import time
 
-SOURCE = 'bb151c2a483a3422c25ba203b7a9358569f5a9da'
-CANDIDATE = 'grounded-text-v15'
+SOURCE = 'd633ff4450bb74206ecce5dda157387336256097'
+CANDIDATE = 'grounded-blocks-v16'
 MAX_REFERENCE_BRANCHES = 36
 MAX_PACKAGE = 24576
 MAX_RESPONSE = 131072
@@ -40,7 +40,7 @@ PINS = {
     'naver_runtime/claude_provider.py': '230e6b9faafe6facde94d2883c654a6e13ea672f4f2ad607afbbc085cc9856e7',
     'naver_runtime/learning_provider.py': 'f50a22c28080dfcadc6b08101a8b8779b59029ff3a6a74060423ba22ae6034be',
     'naver_runtime/provider_observability.py': '9344a464a642cfbea41c7e7a14011a466b1d9ebc495a27c36205bd94e45b21cd',
-    'naver_runtime/report_output_schema.py': '1860b52bcd114176b5da3460c8eb527c50dcc80a21b143642e15f8bfde72eeeb',
+    'naver_runtime/report_output_schema.py': 'c463d7c1d4d9f6d15c764c90d6cdfa4473277907cc1c04cfa5b00a24e0017624',
 }
 TOKEN_FIELDS = ('input_tokens', 'output_tokens', 'cache_read_input_tokens',
                 'cache_creation_input_tokens', 'cache_creation_5m_input_tokens',
