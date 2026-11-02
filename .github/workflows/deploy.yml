@@ -13,6 +13,7 @@ on:
       - '.github/workflows/naver-tools-check.yml'  # 합성 CI 정의만 바뀌어도 앱 재배포하지 않음
       - '.github/workflows/naver-content-preflight.yml'  # 콘텐츠 보존 전 메타데이터 관찰, 앱 배포 없음
       - '.github/workflows/naver-autobid-key-preflight.yml'  # 고정 키 보관 후보 metadata, 앱 배포 없음
+      - '.github/workflows/naver-data-preservation.yml'  # 앱 데이터 일관 사본 보존, 제품 재배포 없음
       - '.github/workflows/naver-data-preflight.yml'
       - '.github/workflows/naver-control-mutation.yml'  # 수동 철거 통제 도구, 제품 재배포 없음
       - '.github/workflows/naver-data-control-preflight.yml'  # mutable data 읽기 전용 관찰, 앱 배포 없음
