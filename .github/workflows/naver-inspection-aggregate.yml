@@ -1,0 +1,178 @@
+name: NAVER 상세 점검 비공개 집계 (일회 읽기)
+
+on:
+  workflow_dispatch:
+    inputs:
+      recipient_certificate_base64:
+        description: '로컬 일회 RSA-3072 공개 인증서의 base64 (개인키 입력 금지)'
+        type: string
+        required: true
+      nonce:
+        description: '로컬에서 정한 일회 64자리 소문자 hex 식별자'
+        type: string
+        required: true
+
+# Ciphertext is public in this run's log. No plaintext aggregate, artifact,
+# customer selector, DB copy, product deployment, or collection action exists.
+permissions:
+  contents: read
+concurrency:
+  group: deploy-logic-analysis
+  cancel-in-progress: false
+
+jobs:
+  sealed_snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: 대표 계정·main·한 번의 실행 확인
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+          ATTEMPT: ${{ github.run_attempt }}
+          REPOSITORY: ${{ github.repository }}
+          HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          [ "$ACTOR" = metainchelp-boop ] && [ "$TRIGGERING_ACTOR" = metainchelp-boop ]
+          [ "$REPOSITORY" = metainchelp-boop/logic-analysis ]
+          [ "$REF" = refs/heads/main ] && [ "$ATTEMPT" = 1 ]
+          [[ "$HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: 합성 검사 (운영 DB·키·수집 호출 없음)
+        run: python -I -B -m unittest discover -s deploy/naver/tests -p test_inspection_aggregate.py -v
+      - name: 검사한 helper·공개 인증서·공개 바인딩 준비
+        env:
+          CERTIFICATE: ${{ inputs.recipient_certificate_base64 }}
+          NONCE: ${{ inputs.nonce }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python -I -B - <<'PY'
+          import base64,hashlib,importlib.util,json,os,pathlib,re,sys
+          try:
+              p=pathlib.Path('deploy/naver/inspection_aggregate.py')
+              spec=importlib.util.spec_from_file_location('aggregate',p)
+              a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
+              encoded=os.environ['CERTIFICATE'];nonce=os.environ['NONCE']
+              a.require(len(encoded)<=10924 and re.fullmatch(r'[A-Za-z0-9+/=]+',encoded))
+              cert=base64.b64decode(encoded,validate=True)
+              a.require(0<len(cert)<=8192 and cert.startswith(b'-----BEGIN CERTIFICATE-----\n')
+                        and cert.rstrip().endswith(b'-----END CERTIFICATE-----'))
+              source=p.read_bytes();folder=pathlib.Path('inspection-ship');folder.mkdir(mode=0o755);folder.chmod(0o755)
+              binding=dict(run_id=os.environ['GITHUB_RUN_ID'],run_attempt=1,source=a.SOURCE,
+                  workflow_sha=os.environ['GITHUB_SHA'],helper_sha256=hashlib.sha256(source).hexdigest(),
+                  recipient_sha256=hashlib.sha256(cert).hexdigest(),nonce=nonce)
+              a.validate_binding(binding)
+              for name,raw in [('inspection_aggregate.py',source),('recipient.pem',cert),('binding.json',a.canonical(binding))]:
+                  (folder/name).write_bytes(raw)
+              with open(os.environ['GITHUB_ENV'],'a') as out:
+                  out.write('NSI_RUN='+os.environ['GITHUB_RUN_ID']+'-1\n')
+                  out.write('NSI_SHA='+binding['helper_sha256']+'\n')
+                  out.write('NSI_BINDING_SHA='+hashlib.sha256(a.canonical(binding)).hexdigest()+'\n')
+                  out.write('NSI_CERT_SHA='+binding['recipient_sha256']+'\n')
+          except BaseException:
+              print('NAVER_INSPECTION_REFUSED=arguments_refused');sys.exit(2)
+          PY
+          sudo chown 0:0 inspection-ship/*
+          sudo chmod 644 inspection-ship/*
+      - name: 관리자 전용 임시 폴더 준비
+        id: prepare_remote
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NSI_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            printf '%s' "$NSI_RUN" | grep -Eq '^[0-9]+-1$'
+            [ -d /tmp ] && [ ! -L /tmp ]
+            umask 077
+            mkdir "/tmp/metainc-naver-inspection-$NSI_RUN"
+      - name: 공개 helper·인증서만 전송
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          command_timeout: 45s
+          source: inspection-ship/inspection_aggregate.py,inspection-ship/recipient.pem,inspection-ship/binding.json
+          target: /tmp/metainc-naver-inspection-${{ github.run_id }}-1
+          strip_components: 1
+          overwrite: false
+      - name: 고정 판에서 한 스냅샷을 읽고 암호문만 반환
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NSI_RUN,NSI_SHA,NSI_BINDING_SHA,NSI_CERT_SHA
+          command_timeout: 45s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            printf '%s' "$NSI_RUN" | grep -Eq '^[0-9]+-1$'
+            incoming="/tmp/metainc-naver-inspection-$NSI_RUN"
+            [ -d "$incoming" ] && [ ! -L "$incoming" ]
+            [ "$(stat -c '%u:%a' "$incoming")" = 0:700 ]
+            for pair in "inspection_aggregate.py:$NSI_SHA" "recipient.pem:$NSI_CERT_SHA" "binding.json:$NSI_BINDING_SHA"; do
+              name=${pair%%:*};expected=${pair#*:};file="$incoming/$name"
+              printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$'
+              [ -f "$file" ] && [ ! -L "$file" ]
+              [ "$(stat -c '%u:%h:%a' "$file")" = 0:1:644 ]
+              [ "$(sha256sum "$file" | cut -d' ' -f1)" = "$expected" ]
+            done
+            rc=0
+            out=$(timeout -k 2s 35s env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C LC_ALL=C \
+              unshare --net -- python3 -I -B "$incoming/inspection_aggregate.py" < "$incoming/binding.json" 2>/dev/null) || rc=$?
+            case "$rc" in 0|2) ;; *) echo NAVER_INSPECTION_REFUSED=runtime_refused; exit 2 ;; esac
+            printf '%s' "$out" | python3 -I -B -c '
+            import base64,re,sys
+            raw=sys.stdin.buffer.read(48001);rc=sys.argv[1]
+            if rc=="0":
+                match=re.fullmatch(rb"NAVER_INSPECTION_CMS_V1=([A-Za-z0-9+/=]{1,43692})",raw)
+                assert match
+                cipher=base64.b64decode(match[1],validate=True)
+                assert 0<len(cipher)<=32768 and base64.b64encode(cipher)==match[1]
+            else:
+                assert re.fullmatch(rb"NAVER_INSPECTION_REFUSED=(arguments_refused|host_refused|source_refused|source_unavailable|database_refused|limit_refused|deadline|crypto_refused|output_refused|runtime_refused|sqlite_refused|cleanup_refused|internal_refused)",raw)
+            ' "$rc" 2>/dev/null || { echo NAVER_INSPECTION_REFUSED=output_refused; exit 2; }
+            printf '%s\n' "$out"
+            exit "$rc"
+      - name: 이번 실행의 공개 임시 파일만 정리
+        if: always() && steps.prepare_remote.outcome == 'success'
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NSI_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            printf '%s' "$NSI_RUN" | grep -Eq '^[0-9]+-1$'
+            incoming="/tmp/metainc-naver-inspection-$NSI_RUN"
+            [ -d "$incoming" ] && [ ! -L "$incoming" ]
+            [ "$(stat -c '%u:%a' "$incoming")" = 0:700 ]
+            for name in inspection_aggregate.py recipient.pem binding.json; do
+              file="$incoming/$name"
+              if [ -e "$file" ] || [ -L "$file" ]; then
+                [ -f "$file" ] && [ ! -L "$file" ]
+                [ "$(stat -c '%u:%h:%a' "$file")" = 0:1:644 ]
+                rm -f -- "$file"
+              fi
+            done
+            rmdir -- "$incoming"
