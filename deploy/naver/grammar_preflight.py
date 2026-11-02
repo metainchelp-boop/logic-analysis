@@ -17,7 +17,7 @@ import sys
 import time
 
 SOURCE = 'c44a66393340314796851f4dd524dad523bd5415'
-CANDIDATE = 'safe-prose-v11'
+CANDIDATE = 'plain-prose-v12'
 MAX_PACKAGE = 24576
 MAX_RESPONSE = 131072
 MAX_RESULT = 4096
