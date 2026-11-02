@@ -36,7 +36,7 @@ GZIP_TYPES = {'application/vnd.oci.image.layer.v1.tar+gzip',
               'application/vnd.docker.image.rootfs.diff.tar.gzip'}
 
 
-PROFILE_SHA256 = 'f776e4a27ab2e66a3a34ae8c0122aadc763ae3e6145e58040e68484d699ebcd5'
+PROFILE_SHA256 = '23f319e49ecef3529d904b84720bf3d1b5fd17ef05169626ffcb95059266ea85'
 PROFILE_FILE = 'retirement_image_profiles.py'
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK

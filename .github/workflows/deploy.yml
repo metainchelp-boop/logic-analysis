@@ -14,6 +14,7 @@ on:
       - '.github/workflows/naver-content-preflight.yml'  # 콘텐츠 보존 전 메타데이터 관찰, 앱 배포 없음
       - '.github/workflows/naver-autobid-key-preflight.yml'  # 고정 키 보관 후보 metadata, 앱 배포 없음
       - '.github/workflows/naver-data-preflight.yml'
+      - '.github/workflows/naver-control-mutation.yml'  # 수동 철거 통제 도구, 제품 재배포 없음
       - '.github/workflows/naver-data-control-preflight.yml'  # mutable data 읽기 전용 관찰, 앱 배포 없음
       - '.github/workflows/naver-images-preservation.yml'  # 남은 고정 이미지 보존 전용, 앱 배포 없음
       - '.github/workflows/naver-image-preservation.yml'  # 고정 이미지 암호화 보존, 앱 배포 없음

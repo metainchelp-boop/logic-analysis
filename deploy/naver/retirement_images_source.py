@@ -34,7 +34,7 @@ KEY = 'source-transport-key'
 PUBLIC_ASSET = 'recovery-public.asc'
 HOSTS_ASSET = 'server-b-known-hosts'
 HEX = re.compile(r'[0-9a-f]{64}\Z')
-PROFILE_SHA256 = 'f776e4a27ab2e66a3a34ae8c0122aadc763ae3e6145e58040e68484d699ebcd5'
+PROFILE_SHA256 = '23f319e49ecef3529d904b84720bf3d1b5fd17ef05169626ffcb95059266ea85'
 PROFILE_FILE = 'retirement_image_profiles.py'
 # Moby docker-v29.4.0 / daa0cb7: containerd Export streams content blobs into tar.Writer.
 # This is the full-archive temporary-copy budget, NOT a claim of zero daemon writes.

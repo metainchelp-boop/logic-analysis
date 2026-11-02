@@ -31,3 +31,12 @@ OCI layer의 descriptor digest는 보관된 원문 바이트의 해시이며 con
 index는 runtime 경로 하나만 허용한다. BuildKit의 명시적 attestation annotation과 `unknown/unknown` platform을 함께 가진 descriptor는 제외하며, 해당 attestation의 존재·복구는 검증하지 않는다. runtime 플랫폼이 둘 이상이거나 runtime blob이 빠지면 거부한다. 따라서 성공은 고정 target에 연결된 단일 runtime 이미지의 구조 검증이고 전체 다중 플랫폼·attestation 보존의 증거는 아니다. 미지원 형식으로 인한 실패도 암호문 손상을 뜻하지 않는다. [BuildKit attestation descriptor](https://github.com/moby/buildkit/blob/v0.20.2/docs/attestations/attestation-storage.md#attestation-manifest-descriptor).
 
 입력과 gzip 확장량은 각각512MiB, outer tar 항목은4096개, 보관하는 metadata 후보는256개·각2MiB·합계16MiB, JSON 깊이는32, index 깊이는8, 전체 실행은600초로 제한한다. CLI는 core dump를 끄며 평문을 추출하거나 디스크에 쓰지 않는다. 일반 구조 오류에서도 입력을 EOF까지 소비하지만 크기·시간 제한에서는 중단한다. 최종 성공에는 부모 실행기가 확인한 **GPG 종료 코드0과 검증기 종료 코드0**이 모두 필요하다. 이 변경의 합성 시험과 실제 암호문 복호화 검증은 별도 증거다.
+
+
+## 콘텐츠 이미지의 압축 해제 검증 예산
+
+남은 이미지 공통 profile에서 콘텐츠 이미지의 gzip 해제 누적 작업량만 8GiB로 제한합니다. 기존 이미지 식별자, 세션, 전송·암호문·외부 tar 2GiB 한도, 1800초 검증 제한과 나머지 세 이미지의 512MiB 해제 한도는 그대로입니다. 평문은 64KiB 이하 chunk로 해시하며 파일로 추출하지 않습니다. 8GiB는 메모리 할당량이나 확인된 실제 해제 크기가 아니라 유한한 검증 작업량 상한입니다.
+
+Docker 29.4.0의 containerd `ImageInspect.Size`는 [packed resource descriptor 크기 합계](https://github.com/moby/moby/blob/daa0cb7f23594cdbcce5002e370027d3fd36ffd7/daemon/containerd/image_inspect.go#L174)입니다. gzip 해제 뒤 계층 tar의 총 길이와 같지 않습니다. 그래서 약 1.38GB의 inspect Size를 근거로 해제 한도까지 2GiB로 둔 기존 설정은 정상 크기의 압축본도 거부할 수 있었습니다. `expanded_size_limit` 뒤에는 EOF까지 drain하므로 결과의 `archive_bytes`는 해제 크기나 실패 위치를 뜻하지 않습니다.
+
+기존 암호문과 과거 영수증은 보존합니다. 새로운 검증은 과거 전송 profile의 SHA와 새 검증 코드/profile의 SHA를 구분하고, 같은 암호문 FD의 전체 길이·SHA를 다시 결속해야 합니다. 완료된 전송 세션을 다시 준비하거나 송신하지 않습니다. 새 한도로도 크기·시간·식별·descriptor·diff_id 검증이 실패하면 성공으로 처리하지 않습니다.
