@@ -26,20 +26,22 @@ import types
 
 SESSION='data-snapshot-20261102-v1'
 BASE='/root/.metainc-retirement-control/'+SESSION
-TRANSFER='/root/.metainc-retirement-transfer/'+SESSION+'/transfer-receipt.json'
+# Only transport changes: the frozen snapshot and original fence keep their session.
+TRANSFER_SESSION='data-snapshot-continuation-20261102-v1'
+TRANSFER='/root/.metainc-retirement-transfer/'+TRANSFER_SESSION+'/transfer-receipt.json'
 CONTROL_SHA='16483b62c97d6780e8a7b04ffde9a445aa8b14f75b8f2a29ca6285036238dcb0'
-PREFLIGHT_SHA='0'*64
-ARCHIVE_SHA='0'*64
+PREFLIGHT_SHA='562582ebf91b82c84f6a728bd2fd2afd9a7cc59d8346deb40b110c20578fec8c'
+ARCHIVE_SHA='d1e61d7a51e1ec955625ef03ce312cf5299630718615479bd20d09a0630ad269'
 OPERATOR_DOCUMENT={'actor': 'metainchelp-boop', 'checked_at': '2026-11-02T07:06:25.189157+00:00', 'other_workflows': [{'id': 267160662, 'path': '.github/workflows/validate.yml', 'state': 'active'}], 'other_workflows_unchanged': True, 'repository': 'metainchelp-boop/metainc-content-studio', 'schema': 1, 'session': 'data-snapshot-20261102-v1', 'status': 'known_deployments_disabled', 'workflows': [{'active_runs': 0, 'after': 'disabled_manually', 'before': 'active', 'id': 265254896, 'path': '.github/workflows/deploy.yml'}, {'active_runs': 0, 'after': 'disabled_manually', 'before': 'active', 'id': 322623002, 'path': '.github/workflows/deploy-autobid.yml'}]}
 OPERATOR_SHA='9069e12e55d6c2a3b9ade3ef95b451d3ed6aac084a5e32319948b59a556455ba'
-SEND_SHA='0'*64
-LOCAL_RESTORE_SHA='0'*64
-SEMANTICS_SHA='0'*64
+SEND_SHA='1518e95f2f14dc82354bb1979f2691a0074f0a6453a289473e3d030a80f52b24'
+LOCAL_RESTORE_SHA='b26844ab0dfdb1bf4a2bf69326cbb0d653405e147ad805771a0f51047e657985'
+SEMANTICS_SHA='7e8d0e90596ae941855e6cc966a8f418a075dcb7057530213fb0a86d0436003a'
 # Exact public control facts from workflow41403670586; no private body.
 PROTECTED=[{'id': 'e6014922a842d9f9a699182510aa47363cef4e12b09bcb338e8cd49f3bf1785f', 'image': 'sha256:e4650c343f7395068d551138ba9d1ae963fff28b203542457d683814862fca28'}, {'id': '1141302033f38224116e03506edf33d9279f2b6633df30d330721f808cdc624f', 'image': 'sha256:171e5bb8aa1673c3d1e0aefa7c48f1e1f72201f2b93c2dcdeb2f9d3134523960'}, {'id': '1d6f986d95a2c1fce2aaeac7a872edaf4e8519e9c99acddebc1cc3a0d6e48291', 'image': 'sha256:3b75795280e53fae096a26b735bd324c7ba76e7aa1d5c4b8a76ed5b7569b195a'}]
 POLICY={'request': {'ad': {'id': '6f37ec7da0dea75b4630fd177ff0f51ae0087e6b310d68df5a6e6803c015890f', 'pid': 1679637}, 'content': {'id': '740ea62adf12d41571a1297ea4bb623ca62177f1c4def4d2c290f7b5ee07c9b5', 'pid': 1669091}}, 'files': [{'aliases': ['ad'], 'enabled_paths': ['/etc/nginx/sites-enabled/ad.metainc.co.kr'], 'locations': [{'end': 745, 'modifier': '', 'path': '/', 'sha256': '375cef8b18bbe4ee9d11c3fcdbddd36e330512ca224de8c17ec0346201b7e967', 'start': 422}], 'matching_servers': 1, 'metadata': {'bytes': 4700, 'device': 64769, 'gid': 0, 'inode': 917201, 'links': 1, 'mode': 420, 'uid': 0}, 'protected_bytes_sha256': '4878a9972995b66863aa5b9ac8134fb7bab0bef3a99fbd263d5d421fde5ce990', 'protected_locations': [{'end': 1992, 'modifier': '=', 'path': '/naver', 'sha256': 'c29741ab74b50d2179157602480e5db9c5099192455f73844c6109341eff97f9', 'start': 1221}, {'end': 2770, 'modifier': '^~', 'path': '/naver/', 'sha256': 'da371418392851ab2f0a8f2d6c5c74d5034b3a3f1ad424fb0fb2f6a5a480f8b3', 'start': 1997}, {'end': 3555, 'modifier': '=', 'path': '/api/naver-auto', 'sha256': '779f650946aeaa333da7c8ba6fdc779d1c548fc65298142af9e872c5137afa5d', 'start': 2775}, {'end': 4342, 'modifier': '^~', 'path': '/api/naver-auto/', 'sha256': '07fcc86d58e48eebd268210f1416e259597b1923204a9d53eae39c123f65d819', 'start': 3560}], 'resolved_path': '/etc/nginx/sites-available/ad.metainc.co.kr', 'sha256': 'f48e0a389974d3b070f9c132d65bf9a776f289541ac5def778936496cd11a89c'}, {'aliases': ['logic'], 'enabled_paths': ['/etc/nginx/sites-enabled/logic-analysis'], 'locations': [{'end': 1464, 'modifier': '=', 'path': '/autobid', 'sha256': 'aead532583115a336d5786a7c37370f64937addf9f9e2e094d1c6e5d7d41ef6a', 'start': 1419}, {'end': 1730, 'modifier': '', 'path': '/autobid/', 'sha256': 'c5df16221f8339254fdbc56827dc8d060be14ed614a89ee8da2dc3eff75b648e', 'start': 1469}, {'end': 3036, 'modifier': '', 'path': '/studio/', 'sha256': '83ed22a01d892d593f7b99fb6dd4a8cd6da8e94c5c170e15b85f2c21c549f407', 'start': 2370}, {'end': 3096, 'modifier': '=', 'path': '/studio', 'sha256': '37f35efee5a022d8da4eba70d180903e258e62c87b1cb0e10ba9e34c09cad45f', 'start': 3041}], 'matching_servers': 1, 'metadata': {'bytes': 3099, 'device': 64769, 'gid': 0, 'inode': 917065, 'links': 1, 'mode': 420, 'uid': 0}, 'protected_bytes_sha256': '892890bfb2ed64ac46ca8f5ca941454e254f2b2e9b82b7de1439c7f36fcb9c93', 'protected_locations': [], 'resolved_path': '/etc/nginx/sites-enabled/logic-analysis', 'sha256': 'a8c1a4f6e2c2012aacdf73ba04dd0082ad8c0eeb5685b43e345d838e2b1e3aea'}, {'aliases': ['studio'], 'enabled_paths': ['/etc/nginx/sites-enabled/studio.metainc.co.kr.conf'], 'locations': [{'end': 891, 'modifier': '', 'path': '/', 'sha256': '3fba238fa0f3633f14fc74d726331aa3e292e582e936fbab854b0cb87bb1558b', 'start': 235}], 'matching_servers': 1, 'metadata': {'bytes': 894, 'device': 64769, 'gid': 0, 'inode': 947735, 'links': 1, 'mode': 420, 'uid': 0}, 'protected_bytes_sha256': '1d93ca0b112f10f5cbcf992a1023cf7e850c3b0293a63477087cd39a326002c4', 'protected_locations': [], 'resolved_path': '/etc/nginx/sites-available/studio.metainc.co.kr.conf', 'sha256': '4db230394a0609739da7516084e3a2b7960cc8a8056914d1d804c5a12f4ecf22'}], 'protected': [{'id': 'e6014922a842d9f9a699182510aa47363cef4e12b09bcb338e8cd49f3bf1785f', 'image': 'sha256:e4650c343f7395068d551138ba9d1ae963fff28b203542457d683814862fca28'}, {'id': '1141302033f38224116e03506edf33d9279f2b6633df30d330721f808cdc624f', 'image': 'sha256:171e5bb8aa1673c3d1e0aefa7c48f1e1f72201f2b93c2dcdeb2f9d3134523960'}, {'id': '1d6f986d95a2c1fce2aaeac7a872edaf4e8519e9c99acddebc1cc3a0d6e48291', 'image': 'sha256:3b75795280e53fae096a26b735bd324c7ba76e7aa1d5c4b8a76ed5b7569b195a'}]}
 LOCAL_RESTORE_EXPECTED=None
-SOURCE_RUN=None
+SOURCE_RUN='41417973833-1'
 FIXED_IMAGES={"ad":"sha256:959001525d45612e0c5cc1045291c7b6caefa768c14d37cc1070c26584cb8922","content":"sha256:b52374a33084ea20386af2380478a38cff92eebdbeff97c616ad7d80a112a0dc"}
 FIXED_NAMES={"ad":"/ad-api","content":"/content-studio"}
 MAX_SOURCE=2147483648
@@ -477,7 +479,7 @@ class Mutation:
         require(isinstance(SOURCE_RUN,str) and RUN.fullmatch(SOURCE_RUN),'source_run_not_pinned')
         pin(SEND_SHA);body,_=self.files.read(TRANSFER,8192,True);require(digest(body)==SEND_SHA,'transfer_proof_refused');value=decode(body)
         fields(value,'phase status session error ssh_public_key bytes sha256 process_rc backup_verified source_bytes archive_bytes object_count paused operator_evidence_sha256 run')
-        require(value['phase']=='send' and value['status']=='transferred_unverified' and value['session']==SESSION and value['error'] is None and
+        require(value['phase']=='send' and value['status']=='transferred_unverified' and value['session']==TRANSFER_SESSION and value['error'] is None and
                 value['ssh_public_key'] is None and value['backup_verified'] is False and value['run']==SOURCE_RUN and
                 value['operator_evidence_sha256']==OPERATOR_SHA and value['paused']=={'ad':'paused','content':'paused'} and
                 value['process_rc']=={'archive':0,'gpg':0,'ssh':0} and all(type(v) is int for v in value['process_rc'].values()),'transfer_proof_refused')
