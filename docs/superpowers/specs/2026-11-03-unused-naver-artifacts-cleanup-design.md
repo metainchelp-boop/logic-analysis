@@ -7,7 +7,7 @@
 ## 계약
 
 - 입력은 `cleanup-artifacts-plan` 또는 `cleanup-artifacts <allowlist_sha256>`뿐이다. 경로·이미지명·보존 예외·삭제 목록 입력을 추가하지 않는다.
-- 두 모드는 기존 `build_plan`, `protected_state`, image/release identity와 삭제 직전 재검사를 공유한다. current, fallback, 배포 기록, 모든 컨테이너의 이미지·mount, unit/drop-in/compose/companion 참조 보호를 바꾸지 않는다.
+- 두 모드는 기존 `build_plan`, `protected_state`, image/release identity와 삭제 직전 재검사를 공유한다. current, fallback, 배포 기록, 모든 컨테이너의 이미지·mount, unit/drop-in/compose/companion 참조 수집을 유지한다. 기존 전체 cleanup은 path 참조로 release만 보호한다. 새 모드는 그 참조의 같은 커밋 이미지와 같은 이미지 ID의 다른 NAVER 태그까지 추가로 보존하며, 삭제 직전에도 다시 확인한다. 이 추가 보호는 기존 전체 cleanup에는 적용하지 않는다.
 - 새 해시는 `unused-naver-artifacts-v1` scope와 기존 정렬된 type/ref/id 목록을 함께 결속한다. 기존 cleanup-plan 해시와 새 해시의 교차 적용을 거부한다. legacy hash와 동작은 그대로 유지한다.
 - apply는 같은 고정 deploy lock과 root 검사, 미완결 배포 거절을 적용한다. 기존 state 디렉터리가 없거나 실제 디렉터리가 아니면 거절한다. 잠금 파일 외에 state/log 파일을 만들거나 바꾸지 않는다. commands 로그 생성·삭제·chmod, prune-logs, 기존 전체 cleanup shell 경로 호출은 없다.
 - Docker 원문 출력은 메모리에 누적하지 않고 버린다. stdout은 기존 고정 JSON 결과 접두사와 새 mode/scope, 제거·거절·실패 목록, 실제 free bytes 전후뿐이다. 강제 image 삭제, container/systemd/volume/build cache 변경은 없다.

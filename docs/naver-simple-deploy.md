@@ -248,6 +248,16 @@ engine 43·relay 43, release 폴더 43개. DB 사본 하나(합 + 256MiB = 3.574
    - 결과: `NAVER_DEPLOY_CLEANUP_RESULT={status, removed, refused, failed, free_bytes_before, free_bytes_after}` (0 CLEANED / 5 PARTIAL / 10 거부 / 11 잠금)
 3. 다시 `inspect` 로 여유 공간을 확인한 뒤 배포한다.
 
+### 기존 배포 로그를 보존하는 미사용 산출물 전용 모드
+
+`cleanup-artifacts-plan` → 목록 검토 → `cleanup-artifacts` 순서로 실행한다. 입력은 해당 계획의 `allowlist_sha256`뿐이며 경로나 태그를 직접 지정할 수 없다. `scope=unused-naver-artifacts-v1`이 후보 목록과 함께 해시에 결속되므로 기존 `cleanup-plan`의 해시와 서로 바꿔 쓸 수 없다.
+
+이 모드는 위의 같은 후보 수집·컨테이너 보호·태그 및 release 정체성 재검사를 사용한다. 추가로 unit/drop-in/compose/companion/container mount가 가리키는 release 커밋의 NAVER 이미지와 그 이미지 ID를 공유하는 NAVER 태그도 남긴다. 적용 중 새 참조가 생기면 삭제 직전에 다시 검사하여 해당 항목을 거절한다. 기존 `cleanup`의 후보·보존 동작은 바뀌지 않는다.
+
+적용에는 기존 state 디렉터리, 같은 deploy lock, root 권한, 미완결 배포 거절이 필요하다. 배포 명령 로그를 만들거나 삭제·chmod하지 않으며, 로그 폴더가 없어도 새로 만들지 않는다. Docker 명령의 원문 출력은 버리고 고정 JSON 결과만 출력한다. 백업·데이터·receipts·다른 앱 이미지·volume·build cache에는 접근하여 정리하지 않는다. Actions 실행 기록과 들어온 임시 helper 파일 정리는 기존 workflow 절차로 남는다.
+
+`reclaim_is_estimate=true`와 회수 추정치는 보장 용량이 아니다. 추정 상·하한이 일치하지 않으면 그 값으로 공간 확보를 확정하지 않는다. 결과의 실제 `free_bytes_after`, 후속 `inspect`, 기존 배포 용량 검사를 확인한다. 용량 기준은 완화하지 않는다.
+
 **절대 하지 않는 것**: `docker system prune`·`volume prune`·`builder prune`·`-a`·`-f`, 다른 앱 이미지, 커밋 태그가 아닌 태그(`local-review` 등),
 saved-exports·receipts·runtime.env·키·데이터 폴더(`.*-failed-db-*` 포함)·기존 백업·volume·build cache.
 

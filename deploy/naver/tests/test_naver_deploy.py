@@ -1438,7 +1438,7 @@ class WorkflowConsistencyTest(unittest.TestCase):
     def test_workflow_cleanup_modes(self):
         with open(os.path.normpath(WORKFLOW)) as handle:
             workflow = handle.read()
-        self.assertIn('options: [inspect, deploy, disk-usage, app-inventory, cleanup-plan, cleanup]', workflow)
+        self.assertIn('options: [inspect, deploy, disk-usage, app-inventory, cleanup-plan, cleanup, cleanup-artifacts-plan, cleanup-artifacts]', workflow)
         ssh_part = workflow[workflow.index('appleboy/ssh-action'):]
         self.assertIn('disk-usage 2>/dev/null', ssh_part)
         self.assertIn("grep '^NAVER_DEPLOY_DISK_USAGE={'", ssh_part)
