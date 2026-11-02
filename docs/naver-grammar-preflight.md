@@ -10,7 +10,7 @@ storage and rendered output require their own product checks.
 ## Fixed boundaries
 
 - Live transport source: `bb151c2a483a3422c25ba203b7a9358569f5a9da`.
-- Candidate: `grounded-segments-v14`.
+- Candidate: `grounded-text-v15`.
 - The live image label, image identity, engine UID and read-only root filesystem
   must match. All 16 files in the transport import closure are SHA-256 pinned;
   unexpected imports or changed files refuse execution.
@@ -23,23 +23,25 @@ storage and rendered output require their own product checks.
   response size is at most 131,072 bytes. No private product source, credentials,
   customer material or response text is emitted in the receipt.
 
-## Grounded reference grammar
+## Grounded text grammar
 
-The validator supports the existing closed JSON subset and one additional form:
-a closed object requiring exactly the string fields `s` and `f`, combined with
-an `anyOf` containing 1–36 branches. Every branch contains only `properties`,
-with only nonempty string enums for `s` and `f`. The parent constraints and a
-branch must both match. These represent the permitted source and field pairs
-in the private fixture.
-The finite product catalog has at most 35 sources: 17 metric, 5 case, 1 plan,
-3 product and 9 setup sources. Grouping cannot create more groups than sources;
-the additional empty-reference branch gives the 36-branch bound. This bound
-comes from the product catalog, not an asserted provider branch limit.
-The no-reference branch has only `s: ""` and `f: ""`; mixed empty and nonempty
-values are refused. All branches are checked before a matching branch can
-succeed. General unions, unconstrained parents, extra branch keywords and nested union leaves remain
-unsupported. The product remains responsible for whether a reference supports
-the generated statement and whether the compiled document is valid.
+The v15 candidate preserves the existing direct-string proposal shape. The
+private fixture supplies a pattern that permits a positive prose alphabet or
+original reference tokens from the metric, case, plan, product and setup
+namespaces. It does not use segment objects or `anyOf`. The helper's existing
+pattern validator is unchanged and checks the exact supplied schema.
+
+A lexically valid reference is not proof that the referenced source is available
+or supports a statement. The product's existing exact allowed-reference prompt,
+compiler and domain checks remain responsible for source membership, numeric
+claims, semantic limits and the final document. The short synthetic preflight
+message does not execute the full product request builder or those domain checks.
+
+The validator retains its narrowly bounded legacy support for a closed `s`/`f`
+object with 1–36 partial enum branches. Its positive and negative tests remain;
+this does not establish provider support or make that form part of v15. General
+unions and unknown schema keywords still fail closed. Only the fixed v15
+candidate is accepted at the package boundary; a v14 package is refused.
 
 ## Execution and evidence
 

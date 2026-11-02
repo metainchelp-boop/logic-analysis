@@ -17,7 +17,7 @@ import sys
 import time
 
 SOURCE = 'bb151c2a483a3422c25ba203b7a9358569f5a9da'
-CANDIDATE = 'grounded-segments-v14'
+CANDIDATE = 'grounded-text-v15'
 MAX_REFERENCE_BRANCHES = 36
 MAX_PACKAGE = 24576
 MAX_RESPONSE = 131072
