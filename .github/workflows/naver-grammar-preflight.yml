@@ -97,6 +97,8 @@ jobs:
           echo "PREFLIGHT_HELPER_SHA=$helper_sha" >> "$GITHUB_ENV"
           echo "PREFLIGHT_PACKAGE_SHA=$package_sha" >> "$GITHUB_ENV"
           echo "합성 요청 묶음 SHA256: $package_sha"
+          # SCP의 tar가 소유자를 보존하므로 전송 사본만 서버 root:600으로 고정한다.
+          sudo chown 0:0 naver-grammar-transfer/grammar_preflight.py naver-grammar-transfer/package.json
 
       - name: 서버 전용 임시 폴더 만들기
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
