@@ -3,7 +3,7 @@ name: 네이버 배포 도구 합성 검증
 # 서버·제품 비밀값 없이 정확한 변경 커밋을 검사한다.
 on:
   pull_request:
-    paths: ['deploy/naver/**', '.github/workflows/naver-deploy.yml', '.github/workflows/naver-content-preflight.yml', '.github/workflows/naver-autobid-key-preflight.yml', '.github/workflows/naver-image-preservation.yml', '.github/workflows/naver-images-preservation.yml', '.github/workflows/naver-data-preflight.yml', '.github/workflows/naver-data-control-preflight.yml', '.github/workflows/naver-key-capsule-preservation.yml', '.github/workflows/naver-tools-check.yml', '.github/workflows/deploy.yml']
+    paths: ['deploy/naver/**', '.github/workflows/naver-deploy.yml', '.github/workflows/naver-content-preflight.yml', '.github/workflows/naver-autobid-key-preflight.yml', '.github/workflows/naver-image-preservation.yml', '.github/workflows/naver-images-preservation.yml', '.github/workflows/naver-data-preflight.yml', '.github/workflows/naver-data-control-preflight.yml', '.github/workflows/naver-control-mutation.yml', '.github/workflows/naver-key-capsule-preservation.yml', '.github/workflows/naver-tools-check.yml', '.github/workflows/deploy.yml']
   push:
     branches: ['codex/naver-app-inventory-20261101']
     paths: ['deploy/naver/**', '.github/workflows/naver-deploy.yml', '.github/workflows/naver-tools-check.yml', '.github/workflows/deploy.yml']

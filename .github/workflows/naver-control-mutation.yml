@@ -1,0 +1,266 @@
+name: 앱 철거 통제 단계 (수동·기본 사전검사)
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        required: true
+        options: [fence, maintenance, stop]
+        default: fence
+      execute:
+        description: 'false는 증거·readiness만 검사한다'
+        type: boolean
+        required: true
+        default: false
+      local_restore_proof_base64:
+        description: 'stop 전용, 검토 SHA와 일치하는 공개 복구 결과 JSON'
+        type: string
+        required: false
+        default: ''
+      kill_semantics_base64:
+        description: 'stop 전용, 실제 daemon commit의 검토된 KILL 순서 증거'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: naver-retirement-control-mutation
+  cancel-in-progress: false
+
+jobs:
+  control:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: 대표·main·첫 실행·단계·호스트 검사
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+          ATTEMPT: ${{ github.run_attempt }}
+          PHASE: ${{ inputs.phase }}
+          EXECUTE: ${{ inputs.execute }}
+          HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTOR" != metainchelp-boop ] || [ "$TRIGGERING_ACTOR" != metainchelp-boop ]; then echo ACTOR_NOT_AUTHORIZED; exit 1; fi
+          if [ "$REF" != refs/heads/main ]; then echo MAIN_REQUIRED; exit 1; fi
+          if [ "$ATTEMPT" != 1 ]; then echo FIRST_ATTEMPT_REQUIRED; exit 1; fi
+          case "$PHASE" in fence|maintenance|stop) ;; *) echo PHASE_REFUSED; exit 1 ;; esac
+          case "$EXECUTE" in true|false) ;; *) echo MODE_REFUSED; exit 1 ;; esac
+          if ! [[ "$HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo TRUSTED_HOST_REQUIRED; exit 1; fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: 서버·키·실자료 없는 focused 합성 검사
+        run: python -I -B -m unittest discover -s deploy/naver/tests -p 'test_retirement_control_mutation*.py' -v
+      - name: 공개 source와 정확 SHA의 공개 stop 증거만 준비
+        env:
+          PHASE: ${{ inputs.phase }}
+          EXECUTE: ${{ inputs.execute }}
+          LOCAL_PROOF: ${{ inputs.local_restore_proof_base64 }}
+          SEMANTICS_PROOF: ${{ inputs.kill_semantics_base64 }}
+        run: |
+          set -euo pipefail
+          python -I -B - <<'PY'
+          import ast,base64,hashlib,json,os,pathlib,re
+          try:
+              phase=os.environ['PHASE'];mode='execute' if os.environ['EXECUTE']=='true' else 'check'
+              source=pathlib.Path('deploy/naver');ship=pathlib.Path('control-mutation-ship');ship.mkdir(mode=0o755)
+              names=['retirement_control_mutation.py','retirement_control_preflight.py']
+              if phase!='fence':names+=['retirement_data_preflight.py','retirement_data_archive.py']
+              tree=ast.parse((source/names[0]).read_text())
+              constants={node.targets[0].id:node.value.value for node in tree.body if isinstance(node,ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and isinstance(node.value,ast.Constant)}
+              for name in names:
+                  body=(source/name).read_bytes()
+                  if not 0<len(body)<=262144:raise ValueError()
+                  (ship/name).write_bytes(body)
+              for variable,pin,name in [('LOCAL_PROOF','LOCAL_RESTORE_SHA','retirement-local-restore-proof.json'),('SEMANTICS_PROOF','SEMANTICS_SHA','retirement-kill-semantics.json')]:
+                  raw=os.environ[variable]
+                  if phase!='stop':
+                      if raw:raise ValueError()
+                      continue
+                  expected=constants.get(pin)
+                  if not isinstance(expected,str) or re.fullmatch('[0-9a-f]{64}',expected) is None or expected=='0'*64:raise ValueError()
+                  if not raw or len(raw)>65536:raise ValueError()
+                  body=base64.b64decode(raw,validate=True)
+                  if not 0<len(body)<=49152 or hashlib.sha256(body).hexdigest()!=expected:raise ValueError()
+                  (ship/name).write_bytes(body);names.append(name)
+              manifest=[]
+              for name in names:
+                  path=ship/name;path.chmod(0o644);manifest.append([name,hashlib.sha256(path.read_bytes()).hexdigest()])
+              encoded=base64.b64encode(json.dumps(manifest,separators=(',',':')).encode()).decode()
+              with open(os.environ['GITHUB_ENV'],'a') as out:
+                  out.write('NCM_MANIFEST='+encoded+'\nNCM_SHA='+manifest[0][1]+'\nNCM_RUN='+os.environ['GITHUB_RUN_ID']+'-1\nNCM_PHASE='+phase+'\nNCM_MODE='+mode+'\n')
+          except Exception:raise SystemExit('CONTROL_ASSETS_REFUSED')
+          PY
+      - name: 고유 원격 public staging 준비
+        id: prepare_remote
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NCM_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            printf '%s' "$NCM_RUN" | grep -Eq '^[1-9][0-9]*-1$'
+            [ -d /tmp ]
+            [ ! -L /tmp ]
+            umask 077
+            mkdir "/tmp/metainc-control-mutation-$NCM_RUN"
+      - name: 공개 source·검토된 공개 증거만 전송
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          command_timeout: 45s
+          source: control-mutation-ship/*
+          target: /tmp/metainc-control-mutation-${{ github.run_id }}-1
+          strip_components: 1
+          overwrite: false
+      - name: 같은 source bytes로 사전검사 또는 고정 단계 실행
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NCM_RUN,NCM_PHASE,NCM_MODE,NCM_SHA,NCM_MANIFEST
+          command_timeout: 6m
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            rc=0
+            out=$(timeout -k 10s 300s python3 -I -B -c '
+            import base64,hashlib,json,os,re,stat,sys
+            run,phase,mode,digest,encoded=sys.argv[1:]
+            if re.fullmatch(r"[1-9][0-9]{0,19}-1",run) is None or phase not in ("fence","maintenance","stop") or mode not in ("check","execute") or re.fullmatch(r"[0-9a-f]{64}",digest) is None or len(encoded)>8192:raise SystemExit(2)
+            rows=json.loads(base64.b64decode(encoded,validate=True));allowed={"retirement_control_mutation.py","retirement_control_preflight.py","retirement_data_preflight.py","retirement_data_archive.py","retirement-local-restore-proof.json","retirement-kill-semantics.json"}
+            expected={"retirement_control_mutation.py","retirement_control_preflight.py"}
+            if phase!="fence":expected|={"retirement_data_preflight.py","retirement_data_archive.py"}
+            if phase=="stop":expected|={"retirement-local-restore-proof.json","retirement-kill-semantics.json"}
+            if not isinstance(rows,list) or len(rows)!=len(expected) or any(not isinstance(row,list) or len(row)!=2 or row[0] not in allowed or re.fullmatch(r"[0-9a-f]{64}",row[1]) is None for row in rows) or {row[0] for row in rows}!=expected:raise SystemExit(2)
+            flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+            tmp=os.open("/tmp",flags);parent=os.open("metainc-control-mutation-"+run,flags,dir_fd=tmp)
+            try:
+                before=os.fstat(parent)
+                if before.st_uid!=0 or stat.S_IMODE(before.st_mode)!=0o700:raise ValueError()
+                source=None
+                for name,pin in rows:
+                    info=os.stat(name,dir_fd=parent,follow_symlinks=False)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or not 0<info.st_size<=262144:raise ValueError()
+                    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+                    try:
+                        if os.fstat(fd).st_ino!=info.st_ino or os.fstat(fd).st_dev!=info.st_dev:raise ValueError()
+                        os.fchown(fd,0,0);os.fchmod(fd,0o600);initial=os.fstat(fd)
+                        body=bytearray()
+                        while True:
+                            block=os.read(fd,min(65536,262145-len(body)))
+                            if not block:break
+                            body.extend(block)
+                            if len(body)>262144:raise ValueError()
+                        def stamp(v):return v.st_dev,v.st_ino,v.st_mode,v.st_uid,v.st_gid,v.st_nlink,v.st_size,v.st_mtime_ns,v.st_ctime_ns
+                        if stamp(os.fstat(fd))!=stamp(initial) or stamp(os.stat(name,dir_fd=parent,follow_symlinks=False))!=stamp(initial) or hashlib.sha256(body).hexdigest()!=pin:raise ValueError()
+                        if name=="retirement_control_mutation.py":
+                            if pin!=digest:raise ValueError()
+                            source=bytes(body)
+                    finally:os.close(fd)
+                linked=os.stat("metainc-control-mutation-"+run,dir_fd=tmp,follow_symlinks=False)
+                if (linked.st_dev,linked.st_ino,linked.st_uid,stat.S_IMODE(linked.st_mode))!=(before.st_dev,before.st_ino,0,0o700):raise ValueError()
+                path="/tmp/metainc-control-mutation-"+run+"/retirement_control_mutation.py"
+                sys.argv=[path,phase,mode,run]
+                exec(compile(source,path,"exec"),{"__name__":"__main__","__file__":path})
+            finally:os.close(parent);os.close(tmp)
+            ' "$NCM_RUN" "$NCM_PHASE" "$NCM_MODE" "$NCM_SHA" "$NCM_MANIFEST" 2>/dev/null) || rc=$?
+            case "$rc" in 0|2) ;; *) echo CONTROL_EXECUTION_UNCONFIRMED; exit 1 ;; esac
+            if ! printf '%s' "$out" | python3 -I -B -c '
+            import json,re,sys
+            def require(value):
+                if not value:raise ValueError()
+            def unique(pairs):
+                value={}
+                for key,item in pairs:require(key not in value);value[key]=item
+                return value
+            try:
+                raw=sys.stdin.buffer.read(8193);require(0<len(raw)<=8192 and len(raw.splitlines())==1 and b"root" not in raw)
+                value=json.loads(raw,object_pairs_hook=unique,parse_constant=lambda _:(_ for _ in ()).throw(ValueError()))
+                expected={"status","error","phase","execute","session","run","changed_containers","changed_files","protected_count","daemon","local_restore_verified","application_restore_verified","data_deleted","fence_journal_sha256","control_policy_sha256"}
+                require(isinstance(value,dict) and set(value)==expected)
+                run,phase,mode,rc=sys.argv[1:]
+                require(value["session"]=="data-snapshot-20261102-v1" and value["phase"]==phase and value["run"]==run and type(value["execute"]) is bool and value["execute"]==(mode=="execute"))
+                require(value["status"] in {"ready","completed","blocked"} and (value["status"]=="blocked")== (rc=="2"))
+                if value["status"]!="blocked":require(value["status"]==("completed" if mode=="execute" else "ready") and value["error"] is None)
+                else:require(isinstance(value["error"],str) and value["error"] in ["arguments_refused", "attempt_exists", "child_cleanup_failed", "command_limit", "command_timeout", "config_path_refused", "configuration_changed", "container_changed", "container_limit", "daemon_metadata_refused", "directory_refused", "docker_failed", "exchange_failed", "exchange_unavailable", "fence_proof_refused", "file_limit", "file_refused", "interrupted", "journal_exists", "json_refused", "listener_unconfirmed", "lock_busy", "lock_refused", "maintenance_proof_refused", "module_refused", "nginx_pretest_failed", "nginx_reload_unconfirmed", "nginx_test_failed", "operation_failed", "operator_refused", "operator_stale", "path_changed", "path_refused", "platform_refused", "policy_not_pinned", "proof_not_pinned", "proof_refused", "protected_changed", "restart_not_fenced", "restore_proof_refused", "rollback_changed", "rollback_failed", "rollback_unconfirmed", "semantics_unproven", "source_run_not_pinned", "span_refused", "stop_unconfirmed", "transfer_proof_refused", "write_failed", "writer_reappeared"])
+                for key,limit in (("changed_containers",2),("changed_files",3),("protected_count",3)):require(type(value[key]) is int and 0<=value[key]<=limit)
+                for key in ("local_restore_verified","application_restore_verified","data_deleted"):require(type(value[key]) is bool)
+                require(value["application_restore_verified"] is False and value["data_deleted"] is False)
+                if phase=="stop" and value["status"]!="blocked":require(value["local_restore_verified"] is True)
+                if mode=="check":require(value["changed_containers"]==value["changed_files"]==0)
+                for key in ("fence_journal_sha256","control_policy_sha256"):
+                    require(value[key] is None or isinstance(value[key],str) and re.fullmatch("[0-9a-f]{64}",value[key]))
+                if phase=="fence" and mode=="execute" and value["status"]=="completed":require(all(value[key] is not None for key in ("fence_journal_sha256","control_policy_sha256")))
+                else:require(value["fence_journal_sha256"] is None and value["control_policy_sha256"] is None)
+                daemon=value["daemon"]
+                if daemon is not None:
+                    require(isinstance(daemon,dict) and set(daemon)=={"version","git_commit","os","arch"})
+                    require(isinstance(daemon["version"],str) and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?",daemon["version"]) and isinstance(daemon["git_commit"],str) and re.fullmatch(r"[0-9a-f]{7,40}",daemon["git_commit"]) and daemon["os"]=="linux" and daemon["arch"] in {"amd64","arm64"})
+                print("RETIREMENT_CONTROL_MUTATION="+json.dumps(value,sort_keys=True,separators=(",",":")))
+            except Exception:raise SystemExit(1)
+            ' "$NCM_RUN" "$NCM_PHASE" "$NCM_MODE" "$rc" 2>/dev/null; then echo CONTROL_OUTPUT_REFUSED; exit 1; fi
+            exit "$rc"
+      - name: 이번 공개 staging만 정리 (원형·journal 보존)
+        if: always() && steps.prepare_remote.outcome == 'success'
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NCM_RUN,NCM_MANIFEST
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            python3 -I -B -c '
+            import base64,hashlib,json,os,re,stat,sys
+            run,encoded=sys.argv[1:]
+            if re.fullmatch(r"[1-9][0-9]{0,19}-1",run) is None or len(encoded)>8192:raise SystemExit(2)
+            rows=json.loads(base64.b64decode(encoded,validate=True));allowed={"retirement_control_mutation.py","retirement_control_preflight.py","retirement_data_preflight.py","retirement_data_archive.py","retirement-local-restore-proof.json","retirement-kill-semantics.json"}
+            if not isinstance(rows,list) or not 2<=len(rows)<=6 or any(not isinstance(row,list) or len(row)!=2 or row[0] not in allowed or re.fullmatch(r"[0-9a-f]{64}",row[1]) is None for row in rows):raise SystemExit(2)
+            flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+            tmp=os.open("/tmp",flags)
+            try:
+                name="metainc-control-mutation-"+run
+                try:folder=os.open(name,flags,dir_fd=tmp)
+                except FileNotFoundError:raise SystemExit(0)
+                try:
+                    info=os.fstat(folder)
+                    if info.st_uid!=0 or stat.S_IMODE(info.st_mode)!=0o700:raise ValueError()
+                    for name,pin in rows:
+                        try:info=os.stat(name,dir_fd=folder,follow_symlinks=False)
+                        except FileNotFoundError:continue
+                        if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or not 0<info.st_size<=262144:raise ValueError()
+                        fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=folder)
+                        try:
+                            body=os.read(fd,262145)
+                            if len(body)>262144 or hashlib.sha256(body).hexdigest()!=pin or os.fstat(fd).st_ino!=info.st_ino:raise ValueError()
+                        finally:os.close(fd)
+                        if os.stat(name,dir_fd=folder,follow_symlinks=False).st_ino!=info.st_ino:raise ValueError()
+                        os.unlink(name,dir_fd=folder)
+                finally:os.close(folder)
+                os.rmdir("metainc-control-mutation-"+run,dir_fd=tmp)
+            finally:os.close(tmp)
+            ' "$NCM_RUN" "$NCM_MANIFEST" 2>/dev/null
