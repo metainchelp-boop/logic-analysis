@@ -21,3 +21,13 @@
 `docker save`의 pipe 사용은 daemon 내부 임시파일이 없다는 보장이 아니다. 원본 helper는 작은 고정 image와 충분한 공간만 허용한다. 참고: [Moby의 image save 임시 디렉터리](https://github.com/moby/moby/blob/v27.5.1/image/tarexport/save.go#L195), [daemon의 임시 경로 설정](https://github.com/moby/moby/blob/v27.5.1/daemon/daemon.go#L1351).
 
 합성 시험은 실제 서버 접근·전송·암호문 회수·복호화의 증거가 아니다. 각 실행 결과를 별도로 보존한다. 키·비밀번호·DB 행·환경 원문·고객 파일명은 결과 기록에 남기지 않는다.
+
+## Docker·containerd 이미지 식별 검증
+
+기존 Docker 형식은 고정 image ID와 config 원문 SHA-256을 대조한다. containerd 저장소에서는 inspect의 image ID가 manifest/index의 target digest일 수 있다. 이때 검증기는 고정 target blob의 실제 SHA-256에서 시작해 각 descriptor의 원문 해시·크기·형식을 확인하고, 단일 runtime manifest의 config와 순서 있는 layer 목록을 `manifest.json`의 동일 경로·순서에 연결한다. 임의 config를 허용하는 fallback은 없다. [Moby inspect 구현](https://github.com/moby/moby/blob/v28.5.2/daemon/containerd/image_inspect.go), [containerd export 구현](https://github.com/containerd/containerd/blob/v2.1.4/core/images/archive/exporter.go).
+
+OCI layer의 descriptor digest는 보관된 원문 바이트의 해시이며 config의 `rootfs.diff_ids`는 압축 해제된 tar 바이트의 순서별 해시다. 검증기는 비압축 tar와 단일 gzip stream을 지원하고 gzip의 CRC·trailer·EOF까지 확인한다. 이어 붙인 gzip, 뒤에 붙인 데이터, zstd 등 미지원 형식은 성공 처리하지 않는다. [OCI descriptor](https://github.com/opencontainers/image-spec/blob/v1.1.1/descriptor.md), [Layer DiffID](https://github.com/opencontainers/image-spec/blob/v1.1.1/config.md#layer-diffid).
+
+index는 runtime 경로 하나만 허용한다. BuildKit의 명시적 attestation annotation과 `unknown/unknown` platform을 함께 가진 descriptor는 제외하며, 해당 attestation의 존재·복구는 검증하지 않는다. runtime 플랫폼이 둘 이상이거나 runtime blob이 빠지면 거부한다. 따라서 성공은 고정 target에 연결된 단일 runtime 이미지의 구조 검증이고 전체 다중 플랫폼·attestation 보존의 증거는 아니다. 미지원 형식으로 인한 실패도 암호문 손상을 뜻하지 않는다. [BuildKit attestation descriptor](https://github.com/moby/buildkit/blob/v0.20.2/docs/attestations/attestation-storage.md#attestation-manifest-descriptor).
+
+입력과 gzip 확장량은 각각512MiB, outer tar 항목은4096개, 보관하는 metadata 후보는256개·각2MiB·합계16MiB, JSON 깊이는32, index 깊이는8, 전체 실행은600초로 제한한다. CLI는 core dump를 끄며 평문을 추출하거나 디스크에 쓰지 않는다. 일반 구조 오류에서도 입력을 EOF까지 소비하지만 크기·시간 제한에서는 중단한다. 최종 성공에는 부모 실행기가 확인한 **GPG 종료 코드0과 검증기 종료 코드0**이 모두 필요하다. 이 변경의 합성 시험과 실제 암호문 복호화 검증은 별도 증거다.

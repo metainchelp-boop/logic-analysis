@@ -54,6 +54,58 @@ def fixture(blobs=False, manifest_first=False, layer_payloads=None):
     return members, 'sha256:' + image
 
 
+def oci_fixture(index_depth=0, gzip_layers=False, gzip_transform=None,
+                attested=False, extra_platform=False, config_changes=None,
+                bad_diff_id=False, descriptor_size_delta=0, layer_media=None,
+                plain_layers=None):
+    """Independent content-addressed OCI layout, as exported by containerd."""
+    blobs = []
+    def blob(body, media):
+        digest = 'sha256:' + hashlib.sha256(body).hexdigest()
+        blobs.append(('blobs/sha256/' + digest.split(':')[1], body, tarfile.REGTYPE))
+        return {'mediaType': media, 'digest': digest, 'size': len(body)}
+    if plain_layers is None:
+        plain_layers = [archive([('private.txt', CANARY, tarfile.REGTYPE)]),
+                        archive([('more.txt', b'SYNTHETIC_SECOND_LAYER', tarfile.REGTYPE)])]
+    layers = []
+    for plain in plain_layers:
+        body = gzip.compress(plain, mtime=0) if gzip_layers else plain
+        if gzip_transform:
+            body = gzip_transform(body)
+        media = layer_media or ('application/vnd.oci.image.layer.v1.tar+gzip' if gzip_layers
+                                else 'application/vnd.oci.image.layer.v1.tar')
+        layers.append(blob(body, media))
+    layers[0]['size'] += descriptor_size_delta
+    config = {'os': 'linux', 'architecture': 'amd64',
+              'rootfs': {'type': 'layers', 'diff_ids': ['sha256:' + hashlib.sha256(p).hexdigest() for p in plain_layers]},
+              'config': {'Env': ['SECRET=' + CANARY.decode()]}}
+    if bad_diff_id:
+        config['rootfs']['diff_ids'][0] = 'sha256:' + '1' * 64
+    config.update(config_changes or {})
+    config_descriptor = blob(json.dumps(config).encode(), 'application/vnd.oci.image.config.v1+json')
+    manifest = {'schemaVersion': 2, 'mediaType': 'application/vnd.oci.image.manifest.v1+json',
+                'config': config_descriptor, 'layers': layers}
+    target = blob(json.dumps(manifest).encode(), manifest['mediaType'])
+    for depth in range(index_depth):
+        runtime = dict(target, platform={'os': 'linux', 'architecture': 'amd64'})
+        children = [runtime]
+        if depth == 0 and attested:
+            children.append({'mediaType': manifest['mediaType'], 'digest': 'sha256:' + 'a' * 64,
+                'size': 123, 'platform': {'os': 'unknown', 'architecture': 'unknown'},
+                'annotations': {'vnd.docker.reference.type': 'attestation-manifest'}})
+        if depth == 0 and extra_platform:
+            children.append(dict(runtime, platform={'os': 'linux', 'architecture': 'arm64'}))
+        index = {'schemaVersion': 2, 'mediaType': 'application/vnd.oci.image.index.v1+json',
+                 'manifests': children}
+        target = blob(json.dumps(index).encode(), index['mediaType'])
+    compatibility = [{'Config': 'blobs/sha256/' + config_descriptor['digest'].split(':')[1],
+                      'RepoTags': None, 'Layers': ['blobs/sha256/' + d['digest'].split(':')[1] for d in layers]}]
+    records = [('oci-layout', b'{"imageLayoutVersion":"1.0.0"}', tarfile.REGTYPE),
+               ('index.json', json.dumps({'schemaVersion': 2, 'manifests': [target]}).encode(), tarfile.REGTYPE),
+               ('manifest.json', json.dumps(compatibility).encode(), tarfile.REGTYPE)]
+    return sorted(blobs + records), target['digest']
+
+
 class EOFStream(io.BytesIO):
     def __init__(self, payload):
         super().__init__(payload)
@@ -286,6 +338,124 @@ class RetirementImageVerifyTest(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)['error'], 'arguments_refused')
         self.assertEqual(result.stderr, b'')
         self.assertNotIn(CANARY, result.stdout)
+
+
+class OCIImageVerifyTest(unittest.TestCase):
+    check = RetirementImageVerifyTest.check
+    replace_manifest = RetirementImageVerifyTest.replace_manifest
+
+    def setUp(self):
+        self.members, self.image = oci_fixture()
+
+    def test_oci_manifest_digest_binds_config_and_ordered_layers(self):
+        result, _ = self.check()
+        self.assertNotEqual(result['config_digest'], self.image.split(':')[1])
+        self.assertEqual(result['layer_count'], 2)
+
+    def test_oci_single_runtime_index_and_nested_index_are_supported(self):
+        for depth in (1, 2):
+            members, expected = oci_fixture(index_depth=depth, attested=True)
+            self.check(members=members, expected=expected)
+
+    def test_oci_gzip_layers_validate_raw_digest_and_uncompressed_diff_ids(self):
+        members, expected = oci_fixture(index_depth=1, gzip_layers=True, attested=True)
+        self.check(members=members, expected=expected)
+        self.check(members=list(reversed(members)), expected=expected)
+
+    def test_oci_gzip_stream_output_can_exceed_one_chunk(self):
+        plain = archive([('large.bin', b'x' * (subject.BLOCK * 3), tarfile.REGTYPE)])
+        members, expected = oci_fixture(gzip_layers=True, plain_layers=[plain])
+        self.check(members=members, expected=expected)
+
+    def test_oci_corrupt_root_config_or_layer_digest_is_rejected(self):
+        manifest = json.loads(next(body for name, body, _ in self.members if name == 'manifest.json'))[0]
+        names = ['blobs/sha256/' + self.image.split(':')[1], manifest['Config'], manifest['Layers'][0]]
+        for changed in names:
+            members = [(name, body + b' ' if name == changed else body, kind) for name, body, kind in self.members]
+            self.check(members=members, error='oci_descriptor_mismatch')
+
+    def test_oci_descriptor_size_must_match_actual_raw_blob(self):
+        members, expected = oci_fixture(descriptor_size_delta=1)
+        self.check(members=members, expected=expected, error='oci_descriptor_mismatch')
+
+    def test_oci_compatibility_config_or_layer_order_cannot_select_other_content(self):
+        original = json.loads(next(body for name, body, _ in self.members if name == 'manifest.json'))
+        for field in ('Config', 'Layers'):
+            value = json.loads(json.dumps(original))
+            if field == 'Config':
+                value[0][field] = value[0]['Layers'][0]
+            else:
+                value[0][field].reverse()
+            self.check(members=self.replace_manifest(value), error='oci_compatibility_mismatch')
+
+    def test_oci_config_diff_id_is_checked_even_with_valid_manifest_descriptors(self):
+        for compressed_layers in (False, True):
+            members, expected = oci_fixture(gzip_layers=compressed_layers, bad_diff_id=True)
+            self.check(members=members, expected=expected, error='layer_digest_mismatch')
+
+    def test_oci_missing_referenced_blob_and_wrong_index_anchor_fail(self):
+        manifest = json.loads(next(body for name, body, _ in self.members if name == 'manifest.json'))[0]
+        members = [record for record in self.members if record[0] != manifest['Config']]
+        self.check(members=members, error='oci_blob_missing')
+        members = [(name, body.replace(self.image.encode(), ('sha256:' + 'b' * 64).encode())
+                    if name == 'index.json' else body, kind) for name, body, kind in self.members]
+        self.check(members=members, error='image_mismatch')
+
+    def test_oci_multiple_runtime_platforms_are_unsupported(self):
+        members, expected = oci_fixture(index_depth=1, extra_platform=True)
+        self.check(members=members, expected=expected, error='unsupported_multi_platform')
+
+    def test_oci_attestation_cannot_substitute_for_a_runtime_image(self):
+        members, expected = oci_fixture(config_changes={'os': 'unknown', 'architecture': 'unknown'})
+        self.check(members=members, expected=expected, error='oci_runtime_invalid')
+        members, expected = oci_fixture(index_depth=1, config_changes={'architecture': 'arm64'})
+        self.check(members=members, expected=expected, error='oci_platform_mismatch')
+
+    def test_oci_index_depth_metadata_count_and_total_are_bounded(self):
+        members, expected = oci_fixture(index_depth=2)
+        with mock.patch.object(subject, 'MAX_INDEX_DEPTH', 1):
+            self.check(members=members, expected=expected, error='oci_index_depth_limit')
+        with mock.patch.object(subject, 'MAX_METADATA_CANDIDATES', 1):
+            self.check(error='metadata_total_limit')
+        with mock.patch.object(subject, 'MAX_METADATA_TOTAL', 32):
+            self.check(error='metadata_total_limit')
+
+    def test_oci_json_nesting_is_bounded(self):
+        deep = None
+        for _ in range(subject.MAX_JSON_DEPTH + 1):
+            deep = [deep]
+        members, expected = oci_fixture(config_changes={'ignored': deep})
+        self.check(members=members, expected=expected, error='config_invalid')
+
+    def test_oci_gzip_crc_truncation_and_concatenation_fail_closed(self):
+        cases = [(lambda p: p[:-1], 'invalid_gzip_layer'),
+                 (lambda p: p[:-8] + bytes([p[-8] ^ 1]) + p[-7:], 'invalid_gzip_layer'),
+                 (lambda p: p + b'junk', 'unsupported_gzip_stream'),
+                 (lambda p: p + p, 'unsupported_gzip_stream')]
+        for transform, error in cases:
+            members, expected = oci_fixture(gzip_layers=True, gzip_transform=transform)
+            self.check(members=members, expected=expected, error=error)
+
+    def test_oci_inflated_total_and_unsupported_codec_are_explicit(self):
+        members, expected = oci_fixture(gzip_layers=True)
+        with mock.patch.object(subject, 'MAX_EXPANDED_BYTES', 1024):
+            self.check(members=members, expected=expected, error='expanded_size_limit')
+        members, expected = oci_fixture(layer_media='application/vnd.oci.image.layer.v1.tar+zstd')
+        self.check(members=members, expected=expected, error='unsupported_compression')
+
+    def test_main_disables_core_dumps_before_reading_opaque_input(self):
+        events, output = [], io.StringIO()
+        def limits(*args):
+            self.assertEqual(args, (subject.resource.RLIMIT_CORE, (0, 0)))
+            events.append('core_disabled')
+        def verify(stream):
+            self.assertEqual(events, ['core_disabled'])
+            return {'status': 'failed', 'error': 'fixture'}
+        with mock.patch.object(subject.sys, 'argv', ['validator']), \
+                mock.patch.object(subject.resource, 'setrlimit', side_effect=limits), \
+                mock.patch.object(subject, 'verify_stream', side_effect=verify), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(subject.main(), 2)
 
 
 if __name__ == '__main__':
