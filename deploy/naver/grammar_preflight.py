@@ -16,8 +16,8 @@ import subprocess
 import sys
 import time
 
-SOURCE = 'c44a66393340314796851f4dd524dad523bd5415'
-CANDIDATE = 'plain-prose-v12'
+SOURCE = 'a3770876f746c4b726c5070dced8aa68179fe44b'
+CANDIDATE = 'setup-direction-v13'
 MAX_PACKAGE = 24576
 MAX_RESPONSE = 131072
 MAX_RESULT = 4096
@@ -39,7 +39,7 @@ PINS = {
     'naver_runtime/claude_provider.py': '4b463645cb304778b2331c3757b83b928d22f27f6e932cf1b23bcfe32367e2cb',
     'naver_runtime/learning_provider.py': 'f50a22c28080dfcadc6b08101a8b8779b59029ff3a6a74060423ba22ae6034be',
     'naver_runtime/provider_observability.py': '9344a464a642cfbea41c7e7a14011a466b1d9ebc495a27c36205bd94e45b21cd',
-    'naver_runtime/report_output_schema.py': '3b978c85f92233fb5d4afdfce2c6b761b431db5f6c41de4b1e781829b793ee2a',
+    'naver_runtime/report_output_schema.py': '000e4cbc43a2566d72951d6d7d446fd173db78d1d4d621b151c325ca7083eca2',
 }
 TOKEN_FIELDS = ('input_tokens', 'output_tokens', 'cache_read_input_tokens',
                 'cache_creation_input_tokens', 'cache_creation_5m_input_tokens',
