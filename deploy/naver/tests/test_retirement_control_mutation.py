@@ -86,7 +86,7 @@ class Mutation(unittest.TestCase):
         self.fence()
         for row in self.request.values():self.docker.states[row['id']]['paused']=True
         self.mkdir(m.TRANSFER.rsplit('/',1)[0])
-        self.transfer={'phase':'send','status':'transferred_unverified','session':m.SESSION,'error':None,'ssh_public_key':None,
+        self.transfer={'phase':'send','status':'transferred_unverified','session':m.TRANSFER_SESSION,'error':None,'ssh_public_key':None,
             'bytes':1000,'sha256':'e'*64,'process_rc':{'archive':0,'gpg':0,'ssh':0},'backup_verified':False,
             'source_bytes':100,'archive_bytes':10240,'object_count':8,'paused':{'ad':'paused','content':'paused'},
             'operator_evidence_sha256':m.OPERATOR_SHA,'run':'900-1'}
@@ -107,6 +107,38 @@ class Mutation(unittest.TestCase):
         semantics={'schema':'metainc-retirement-kill-v1','daemon_version':'29.4.0','daemon_git_commit':'c'*40,'signal':'KILL',
                    'order':'task_kill_before_resume','source_commit':'c'*40,'source_sha256':'f'*64}
         self.proof('retirement-kill-semantics.json',semantics,'SEMANTICS_SHA')
+    def test_new_transport_receipt_with_original_fence_and_restore_session_is_accepted(self):
+        self.stop_ready();helper=self.helper()
+        transfer=helper.transfer_proof()
+        self.assertEqual(transfer['session'],m.TRANSFER_SESSION)
+        self.assertEqual(helper.fence_journal()['session'],m.SESSION)
+        helper.local_proof(transfer)
+        self.assertTrue(helper.report['local_restore_verified'])
+        self.assertEqual(m.TRANSFER,'/root/.metainc-retirement-transfer/data-snapshot-continuation-20261102-v1/transfer-receipt.json')
+        self.assertEqual(m.BASE,'/root/.metainc-retirement-control/data-snapshot-20261102-v1')
+    def test_original_session_transfer_receipt_is_rejected_even_with_matching_hash(self):
+        self.backup_ready();value={**self.transfer,'session':m.SESSION};body=m.canonical(value)
+        self.put(m.TRANSFER,body)
+        with mock.patch.object(m,'SEND_SHA',m.digest(body)),self.assertRaises(m.Refused) as caught:
+            self.helper().transfer_proof()
+        self.assertEqual(caught.exception.code,'transfer_proof_refused')
+    def test_old_transfer_path_is_never_used_as_fallback(self):
+        self.backup_ready();old='/root/.metainc-retirement-transfer/'+m.SESSION+'/transfer-receipt.json'
+        self.put(old,m.canonical(self.transfer));self.probe.local(m.TRANSFER).unlink()
+        with self.assertRaises(FileNotFoundError):self.helper().transfer_proof()
+    def test_transport_session_is_rejected_in_local_restore_proof(self):
+        self.stop_ready();path='/assets/retirement-local-restore-proof.json'
+        value=m.decode(self.files.read(path,8192,True)[0]);value['session']=m.TRANSFER_SESSION
+        body=m.canonical(value);self.put(path,body)
+        with mock.patch.object(m,'LOCAL_RESTORE_SHA',m.digest(body)),mock.patch.object(m,'LOCAL_RESTORE_EXPECTED',value),self.assertRaises(m.Refused) as caught:
+            self.helper().local_proof(self.transfer)
+        self.assertEqual(caught.exception.code,'restore_proof_refused')
+    def test_transport_session_is_rejected_in_original_fence_journal(self):
+        self.backup_ready();path=m.BASE+'/fence-complete.json'
+        value=m.decode(self.files.read(path,8192,True)[0]);value['session']=m.TRANSFER_SESSION
+        self.put(path,m.canonical(value))
+        with self.assertRaises(m.Refused) as caught:self.helper().fence_journal()
+        self.assertEqual(caught.exception.code,'fence_proof_refused')
     def test_auto_remove_adapter_requires_exact_boolean_and_fixed_inspect(self):
         identifier='a'*64
         for raw,expected in ((b'false\n',False),(b'true\n',True)):
@@ -246,8 +278,12 @@ class Mutation(unittest.TestCase):
         for row in self.policy['files']:self.assertEqual(m.digest(self.files.read(row['resolved_path'],262144)[0]),row['sha256'])
     def test_stop_requires_independent_local_proof_and_exact_daemon_semantics(self):
         self.backup_ready()
-        with self.assertRaises(m.Refused):self.helper().run('stop',True,'103-1')
+        with mock.patch.object(m,'LOCAL_RESTORE_SHA','0'*64),self.assertRaises(m.Refused):
+            self.helper().run('stop',True,'103-1')
+        with mock.patch.object(m,'LOCAL_RESTORE_SHA','a'*64),self.assertRaises(FileNotFoundError):
+            self.helper().run('stop',True,'103-1')
         self.assertEqual(self.docker.kills,[])
+        self.assertFalse(self.probe.local(m.BASE+'/stop-attempt.json').exists())
     def test_stop_kills_only_fixed_apps_and_preserves_all_files_and_protected(self):
         self.stop_ready();before=self.docker.state('b'*64)
         result=self.helper().run('stop',True,'103-1')
