@@ -30,6 +30,16 @@ class Fixture(unittest.TestCase):
         # Synthetic /proc PIDs are unrelated to the real test runner PID.
         # In Linux CI the runner itself can legitimately be PID101 or201.
         self.stack.enter_context(mock.patch.object(s.os,'getpid',return_value=4294967295))
+        native_readlink=os.readlink
+        def virtual_fd_target(path,*args,**kwargs):
+            value=native_readlink(path,*args,**kwargs)
+            # FD symlinks must point at real fixture files for stat(), but their
+            # target strings emulate the process namespace, not host tempfile.
+            if (isinstance(path,str) and path.isdecimal() and kwargs.get('dir_fd') is not None and
+                    isinstance(value,str) and value.startswith(str(self.root)+'/')):
+                return value[len(str(self.root)):]
+            return value
+        self.stack.enter_context(mock.patch.object(s.os,'readlink',side_effect=virtual_fd_target))
         pins=[]
         for alias,entry in self.request.items():
             pid=entry['pid'];base=self.root/('containers/'+alias)
@@ -115,6 +125,20 @@ class Fixture(unittest.TestCase):
                     result=fixture.collect()
                     self.assertEqual(result['error'],'writers_unresolved',result)
                 finally:fixture.doCleanups()
+    def test_linux_tmp_fixture_prefix_is_not_a_content_container_tmp_path(self):
+        original=tempfile.TemporaryDirectory
+        # Reproduce Linux tempfile spelling on macOS as well: the kernel FD
+        # target is /tmp/<fixture>/outside, not the container's own /tmp file.
+        with mock.patch.object(tempfile,'TemporaryDirectory',side_effect=lambda:original(dir='/tmp')):
+            fixture=Fixture('test_target_uncovered_writer_and_map_prevent_complete_coverage')
+            try:
+                fixture.setUp();self.assertTrue(str(fixture.root).startswith('/tmp/'))
+                fixture.write('/outside/'+CANARY,b'opaque');fixture.fd(201,3,'/outside/'+CANARY)
+                result=fixture.collect()
+                self.assertEqual(result['error'],'writers_unresolved',result)
+                self.assertEqual(result['host']['target_uncovered_writers'],1)
+                self.assertEqual(result['host']['covered_writable_fds'],0)
+            finally:fixture.doCleanups()
     def test_source_pin_mismatch_is_separate_failure_without_body(self):
         self.write('/containers/content/app/safe_db_route.py',CANARY.encode())
         result=self.collect();self.assertEqual(result['error'],'source_unreviewed');self.assert_safe(result)
