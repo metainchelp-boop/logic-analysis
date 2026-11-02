@@ -27,6 +27,9 @@ class Fixture(unittest.TestCase):
         self.end=time.monotonic()+10
         self.request={'ad':{'id':'a'*64,'pid':101},'content':{'id':'c'*64,'pid':201}}
         self.stack=contextlib.ExitStack();self.addCleanup(self.stack.close)
+        # Synthetic /proc PIDs are unrelated to the real test runner PID.
+        # In Linux CI the runner itself can legitimately be PID101 or201.
+        self.stack.enter_context(mock.patch.object(s.os,'getpid',return_value=4294967295))
         pins=[]
         for alias,entry in self.request.items():
             pid=entry['pid'];base=self.root/('containers/'+alias)
@@ -101,6 +104,17 @@ class Fixture(unittest.TestCase):
         self.assertEqual(result['routes']['fallback_routes'],6);self.assertEqual(len(result['candidates']),32)
         self.assert_safe(result)
         self.assertTrue(all(command[0] in ('inspect','top','volume','ps') for command in self.commands))
+    def test_real_observer_pid_collision_cannot_hide_synthetic_app_writer(self):
+        for real_pid in (101,201):
+            with self.subTest(real_pid=real_pid),mock.patch.object(s.os,'getpid',return_value=real_pid):
+                fixture=Fixture('test_target_uncovered_writer_and_map_prevent_complete_coverage')
+                try:
+                    fixture.setUp()
+                    fixture.write('/outside/'+CANARY,b'opaque');fixture.fd(201,3,'/outside/'+CANARY)
+                    self.assertNotIn(s.os.getpid(),(101,201))
+                    result=fixture.collect()
+                    self.assertEqual(result['error'],'writers_unresolved',result)
+                finally:fixture.doCleanups()
     def test_source_pin_mismatch_is_separate_failure_without_body(self):
         self.write('/containers/content/app/safe_db_route.py',CANARY.encode())
         result=self.collect();self.assertEqual(result['error'],'source_unreviewed');self.assert_safe(result)
