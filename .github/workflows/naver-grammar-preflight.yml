@@ -97,8 +97,11 @@ jobs:
           echo "PREFLIGHT_HELPER_SHA=$helper_sha" >> "$GITHUB_ENV"
           echo "PREFLIGHT_PACKAGE_SHA=$package_sha" >> "$GITHUB_ENV"
           echo "합성 요청 묶음 SHA256: $package_sha"
-          # SCP의 tar가 소유자를 보존하므로 전송 사본만 서버 root:600으로 고정한다.
+          # Action의 tar 사용자는 runner UID와 다르다. 키·고객정보가 없는 고정 합성
+          # 형식과 공개 helper 전송 사본만 읽게 하고, 서버에서는 root:700 아래 둔다.
           sudo chown 0:0 naver-grammar-transfer/grammar_preflight.py naver-grammar-transfer/package.json
+          chmod 755 naver-grammar-transfer
+          sudo chmod 644 naver-grammar-transfer/grammar_preflight.py naver-grammar-transfer/package.json
 
       - name: 서버 전용 임시 폴더 만들기
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
@@ -130,7 +133,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
-          source: naver-grammar-transfer
+          source: naver-grammar-transfer/grammar_preflight.py,naver-grammar-transfer/package.json
           target: /var/lib/metainc/naver-grammar-preflight/${{ github.run_id }}-${{ github.run_attempt }}
           strip_components: 1
           overwrite: false
@@ -156,8 +159,11 @@ jobs:
             test -d "$base" && test ! -L "$base"
             test "$(stat -c %u:%a "$base")" = 0:700
             test ! -L "$base/grammar_preflight.py"
-            test "$(stat -c %u:%a "$base/grammar_preflight.py")" = 0:600
+            test "$(stat -c %u:%a "$base/grammar_preflight.py")" = 0:644
+            test ! -L "$base/package.json"
+            test "$(stat -c %u:%a "$base/package.json")" = 0:644
             test "$(sha256sum "$base/grammar_preflight.py" | cut -d' ' -f1)" = "$PREFLIGHT_HELPER_SHA"
+            chmod 600 "$base/grammar_preflight.py" "$base/package.json"
             test -d /var/lib/metainc/naver-deploy
             test ! -L /var/lib/metainc/naver-deploy/lock
             # 같은 서버의 진행 중 배포/정리와 겹치지 않는다. 기다리거나 재시도하지 않는다.
