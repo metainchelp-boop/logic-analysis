@@ -248,12 +248,12 @@ class GrammarPreflightTests(unittest.TestCase):
 
     def test_live_source_and_candidate_are_fixed_to_reviewed_boundary(self):
         self.assertEqual(G.SOURCE, 'bb151c2a483a3422c25ba203b7a9358569f5a9da')
-        self.assertEqual(G.CANDIDATE, 'grounded-segments-v14')
+        self.assertEqual(G.CANDIDATE, 'grounded-text-v15')
         self.assertEqual(G.MAX_REFERENCE_BRANCHES, 36)
         self.assertEqual(G.MAX_PACKAGE, 24576)
         self.assertEqual(G.blank_result(self.pkg)['live_source'], G.SOURCE)
         with self.assertRaises(ValueError):
-            G.validate_package({**self.pkg, 'candidate': 'setup-direction-v13'})
+            G.validate_package({**self.pkg, 'candidate': 'grounded-segments-v14'})
 
     def test_close_failure_cannot_claim_success(self):
         response = Response(b'{"stop_reason":"end_turn","content":[{"type":"text","text":"{}"}]}', fail_close=True)
