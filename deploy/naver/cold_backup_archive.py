@@ -1,4 +1,4 @@
-"""Losslessly archive one fixed, already-cold deployment backup.
+"""Losslessly archive one of two fixed, already-cold deployment backups.
 
 This does not open SQLite, inspect live database files, stop containers, or prune
 images. The original byte manifest is retained verbatim. Publication means an
@@ -8,6 +8,8 @@ verification. Interrupted partial archives are retained for operator review.
 There is deliberately no production restore command or automatic retry.
 """
 import contextlib
+from collections import namedtuple
+from types import MappingProxyType
 import fcntl
 import gzip
 import hashlib
@@ -27,6 +29,13 @@ ARCHIVE_NAME = BACKUP_NAME + '-v1'
 LOCK_PARENT = '/var/lib/metainc/naver-deploy'
 CONFIRM = 'ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY'
 SCOPE = 'c44-cold-backup-lossless-v1'
+Profile = namedtuple('Profile', 'scope backup archive confirm')
+PROFILES = MappingProxyType({
+    SCOPE: Profile(SCOPE, BACKUP_NAME, ARCHIVE_NAME, CONFIRM),
+    'a377-cold-backup-lossless-v1': Profile(
+        'a377-cold-backup-lossless-v1', '20261102T185748Z-a3770876f746',
+        '20261102T185748Z-a3770876f746-v1', 'ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY'),
+})
 ROOT_UID = 0
 ROOT_GID = 0
 FILES = frozenset(('engine.db', 'engine.db-wal', 'engine.db-shm', 'engine.db-journal'))
@@ -62,6 +71,12 @@ class Refused(Exception):
     pass
 
 
+def profile_for(scope=SCOPE):
+    if type(scope) is not str or scope not in PROFILES:
+        raise Refused('INPUT_REFUSED')
+    return PROFILES[scope]
+
+
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
 
@@ -70,21 +85,24 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def receipt(mode):
-    return dict(version=1, scope=SCOPE, mode=mode if mode in ('plan', 'apply') else 'invalid',
+def receipt(mode, scope=SCOPE):
+    return dict(version=1, scope=profile_for(scope).scope, mode=mode if mode in ('plan', 'apply') else 'invalid',
                 status='refused', reason='INTERNAL_ERROR',
                 **{key: None for key in NUMBERS + HASHES},
                 **{key: False for key in BOOLEANS},
                 database_opened=False, services_changed=False)
 
 
-def validate_report(value):
+def validate_report(value, expected_scope=None):
     if type(value) is not dict or set(value) != set(receipt('plan')):
         raise Refused('ARCHIVE_REFUSED')
     if (type(value['version']) is not int or value['version'] != 1 or
-            value['scope'] != SCOPE or value['mode'] not in ('plan', 'apply', 'invalid') or
+            type(value['scope']) is not str or value['scope'] not in PROFILES or
+            value['mode'] not in ('plan', 'apply', 'invalid') or
             value['status'] not in ('planned', 'applied', 'refused') or
             value['reason'] not in REASONS):
+        raise Refused('ARCHIVE_REFUSED')
+    if expected_scope is not None and value['scope'] != profile_for(expected_scope).scope:
         raise Refused('ARCHIVE_REFUSED')
     for key in NUMBERS:
         if value[key] is not None and (type(value[key]) is not int or not 0 <= value[key] < 2 ** 63):
@@ -283,9 +301,10 @@ def snapshot(runner=run):
 
 
 @contextlib.contextmanager
-def source():
+def source(scope=SCOPE):
+    profile = profile_for(scope)
     with directory(BACKUP_PARENT) as parent:
-        fd = os.open(BACKUP_NAME, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+        fd = os.open(profile.backup, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
         handles = {}
         try:
             check_dir(fd, True)
@@ -312,7 +331,7 @@ def source():
                     raise Refused('SOURCE_REFUSED')
             if sum(row['size'] for row in identities.values()) > MAX_SOURCE:
                 raise Refused('SOURCE_REFUSED')
-            yield dict(parent=parent, fd=fd, handles=handles, identities=identities,
+            yield dict(parent=parent, fd=fd, handles=handles, identities=identities, profile=profile,
                        folder=folder, raw=raw, manifest=manifest)
         finally:
             for handle in handles.values():
@@ -322,7 +341,7 @@ def source():
 
 def verify_source(src):
     same(src['fd'], src['folder'])
-    current = os.stat(BACKUP_NAME, dir_fd=src['parent'], follow_symlinks=False)
+    current = os.stat(src['profile'].backup, dir_fd=src['parent'], follow_symlinks=False)
     if identity(current) != src['folder'] or set(os.listdir(src['fd'])) != set(src['handles']):
         raise Refused('SOURCE_CHANGED')
     for name, fd in src['handles'].items():
@@ -339,12 +358,13 @@ def measure(src, budget, protected):
             raise Refused('HASH_MISMATCH')
         rows[name] = dict(row, source=src['identities'][name])
     verify_source(src)
-    return validate_archive_plan(dict(version=1, scope=SCOPE, backup=BACKUP_NAME, archive=ARCHIVE_NAME,
+    profile = src['profile']
+    return validate_archive_plan(dict(version=1, scope=profile.scope, backup=profile.backup, archive=profile.archive,
                 gzip=dict(level=1, mtime=0, zlib=zlib.ZLIB_RUNTIME_VERSION, python=sys.version.split()[0]),
                 source_folder=src['folder'], source_manifest=src['identities']['manifest.json'],
                 source_manifest_sha256=digest(src['raw']), files=rows, protected=protected,
                 reserve_bytes=RESERVE, minimum_free_after_bytes=MIN_FREE_AFTER,
-                overhead_bytes=OVERHEAD))
+                overhead_bytes=OVERHEAD), expected_scope=profile.scope)
 
 
 def free_bytes(fd):
@@ -360,18 +380,20 @@ def exists(parent, name):
         return False
 
 
-def archive_absent():
+def archive_absent(scope=SCOPE):
+    profile = profile_for(scope)
     with directory('/'.join(ARCHIVE_PARENT.split('/')[:-1])) as parent:
         name = ARCHIVE_PARENT.split('/')[-1]
         if exists(parent, name):
             with directory(ARCHIVE_PARENT, True) as archive_parent:
-                if exists(archive_parent, ARCHIVE_NAME):
+                if exists(archive_parent, profile.archive):
                     raise Refused('ARCHIVE_EXISTS')
 
 
 @contextlib.contextmanager
-def new_archive(source_device):
+def new_archive(source_device, scope=SCOPE):
     """An incomplete private directory is retained on error; never overwrite it."""
+    profile = profile_for(scope)
     with directory('/'.join(ARCHIVE_PARENT.split('/')[:-1])) as parent:
         name = ARCHIVE_PARENT.split('/')[-1]
         if not exists(parent, name):
@@ -380,11 +402,11 @@ def new_archive(source_device):
         with directory(ARCHIVE_PARENT, True) as archive_parent:
             if os.fstat(archive_parent).st_dev != source_device:
                 raise Refused('PATH_REFUSED')
-            if exists(archive_parent, ARCHIVE_NAME):
+            if exists(archive_parent, profile.archive):
                 raise Refused('ARCHIVE_EXISTS')
-            os.mkdir(ARCHIVE_NAME, 0o700, dir_fd=archive_parent)
+            os.mkdir(profile.archive, 0o700, dir_fd=archive_parent)
             os.fsync(archive_parent)
-            fd = os.open(ARCHIVE_NAME, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=archive_parent)
+            fd = os.open(profile.archive, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=archive_parent)
             try:
                 check_dir(fd, True)
                 yield fd
@@ -488,31 +510,33 @@ def remove_source(src, result, budget):
         # Close it before reporting free space, and avoid a second close later.
         os.close(src['handles'].pop(name))
     os.fsync(src['fd'])
-    info = os.stat(BACKUP_NAME, dir_fd=src['parent'], follow_symlinks=False)
+    info = os.stat(src['profile'].backup, dir_fd=src['parent'], follow_symlinks=False)
     if (info.st_dev, info.st_ino) != (src['folder']['device'], src['folder']['inode']) or os.listdir(src['fd']):
         raise Refused('SOURCE_CHANGED')
-    os.rmdir(BACKUP_NAME, dir_fd=src['parent'])
+    os.rmdir(src['profile'].backup, dir_fd=src['parent'])
     os.fsync(src['parent'])
     result['cleanup_complete'] = True
 
 
-def execute(mode, plan_sha='', confirm='', runner=run, free=None, budget=None):
+def execute(mode, plan_sha='', confirm='', runner=run, free=None, budget=None, scope=SCOPE):
     result = receipt(mode)
     budget = budget or Budget()
     try:
+        profile = profile_for(scope)
+        result['scope'] = profile.scope
         if mode == 'plan':
             if plan_sha or confirm:
                 raise Refused('INPUT_REFUSED')
         elif mode == 'apply':
-            if type(plan_sha) is not str or not SHA.fullmatch(plan_sha) or confirm != CONFIRM:
+            if type(plan_sha) is not str or not SHA.fullmatch(plan_sha) or confirm != profile.confirm:
                 raise Refused('INPUT_REFUSED')
         else:
             raise Refused('INPUT_REFUSED')
         protected = snapshot(runner)
         result.update(protected_sha256=digest(canonical(protected).encode()),
                       containers=len(protected['containers']), images=len(protected['images']))
-        archive_absent()
-        with source() as src:
+        archive_absent(profile.scope)
+        with source(profile.scope) as src:
             free = free or (lambda: free_bytes(src['parent']))
             result['free_before_bytes'] = free()
             plan = measure(src, budget, protected)
@@ -536,7 +560,7 @@ def execute(mode, plan_sha='', confirm='', runner=run, free=None, budget=None):
                 raise Refused('PLAN_MISMATCH')
             if not capacity:
                 raise Refused('SPACE_REFUSED')
-            with new_archive(src['folder']['device']) as archive:
+            with new_archive(src['folder']['device'], profile.scope) as archive:
                 result['archive_started'] = True
                 for name, expected in plan['files'].items():
                     handle = create_file(archive, name + '.gz')
@@ -585,13 +609,18 @@ def execute(mode, plan_sha='', confirm='', runner=run, free=None, budget=None):
     return validate_report(result)
 
 
-def validate_archive_plan(plan):
+def validate_archive_plan(plan, expected_scope=None):
+    if type(plan) is not dict or type(plan.get('scope')) is not str or plan['scope'] not in PROFILES:
+        raise Refused('ARCHIVE_REFUSED')
+    profile = profile_for(plan['scope'])
+    if expected_scope is not None and profile.scope != profile_for(expected_scope).scope:
+        raise Refused('ARCHIVE_REFUSED')
     expected = {'version', 'scope', 'backup', 'archive', 'gzip', 'source_folder',
                 'source_manifest', 'source_manifest_sha256', 'files', 'protected',
                 'reserve_bytes', 'minimum_free_after_bytes', 'overhead_bytes'}
     if (type(plan) is not dict or set(plan) != expected or type(plan['version']) is not int or
-            plan['version'] != 1 or plan['scope'] != SCOPE or plan['backup'] != BACKUP_NAME or
-            plan['archive'] != ARCHIVE_NAME or type(plan['files']) is not dict or
+            plan['version'] != 1 or plan['backup'] != profile.backup or
+            plan['archive'] != profile.archive or type(plan['files']) is not dict or
             'engine.db' not in plan['files'] or not set(plan['files']).issubset(FILES) or
             type(plan['source_manifest_sha256']) is not str or not SHA.fullmatch(plan['source_manifest_sha256'])):
         raise Refused('ARCHIVE_REFUSED')
@@ -634,7 +663,7 @@ def validate_archive_plan(plan):
     return plan
 
 
-def restore_isolated(archive_path, target_parent, target_name, archive_sha256):
+def restore_isolated(archive_path, target_parent, target_name, archive_sha256, scope=SCOPE):
     """Local recovery exercise only, never reachable from the production CLI.
 
     The caller provides an existing private isolated parent; only a newly
@@ -642,6 +671,7 @@ def restore_isolated(archive_path, target_parent, target_name, archive_sha256):
     Original manifest bytes, ownership, modes and mtime are restored after the
     full gzip byte comparison. No database library is used.
     """
+    profile = profile_for(scope)
     if (not re.fullmatch(r'restore-check-[0-9a-f]{16}', target_name) or
             type(archive_sha256) is not str or not SHA.fullmatch(archive_sha256)):
         raise Refused('INPUT_REFUSED')
@@ -656,7 +686,7 @@ def restore_isolated(archive_path, target_parent, target_name, archive_sha256):
             os.close(handle)
         if digest(manifest_bytes) != archive_sha256:
             raise Refused('ARCHIVE_REFUSED')
-        plan = validate_archive_plan(strict_json(manifest_bytes))
+        plan = validate_archive_plan(strict_json(manifest_bytes), expected_scope=profile.scope)
         handle = open_file(archive, 'source-manifest.json', True)
         try:
             raw = read_small(handle)
@@ -723,14 +753,16 @@ def main(args):
     mode = args[0] if args else 'invalid'
     result = receipt(mode)
     try:
-        if len(args) != 3:
+        if len(args) not in (3, 4):
             raise Refused('INPUT_REFUSED')
+        profile = profile_for(args[3] if len(args) == 4 else SCOPE)
+        result['scope'] = profile.scope
         if os.geteuid() != ROOT_UID:
             raise Refused('NOT_ROOT')
         os.umask(0o077)
         os.nice(19)
         with deployment_lock():
-            result = execute(*args)
+            result = execute(*args[:3], scope=profile.scope)
     except Refused as exc:
         result['reason'] = str(exc) if str(exc) in REASONS else 'INTERNAL_ERROR'
     except Exception:

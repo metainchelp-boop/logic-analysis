@@ -1,16 +1,52 @@
-# One cold NAVER backup: lossless archive and isolated recovery
+# Fixed cold NAVER backups: lossless archive and isolated recovery
 
-This helper is restricted to the already-cold deployment copy
-`/var/backups/metainc/naver-deploy-db/20261102T170022Z-c44a66393340`.
+This helper accepts exactly two reviewed cold-backup profiles. Source and
+archive paths are fixed in the helper; neither the workflow nor CLI accepts an
+arbitrary path, commit, timestamp or confirmation phrase.
+
+| Workflow scope | Source directory below `/var/backups/metainc/naver-deploy-db/` | Confirmation for APPLY |
+| --- | --- | --- |
+| `c44-cold-backup-lossless-v1` (default) | `20261102T170022Z-c44a66393340` | `ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY` |
+| `a377-cold-backup-lossless-v1` | `20261102T185748Z-a3770876f746` | `ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY` |
+
+The a377 source is the previous-product backup recorded by the successful
+bb151c2a deployment, run `41502564117`; it is not the running database. Adding
+this profile does not read, remove or overwrite the existing c44 archive.
 It never opens SQLite, reads the live engine database, changes containers, or
 removes images/volumes. The deployment flock is held throughout. All five
 container identities, images, PIDs, start times and restart counts, and the full
 image ID set must remain unchanged. A changed snapshot refuses the operation.
 
-The separate destination is
-`/var/backups/metainc/naver-cold-archives/20261102T170022Z-c44a66393340-v1/`.
+Each separate destination is below `/var/backups/metainc/naver-cold-archives/`,
+with the exact source directory name plus `-v1`: either
+`20261102T170022Z-c44a66393340-v1` or `20261102T185748Z-a3770876f746-v1`.
 Its parent and directory are root-owned mode `0700`; files are mode `0600`.
-The destination is never overwritten or automatically pruned.
+The destination is never overwritten or automatically pruned. Only the chosen
+profile's source files may be removed, after the verified archive is published.
+
+## Profile selection and compatibility
+
+Use the manual workflow on main with the required `scope` choice and mode
+`plan`. Then select that same scope for `apply`, using its returned plan hash
+and its own confirmation from the table. Actor, triggering actor, first attempt,
+trusted host fingerprint and the shared deployment lock gates are unchanged.
+The closed receipt is validated against the requested scope before publication.
+
+The helper CLI adds an optional fourth scope argument:
+
+```sh
+python3 -I -B cold_backup_archive.py plan '' '' a377-cold-backup-lossless-v1
+python3 -I -B cold_backup_archive.py apply PLAN_SHA256 ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY a377-cold-backup-lossless-v1
+```
+
+These are operator examples, not a request to run a production operation.
+Existing three-argument CLI calls retain the c44 default. Existing version-1
+c44 manifests and receipts remain valid; no existing archive is rewritten.
+Both plan hashes include the fixed scope, backup and archive names along with
+source identity and protected state. A c44 plan or confirmation cannot authorize
+an a377 APPLY, or vice versa. Unsupported scope strings are refused without
+printing the supplied value. Even identical source bytes do not make plans
+interchangeable.
 
 ## Format and publication
 
@@ -76,6 +112,16 @@ archive.restore_isolated(
 PY
 ```
 
+The example above retains the original c44 default. For an a377 isolated
+exercise, use archive directory
+`/var/backups/metainc/naver-cold-archives/20261102T185748Z-a3770876f746-v1`,
+the a377 APPLY receipt hash, and pass
+`scope='a377-cold-backup-lossless-v1'` to `restore_isolated`. A different
+expected scope, or a manifest mixing one scope with the other's source/archive
+name, is refused before creating the restore target. The caller-provided archive
+location permits an isolated copied archive; it does not relax the fixed
+manifest identity or receipt hash requirement.
+
 Before creating the target, restore verifies the receipt-bound archive manifest,
 its closed metadata types/allowlist, the verbatim original manifest, and every
 gzip's compressed and uncompressed hash/size. After extraction it restores each
@@ -110,5 +156,8 @@ recovery operation with the services stopped and compatibility verified.
 Synthetic tests cover full byte/metadata recovery, manifest preservation,
 corruption and gzip bombs/trailing members, source drift, symlink/hardlink
 refusal, interrupted publication/cleanup, file descriptor release, plan and
-confirmation gates, snapshot changes, capacity refusal and restore no-overwrite.
+confirmation gates, snapshot changes, capacity refusal and restore no-overwrite
+for both profiles. They also cover cross-profile plan/confirmation/restore
+refusal, legacy c44 CLI compatibility, receipt scope binding, and preservation
+of the other profile's source and archive bytes/metadata.
 They do not constitute a restore test of the production database.
