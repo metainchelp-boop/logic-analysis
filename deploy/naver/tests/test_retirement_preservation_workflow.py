@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -48,6 +49,7 @@ fields = {'%u': os.environ['TEST_UID'], '%a': format(stat.S_IMODE(s.st_mode), 'o
 print(':'.join(fields[p] for p in sys.argv[2].split(':')))
 """)
         self.program('sha256sum', "import hashlib, pathlib, sys\np = pathlib.Path(sys.argv[1])\nprint(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + str(p))\n")
+        self.program('chown', "import sys\nassert sys.argv[1:3] == ['0:0', '--']\n")
         self.program('timeout', "import os, sys\nos.execvp(sys.argv[4], sys.argv[4:])\n")
         self.set_report(self.report())
         for name in ASSETS[1:]:
@@ -139,21 +141,14 @@ print(':'.join(fields[p] for p in sys.argv[2].split(':')))
         self.assertIn('strip_components: 1', part)
         self.assertIn('overwrite: false', part)
         ship = next(p for p in self.parts if 'mkdir preservation-ship' in p)
-        self.assertLess(ship.index('chmod 600'), ship.index('sudo chown 0:0'))
-        for name in ('NRP_HELPER_SHA=', 'NRP_PUBLIC_SHA=', 'NRP_HOSTS_SHA='):
-            self.assertLess(ship.index(name), ship.index('sudo chown 0:0'))
+        self.assertIn('chmod 755 preservation-ship', ship)
+        self.assertIn('chmod 644', ship)
+        self.assertNotIn('chown', ship)
         self.assertNotRegex(self.source, r'docker\s+(stop|rm|exec|build|run)|rm\s+-rf|rsync|sqlite3|/root/|\.env')
         self.assertNotIn('upload-artifact', self.source)
 
-    def test_runner_finishes_permission_changes_and_hashes_before_ownership_transfer(self):
-        # Simulate root ownership making files unreadable to the ordinary runner.
-        # No sudo/root access is used by this synthetic test.
-        self.program('sudo', """import pathlib, sys
-if sys.argv[1:3] != ['chown', '0:0']:
-    raise SystemExit(1)
-for name in sys.argv[3:]:
-    pathlib.Path(name).chmod(0)
-""")
+    def test_staged_public_assets_are_readable_to_different_container_uid(self):
+        # Pinned drone-scp runs as UID 1000, unlike the hosted runner UID 1001.
         target = self.base / 'deploy/naver'
         (target / 'preservation').mkdir(parents=True)
         for name in ASSETS:
@@ -172,6 +167,12 @@ for name in sys.argv[3:]:
         for field in ('NRP_HELPER_SHA', 'NRP_PUBLIC_SHA', 'NRP_HOSTS_SHA'):
             self.assertEqual(values[field], expected)
         self.assertEqual(values['NRP_RUN'], '1234-1')
+        directory = self.base / 'preservation-ship'
+        self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o755)
+        for name in ASSETS:
+            self.assertEqual(stat.S_IMODE((directory / name).stat().st_mode), 0o644)
+        self.assertEqual(sorted(p.name for p in directory.iterdir()), sorted(ASSETS))
+
 
     def test_matching_assets_execute_exact_phase_with_metadata_output(self):
         result = self.run_shell(self.invoke)
@@ -198,8 +199,28 @@ for name in sys.argv[3:]:
         for field, value in (('NRP_RUN', '1234-1\n' + CANARY), ('NRP_HELPER_SHA', 'f' * 64 + '\n'),
                              ('NRP_PHASE', CANARY), ('TEST_UID', '1000')):
             self.assert_refused(self.run_shell(self.invoke, **{field: value}))
-        (self.incoming / ASSETS[1]).chmod(0o644)
+        for name in ASSETS:
+            (self.incoming / name).chmod(0o644)
+        self.set_report(self.report())
+        self.hash_assets()
+        result = self.run_shell(self.invoke)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ASSETS:
+            self.assertEqual(stat.S_IMODE((self.incoming / name).stat().st_mode), 0o600)
+
+    def test_hardlinked_public_asset_refused_before_normalization_and_cleanup(self):
+        path = self.incoming / ASSETS[1]
+        os.link(path, self.base / 'outside-linked')
         self.assert_refused(self.run_shell(self.invoke))
+        self.assert_refused(self.run_shell(self.cleanup))
+        self.assertTrue(path.exists())
+
+    def test_cleanup_removes_partially_transferred_public_mode_files(self):
+        for name in ASSETS:
+            (self.incoming / name).chmod(0o644)
+        result = self.run_shell(self.cleanup)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.incoming.exists())
 
     def test_linked_asset_is_rejected(self):
         target = self.base / 'outside-public'

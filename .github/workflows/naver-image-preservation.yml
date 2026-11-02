@@ -55,13 +55,13 @@ jobs:
           cp deploy/naver/retirement_preserve_source.py preservation-ship/
           cp deploy/naver/preservation/recovery-public.asc preservation-ship/
           cp deploy/naver/preservation/server-b-known-hosts preservation-ship/
-          # 고정 drone-scp의 tar가 UID/GID를 보존한다. 전송용 공개 파일 사본만 정규화한다.
-          chmod 600 preservation-ship/retirement_preserve_source.py preservation-ship/recovery-public.asc preservation-ship/server-b-known-hosts
+          # 고정 drone-scp 컨테이너는 UID 1000이다. 공개 파일만 전송 가능하게 한다.
+          chmod 755 preservation-ship
+          chmod 644 preservation-ship/retirement_preserve_source.py preservation-ship/recovery-public.asc preservation-ship/server-b-known-hosts
           echo "NRP_HELPER_SHA=$(sha256sum preservation-ship/retirement_preserve_source.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
           echo "NRP_PUBLIC_SHA=$(sha256sum preservation-ship/recovery-public.asc | cut -d' ' -f1)" >> "$GITHUB_ENV"
           echo "NRP_HOSTS_SHA=$(sha256sum preservation-ship/server-b-known-hosts | cut -d' ' -f1)" >> "$GITHUB_ENV"
           echo "NRP_RUN=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
-          sudo chown 0:0 preservation-ship/retirement_preserve_source.py preservation-ship/recovery-public.asc preservation-ship/server-b-known-hosts
       - name: 충돌 없는 관리자 전용 helper 임시 폴더 준비
         id: prepare_remote
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
@@ -122,6 +122,10 @@ jobs:
             for asset in "$helper" "$public_key" "$known_hosts"; do
               [ -f "$asset" ]
               [ ! -L "$asset" ]
+              [ "$(stat -c '%h' "$asset")" = 1 ]
+              # root 전용 신규 폴더 안의 링크 없는 공개 파일만 권한 정규화한다.
+              chown 0:0 -- "$asset"
+              chmod 600 "$asset"
               [ "$(stat -c '%u:%a:%h' "$asset")" = 0:600:1 ]
             done
             [ "$(sha256sum "$helper" | cut -d' ' -f1)" = "$NRP_HELPER_SHA" ]
@@ -206,7 +210,7 @@ jobs:
               if [ -e "$asset" ] || [ -L "$asset" ]; then
                 [ -f "$asset" ]
                 [ ! -L "$asset" ]
-                [ "$(stat -c '%u:%a:%h' "$asset")" = 0:600:1 ]
+                [ "$(stat -c '%h' "$asset")" = 1 ]
                 rm -f -- "$asset" 2>/dev/null
               fi
             done
