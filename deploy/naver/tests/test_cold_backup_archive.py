@@ -503,25 +503,30 @@ class ArchiveTest(unittest.TestCase):
         self.assertTrue(target.exists())
 
     def test_other_source_and_published_archive_untouched(self):
-        other = self.other_profile()
-        other_source = self.backups / other.backup
-        other_source.mkdir(mode=0o700)
-        other_archive = self.archives / other.archive
-        other_archive.mkdir(mode=0o700, parents=True)
+        self.archives.mkdir(mode=0o700)
         self.archives.chmod(0o700)
         paths = []
-        for folder, name in ((other_source, 'engine.db'), (other_archive, 'archive-manifest.json'),
-                             (other_archive, 'engine.db.gz')):
-            path = folder / name
-            path.write_bytes(b'synthetic-other-profile-must-remain')
-            path.chmod(0o600)
-            paths.append(path)
+        folders = []
+        for other in A.PROFILES.values():
+            if other.scope == self.scope:
+                continue
+            other_source = self.backups / other.backup
+            other_source.mkdir(mode=0o700)
+            other_archive = self.archives / other.archive
+            other_archive.mkdir(mode=0o700)
+            folders.extend((other_source, other_archive))
+            for folder, name in ((other_source, 'engine.db'), (other_archive, 'archive-manifest.json'),
+                                 (other_archive, 'engine.db.gz')):
+                path = folder / name
+                path.write_bytes(b'synthetic-other-profile-must-remain')
+                path.chmod(0o600)
+                paths.append(path)
         before = {str(path): (path.read_bytes(), A.identity(path.stat())) for path in paths}
-        directories = {str(path): A.identity(path.stat()) for path in (other_source, other_archive)}
+        directories = {str(path): A.identity(path.stat()) for path in folders}
         result = self.apply()
         self.assertEqual(result['status'], 'applied', result)
         self.assertEqual(before, {str(path): (path.read_bytes(), A.identity(path.stat())) for path in paths})
-        self.assertEqual(directories, {str(path): A.identity(path.stat()) for path in (other_source, other_archive)})
+        self.assertEqual(directories, {str(path): A.identity(path.stat()) for path in folders})
 
     def test_restore_wrong_expected_scope_refused_before_target_creation(self):
         result = self.apply()
@@ -589,9 +594,15 @@ class ArchiveBB151Test(ArchiveTest):
     scope = 'bb151-cold-backup-lossless-v1'
 
 
+class ArchiveD633Test(ArchiveTest):
+    # Exercise the same full byte/metadata restoration and refusal contract.
+    scope = 'd633-cold-backup-lossless-v1'
+
+
 class FixedProfileTest(unittest.TestCase):
-    def test_only_three_fixed_profiles_and_original_c44_format_preserved(self):
-        self.assertEqual(set(A.PROFILES), {'c44-cold-backup-lossless-v1', 'a377-cold-backup-lossless-v1', 'bb151-cold-backup-lossless-v1'})
+    def test_only_four_fixed_profiles_and_original_c44_format_preserved(self):
+        self.assertEqual(set(A.PROFILES), {'c44-cold-backup-lossless-v1', 'a377-cold-backup-lossless-v1',
+                                         'bb151-cold-backup-lossless-v1', 'd633-cold-backup-lossless-v1'})
         self.assertEqual(A.profile_for(), A.Profile(A.SCOPE, A.BACKUP_NAME, A.ARCHIVE_NAME, A.CONFIRM))
         self.assertEqual(A.profile_for('a377-cold-backup-lossless-v1'), A.Profile(
             'a377-cold-backup-lossless-v1', '20261102T185748Z-a3770876f746',
@@ -599,6 +610,9 @@ class FixedProfileTest(unittest.TestCase):
         self.assertEqual(A.profile_for('bb151-cold-backup-lossless-v1'), A.Profile(
             'bb151-cold-backup-lossless-v1', '20261102T205647Z-bb151c2a483a',
             '20261102T205647Z-bb151c2a483a-v1', 'ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY'))
+        self.assertEqual(A.profile_for('d633-cold-backup-lossless-v1'), A.Profile(
+            'd633-cold-backup-lossless-v1', '20261102T230515Z-d633ff4450bb',
+            '20261102T230515Z-d633ff4450bb-v1', 'ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY'))
         with self.assertRaises(TypeError):
             A.PROFILES['arbitrary'] = A.profile_for()
         with self.assertRaises(AttributeError):

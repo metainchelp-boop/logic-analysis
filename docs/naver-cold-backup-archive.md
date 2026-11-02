@@ -1,6 +1,6 @@
 # Fixed cold NAVER backups: lossless archive and isolated recovery
 
-This helper accepts exactly three reviewed cold-backup profiles. Source and
+This helper accepts exactly four reviewed cold-backup profiles. Source and
 archive paths are fixed in the helper; neither the workflow nor CLI accepts an
 arbitrary path, commit, timestamp or confirmation phrase.
 
@@ -9,15 +9,21 @@ arbitrary path, commit, timestamp or confirmation phrase.
 | `c44-cold-backup-lossless-v1` (default) | `20261102T170022Z-c44a66393340` | `ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY` |
 | `a377-cold-backup-lossless-v1` | `20261102T185748Z-a3770876f746` | `ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY` |
 | `bb151-cold-backup-lossless-v1` | `20261102T205647Z-bb151c2a483a` | `ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY` |
+| `d633-cold-backup-lossless-v1` | `20261102T230515Z-d633ff4450bb` | `ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY` |
 
 The a377 source is the previous-product backup recorded by the successful
 bb151c2a deployment, run `41502564117`; it is not the running database. Adding
 this profile does not read, remove or overwrite the existing c44 archive.
 The bb151 source is the previous-product backup recorded by successful d633
 deployment run `41521463521`. Read-only inspect run `41529054879` confirmed d633
-remains active and approximately 1.99 GiB is free. The new fixed profile must
+was active and approximately 1.99 GiB was free at that observation. That profile must
 still pass its own PLAN and byte-verification gates before any archival action;
 it does not read or overwrite either earlier archive.
+The d633 source is the previous-product backup recorded by successful 54fc
+deployment run `41540120997`. Its separate profile preserves the three earlier
+archives and keeps the same 5 GiB projected/actual free-space requirements.
+Adding the profile does not run PLAN or APPLY, establish current capacity, or
+authorize lowering a guard. A fresh scope-bound PLAN is required before APPLY.
 It never opens SQLite, reads the live engine database, changes containers, or
 removes images/volumes. The deployment flock is held throughout. All five
 container identities, images, PIDs, start times and restart counts, and the full
@@ -126,6 +132,9 @@ expected scope, or a manifest mixing one scope with the other's source/archive
 name, is refused before creating the restore target. The caller-provided archive
 location permits an isolated copied archive; it does not relax the fixed
 manifest identity or receipt hash requirement.
+For a d633 isolated exercise, use
+`/var/backups/metainc/naver-cold-archives/20261102T230515Z-d633ff4450bb-v1`,
+the d633 APPLY receipt hash, and `scope='d633-cold-backup-lossless-v1'`.
 
 Before creating the target, restore verifies the receipt-bound archive manifest,
 its closed metadata types/allowlist, the verbatim original manifest, and every
@@ -162,7 +171,7 @@ Synthetic tests cover full byte/metadata recovery, manifest preservation,
 corruption and gzip bombs/trailing members, source drift, symlink/hardlink
 refusal, interrupted publication/cleanup, file descriptor release, plan and
 confirmation gates, snapshot changes, capacity refusal and restore no-overwrite
-for both profiles. They also cover cross-profile plan/confirmation/restore
+for every fixed profile. They also cover cross-profile plan/confirmation/restore
 refusal, legacy c44 CLI compatibility, receipt scope binding, and preservation
-of the other profile's source and archive bytes/metadata.
+of all other profiles' source and archive bytes/metadata.
 They do not constitute a restore test of the production database.
