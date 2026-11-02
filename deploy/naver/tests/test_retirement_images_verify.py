@@ -396,6 +396,59 @@ class ImageProfileIsolationTest(unittest.TestCase):
             self.assertEqual(result['error'], error)
         self.assertEqual(original.max_archive_bytes, 536870912)
 
+    def test_content_packed_size_does_not_bound_cumulative_layer_expansion(self):
+        layers=[archive([('synthetic-a',b'A'*131072,tarfile.REGTYPE)]),
+                archive([('synthetic-b',b'B'*196608,tarfile.REGTYPE)])]
+        members,image=oci_fixture(gzip_layers=True,plain_layers=layers)
+        packed=sum(len(body) for name,body,_ in members if name.startswith('blobs/'))
+        payload=archive(members);expanded=sum(map(len,layers))
+        self.assertLess(packed,len(payload));self.assertLess(len(payload),expanded)
+        original=subject.load_profiles().lookup('content-studio')
+        profile=replace(original,image_id=image,expected_size_bytes=packed,max_expanded_bytes=expanded)
+        # Exact expanded budget accepts both real gzip layers, with no archive
+        # bytes double-charged; one fewer byte fails but still drains GPG EOF.
+        for limit,error in ((expanded-1,'expanded_size_limit'),(expanded,None)):
+            stream=EOFStream(payload)
+            result=subject.verify_stream(stream,replace(profile,max_expanded_bytes=limit))
+            self.assertEqual(result['error'],error)
+            self.assertEqual(result['archive_bytes'],len(payload))
+            self.assertTrue(stream.eof_observed)
+            self.assertLessEqual(stream.largest_request,subject.BLOCK)
+        # A larger inflate budget cannot weaken the separate outer archive cap.
+        result=subject.verify_stream(EOFStream(payload),replace(profile,max_archive_bytes=len(payload)-1))
+        self.assertEqual(result['error'],'archive_size_limit')
+
+    def test_content_real_eight_gib_counter_boundary_stays_fail_closed(self):
+        profile=subject.load_profiles().lookup('content-studio')
+        self.assertEqual(profile.max_expanded_bytes,8*1024**3)
+        plain=archive([('synthetic',b'A'*131072,tarfile.REGTYPE)])
+        packed=gzip.compress(plain,mtime=0)
+        for excess in (0,1):
+            reader=subject.Reader(EOFStream(b''),profile)
+            budget={'bytes':profile.max_expanded_bytes-len(plain)+excess}
+            inflater=subject.GzipDigest(budget,reader)
+            if excess:
+                with self.assertRaisesRegex(subject.VerifyError,'expanded_size_limit'):
+                    inflater.feed(packed)
+            else:
+                inflater.feed(packed);entry,error=inflater.finish()
+                self.assertIsNone(error);self.assertEqual(entry.size,len(plain))
+                self.assertEqual(entry.digest,hashlib.sha256(plain).hexdigest())
+                self.assertEqual(budget['bytes'],profile.max_expanded_bytes)
+                self.assertLessEqual(len(entry.first),512);self.assertLessEqual(len(entry.last),1024)
+
+    def test_content_larger_budget_still_rejects_identity_descriptor_and_diff_id_faults(self):
+        profile=subject.load_profiles().lookup('content-studio')
+        cases=[({},'sha256:'+'f'*64,'image_mismatch'),
+               ({'descriptor_size_delta':1},None,'oci_descriptor_mismatch'),
+               ({'bad_diff_id':True},None,'layer_digest_mismatch')]
+        for options,wrong_image,error in cases:
+            members,image=oci_fixture(gzip_layers=True,**options)
+            result=subject.verify_stream(EOFStream(archive(members)),replace(profile,image_id=wrong_image or image))
+            self.assertEqual(result['error'],error)
+            self.assertEqual(result['status'],'failed')
+            self.assertIsNone(result['config_digest'])
+
     def test_library_verification_needs_no_files_or_profile_loader(self):
         members, image = fixture()
         profile = replace(subject.load_profiles().lookup('autobid-engine'), image_id=image)

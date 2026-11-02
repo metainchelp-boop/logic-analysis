@@ -34,6 +34,20 @@ class RegistryTest(unittest.TestCase):
             self.assertEqual(profile.command, 'receive-' + profile.session)
         self.assertEqual(len({p.session for p in self.profiles.PROFILES.values()}), 4)
 
+    def test_only_content_has_a_larger_separate_inflation_budget(self):
+        gib=1024**3
+        content=self.profiles.lookup('content-studio')
+        self.assertEqual(content.max_expanded_bytes,8*gib)
+        self.assertEqual((content.max_archive_bytes,content.max_cipher_bytes),(2*gib,2*gib))
+        self.assertEqual((content.max_image_bytes,content.source_min_free_bytes,
+                          content.receiver_min_free_bytes),(1536*1024**2,3*gib,4*gib))
+        self.assertEqual((content.source_timeout_seconds,content.receiver_timeout_seconds,
+                          content.verify_timeout_seconds,content.workflow_timeout_seconds),(1800,1800,1800,1830))
+        for name in self.profiles.ORDER[:3]:
+            profile=self.profiles.lookup(name)
+            self.assertEqual((profile.max_expanded_bytes,profile.max_archive_bytes,profile.max_cipher_bytes),
+                             (512*1024**2,)*3)
+
     def test_registry_and_profile_cannot_be_mutated(self):
         with self.assertRaises(TypeError):
             self.profiles.PROFILES['ad'] = self.profiles.lookup('autobid-web')
