@@ -53,7 +53,7 @@ def load_modules(directory,run):
 
 def diagnose(archive,preflight,source,docker,*,end=None):
     report={'schema':'metainc-data-diagnostic-v1','session':SESSION,'status':'blocked','stage':'dependencies','error':None,'read_only':True,'archive_written':False,'state_changed':False,'cleanup_confirmed':False,'entry_count':0,'file_count':0,'deleted_count':0,'configuration_count':0,'configuration_absent_count':0}
-    snapshot=None
+    snapshot=None;child_cleanup_uncertain=False
     def stage(name,call):report['stage']=name;return call()
     try:
         snapshot=archive.Snapshot(preflight,REQUEST,docker=docker,end=end,restart_evidence=source.RESTART_EVIDENCE)
@@ -75,6 +75,7 @@ def diagnose(archive,preflight,source,docker,*,end=None):
         report.update(status='diagnosed',stage='complete')
     except BaseException as error:
         reason=getattr(error,'code',None)
+        child_cleanup_uncertain=reason=='attempt_not_terminal'
         report['error']=reason if isinstance(reason,str) and reason in ERRORS else 'operation_failed'
     finally:
         signals=(signal.SIGINT,signal.SIGTERM,signal.SIGHUP,signal.SIGALRM)
@@ -84,7 +85,7 @@ def diagnose(archive,preflight,source,docker,*,end=None):
         finally:signal.pthread_sigmask(signal.SIG_SETMASK,mask)
         try:
             if snapshot is not None:snapshot.stack.close()
-            report['cleanup_confirmed']=True
+            report['cleanup_confirmed']=not child_cleanup_uncertain
         except BaseException:
             report.update(status='blocked',error='cleanup_unconfirmed')
         finally:

@@ -68,6 +68,9 @@ class Diagnostic(unittest.TestCase):
     def test_interruption_is_bounded_and_closes_snapshot(self):
         with mock.patch.object(self.snapshot,'configuration',side_effect=m.Refused('interrupted')),mock.patch.object(self.snapshot.stack,'close',wraps=self.snapshot.stack.close) as close:
             self.assertEqual(self.run_diag()['error'],'interrupted');close.assert_called_once()
+    def test_unreaped_docker_command_child_cannot_claim_cleanup_confirmed(self):
+        with mock.patch.object(self.snapshot,'frozen',side_effect=m.Refused('attempt_not_terminal')),mock.patch.object(self.snapshot.stack,'close',wraps=self.snapshot.stack.close) as close:
+            result=self.run_diag();self.assertEqual(result['error'],'attempt_not_terminal');self.assertEqual(result['stage'],'frozen_initial');self.assertFalse(result['cleanup_confirmed']);close.assert_called_once()
     def test_outer_temporary_directory_cleanup_failure_is_not_confirmed(self):
         folder=mock.MagicMock();folder.__enter__.return_value='/synthetic-config';folder.__exit__.side_effect=RuntimeError(CANARY)
         modules={'retirement_data_preflight.py':types.SimpleNamespace(Docker=lambda *a,**kw:None),'retirement_data_archive.py':None,'retirement_data_source.py':None}
