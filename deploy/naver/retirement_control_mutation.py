@@ -100,15 +100,28 @@ def cfg_path(value):
 
 class Files:
     """Alternate filesystem/owner/exchange are synthetic adapters, never CLI inputs."""
-    def __init__(self,base='/',uid=0,gid=0,exchange=None):self.base,self.uid,self.gid,self.exchanger=base,uid,gid,exchange
+    def __init__(self,base='/',uid=0,gid=0,exchange=None,staging=None):
+        self.base,self.uid,self.gid,self.exchanger=base,uid,gid,exchange
+        require(staging is None or isinstance(staging,str) and re.fullmatch(r'/tmp/metainc-control-mutation-[1-9][0-9]{0,19}-1',staging),'path_refused')
+        self.staging=staging
     @contextlib.contextmanager
     def directory(self,path):
         require(isinstance(path,str) and path.startswith('/') and all(p not in ('.','..') for p in path.split('/')),'path_refused')
         with contextlib.ExitStack() as stack:
             fd=os.open(self.base,DIR);stack.callback(os.close,fd);chain=[]
-            for name in filter(None,path.split('/')):
+            parts=list(filter(None,path.split('/')))
+            scoped_staging=self.staging is not None and path==self.staging
+            for index,name in enumerate(parts):
                 before=os.stat(name,dir_fd=fd,follow_symlinks=False)
-                require(stat.S_ISDIR(before.st_mode) and before.st_uid==self.uid and before.st_gid==self.gid and not before.st_mode&0o022,'directory_refused')
+                # /tmp is traversable only toward this helper's exact run staging.
+                # Its sticky parent never grants access to another /tmp child.
+                if scoped_staging and index==0 and name=='tmp':
+                    expected_uid,expected_gid=(0,0) if self.base=='/' else (self.uid,self.gid)
+                    allowed=before.st_uid==expected_uid and before.st_gid==expected_gid and stat.S_IMODE(before.st_mode)==0o1777
+                else:
+                    allowed=before.st_uid==self.uid and before.st_gid==self.gid and not before.st_mode&0o022
+                    if scoped_staging:allowed=allowed and stat.S_IMODE(before.st_mode)==0o700
+                require(stat.S_ISDIR(before.st_mode) and allowed,'directory_refused')
                 child=os.open(name,DIR,dir_fd=fd);stack.callback(os.close,child)
                 require(stamp(os.fstat(child))[:5]==stamp(before)[:5],'path_changed')
                 chain.append((fd,name,child,stamp(before)[:5]));fd=child
@@ -324,6 +337,10 @@ class Docker:
                 isinstance(value['git_commit'],str) and re.fullmatch(r'[0-9a-f]{7,40}',value['git_commit']) and
                 value['os']=='linux' and value['arch'] in ('amd64','arm64'),'daemon_metadata_refused')
         return value
+    def auto_remove(self,identifier):
+        require(isinstance(identifier,str) and HEX.fullmatch(identifier),'container_changed')
+        value=decode(self.run('inspect','--format','{{json .HostConfig.AutoRemove}}',identifier,limit=64))
+        require(type(value) is bool,'container_changed');return value
     def update_no(self,identifier):self.run('update','--restart=no',identifier,limit=256)
     def kill(self,identifier):self.run('kill','--signal','KILL',identifier,limit=256)
     def running_names(self):
@@ -373,7 +390,9 @@ def rewritten(body,spans):
 
 class Mutation:
     def __init__(self,files=None,docker=None,control=None,frozen=None,runner=command,directory=None,sleep=time.sleep):
-        self.files=files or Files();self.directory=directory or os.path.dirname(os.path.abspath(__file__))
+        self.directory=directory or os.path.dirname(os.path.abspath(__file__))
+        staging=self.directory if re.fullmatch(r'/tmp/metainc-control-mutation-[1-9][0-9]{0,19}-1',self.directory) else None
+        self.files=files or Files(staging=staging)
         self.docker,self.control,self.freeze=docker,control,frozen
         self.runner,self.sleep=runner,sleep;self.policy=POLICY
         self.report={'status':'blocked','error':None,'phase':None,'execute':False,'session':SESSION,
@@ -428,6 +447,9 @@ class Mutation:
             out[alias]=row
         return out
     def no_restart(self,states):require(all(row['restart']=={'Name':'no','MaximumRetryCount':0} for row in states.values()),'restart_not_fenced')
+    def no_auto_remove(self):
+        for selection in self.policy['request'].values():
+            require(self.docker.auto_remove(selection['id']) is False,'container_changed')
     def frozen(self):
         if self.freeze is not None:return self.freeze()
         preflight=load_module(self.files,self.directory,'retirement_data_preflight.py',PREFLIGHT_SHA)
@@ -491,6 +513,7 @@ class Mutation:
                 value['source_commit'].startswith(daemon['git_commit']) and isinstance(value['source_sha256'],str) and HEX.fullmatch(value['source_sha256']),'semantics_unproven')
     def record(self,name,value):self.files.write(BASE+'/'+name,canonical(value))
     def run(self,phase,execute,run):
+        require(self.files.staging is None or self.files.staging=='/tmp/metainc-control-mutation-'+run,'arguments_refused')
         if execute:
             self.perform(phase,False,run)
             self.files.initialize()
@@ -513,6 +536,7 @@ class Mutation:
                 _,test_code=self.runner(['/usr/sbin/nginx','-t'],limit=4096,timeout=15)
                 require(test_code==0,'nginx_pretest_failed')
             else:
+                self.no_auto_remove()
                 self.local_proof(transfer);self.semantics(daemon)
                 maintenance=decode(self.files.read(BASE+'/maintenance-complete.json',65536,True)[0])
                 fields(maintenance,'schema session status run transfer_sha256 records')
@@ -583,6 +607,7 @@ class Mutation:
                 raise
         else:
             require(self.frozen()==frozen and self.protected()==protected,'container_changed')
+            self.no_auto_remove()
             for alias,selection in self.policy['request'].items():self.docker.kill(selection['id']);self.report['changed_containers']+=1
             for delay in (0,10,20):
                 if delay:self.sleep(delay)
