@@ -195,12 +195,12 @@ class GrammarPreflightTests(unittest.TestCase):
                     {'s': True, 'f': 'summary'}, {'s': 'case:1', 'f': 1}, [], 'case:1.summary'):
             self.assertFalse(G.schema_matches({'ref': ref}, schema), ref)
 
-    def test_reference_union_one_to_sixteen_branches_and_no_general_union_support(self):
+    def test_reference_union_one_to_thirty_six_branches_and_no_general_union_support(self):
         valid = self.reference_branch(['case:1'], ['summary'])
         ref = {'s': 'case:1', 'f': 'summary'}
-        for count in (1, 8, 16):
+        for count in (1, 16, 19, 36):
             self.assertTrue(G.schema_matches(ref, self.reference_schema([copy.deepcopy(valid) for _ in range(count)])))
-        for branches in ([], [valid] * 17, valid, [{'type': 'string', 'enum': ['case:1']}],
+        for branches in ([], [valid] * 37, valid, [{'type': 'string', 'enum': ['case:1']}],
                          [valid, {'type': 'any'}], [valid, {'$ref': '#/definitions/x'}]):
             self.assertFalse(G.schema_matches(ref, self.reference_schema(branches)))
         for schema in ({'anyOf': [valid]}, {'oneOf': [valid]},
@@ -249,7 +249,7 @@ class GrammarPreflightTests(unittest.TestCase):
     def test_live_source_and_candidate_are_fixed_to_reviewed_boundary(self):
         self.assertEqual(G.SOURCE, 'bb151c2a483a3422c25ba203b7a9358569f5a9da')
         self.assertEqual(G.CANDIDATE, 'grounded-segments-v14')
-        self.assertEqual(G.MAX_REFERENCE_BRANCHES, 16)
+        self.assertEqual(G.MAX_REFERENCE_BRANCHES, 36)
         self.assertEqual(G.MAX_PACKAGE, 24576)
         self.assertEqual(G.blank_result(self.pkg)['live_source'], G.SOURCE)
         with self.assertRaises(ValueError):

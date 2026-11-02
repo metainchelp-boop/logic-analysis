@@ -27,10 +27,14 @@ storage and rendered output require their own product checks.
 
 The validator supports the existing closed JSON subset and one additional form:
 a closed object requiring exactly the string fields `s` and `f`, combined with
-an `anyOf` containing 1–16 branches. Every branch contains only `properties`,
+an `anyOf` containing 1–36 branches. Every branch contains only `properties`,
 with only nonempty string enums for `s` and `f`. The parent constraints and a
 branch must both match. These represent the permitted source and field pairs
 in the private fixture.
+The finite product catalog has at most 35 sources: 17 metric, 5 case, 1 plan,
+3 product and 9 setup sources. Grouping cannot create more groups than sources;
+the additional empty-reference branch gives the 36-branch bound. This bound
+comes from the product catalog, not an asserted provider branch limit.
 The no-reference branch has only `s: ""` and `f: ""`; mixed empty and nonempty
 values are refused. All branches are checked before a matching branch can
 succeed. General unions, unconstrained parents, extra branch keywords and nested union leaves remain
