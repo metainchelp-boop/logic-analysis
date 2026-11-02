@@ -16,6 +16,7 @@ on:
       - '.github/workflows/naver-data-preservation.yml'  # 앱 데이터 일관 사본 보존, 제품 재배포 없음
       - '.github/workflows/naver-data-preflight.yml'
       - '.github/workflows/naver-data-diagnostic.yml'  # 정지된 원본 읽기 전용 진단, 앱 배포 없음
+      - '.github/workflows/naver-data-continuation.yml'  # 동결 원본 별도 사본 보존, 앱 배포 없음
       - '.github/workflows/naver-control-mutation.yml'  # 수동 철거 통제 도구, 제품 재배포 없음
       - '.github/workflows/naver-data-control-preflight.yml'  # mutable data 읽기 전용 관찰, 앱 배포 없음
       - '.github/workflows/naver-images-preservation.yml'  # 남은 고정 이미지 보존 전용, 앱 배포 없음

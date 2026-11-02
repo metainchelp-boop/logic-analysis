@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 import unittest
@@ -89,15 +90,15 @@ class ArchiveTest(unittest.TestCase):
             value = self.request['ad' if args[-1] == 'a' * 64 else 'content']
             return json.dumps(dict(id=value['id'], pid=value['pid'], running=True,
                                   paused=self.paused, restarting=False)).encode()
-        if args[0] == 'inspect' and '"host_config"' in args[2]:
+        if args[0] == 'inspect' and args[2] == '{{json .}}':
             alias = 'ad' if args[-1] == 'a' * 64 else 'content'
             config = dict.fromkeys(s.CONFIG_FIELDS)
             config.update(Env=['SECRET=' + CANARY], Cmd=['synthetic-server'], WorkingDir='/app')
             host = dict.fromkeys(s.HOST_FIELDS)
             host['RestartPolicy'] = {'Name': 'no', 'MaximumRetryCount': 0}
-            return json.dumps({'id': self.request[alias]['id'], 'name': p.NAMES[alias],
-                'image': p.IMAGES[alias], 'config': config, 'host_config': host,
-                'networks': {'synthetic': {'Aliases': [alias]}}}).encode()
+            return json.dumps({'Id': self.request[alias]['id'], 'Name': p.NAMES[alias],
+                'Image': p.IMAGES[alias], 'Config': config, 'HostConfig': host,
+                'NetworkSettings': {'Networks': {'synthetic': {'Aliases': [alias]}}}}).encode()
         return self.f.run_docker(args)
 
     def group(self, alias='ad', version='v2'):
@@ -465,10 +466,10 @@ class ArchiveTest(unittest.TestCase):
         seen = [0]
         def changed(args):
             body = original(args)
-            if args[0] == 'inspect' and '"host_config"' in args[2]:
+            if args[0] == 'inspect' and args[2] == '{{json .}}':
                 seen[0] += 1
                 if seen[0] > 2:
-                    value = json.loads(body); value['config']['Env'] = ['CHANGED_SECRET=' + CANARY]
+                    value = json.loads(body); value['Config']['Env'] = ['CHANGED_SECRET=' + CANARY]
                     return json.dumps(value).encode()
             return body
         self.docker.runner = changed
@@ -559,13 +560,46 @@ class ArchiveTest(unittest.TestCase):
         original = self.command
         def changed(args):
             body = original(args)
-            if args[0] == 'inspect' and '"host_config"' in args[2]:
-                value = json.loads(body); value['image'] = 'sha256:' + '0' * 64
+            if args[0] == 'inspect' and args[2] == '{{json .}}':
+                value = json.loads(body); value['Image'] = 'sha256:' + '0' * 64
                 return json.dumps(value).encode()
             return body
         self.docker.runner = changed
         self.denied('configuration_unconfirmed'); self.assertEqual(self.payload, b'')
 
+    def test_missing_optional_inspect_fields_remain_null_and_extra_fields_are_not_archived(self):
+        original = self.command
+        def omitted(args):
+            if args[0] == 'inspect' and args[2] != '{{json .}}' and '.Config.Healthcheck' in args[2]:
+                raise p.Refused('command_failed')
+            body = original(args)
+            if args[0] == 'inspect' and args[2] == '{{json .}}':
+                value = json.loads(body)
+                del value['Config']['Healthcheck'];del value['HostConfig']['Mounts']
+                value['UnreviewedInspectField'] = 'UNRELATED_PRIVATE_INSPECT_FIELD'
+                value['Config']['UnreviewedConfigField'] = 'UNRELATED_PRIVATE_INSPECT_FIELD'
+                return json.dumps(value).encode()
+            return body
+        self.docker.runner = omitted
+        result=self.run_archive();self.assertEqual(result['status'],'archive_stream_complete')
+        archive,_,manifest=self.manifest()
+        for row in manifest['recovery_config']:
+            if row['format']=='docker-json':
+                body=archive.extractfile(row['object']).read();value=json.loads(body)
+                self.assertIsNone(value['config']['Healthcheck']);self.assertIsNone(value['host_config']['Mounts'])
+                self.assertEqual(set(value['config']),set(s.CONFIG_FIELDS));self.assertEqual(set(value['host_config']),set(s.HOST_FIELDS))
+                self.assertNotIn(b'UNRELATED_PRIVATE_INSPECT_FIELD',body)
+    def test_full_inspect_identity_and_required_containers_are_never_optional(self):
+        original=self.command
+        cases=[('Id',None),('Name','/other'),('Image','sha256:'+'0'*64),('Config',None),('HostConfig',[]),('NetworkSettings',{}),('NetworkSettings',{'Networks':[]})]
+        for key,bad in cases:
+            def wrong(args,key=key,bad=bad):
+                body=original(args)
+                if args[0]=='inspect' and args[2]=='{{json .}}':
+                    value=json.loads(body);value[key]=bad;return json.dumps(value).encode()
+                return body
+            with self.subTest(key=key):
+                self.docker.runner=wrong;self.denied('configuration_unconfirmed');self.assertEqual(self.payload,b'')
     def test_optional_content_environment_absence_is_explicit(self):
         self.f.local('/containers/content/app/.env').unlink()
         self.run_archive()
@@ -655,6 +689,22 @@ class ArchiveTest(unittest.TestCase):
         with mock.patch.object(s, 'MAX_PATH_BYTES', 1): self.denied('manifest_size_limit')
         self.assertEqual(self.payload, b'')
 
+
+
+
+class DockerTemplateSemantics(unittest.TestCase):
+    def test_real_cli_missing_optional_map_field_vs_full_json_without_daemon(self):
+        import shutil
+        binary=shutil.which('docker')
+        if binary is None:self.skipTest('Docker CLI unavailable; no daemon is required')
+        with tempfile.TemporaryDirectory(prefix='docker-template-synthetic-') as config:
+            environment={'PATH':os.path.dirname(binary)+':/usr/bin:/bin','LANG':'C','LC_ALL':'C'}
+            base=[binary,'--config',config,'context','inspect','default','--format']
+            missing=subprocess.run(base+['{{json .Endpoints.docker.Healthcheck}}'],env=environment,capture_output=True,timeout=10)
+            whole=subprocess.run(base+['{{json .}}'],env=environment,capture_output=True,timeout=10)
+            self.assertNotEqual(missing.returncode,0)
+            self.assertEqual(whole.returncode,0)
+            self.assertIsInstance(json.loads(whole.stdout).get('Endpoints'),dict)
 
 if __name__ == '__main__':
     unittest.main()

@@ -440,22 +440,25 @@ class Snapshot:
         rows, total, absent, parent_guards = [restart], restart['bytes'], [], {}
         for alias in ('ad', 'content'):
             selection = self.request[alias]
-            config = ','.join('"' + key + '":{{json .Config.' + key + '}}' for key in CONFIG_FIELDS)
-            host = ','.join('"' + key + '":{{json .HostConfig.' + key + '}}' for key in HOST_FIELDS)
-            template = ('{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},'
-                        '"config":{' + config + '},"host_config":{' + host + '},'
-                        '"networks":{{json .NetworkSettings.Networks}}}')
-            raw = self.docker.run(['inspect', '--format', template, selection['id']])
+            # Inspect's Go template treats absent optional map keys as errors.
+            # Read the bounded JSON object internally, then retain only this
+            # reviewed recovery subset. Missing optional keys remain null;
+            # no Docker defaults are guessed and extra inspect fields are lost.
+            raw = self.docker.run(['inspect', '--format', '{{json .}}', selection['id']])
             if not 0 < len(raw) <= MAX_CONFIG_FILE:
                 raise Refused('configuration_limit')
-            value = self.p.json_read(raw)
-            if (not isinstance(value, dict) or set(value) != {'id', 'name', 'image', 'config', 'host_config', 'networks'} or
-                    value['id'] != selection['id'] or value['name'] != self.p.NAMES[alias] or
-                    value['image'] != self.p.IMAGES[alias] or not isinstance(value['config'], dict) or
-                    set(value['config']) != set(CONFIG_FIELDS) or not isinstance(value['host_config'], dict) or
-                    set(value['host_config']) != set(HOST_FIELDS) or not isinstance(value['networks'], dict) or
-                    len(value['networks']) > 16):
+            inspected = self.p.json_read(raw)
+            if (not isinstance(inspected, dict) or inspected.get('Id') != selection['id'] or
+                    inspected.get('Name') != self.p.NAMES[alias] or inspected.get('Image') != self.p.IMAGES[alias] or
+                    not isinstance(inspected.get('Config'), dict) or not isinstance(inspected.get('HostConfig'), dict) or
+                    not isinstance(inspected.get('NetworkSettings'), dict) or
+                    not isinstance(inspected['NetworkSettings'].get('Networks'), dict) or
+                    len(inspected['NetworkSettings']['Networks']) > 16):
                 raise Refused('configuration_unconfirmed')
+            value = {'id': inspected['Id'], 'name': inspected['Name'], 'image': inspected['Image'],
+                     'config': {key: inspected['Config'].get(key) for key in CONFIG_FIELDS},
+                     'host_config': {key: inspected['HostConfig'].get(key) for key in HOST_FIELDS},
+                     'networks': inspected['NetworkSettings']['Networks']}
             body = json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode('ascii')
             total += len(body)
             rows.append({'alias': alias + '-container', 'format': 'docker-json', 'body': body,

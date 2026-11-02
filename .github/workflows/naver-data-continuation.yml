@@ -1,0 +1,253 @@
+name: 이미 동결된 세 앱 자료 보존 이어가기 (수동 전용)
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: '준비 → 서버 B 수신 준비 → 전송 → 완료된 시도·서버 B 인증 폐기 후 정리'
+        required: true
+        type: choice
+        default: prepare
+        options: [prepare, send, cleanup]
+      operator_evidence_sha256:
+        description: 'prepare·send 전 이미 중지된 상태를 확인한 통제 기록 SHA256'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# 원래 시도와 이어가기 모두 같은 동시 실행 그룹으로 직렬화한다. 원래 세션은 수정하지 않는다.
+concurrency:
+  group: naver-data-preservation
+  cancel-in-progress: false
+
+jobs:
+  preservation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      NRD_PHASE: ${{ inputs.phase }}
+      NRD_OPERATOR: ${{ inputs.operator_evidence_sha256 }}
+    steps:
+      - name: 대표 계정·main·신뢰한 호스트·고정 단계 확인
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+          HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTOR" != metainchelp-boop ]; then echo ACTOR_NOT_AUTHORIZED; exit 1; fi
+          if [ "$TRIGGERING_ACTOR" != metainchelp-boop ]; then echo ACTOR_NOT_AUTHORIZED; exit 1; fi
+          if [ "$REF" != refs/heads/main ]; then echo MAIN_REQUIRED; exit 1; fi
+          if ! [[ "$HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo TRUSTED_HOST_FINGERPRINT_REQUIRED; exit 1; fi
+          case "$NRD_PHASE" in prepare|send|cleanup) ;; *) echo PHASE_NOT_AUTHORIZED; exit 1 ;; esac
+          if [ "$NRD_PHASE" = prepare ] || [ "$NRD_PHASE" = send ]; then
+            [[ "$NRD_OPERATOR" =~ ^[0-9a-f]{64}$ ]] || { echo OPERATOR_EVIDENCE_REQUIRED; exit 1; }
+          else
+            [ -z "$NRD_OPERATOR" ] || { echo OPERATOR_EVIDENCE_UNEXPECTED; exit 1; }
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: 보존 도구 합성 검사 (제품·DB·키·서버 없음)
+        # 전체 회귀 검사는 정확한 PR 커밋에서 수행한다. 수동 단계는 보존 도구를 다시 확인한다.
+        run: python -I -B -m unittest discover -s deploy/naver/tests -p 'test_retirement_data*.py' -v
+      - name: 검사한 helper·공개키·서버 B 호스트 공개키만 준비
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir preservation-ship
+          cp deploy/naver/retirement_data_continuation.py deploy/naver/retirement_data_archive.py deploy/naver/retirement_data_preflight.py deploy/naver/retirement_control_preflight.py preservation-ship/
+          cp deploy/naver/preservation/recovery-public.asc preservation-ship/
+          cp deploy/naver/preservation/server-b-known-hosts preservation-ship/
+          # 고정 drone-scp 컨테이너는 UID 1000이다. 공개 파일만 전송 가능하게 한다.
+          chmod 755 preservation-ship
+          chmod 644 preservation-ship/retirement_data_continuation.py preservation-ship/retirement_data_archive.py preservation-ship/retirement_data_preflight.py preservation-ship/retirement_control_preflight.py preservation-ship/recovery-public.asc preservation-ship/server-b-known-hosts
+          echo "NRD_HELPER_SHA=$(sha256sum preservation-ship/retirement_data_continuation.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NRD_ARCHIVE_SHA=$(sha256sum preservation-ship/retirement_data_archive.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NRD_PREFLIGHT_SHA=$(sha256sum preservation-ship/retirement_data_preflight.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NRD_CONTROL_SHA=$(sha256sum preservation-ship/retirement_control_preflight.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NRD_PUBLIC_SHA=$(sha256sum preservation-ship/recovery-public.asc | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NRD_HOSTS_SHA=$(sha256sum preservation-ship/server-b-known-hosts | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NRD_RUN=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: 충돌 없는 관리자 전용 helper 임시 폴더 준비
+        id: prepare_remote
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NRD_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            case "$NRD_RUN" in ''|*[!0-9-]*) exit 1 ;; esac
+            printf '%s' "$NRD_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            [ -d /tmp ]
+            [ ! -L /tmp ]
+            umask 077
+            mkdir "/tmp/metainc-data-continuation-$NRD_RUN"
+      - name: 검토한 helper 4개·공개키 2개만 전송
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          command_timeout: 45s
+          source: preservation-ship/retirement_data_continuation.py,preservation-ship/retirement_data_archive.py,preservation-ship/retirement_data_preflight.py,preservation-ship/retirement_control_preflight.py,preservation-ship/recovery-public.asc,preservation-ship/server-b-known-hosts
+          target: /tmp/metainc-data-continuation-${{ github.run_id }}-${{ github.run_attempt }}
+          strip_components: 1
+          overwrite: false
+      - name: 고정 자료 보존 단계 실행 (공개 상태만 출력)
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NRD_RUN,NRD_HELPER_SHA,NRD_ARCHIVE_SHA,NRD_PREFLIGHT_SHA,NRD_CONTROL_SHA,NRD_PUBLIC_SHA,NRD_HOSTS_SHA,NRD_PHASE,NRD_OPERATOR
+          command_timeout: 42m
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            case "$NRD_RUN" in ''|*[!0-9-]*) exit 1 ;; esac
+            printf '%s' "$NRD_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            case "$NRD_PHASE" in prepare|send|cleanup) ;; *) exit 1 ;; esac
+            for digest in "$NRD_HELPER_SHA" "$NRD_ARCHIVE_SHA" "$NRD_PREFLIGHT_SHA" "$NRD_CONTROL_SHA" "$NRD_PUBLIC_SHA" "$NRD_HOSTS_SHA"; do
+              [ "${#digest}" = 64 ]
+              case "$digest" in *[!0-9a-f]*) exit 1 ;; esac
+            done
+            incoming="/tmp/metainc-data-continuation-$NRD_RUN"
+            helper="$incoming/retirement_data_continuation.py"
+            public_key="$incoming/recovery-public.asc"
+            known_hosts="$incoming/server-b-known-hosts"
+            [ -d "$incoming" ]
+            [ ! -L "$incoming" ]
+            [ "$(stat -c '%u:%a' "$incoming")" = 0:700 ]
+            for asset in "$helper" "$incoming/retirement_data_archive.py" "$incoming/retirement_data_preflight.py" "$incoming/retirement_control_preflight.py" "$public_key" "$known_hosts"; do
+              [ -f "$asset" ]
+              [ ! -L "$asset" ]
+              [ "$(stat -c '%h' "$asset")" = 1 ]
+              # root 전용 신규 폴더 안의 링크 없는 공개 파일만 권한 정규화한다.
+              chown 0:0 -- "$asset"
+              chmod 600 "$asset"
+              [ "$(stat -c '%u:%a:%h' "$asset")" = 0:600:1 ]
+            done
+            [ "$(sha256sum "$helper" | cut -d' ' -f1)" = "$NRD_HELPER_SHA" ]
+            [ "$(sha256sum "$incoming/retirement_data_archive.py" | cut -d' ' -f1)" = "$NRD_ARCHIVE_SHA" ]
+            [ "$(sha256sum "$incoming/retirement_data_preflight.py" | cut -d' ' -f1)" = "$NRD_PREFLIGHT_SHA" ]
+            [ "$(sha256sum "$incoming/retirement_control_preflight.py" | cut -d' ' -f1)" = "$NRD_CONTROL_SHA" ]
+            [ "$(sha256sum "$public_key" | cut -d' ' -f1)" = "$NRD_PUBLIC_SHA" ]
+            [ "$(sha256sum "$known_hosts" | cut -d' ' -f1)" = "$NRD_HOSTS_SHA" ]
+            rc=0
+            export RETIREMENT_RUN="$NRD_RUN" RETIREMENT_OPERATOR_EVIDENCE_SHA256="$NRD_OPERATOR"
+            # Execute the exact same checked source bytes; never re-open it for an import.
+            out=$(timeout -k 5s 2430s python3 -I -B -c '
+            import hashlib,os,stat,sys
+            path,digest,phase=sys.argv[1:]
+            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK)
+            try:
+                before=os.fstat(fd)
+                if not stat.S_ISREG(before.st_mode) or before.st_uid!=0 or before.st_nlink!=1 or stat.S_IMODE(before.st_mode)!=0o600 or not 0<before.st_size<=262144:raise ValueError()
+                body=bytearray()
+                while True:
+                    part=os.read(fd,min(65536,262145-len(body)))
+                    if not part:break
+                    body.extend(part)
+                    if len(body)>262144:raise ValueError()
+                def stamp(value):return (value.st_dev,value.st_ino,value.st_mode,value.st_uid,value.st_gid,value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+                if stamp(os.fstat(fd))!=stamp(before) or stamp(os.stat(path,follow_symlinks=False))!=stamp(before) or hashlib.sha256(body).hexdigest()!=digest:raise ValueError()
+            finally:os.close(fd)
+            sys.argv=[path,phase]
+            exec(compile(bytes(body),path,"exec"),{"__name__":"__main__","__file__":path})
+            ' "$helper" "$NRD_HELPER_SHA" "$NRD_PHASE" 2>/dev/null) || rc=$?
+            case "$rc" in 0|2) ;; *) echo RETIREMENT_PRESERVATION_FAILED; exit 1 ;; esac
+            # helper 실패나 예상 밖 출력은 공개 로그에 원문을 싣지 않는다.
+            if ! printf '%s' "$out" | python3 -I -B -c '
+            import base64,json,re,sys
+            def require(value):
+                if not value:raise ValueError()
+            def unique(pairs):
+                result={}
+                for key,value in pairs:
+                    require(key not in result);result[key]=value
+                return result
+            try:
+                raw=sys.stdin.buffer.read(4097)
+                require(0<len(raw)<=4096 and len(raw.splitlines())==1)
+                data=json.loads(raw,object_pairs_hook=unique,parse_constant=lambda value:(_ for _ in ()).throw(ValueError()))
+                fields={"phase","status","session","error","ssh_public_key","bytes","sha256","process_rc","backup_verified","source_bytes","archive_bytes","object_count","paused","operator_evidence_sha256","run"}
+                require(isinstance(data,dict) and set(data)==fields)
+                allowed={"prepare":{"prepared"},"send":{"transferred_unverified"},"cleanup":{"transport_key_removed","already_closed"}}
+                phase,rc,run,evidence=sys.argv[1:]
+                require(re.fullmatch(r"[0-9a-f]{64}",evidence) if phase in {"prepare","send"} else evidence=="")
+                require(data["phase"]==phase and data["session"]=="data-snapshot-continuation-20261102-v1" and data["backup_verified"] is False)
+                require(data["status"] in allowed[phase]|{"failed"} and (data["status"]=="failed")== (rc=="2"))
+                require(data["run"]==run and re.fullmatch(r"[1-9][0-9]{0,19}-[1-9][0-9]{0,5}",run))
+                errors={"archive_failed","asset_invalid","attempt_exists","attempt_not_terminal","cipher_limit","command_failed","command_limit","controls_changed","daemon_unverified","deadline_exceeded","dependency_failed","file_exists","file_missing","file_too_large","image_invalid","internal_failure","interrupted","invalid_phase","lock_busy","module_refused","not_prepared","old_attempt_refused","old_transport_not_closed","operator_evidence_refused","path_changed","pipe_failed","pipeline_failed","policy_unresolved","producer_archive_incomplete","producer_archive_size_limit","producer_archive_timeout","producer_async_io_uncovered","producer_cgroup_tasks_changed","producer_cgroup_unconfirmed","producer_command_failed","producer_command_limit","producer_configuration_changed","producer_configuration_limit","producer_configuration_missing","producer_configuration_unconfirmed","producer_content_changed","producer_coverage_incomplete","producer_data_size_limit","producer_deadline_exceeded","producer_deleted_changed","producer_deleted_limit","producer_deleted_uncovered","producer_direct_io_uncovered","producer_directory_changed","producer_encrypted_pipe_failed","producer_encrypted_pipe_required","producer_entry_limit","producer_fd_limit","producer_file_changed","producer_filesystem_boundary","producer_final_guard_changed","producer_freeze_changed","producer_interrupted","producer_link_or_special_uncovered","producer_manifest_size_limit","producer_mapping_changed","producer_mapping_unpinned","producer_name_uncovered","producer_nested_cgroup_uncovered","producer_not_frozen","producer_preflight_contract_refused","producer_privilege_or_platform_refused","producer_process_changed","producer_regular_file_uncovered","producer_request_refused","producer_restart_evidence_unconfirmed","producer_thread_set_unconfirmed","producer_tree_changed","public_key_invalid","receipt_invalid","recipient_invalid","root_required","session_closed","session_exists","session_missing","space_insufficient","unsafe_path"}
+                require(data["error"] in errors if data["status"]=="failed" else data["error"] is None)
+                for key,limit in (("bytes",2300300288),("source_bytes",2147483648),("archive_bytes",2283523072),("object_count",100080)):
+                    value=data[key];require(value is None or type(value) is int and 0<=value<=limit)
+                for key in ("sha256","operator_evidence_sha256"):
+                    value=data[key];require(value is None or isinstance(value,str) and re.fullmatch(r"[0-9a-f]{64}",value))
+                public=data["ssh_public_key"]
+                if public is not None:
+                    require(isinstance(public,str) and re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/]{68}",public))
+                    wire=base64.b64decode(public.split()[1],validate=True)
+                    require(len(wire)==51 and wire[:19]==b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20")
+                codes=data["process_rc"]
+                require(codes is None or isinstance(codes,dict) and set(codes)=={"archive","gpg","ssh"} and all(v is None or type(v) is int and -255<=v<=255 for v in codes.values()))
+                paused=data["paused"]
+                require(isinstance(paused,dict) and set(paused)=={"ad","content"} and all(v in {"not_observed","paused"} for v in paused.values()))
+                empty=("bytes","sha256","process_rc","source_bytes","archive_bytes","object_count")
+                if data["status"]=="prepared":
+                    require(public is not None and all(data[key] is None for key in empty) and data["operator_evidence_sha256"]==evidence and re.fullmatch(r"[0-9a-f]{64}",evidence) and set(paused.values())=={"paused"})
+                elif data["status"]=="transferred_unverified":
+                    require(public is None and codes=={"archive":0,"gpg":0,"ssh":0} and all(data[key] is not None for key in empty) and data["bytes"]>0 and data["source_bytes"]>0 and data["object_count"]>0 and data["archive_bytes"]>=1024 and data["archive_bytes"]%512==0 and data["archive_bytes"]>=data["source_bytes"] and set(paused.values())=={"paused"})
+                    require(data["operator_evidence_sha256"]==evidence and re.fullmatch(r"[0-9a-f]{64}",evidence))
+                elif data["status"] in {"transport_key_removed","already_closed"}:
+                    require(public is None and all(data[key] is None for key in empty) and data["operator_evidence_sha256"] is None and set(paused.values())=={"not_observed"})
+                print("RETIREMENT_DATA_CONTINUATION="+json.dumps(data,sort_keys=True,separators=(",",":")))
+            except Exception:raise SystemExit(1)
+            ' "$NRD_PHASE" "$rc" "$NRD_RUN" "$NRD_OPERATOR" 2>/dev/null; then echo RETIREMENT_PRESERVATION_OUTPUT_REFUSED; exit 1; fi
+            exit "$rc"
+      - name: 이번 실행의 공개 helper 파일과 빈 임시 폴더만 정리
+        # 운송 키는 남긴다. 전송 시도 종료·서버 B 인증 폐기 후 cleanup 단계를 별도로 실행한다.
+        if: always() && steps.prepare_remote.outcome == 'success'
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NRD_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            case "$NRD_RUN" in ''|*[!0-9-]*) exit 1 ;; esac
+            printf '%s' "$NRD_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            incoming="/tmp/metainc-data-continuation-$NRD_RUN"
+            if [ ! -e "$incoming" ] && [ ! -L "$incoming" ]; then exit 0; fi
+            [ -d "$incoming" ]
+            [ ! -L "$incoming" ]
+            [ "$(stat -c '%u:%a' "$incoming")" = 0:700 ]
+            for name in retirement_data_continuation.py retirement_data_archive.py retirement_data_preflight.py retirement_control_preflight.py recovery-public.asc server-b-known-hosts; do
+              asset="$incoming/$name"
+              if [ -e "$asset" ] || [ -L "$asset" ]; then
+                [ -f "$asset" ]
+                [ ! -L "$asset" ]
+                [ "$(stat -c '%h' "$asset")" = 1 ]
+                rm -f -- "$asset" 2>/dev/null
+              fi
+            done
+            if ! rmdir -- "$incoming" 2>/dev/null; then echo RETIREMENT_PRESERVATION_CLEANUP_INCOMPLETE; exit 1; fi
