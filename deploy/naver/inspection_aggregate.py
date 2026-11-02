@@ -42,6 +42,7 @@ CIPHER_BYTES = 32768
 MAX_POLICIES = 5000
 MAX_JOBS = 50000
 MAX_PROGRESS_BYTES = 64 * 1024 * 1024
+_PUBLIC_OUTPUT_FDS = frozenset((0, 1, 2))
 EVENTS = ('policy_blocked', 'retry_wait', 'weekly_not_due', 'account_wait',
           'account_scope_invalid', 'manual_quota', 'behind_window')
 STATUSES = ('missing', 'scope_invalid', 'ok', 'reading', 'partial', 'retry', 'limited', 'reauth', 'source_wait', 'other')
@@ -291,7 +292,19 @@ def forbid_side_effects(event, args, allowed_database=DATABASE):
     if event == 'open':
         flags = args[2]
         if type(flags) is int and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND):
-            raise Refused('runtime_refused')
+            # Popen wraps its already-created stdin pipe with io.open(fd, 'wb').
+            # Its mode flags include CREAT/TRUNC even though no path is opened.
+            # Permit only an existing anonymous pipe; paths and all file/socket
+            # descriptors (including named FIFOs and standard streams) stay denied.
+            descriptor = args[0]
+            try:
+                anonymous_pipe = (sys.platform == 'linux' and type(descriptor) is int and descriptor > 2
+                    and descriptor not in _PUBLIC_OUTPUT_FDS
+                    and stat.S_ISFIFO(os.fstat(descriptor).st_mode)
+                    and re.fullmatch(r'pipe:\[[0-9]+\]', os.readlink('/proc/self/fd/'+str(descriptor))))
+            except OSError:
+                anonymous_pipe = False
+            require(anonymous_pipe, 'runtime_refused')
     if event == 'sqlite3.connect':
         require(args[0] == allowed_database.as_uri() + '?mode=ro', 'database_refused')
 
@@ -419,7 +432,9 @@ def encrypt(value, certificate, expected, runner=command, certificate_owner=None
             '-outform', 'DER', '-recip', str(certificate), '-keyopt', 'rsa_padding_mode:oaep',
             '-keyopt', 'rsa_oaep_md:sha256', '-keyopt', 'rsa_mgf1_md:sha256'],
             data=pack(value), limit=CIPHER_BYTES, timeout=5)
-    except BaseException:
+    except BaseException as exc:
+        if isinstance(exc, Refused) and exc.code == 'deadline':
+            raise
         raise Refused('crypto_refused') from None
     require(0 < len(cipher) <= CIPHER_BYTES, 'crypto_refused')
     return FRAME_PREFIX + base64.b64encode(cipher).decode('ascii')
@@ -582,6 +597,7 @@ def run_locked(binding):
 
 
 def main():
+    global _PUBLIC_OUTPUT_FDS
     try:
         require(sys.argv[1:] in ([], ['--child']), 'arguments_refused')
         raw = sys.stdin.buffer.read(8193)
@@ -589,6 +605,8 @@ def main():
         # Third-party import/SQLite/crypto stderr never reaches the public workflow.
         with open(os.devnull, 'w') as sink:
             saved = (os.dup(1), os.dup(2))
+            protected = _PUBLIC_OUTPUT_FDS
+            _PUBLIC_OUTPUT_FDS = frozenset((0, 1, 2, *saved))
             try:
                 os.dup2(sink.fileno(), 1)
                 os.dup2(sink.fileno(), 2)
@@ -600,6 +618,7 @@ def main():
                 os.dup2(saved[1], 2)
                 os.close(saved[0])
                 os.close(saved[1])
+                _PUBLIC_OUTPUT_FDS = protected
         require(type(line) is str and re.fullmatch(re.escape(FRAME_PREFIX) + r'[A-Za-z0-9+/=]{1,43692}', line))
         print(line)
         return 0
