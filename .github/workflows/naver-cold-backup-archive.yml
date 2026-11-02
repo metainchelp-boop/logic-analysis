@@ -1,0 +1,186 @@
+name: NAVER 이전 배포 백업 무손실 보관
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'plan = 압축 가능 용량과 상태 해시 / apply = 검증한 이전 백업만 무손실 보관'
+        type: choice
+        options: [plan, apply]
+        default: plan
+        required: true
+      plan_sha256:
+        description: 'apply 전용: 직전 plan 결과의 plan_sha256 64자리'
+        type: string
+        default: ''
+        required: false
+      confirm:
+        description: 'apply 전용: ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY'
+        type: string
+        default: ''
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-logic-analysis
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: 대표 계정·main·신뢰한 호스트 확인
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+          ATTEMPT: ${{ github.run_attempt }}
+          HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          MODE: ${{ inputs.mode }}
+          PLAN_SHA: ${{ inputs.plan_sha256 }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTOR" != metainchelp-boop ]; then echo ACTOR_NOT_AUTHORIZED; exit 1; fi
+          if [ "$TRIGGERING_ACTOR" != metainchelp-boop ]; then echo ACTOR_NOT_AUTHORIZED; exit 1; fi
+          if [ "$REF" != refs/heads/main ]; then echo MAIN_REQUIRED; exit 1; fi
+          if [ "$ATTEMPT" != 1 ]; then echo FIRST_ATTEMPT_REQUIRED; exit 1; fi
+          if ! [[ "$HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo TRUSTED_HOST_FINGERPRINT_REQUIRED; exit 1; fi
+          case "$MODE" in
+            plan) test -z "$PLAN_SHA" && test -z "$CONFIRM" || { echo INPUT_REFUSED; exit 1; } ;;
+            apply)
+              [[ "$PLAN_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo INPUT_REFUSED; exit 1; }
+              test "$CONFIRM" = ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY || { echo INPUT_REFUSED; exit 1; } ;;
+            *) echo INPUT_REFUSED; exit 1 ;;
+          esac
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: 보관 도구 합성 검사 (운영 DB·서버 없음)
+        run: python -I -B -m unittest discover -s deploy/naver/tests -p 'test_cold_backup_archive*.py' -v
+      - name: 검사한 helper 한 파일 준비
+        run: |
+          set -euo pipefail
+          mkdir -m 755 cold-backup-ship
+          cp deploy/naver/cold_backup_archive.py cold-backup-ship/
+          # 고정 drone-scp의 tar가 UID/GID를 보존하므로 전송용 공개 helper 사본만 정규화한다.
+          sudo chown 0:0 cold-backup-ship/cold_backup_archive.py
+          sudo chmod 644 cold-backup-ship/cold_backup_archive.py
+          echo "NCA_SHA=$(sha256sum cold-backup-ship/cold_backup_archive.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NCA_RUN=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: 충돌 없는 관리자 전용 임시 폴더 준비
+        id: prepare_remote
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NCA_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            printf '%s' "$NCA_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            [ -d /tmp ]
+            [ ! -L /tmp ]
+            umask 077
+            mkdir "/tmp/metainc-naver-cold-backup-$NCA_RUN"
+      - name: helper 한 파일 전송 (제품·데이터 없음)
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          command_timeout: 45s
+          source: cold-backup-ship/cold_backup_archive.py
+          target: /tmp/metainc-naver-cold-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          strip_components: 1
+          overwrite: false
+      - name: 배포 잠금과 상태 해시 확인 후 선택한 모드 실행
+        env:
+          NCA_MODE: ${{ inputs.mode }}
+          NCA_PLAN: ${{ inputs.plan_sha256 }}
+          NCA_CONFIRM: ${{ inputs.confirm }}
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NCA_RUN,NCA_SHA,NCA_MODE,NCA_PLAN,NCA_CONFIRM
+          command_timeout: 21m
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            printf '%s' "$NCA_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            printf '%s' "$NCA_SHA" | grep -Eq '^[0-9a-f]{64}$'
+            incoming="/tmp/metainc-naver-cold-backup-$NCA_RUN"
+            helper="$incoming/cold_backup_archive.py"
+            [ -d "$incoming" ]
+            [ ! -L "$incoming" ]
+            [ "$(stat -c '%u:%a' "$incoming")" = 0:700 ]
+            trap 'rm -f -- "$helper" 2>/dev/null; rmdir -- "$incoming" 2>/dev/null || true' EXIT
+            [ -f "$helper" ]
+            [ ! -L "$helper" ]
+            [ "$(stat -c '%u:%h:%a' "$helper")" = 0:1:644 ]
+            [ "$(sha256sum "$helper" | cut -d' ' -f1)" = "$NCA_SHA" ]
+            rc=0
+            out=$(python3 -I -B "$helper" "$NCA_MODE" "$NCA_PLAN" "$NCA_CONFIRM" 2>/dev/null) || rc=$?
+            case "$rc" in 0|2) ;; *) echo NAVER_COLD_BACKUP_ARCHIVE_FAILED; exit 1 ;; esac
+            # Validate the entire closed result with the same hash-bound public helper.
+            # stdout JSON travels only over stdin; no unvalidated output or raw argv data.
+            printf '%s' "$out" | python3 -I -B -c '
+            import hashlib,json,os,stat,sys
+            path,expected,rc=sys.argv[1:]
+            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK)
+            try:
+                before=os.fstat(fd)
+                assert stat.S_ISREG(before.st_mode) and before.st_uid==0 and before.st_nlink==1
+                code=os.read(fd,131073)
+                assert len(code)<=131072 and hashlib.sha256(code).hexdigest()==expected
+                after=os.fstat(fd)
+                assert (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)
+            finally: os.close(fd)
+            ns={"__name__":"closed_result_validator"};exec(compile(code,path,"exec"),ns)
+            raw=sys.stdin.buffer.read(32769)
+            assert 0<len(raw)<=32768 and b"\n" not in raw
+            value=json.loads(raw);ns["validate_report"](value)
+            assert (rc=="0" and value["status"] in ("planned","applied")) or (rc=="2" and value["status"]=="refused")
+            ' "$helper" "$NCA_SHA" "$rc" 2>/dev/null || { echo NAVER_COLD_BACKUP_ARCHIVE_OUTPUT_REFUSED; exit 1; }
+            printf 'NAVER_COLD_BACKUP_ARCHIVE_RESULT=%s\n' "$out"
+            exit "$rc"
+      - name: 이번 실행의 helper와 빈 임시 폴더만 정리
+        if: always() && steps.prepare_remote.outcome == 'success'
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NCA_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            printf '%s' "$NCA_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            incoming="/tmp/metainc-naver-cold-backup-$NCA_RUN"
+            helper="$incoming/cold_backup_archive.py"
+            if [ ! -e "$incoming" ] && [ ! -L "$incoming" ]; then exit 0; fi
+            [ -d "$incoming" ]
+            [ ! -L "$incoming" ]
+            [ "$(stat -c '%u:%a' "$incoming")" = 0:700 ]
+            if [ -e "$helper" ] || [ -L "$helper" ]; then
+              [ -f "$helper" ]
+              [ ! -L "$helper" ]
+              [ "$(stat -c '%u:%h:%a' "$helper")" = 0:1:644 ]
+              rm -f -- "$helper" 2>/dev/null
+            fi
+            if ! rmdir -- "$incoming" 2>/dev/null; then echo NAVER_COLD_BACKUP_ARCHIVE_CLEANUP_INCOMPLETE; exit 1; fi
