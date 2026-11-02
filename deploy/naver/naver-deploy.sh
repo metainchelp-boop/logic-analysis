@@ -13,6 +13,8 @@
 #       읽기 전용. 지워도 되는 관제 이미지 태그·release 폴더 목록과 회수량 추정, allowlist_sha256 을 낸다.
 #   naver-deploy.sh cleanup <allowlist_sha256>
 #       계획을 다시 세워 해시가 정확히 같을 때만 그 목록만 지운다(docker image rm 강제 없음, release 폴더 rm -r).
+#   naver-deploy.sh cleanup-artifacts-plan | cleanup-artifacts <allowlist_sha256>
+#       같은 미사용 관제 태그·release만 정리하며 기존 배포 로그는 생성·삭제·chmod 하지 않는다. 별도 scope 해시 사용.
 #
 # 지키는 것(docs/naver-simple-deploy.md 와 같은 목록):
 #   - 이미지 두 개를 커밋 태그로 먼저 빌드한 뒤에만 서비스를 멈춘다.
@@ -726,6 +728,7 @@ def image_sizes():
 # 백업, 다른 앱 이미지, volume, build cache)은 계획에 들어올 수 없다.
 FALLBACK_COMMIT = '89a924f2416f0450f38854b531bdf8778558dca6'
 NAVER_REPOS = ('metainc/naver-engine', 'metainc/naver-relay')
+ARTIFACTS_SCOPE = 'unused-naver-artifacts-v1'
 RELEASE_REF = re.compile(r'releases/naver-([0-9a-f]{40})(?![0-9a-f])')
 UNIT_ROOTS = ('/etc/systemd/system', '/run/systemd/system', '/usr/lib/systemd/system', '/lib/systemd/system')
 UNIT_SUFFIXES = ('.service', '.timer', '.path', '.socket')
@@ -921,15 +924,16 @@ def release_identity(path):
     return '%d:%d' % (info.st_dev, info.st_ino)
 
 
-def build_plan():
+def build_plan(*, artifacts_only=False):
     commits, path_refs, used_images = protected_state()
+    image_commits = set(commits) | set(path_refs) if artifacts_only else commits
     table = image_table()
-    keep_ids = protected_ids(commits, used_images, table)
+    keep_ids = protected_ids(image_commits, used_images, table)
     candidates, kept = [], {'protected_commits': sorted(commits), 'kept_images': 0, 'kept_releases': 0}
     for repository, tag, identity in sorted(table):
         if repository not in NAVER_REPOS or not HEX40.match(tag):
             continue
-        if tag in commits or identity in keep_ids:
+        if tag in image_commits or identity in keep_ids:
             kept['kept_images'] += 1
             continue
         rows = docker_json(['image', 'inspect', repository + ':' + tag])
@@ -950,7 +954,9 @@ def build_plan():
             kept['kept_releases'] += 1
             continue
         candidates.append({'type': 'release', 'ref': path, 'id': release_identity(full), 'size_bytes': tree_bytes(full)})
-    canonical = json.dumps(sorted([c['type'], c['ref'], c['id']] for c in candidates), separators=(',', ':'))
+    identities = sorted([c['type'], c['ref'], c['id']] for c in candidates)
+    canonical = json.dumps({'scope': ARTIFACTS_SCOPE, 'candidates': identities} if artifacts_only else identities,
+                           separators=(',', ':'))
     digest = hashlib.sha256(canonical.encode()).hexdigest()
     estimate = reclaim_estimate(candidates, table, keep_ids)
     return {'candidates': candidates, 'allowlist_sha256': digest, 'kept': kept,
@@ -1005,9 +1011,11 @@ def free_bytes():
     return info.f_bavail * info.f_frsize
 
 
-def cleanup_plan():
-    plan = build_plan()
-    plan.update(mode='cleanup-plan', read_only=True, free_bytes=free_bytes(),
+def cleanup_plan(*, artifacts_only=False):
+    plan = build_plan(artifacts_only=artifacts_only)
+    if artifacts_only:
+        plan.update(scope=ARTIFACTS_SCOPE, reclaim_is_estimate=True)
+    plan.update(mode='cleanup-artifacts-plan' if artifacts_only else 'cleanup-plan', read_only=True, free_bytes=free_bytes(),
                 generated_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
     print('NAVER_DEPLOY_CLEANUP_PLAN=' + json.dumps(plan, sort_keys=True, separators=(',', ':')))
 
@@ -1058,9 +1066,11 @@ def remove_release(releases_fd, name, approved):
     unlink_name_checked(releases_fd, name, approved)
 
 
-def image_still_deletable(candidate):
+def image_still_deletable(candidate, *, artifacts_only=False):
     """지우기 직전: 태그가 아직 승인된 ID 를 가리키고, 어떤 컨테이너(정지 포함)도 그 ID 를 쓰지 않고, 보호 대상이 아닌지."""
-    commits, _, used_images = protected_state()
+    commits, path_refs, used_images = protected_state()
+    if artifacts_only:
+        commits = set(commits) | set(path_refs)
     code, out, _ = docker(['image', 'inspect', candidate['ref']])
     if code:
         return False
@@ -1094,10 +1104,18 @@ def release_still_deletable(candidate):
     return stat.S_ISDIR(info.st_mode) and '%d:%d' % (info.st_dev, info.st_ino) == candidate['id']
 
 
-def cleanup(expected, private_log):
+class DiscardCleanupLog:
+    """The artifacts-only mode neither opens a log file nor retains command output."""
+    def write(self, _text):
+        pass
+
+
+def cleanup(expected, private_log, *, artifacts_only=False):
     """계획을 다시 세워 해시가 정확히 같을 때만, 항목마다 지우기 직전에 다시 확인하고 그 목록만 지운다. 결과는 고정 형식 한 줄."""
-    result = {'mode': 'cleanup', 'allowlist_sha256': expected, 'removed': [], 'refused': [], 'failed': [],
+    result = {'mode': 'cleanup-artifacts' if artifacts_only else 'cleanup', 'allowlist_sha256': expected, 'removed': [], 'refused': [], 'failed': [],
               'free_bytes_before': free_bytes()}
+    if artifacts_only:
+        result['scope'] = ARTIFACTS_SCOPE
 
     def finish(status, code):
         result.update(status=status, exit_code=code, free_bytes_after=free_bytes())
@@ -1106,18 +1124,18 @@ def cleanup(expected, private_log):
     if not re.fullmatch(r'[0-9a-f]{64}', expected or ''):
         finish('REFUSED_BAD_INPUT', 10)
     try:
-        plan = build_plan()
+        plan = build_plan(artifacts_only=artifacts_only)
     except Refuse:
         finish('REFUSED_PLAN_FAILED', 10)
     result['planned_sha256'] = plan['allowlist_sha256']
     if plan['allowlist_sha256'] != expected:
         finish('REFUSED_HASH_MISMATCH', 10)
-    with open(private_log, 'a') as log:
+    with (contextlib.nullcontext(DiscardCleanupLog()) if artifacts_only else open(private_log, 'a')) as log:
         for candidate in plan['candidates']:
             if candidate['type'] != 'image':
                 continue
             try:
-                ok = image_still_deletable(candidate)
+                ok = image_still_deletable(candidate, artifacts_only=artifacts_only)
             except Refuse:
                 ok = False
             if not ok:
@@ -1954,6 +1972,8 @@ COMMANDS = {'unit-parse': unit_parse, 'override-check': override_check, 'subst':
             'backup-prune': backup_prune, 'sha': sha, 'tree-sha': tree_sha, 'result-json': result_json,
             'inspect': inspect, 'verify-copy': verify_copy, 'partial-prune': partial_prune,
             'disk-budget': disk_budget, 'image-sizes': image_sizes, 'cleanup-plan': cleanup_plan, 'disk-usage': disk_usage, 'cleanup': cleanup, 'env-switches': env_switches, 'container-mounts': container_mounts,
+            'cleanup-artifacts-plan': lambda: cleanup_plan(artifacts_only=True),
+            'cleanup-artifacts': lambda expected: cleanup(expected, None, artifacts_only=True),
             'compose-shape': compose_shape, 'shape-diff': shape_diff, 'check-config-run': check_config_run,
             'prune-logs': prune_logs,
             'schema-file': lambda path: print(schema_of(read(path))),
@@ -2460,6 +2480,28 @@ main_cleanup() {
   py cleanup "$expected" "$CMD_LOG"
 }
 
+artifacts_refuse() { # status exit-code; no host log side effects
+  printf 'NAVER_DEPLOY_CLEANUP_RESULT={"exit_code":%s,"mode":"cleanup-artifacts","status":"%s"}\n' "$2" "$1"
+  exit "$2"
+}
+
+main_cleanup_artifacts() {
+  local expected=$1 phase
+  printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$' || artifacts_refuse REFUSED_BAD_INPUT 10
+  if [ "$TEST_MODE" = 0 ] && [ "$(id -u)" != 0 ]; then
+    artifacts_refuse REFUSED_NOT_ROOT 10
+  fi
+  # Existing state and global lock only. Do not create/chmod a log directory or prune logs.
+  [ -d "$R$STATE_DIR" ] && [ ! -L "$R$STATE_DIR" ] || artifacts_refuse REFUSED_LAYOUT 10
+  exec 9>>"$R$STATE_DIR/lock"
+  flock -n 9 || artifacts_refuse LOCKED 11
+  phase=$(py state-get "$STATE_FILE" phase 2>/dev/null) || phase=''
+  if phase_needs_restore "$phase"; then
+    artifacts_refuse REFUSED_DEPLOY_NOT_FINISHED 10
+  fi
+  py cleanup-artifacts "$expected"
+}
+
 # ── deploy ──────────────────────────────────────────────────────────────────
 main_deploy() {
   local tar_path cur cur_r companion name info id user src label unit
@@ -2805,6 +2847,14 @@ case "$MODE" in
     [ "$#" = 2 ] || { echo "사용: $0 cleanup <allowlist_sha256>" >&2; exit 64; }
     main_cleanup "$2"
     ;;
+  cleanup-artifacts-plan)
+    [ "$#" = 1 ] || { echo "사용: $0 cleanup-artifacts-plan" >&2; exit 64; }
+    py cleanup-artifacts-plan
+    ;;
+  cleanup-artifacts)
+    [ "$#" = 2 ] || { echo "사용: $0 cleanup-artifacts <allowlist_sha256>" >&2; exit 64; }
+    main_cleanup_artifacts "$2"
+    ;;
   deploy)
     shift
     [ "$#" -ge 2 ] || { echo "사용: $0 deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2; exit 64; }
@@ -2830,7 +2880,7 @@ case "$MODE" in
     main_deploy "$D_COMMIT" "$D_TAR"
     ;;
   *)
-    echo "사용: $0 inspect | disk-usage | app-inventory | cleanup-plan | cleanup <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2
+    echo "사용: $0 inspect | disk-usage | app-inventory | cleanup-plan | cleanup <allowlist_sha256> | cleanup-artifacts-plan | cleanup-artifacts <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2
     exit 64
     ;;
 esac
