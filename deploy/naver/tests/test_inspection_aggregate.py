@@ -105,6 +105,19 @@ class ClosedContract(unittest.TestCase):
         self.assertEqual(len(mounts),3);self.assertTrue(all(x.endswith(',readonly') for x in mounts))
         self.assertNotIn('docker.sock',str(mounts));self.assertNotIn('--env-file',argv);self.assertNotIn('exec',argv)
 
+    def test_host_cli_address_reservation_does_not_relax_child_ram_limit(self):
+        with patch.object(A.resource,'setrlimit') as limit,patch.object(A.signal,'signal'),patch.object(A.signal,'setitimer'):
+            A.limits(25)
+            limit.assert_any_call(A.resource.RLIMIT_AS,(512*1024*1024,)*2)
+            limit.reset_mock();A.limits(30,address_bytes=2*1024*1024*1024)
+            limit.assert_any_call(A.resource.RLIMIT_AS,(2*1024*1024*1024,)*2)
+        expected=binding()
+        with patch.object(A.sys,'platform','linux'),patch.object(A.os,'geteuid',return_value=0), \
+             patch.object(A,'deployment_lock',return_value=contextlib.nullcontext()), \
+             patch.object(A,'run_locked',return_value='synthetic'),patch.object(A,'limits') as guard:
+            self.assertEqual(A.run(expected),'synthetic')
+        guard.assert_called_once_with(30,address_bytes=2*1024*1024*1024)
+
     def test_host_child_cleanup_and_identity_fences_with_closed_failure(self):
         expected=binding(b'certificate');expected['helper_sha256']=hashlib.sha256(b'helper').hexdigest()
         calls=[]

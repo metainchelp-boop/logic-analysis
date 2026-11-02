@@ -425,9 +425,9 @@ def encrypt(value, certificate, expected, runner=command, certificate_owner=None
     return FRAME_PREFIX + base64.b64encode(cipher).decode('ascii')
 
 
-def limits(seconds):
+def limits(seconds, *, address_bytes=512*1024*1024):
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    resource.setrlimit(resource.RLIMIT_AS, (512*1024*1024, 512*1024*1024))
+    resource.setrlimit(resource.RLIMIT_AS, (address_bytes, address_bytes))
     resource.setrlimit(resource.RLIMIT_CPU, (25, 25))
     def expired(*_):
         raise Refused('deadline')
@@ -542,7 +542,9 @@ def run(binding):
     """Host validates identity; an isolated fixed-image child performs the read."""
     validate_binding(binding)
     require(sys.platform == 'linux' and os.geteuid() == 0 and sys.version_info >= (3, 10), 'host_refused')
-    limits(30)
+    # Docker's Go CLI reserves more than 512 MiB of virtual address space at
+    # startup. This host ceiling is not the isolated reader's 512 MiB RAM cap.
+    limits(30, address_bytes=2*1024*1024*1024)
     with deployment_lock():
         return run_locked(binding)
 
