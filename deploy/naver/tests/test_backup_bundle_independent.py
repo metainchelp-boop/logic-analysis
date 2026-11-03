@@ -58,9 +58,14 @@ class SyntheticProc:
     def fds(self, pid, tid):
         return set(self.tasks[(pid, tid)]['fds'])
 
+    def fd_metadata(self, pid, tid, number):
+        return dict(self.tasks[(pid, tid)]['fds'][number][0])
+
+    def fd_flags(self, pid, tid, number):
+        return self.tasks[(pid, tid)]['fds'][number][1]
+
     def fd(self, pid, tid, number):
-        row, flags = self.tasks[(pid, tid)]['fds'][number]
-        return dict(row), flags
+        return self.fd_metadata(pid, tid, number), self.fd_flags(pid, tid, number)
 
     def maps(self, pid, tid):
         return self.tasks[(pid, tid)]['maps']
@@ -85,7 +90,9 @@ class AllModeReferenceContractTests(unittest.TestCase):
             with self.subTest(flags=flags):
                 proc = SyntheticProc()
                 proc.tasks[(101, 101)]['fds'][3] = (metadata(), flags)
-                self.assertEqual(self.refused(proc), 'SOURCE_IN_USE')
+                with mock.patch.object(proc, 'fd_flags', side_effect=AssertionError('flags unnecessary')) as read:
+                    self.assertEqual(self.refused(proc), 'SOURCE_IN_USE')
+                read.assert_not_called()
 
     def test_all_file_backed_maps_and_directory_references_are_in_use(self):
         for perms in ('r--p', 'rw-p', '---p', 'r-xs', 'rw-s'):
@@ -128,8 +135,9 @@ class AllModeReferenceContractTests(unittest.TestCase):
         meta = metadata()
         proc.tasks[(101, 101)]['fds'][3] = (meta, 0)
         exception = (101, 101, proc.identity(101, 101), 3, meta, 0)
-        with mock.patch.object(proc, 'fd', side_effect=[(meta, 0), (dict(meta, inode=9003), 0)]):
+        with mock.patch.object(proc, 'fd', return_value=(dict(meta, inode=9003), 0)) as reread:
             self.assertEqual(self.refused(proc, observer_fds=(exception,)), 'PROC_CHANGED')
+        reread.assert_called_once_with(101, 101, 3)
 
     def test_unknown_visibility_permissions_or_live_task_read_gaps_refuse(self):
         for method, error in (('visible', B.Refused('PROC_UNAVAILABLE')),
@@ -146,14 +154,14 @@ class AllModeReferenceContractTests(unittest.TestCase):
     def test_still_listed_descriptor_cannot_be_treated_as_a_closed_fd(self):
         proc = SyntheticProc()
         proc.tasks[(101, 101)]['fds'][3] = (metadata(), 0)
-        with mock.patch.object(proc, 'fd', side_effect=FileNotFoundError(CANARY)):
+        with mock.patch.object(proc, 'fd_metadata', side_effect=FileNotFoundError(CANARY)):
             self.refused(proc)
 
     def test_closed_descriptor_is_bounded_churn_when_no_longer_in_the_table(self):
         proc = SyntheticProc()
         listings = iter(({3}, set()))
         with mock.patch.object(proc, 'fds', side_effect=lambda *args: next(listings, set())), \
-                mock.patch.object(proc, 'fd', side_effect=FileNotFoundError(CANARY)):
+                mock.patch.object(proc, 'fd_metadata', side_effect=FileNotFoundError(CANARY)):
             result = self.scan(proc)
         self.assertEqual(result['reference_count'], 0)
         self.assertEqual(result['exited_generations'], 0)
@@ -797,7 +805,8 @@ class LimitDiagnosticContractTests(unittest.TestCase):
     def traced(self, proc):
         with contextlib.ExitStack() as stack:
             calls = {name: stack.enter_context(mock.patch.object(proc, name, wraps=getattr(proc, name)))
-                     for name in ('visible', 'population', 'identity', 'present', 'fds', 'fd', 'maps', 'link')}
+                     for name in ('visible', 'population', 'identity', 'present', 'fds',
+                                  'fd_metadata', 'fd_flags', 'fd', 'maps', 'link')}
             yield calls
 
     def counts(self, calls, **expected):
@@ -897,7 +906,7 @@ class LimitDiagnosticContractTests(unittest.TestCase):
         proc.tasks[(101, 101)]['fds'][3] = (metadata(UNRELATED), 0)
         with self.traced(proc) as calls, mock.patch.object(B, 'MAX_FDS', 1):
             self.limit(lambda: B.scan_references({TARGET}, self.budget(), proc=proc), 'fd_total', 1, 2)
-        self.counts(calls, visible=1, population=2, identity=3, fds=4, fd=1, maps=2, link=2)
+        self.counts(calls, visible=1, population=2, identity=3, fds=4, fd_metadata=1, maps=2, link=2)
 
     def test_late_generation_limit_uses_existing_tail_without_extra_population_or_identity(self):
         proc = SyntheticProc(((101, 101), (202, 202)))
@@ -916,7 +925,93 @@ class LimitDiagnosticContractTests(unittest.TestCase):
             result = B.scan_references({TARGET}, self.budget(), proc=proc)
         self.assertEqual(result, dict(process_generations=1, fd_observations=2, map_observations=0,
             late_generations=0, exited_generations=0, reference_count=0, passes=2))
-        self.counts(calls, visible=1, population=4, identity=4, fds=6, fd=2, maps=4, link=4)
+        self.counts(calls, visible=1, population=4, identity=4, fds=6, fd_metadata=2, maps=4, link=4)
+
+    @contextlib.contextmanager
+    def native_descriptor(self, fdinfo):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            task = root / '101' / 'task' / '101'
+            (task / 'fd').mkdir(parents=True)
+            (task / 'fdinfo').mkdir()
+            payload = root / 'unrelated-file'
+            payload.write_bytes(b'SYNTHETIC_UNRELATED_FILE')
+            (task / 'fd' / '3').symlink_to(payload)
+            if fdinfo is not None:
+                (task / 'fdinfo' / '3').write_bytes(fdinfo)
+            meta = B.A.identity(payload.stat())
+            proc, synthetic = B.Proc(root), SyntheticProc()
+            with contextlib.ExitStack() as stack:
+                for name in ('visible', 'population', 'identity', 'present', 'maps', 'link'):
+                    stack.enter_context(mock.patch.object(proc, name, side_effect=getattr(synthetic, name)))
+                yield proc, meta
+
+    def test_unrelated_oversized_native_fdinfo_does_not_block_complete_observation(self):
+        for fdinfo in (b'flags:\t0\n' + b'x' * 4088, None):
+            with self.subTest(fdinfo='oversized' if fdinfo else 'absent'), \
+                    self.native_descriptor(fdinfo) as (proc, meta), self.traced(proc) as calls:
+                with mock.patch.object(proc, 'read', wraps=proc.read) as read:
+                    try:
+                        result = B.scan_references({TARGET}, self.budget(), proc=proc)
+                    except B.Refused as error:
+                        self.fail('unrelated descriptor blocked observation: ' + str(error) +
+                                  ' ' + B.A.canonical(getattr(error, 'diagnostic', None)))
+                read.assert_not_called()
+                self.counts(calls, visible=1, population=4, identity=4, fds=6,
+                            fd_metadata=2, maps=4, link=4)
+            self.assertEqual(result['passes'], 2)
+            self.assertEqual(result['fd_observations'], 2)
+            self.assertEqual(result['reference_count'], 0)
+
+    def test_native_target_all_modes_refuse_without_opening_oversized_or_absent_fdinfo(self):
+        for flags in (0, 1, 2, getattr(os, 'O_PATH', 0o10000000)):
+            prefix = ('flags:\t%o\n' % flags).encode()
+            for raw in (prefix + b'x' * (4097 - len(prefix)), None):
+                with self.subTest(flags=flags, fdinfo='oversized' if raw else 'absent'), \
+                        self.native_descriptor(raw) as (proc, meta), \
+                        mock.patch.object(proc, 'read', side_effect=AssertionError('flags unnecessary')) as read:
+                    with self.assertRaisesRegex(B.Refused, '^SOURCE_IN_USE$'):
+                        B.scan_references({(meta['device'], meta['inode'])}, self.budget(), proc=proc)
+                read.assert_not_called()
+
+    def test_native_exact_observer_retains_bounded_flags_and_full_double_observation(self):
+        prefix = b'flags:\t0\n'
+        for raw, reason in ((prefix, None), (prefix + b'x' * (4096 - len(prefix)), None),
+                            (prefix + b'x' * (4097 - len(prefix)), 'PROC_LIMIT'),
+                            (b'', 'PROC_INVALID'), (b'flags:\t0\nflags:\t0\n', 'PROC_INVALID'),
+                            (b'flags:\t2\n', 'SOURCE_IN_USE')):
+            with self.subTest(size=len(raw), reason=reason), self.native_descriptor(raw) as (proc, meta):
+                target = (meta['device'], meta['inode'])
+                exception = (101, 101, proc.identity(101, 101), 3, meta, 0)
+                with self.traced(proc) as calls:
+                    def scan():
+                        return B.scan_references({target}, self.budget(), proc=proc, observer_fds=(exception,))
+                    if reason == 'PROC_LIMIT':
+                        self.limit(scan, 'fdinfo_bytes', 4096, 4097)
+                    elif reason:
+                        with self.assertRaisesRegex(B.Refused, '^' + reason + '$'):
+                            scan()
+                    else:
+                        result = scan()
+                        self.assertEqual(result['fd_observations'], 2)
+                        self.counts(calls, visible=1, population=4, identity=4, fds=6,
+                                    fd_metadata=4, fd_flags=4, fd=2, maps=4, link=4)
+
+    def test_observer_stat_flags_reuse_and_live_read_gaps_still_refuse(self):
+        for changed, failure, expected in (
+                ('fd_metadata', PermissionError(CANARY), 'PROC_UNAVAILABLE'),
+                ('fd_flags', FileNotFoundError(CANARY), 'PROC_UNAVAILABLE'),
+                ('fd', FileNotFoundError(CANARY), 'PROC_UNAVAILABLE'),
+                ('fd_flags', [0, 2], 'PROC_CHANGED'),
+                ('fd_metadata', [metadata(), metadata(UNRELATED)], 'PROC_CHANGED')):
+            proc = SyntheticProc()
+            meta = metadata()
+            proc.tasks[(101, 101)]['fds'][3] = (meta, 0)
+            exception = (101, 101, proc.identity(101, 101), 3, meta, 0)
+            with self.subTest(seam=changed, expected=expected), \
+                    mock.patch.object(proc, changed, side_effect=failure), \
+                    self.assertRaisesRegex(B.Refused, '^' + expected + '$'):
+                B.scan_references({TARGET}, self.budget(), proc=proc, observer_fds=(exception,))
 
 
 if __name__ == '__main__':

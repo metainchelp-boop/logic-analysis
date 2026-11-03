@@ -296,13 +296,19 @@ class Proc:
             raise LimitRefused('malformed_fd_table', None, None)
         return set(int(name) for name in names)
 
-    def fd(self, pid, tid, number):
+    def fd_metadata(self, pid, tid, number):
         info = os.stat(self.path(pid, tid, 'fd/' + str(number)))
+        return A.identity(info)
+
+    def fd_flags(self, pid, tid, number):
         raw = self.read(pid, tid, 'fdinfo/' + str(number), 4096)
         flags = re.findall(rb'^flags:\s*([0-7]+)\s*$', raw, re.M)
         if len(flags) != 1:
             raise Refused('PROC_INVALID')
-        return A.identity(info), int(flags[0], 8)
+        return int(flags[0], 8)
+
+    def fd(self, pid, tid, number):
+        return self.fd_metadata(pid, tid, number), self.fd_flags(pid, tid, number)
 
     def maps(self, pid, tid):
         return self.read(pid, tid, 'maps', MAX_MAPS)
@@ -371,15 +377,20 @@ def scan_references(targets, budget, *, observer_fds=(), proc=None):
                 if result['fd_observations'] > MAX_FDS:
                     raise LimitRefused('fd_total', MAX_FDS, result['fd_observations'])
                 try:
-                    metadata, flags = proc.fd(pid, tid, number)
+                    metadata = proc.fd_metadata(pid, tid, number)
+                    key = (metadata['device'], metadata['inode'])
+                    if key not in targets:
+                        return
+                    expected = exceptions.get((pid, tid, before, number))
+                    if expected is None or expected[0] != metadata:
+                        raise Refused('SOURCE_IN_USE')
+                    # Access mode cannot excuse a source reference. Flags are
+                    # needed only to confirm the exact pinned observer handle.
+                    flags = proc.fd_flags(pid, tid, number)
                 except (FileNotFoundError, ProcessLookupError):
                     if number in proc.fds(pid, tid):
                         raise Refused('PROC_UNAVAILABLE') from None
                     return
-                key = (metadata['device'], metadata['inode'])
-                if key not in targets:
-                    return
-                expected = exceptions.get((pid, tid, before, number))
                 if expected != (metadata, flags):
                     raise Refused('SOURCE_IN_USE')
                 if proc.fd(pid, tid, number) != (metadata, flags):

@@ -100,3 +100,19 @@ No paths, PIDs, descriptor numbers, raw data or further /proc reads are added.
 
 PLAN/APPLY execution, source/plan/archive formats and all existing bounds remain
 unchanged. A failed diagnosis stays unknown; it never raises a cap or retries.
+
+## Target identity before optional FD flags
+
+The separate diagnostic observed an FD-info read of at least 4,097 bytes against
+the unchanged 4,096-byte cap. It did not identify the FD or establish that it was
+unrelated to either source; it also cannot retroactively identify the first
+PLAN's exact limit.
+
+Every PID/TID FD is still compared by device/inode. An unrelated FD needs no
+access-mode decision, so its additional FD-info is not read. Any target FD with
+no exact registered observer identity is immediately a reference in every mode,
+including read-only and O_PATH. Only the exact observer tuple and full metadata
+may proceed to the existing bounded flags read, followed by the original second
+metadata-plus-flags observation. Missing, changed, malformed or over-limit
+observer evidence still refuses. All maps, cwd/root, process generations,
+two passes, late observations, ceilings and time/space guards remain unchanged.
