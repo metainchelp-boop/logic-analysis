@@ -50,7 +50,7 @@ class BundleWorkflowTests(unittest.TestCase):
                 self.assertNotIn(CANARY.encode(), result.stdout + result.stderr)
         self.assertIn('group: deploy-logic-analysis\n  cancel-in-progress: false', self.text)
         self.assertIn('contents: read', self.text)
-        self.assertIn('options: [diagnose, plan, apply, inspect]', self.text)
+        self.assertIn('options: [diagnose, plan, apply, inspect, finalize]', self.text)
         self.assertNotRegex(self.text, r'contents: write|workflow_run|schedule:|pull_request:')
         for action in re.findall(r'uses: ([^\n]+)', self.text):
             self.assertRegex(action, r'@[0-9a-f]{40}\Z')
@@ -62,6 +62,11 @@ class BundleWorkflowTests(unittest.TestCase):
                 ('diagnose', '', '', '', True),
                 ('apply', B.A.canonical(plan), B.hash_object(plan), B.CONFIRM, True),
                 ('inspect', B.A.canonical(plan), B.hash_object(plan), '', True),
+                ('finalize', B.A.canonical(plan), B.hash_object(plan), B.FINALIZE_CONFIRM, True),
+                ('finalize', B.A.canonical(plan), B.hash_object(plan), B.CONFIRM, False),
+                ('finalize', B.A.canonical(plan), B.hash_object(plan), '', False),
+                ('apply', B.A.canonical(plan), B.hash_object(plan), B.FINALIZE_CONFIRM, False),
+                ('finalize', B.A.canonical(plan), '0' * 64, B.FINALIZE_CONFIRM, False),
                 ('inspect', B.A.canonical(plan), B.hash_object(plan), B.CONFIRM, False),
                 ('inspect', B.A.canonical(plan), '0' * 64, '', False),
                 ('inspect', '', '', '', False),
@@ -108,6 +113,12 @@ class BundleWorkflowTests(unittest.TestCase):
             return accepted
 
     def test_exact_closed_output_and_source_hash_gate_before_public_result(self):
+        self.assertTrue(self.validate(B.A.canonical(B.finalize_receipt()).encode()))
+        for changed in (dict(B.finalize_receipt(), gzip_created=True),
+                        dict(B.finalize_receipt(), published_markers=True),
+                        dict(B.finalize_receipt(), publication_started=True),
+                        dict(B.finalize_receipt(), extra=CANARY)):
+            self.assertFalse(self.validate(B.A.canonical(changed).encode()))
         self.assertTrue(self.validate(B.A.canonical(B.inspect_receipt()).encode()))
         self.assertFalse(self.validate(B.A.canonical(dict(B.inspect_receipt(), payload_verified=True)).encode()))
         raw = B.A.canonical(B.receipt('plan')).encode()

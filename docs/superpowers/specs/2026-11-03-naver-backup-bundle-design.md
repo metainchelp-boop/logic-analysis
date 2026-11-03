@@ -246,3 +246,87 @@ manifest limits and races, exact source/plan association, failure output closure
 read-only lock behavior, protected-state failure, and spies that reject payload
 opens, compression, publication, source writes or removal. Existing bundle and
 single-backup suites remain required; actual operating state remains separate.
+
+## Pending-only finalization
+
+The separate `finalize` mode completes only the fixed bundle's exact initial
+pending state. Its confirmation is
+`FINALIZE_VERIFIED_FIXED_NAVER_BACKUP_BUNDLE`; it takes the existing canonical
+PLAN and SHA, never a caller path. The existing four modes and hash-pinned cold
+helper remain unchanged. This mode does not recompress, replace gzip files,
+remove partial archives, relax a source/reference check, or retry automatically.
+
+The only admitted root entries are the two child directories. Deployment must
+contain exactly its gzip, copied source manifest and pending manifest; snapshot
+must contain exactly its gzip and pending manifest. Published markers, a root
+marker, link windows, aliases, extra entries, symlinks and incomplete payloads
+are refused. Files are root-owned0600, single-linked, and on the same device;
+directories are root-owned0700. All original sources retain their existing
+identity, producer generation and source-code pin checks.
+
+After the first all-use scan, `check_plan_sources` still rehashes both originals
+and checks the exact source identity, producer, protected state, codec and old
+deployment manifest. The unchanged source/producer/protected checks and second
+all-use scan remain. Both child pending documents must equal the canonical
+complete documents reconstructed from those freshly opened originals, and the
+copied source manifest must equal the original raw manifest bytes.
+
+A small held-FD verifier follows the existing cold verifier's bounded zlib
+algorithm: compressed and decompressed sizes/hashes, EOF and rejection of
+trailing/concatenated/truncated or oversized output. It adds a budget check
+inside the bounded decompression loop. It reads only the caller's retained
+read-only FD and never opens, closes or writes a payload. No decompressed file
+is materialized. Both complete verifications must pass before any publication.
+
+Payloads, copied manifest and child markers remain pinned by FD and pathname
+through the cleanup gate. Full metadata is rechecked after verification,
+before/after publication and after the third all-use scan. Only an immediately
+performed publication may update a marker's expected ctime after its exact
+bytes, inode, remaining metadata and path are checked; subsequent checks use
+that entire fixed identity. Directory metadata transitions similarly occur
+only immediately after the known write/link/unlink with exact expected entries
+and immutable identity checked. The new root regular entry permits directory
+link count delta0 or+1 (ext4/APFS); renames do not permit an arbitrary link-count
+change. No later check refreshes an expectation to accept an external change.
+
+Existing payload and manifest FDs and child directories are fsynced before
+publishing both children. Only the new root manifest is then created with
+O_EXCL, fsynced and published. Its created write-FD identity must match the
+retained read FD, so a replacement between write and reopen is refused even
+when its content is identical. All three final marker bytes are checked.
+
+The third all-use scan, source/producer/protected checks, deadline and final
+archive binding check precede the existing original cleanup functions. Actual
+post-cleanup free space and protected state remain mandatory. Earlier failures
+leave originals intact; a failure after cleanup starts reports actual progress.
+Published or partial files are retained on every failure, and a mixed state is
+outside this mode's supported starting shape.
+
+The hard600-second shared budget,512MiB working reserve and5GiB final floor stay
+unchanged. Existing gzip allocation is not subtracted again: the fixed new-write
+budget is the existing conservative2MiB overhead, while the only new file is a
+root manifest capped at64KiB. Live free-space checks guard the initial projection
+and each new write/publication, followed by the original pre-cleanup and actual
+post-cleanup floor checks. Neither PLAN duration nor size-only inspection proves
+that this operation will finish within its time or space limits.
+
+Finalization uses a separate closed version1 receipt. `archive_reused` means the
+strict initial archive handles were opened; `payload_verified` means both full
+held-FD verifications passed. `publication_started` distinguishes attempting
+publication from creation of payloads, which remain `gzip_created=false` and
+`gzip_rewritten=false`. `published_markers` counts only publication calls that
+returned and passed their immediate binding checks; a failed call can leave a
+link window, so this counter is not an inventory of a failed operation.
+`archive_published`, `archive_verified`, cleanup flags and removed count remain
+separate. Success still requires all three reference scans, three verified
+published markers, three removed original files, protected identity and the
+actual5GiB floor. It does not assert SQLite integrity of the interrupted regular
+snapshot, only lossless preservation of its exact bytes.
+
+After the third all-use scan, the retained three marker FDs and copied source
+manifest are read again for exact byte equality before the final metadata/path
+check and cleanup gate. The two retained gzip FDs are also read once more for
+bounded compressed size/SHA equality to the PLAN. This binds the earlier full
+roundtrip to the current compressed bytes even if an in-place edit shares a
+filesystem timestamp. It does not repeat decompression or original rehash,
+compress, write a payload, add a proc scan or extend the shared600-second budget.
