@@ -14,6 +14,7 @@ import re
 import signal
 import stat
 import sys
+import threading
 import time
 import types
 import zlib
@@ -457,14 +458,33 @@ def scan_references(targets, budget, *, observer_fds=(), proc=None):
                     raise LimitRefused('fd_total', MAX_FDS, result['fd_observations'])
                 try:
                     metadata = proc.fd_metadata(pid, tid, number)
-                    key = (metadata['device'], metadata['inode'])
-                    if key not in targets:
-                        return
-                    expected = exceptions.get((pid, tid, before, number))
-                    if expected is None or expected[0] != metadata:
-                        raise Refused('SOURCE_IN_USE')
-                    # Access mode cannot excuse a source reference. Flags are
-                    # needed only to confirm the exact pinned observer handle.
+                except (FileNotFoundError, ProcessLookupError) as error:
+                    if number in proc.fds(pid, tid):
+                        current_pid = os.getpid()
+                        # listdir can list its own temporary FD, close it, then
+                        # reuse its number on the confirming listing. Only the
+                        # current task's table can be checked with direct fstat.
+                        # A known source pin is never eligible, even if closed.
+                        if (error.errno in (errno.ENOENT, errno.ESRCH) and
+                                (pid, tid, before, number) not in exceptions and
+                                pid == current_pid and tid == threading.get_native_id()):
+                            try:
+                                os.fstat(number)
+                            except OSError as closed:
+                                if closed.errno == errno.EBADF:
+                                    return
+                        phase = 'fd_missing_listed_self' if pid == current_pid else 'fd_missing_listed'
+                        raise ProcUnavailable(phase, error) from None
+                    return
+                key = (metadata['device'], metadata['inode'])
+                if key not in targets:
+                    return
+                expected = exceptions.get((pid, tid, before, number))
+                if expected is None or expected[0] != metadata:
+                    raise Refused('SOURCE_IN_USE')
+                # Access mode cannot excuse a source reference. The original
+                # flags/recheck path gets no closed-current-task exception.
+                try:
                     flags = proc.fd_flags(pid, tid, number)
                 except (FileNotFoundError, ProcessLookupError) as error:
                     if number in proc.fds(pid, tid):

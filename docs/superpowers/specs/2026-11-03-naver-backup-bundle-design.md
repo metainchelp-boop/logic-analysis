@@ -161,5 +161,45 @@ FD also distinguishes the helper's own PID using `os.getpid()`; no identifier is
 published and no extra /proc read is made. An isolated native Linux scan exposed
 both an unreaped-child namespace refusal and a self-FD listing refusal: the
 listing can include its temporary directory FD, which closes and reappears at
-the same slot on the next listing. Both remain refusals. Neither local example
+the same slot on the next listing. In the diagnostic-only version both remain
+refusals. Neither local example
 establishes the first unavailable observation on the operating host.
+
+## Closed current-task listing descriptor
+
+A `/proc/.../fd` listing can include the directory descriptor used by that
+listing. It closes before the list is returned, and a confirming listing can
+reuse the same number. In the metadata-missing branch only, the helper may now
+confirm that number is closed with one direct `fstat`, under all of these gates:
+
+- The original `fd_metadata` failure has errno ENOENT or ESRCH. A diagnostic
+  phase string is never used as authority for this exception.
+- Both the observed PID and native TID equal the current caller. Same PID alone
+  is insufficient: a different thread can have an unshared file-descriptor
+  table while the caller sees EBADF for a descriptor still open in that thread.
+- The exact `(pid, tid, generation, number)` is not a known pinned observer slot.
+  A closed source handle remains a broken pin even if the next listing reuses
+  its number.
+- Direct `fstat` reports EBADF. A valid descriptor or any other error retains
+  the existing refusal. No flags, access mode, filename or inode guess excuses
+  a positive source reference.
+
+The check adds no file open or `/proc` read. It is not applied after target
+metadata has been observed, to observer flags or the final identity recheck.
+RO, RW, O_PATH and unlinked-but-open sources remain in use. Existing descriptor
+counts, byte/task ceilings, deadlines, two passes, late tasks and generation
+checks remain in force; the closed descriptor is still counted as observed.
+The preexisting recovery for a descriptor absent from the confirming listing
+is unchanged.
+
+EBADF means closed at the direct probe, not future non-use. Reuse before the
+probe refuses; a persistent source reference introduced after it is found by
+the later pass. A finite scan still cannot prove an atomic global snapshot.
+This candidate does not authorize skipping zombie tasks or unresolved metadata,
+and its synthetic results do not identify an operating-host failure cause.
+
+Regression coverage includes a real current-task `/proc` scan, actual Linux
+RO/RW/O_PATH and unlinked handles, a same-PID thread with a genuinely unshared
+FD table, reuse around the probe, broken pinned slots, flags failures, changed
+generations and the unchanged total-FD cap. Native Linux cases are required on
+Linux; they are explicitly skipped on other operating systems.
