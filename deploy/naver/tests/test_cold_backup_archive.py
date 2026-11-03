@@ -1,6 +1,8 @@
 import contextlib
+import gzip
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -13,6 +15,8 @@ from unittest import mock
 SPEC = importlib.util.spec_from_file_location('cold_archive', Path(__file__).parents[1] / 'cold_backup_archive.py')
 A = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(A)
+D633_SCOPE = 'd633-cold-backup-lossless-v1'
+D633_GZIP6_SCOPE = 'd633-cold-backup-lossless-gzip6-v1'
 
 
 class ArchiveTest(unittest.TestCase):
@@ -88,6 +92,11 @@ class ArchiveTest(unittest.TestCase):
         A.restore_isolated(str(self.archive), str(self.base), target, receipt['archive_manifest_sha256'], scope=self.scope)
         return self.base / target
 
+    def tree_state(self, folder):
+        paths = [folder, *sorted(folder.rglob('*'))]
+        return {str(path.relative_to(folder)): (A.identity(path.stat()),
+                path.read_bytes() if path.is_file() else None) for path in paths}
+
     def test_plan_is_read_only_and_counts_exact_deterministic_gzip(self):
         first = self.plan()
         second = self.plan()
@@ -121,6 +130,89 @@ class ArchiveTest(unittest.TestCase):
             actual = A.identity((target / name).stat())
             for key in ('uid', 'gid', 'mode', 'mtime_ns', 'size'):
                 self.assertEqual(actual[key], self.identities[name][key], (name, key))
+
+    def test_profile_level_and_exact_compressed_bytes_are_bound_to_plan(self):
+        planned = self.plan()
+        result = self.apply(planned)
+        manifest = json.loads((self.archive / 'archive-manifest.json').read_bytes())
+        self.assertEqual((planned['version'], result['version'], manifest['version']), (1, 1, 1))
+        self.assertEqual(manifest['gzip']['level'], self.profile.gzip_level)
+        self.assertEqual(manifest['gzip']['mtime'], 0)
+        total = 0
+        for name, raw in self.payloads.items():
+            output = io.BytesIO()
+            with gzip.GzipFile(filename='', mode='wb', fileobj=output,
+                               compresslevel=self.profile.gzip_level, mtime=0) as compressed:
+                compressed.write(raw)
+            expected = output.getvalue()
+            self.assertEqual((self.archive / (name + '.gz')).read_bytes(), expected)
+            self.assertEqual(manifest['files'][name]['gzip_size'], len(expected))
+            self.assertEqual(manifest['files'][name]['gzip_sha256'], hashlib.sha256(expected).hexdigest())
+            total += len(expected)
+        self.assertEqual(planned['compressed_bytes'], total)
+        self.assertEqual(planned['plan_sha256'], result['archive_manifest_sha256'])
+
+    def test_restore_legacy_v1_gzip1_fixture_without_current_archive_writer(self):
+        # Fixed gzip1 bytes and the historical manifest schema are independent
+        # of compress(), measure() and execute(), so a writer change cannot
+        # silently update the compatibility fixture along with the reader.
+        profile = self.profile if self.profile.gzip_level == 1 else A.profile_for(D633_SCOPE)
+        raw_files = {'engine.db': b'legacy-gzip1-fixture\0', 'engine.db-wal': b''}
+        compressed = {
+            'engine.db': bytes.fromhex('1f8b08000000000004ffcb494d4f4caed44dafca2c30d44dcbac28292d4a6500007cbf504815000000'),
+            'engine.db-wal': bytes.fromhex('1f8b08000000000004ff03000000000000000000'),
+        }
+        original = json.dumps({name: {'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+                               for name, raw in raw_files.items()}, indent=3).encode() + b'\n'
+        files = {}
+        for name, raw in raw_files.items():
+            metadata = dict(self.identities[name], size=len(raw))
+            files[name] = dict(size=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
+                               gzip_size=len(compressed[name]),
+                               gzip_sha256=hashlib.sha256(compressed[name]).hexdigest(), source=metadata)
+        manifest = dict(version=1, scope=profile.scope, backup=profile.backup, archive=profile.archive,
+                        gzip=dict(level=1, mtime=0, zlib='1.2.13', python='3.12.0'),
+                        source_folder=A.identity(self.original.stat()),
+                        source_manifest=dict(self.identities['manifest.json'], size=len(original)),
+                        source_manifest_sha256=hashlib.sha256(original).hexdigest(), files=files,
+                        protected=A.snapshot(self.runner), reserve_bytes=512 * 1024 ** 2,
+                        minimum_free_after_bytes=5 * 1024 ** 3, overhead_bytes=1024 * 1024)
+        encoded = json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode()
+        archive = self.archives / profile.archive
+        archive.mkdir(mode=0o700, parents=True)
+        self.archives.chmod(0o700)
+        for name, raw in {**{name + '.gz': raw for name, raw in compressed.items()},
+                          'source-manifest.json': original, 'archive-manifest.json': encoded}.items():
+            path = archive / name
+            path.write_bytes(raw)
+            path.chmod(0o600)
+        before = self.tree_state(archive)
+        target_name = 'restore-check-1111111111111111'
+        A.restore_isolated(str(archive), str(self.base), target_name,
+                           hashlib.sha256(encoded).hexdigest(), scope=profile.scope)
+        target = self.base / target_name
+        for name, raw in dict(raw_files, **{'manifest.json': original}).items():
+            self.assertEqual((target / name).read_bytes(), raw)
+            metadata = manifest['source_manifest'] if name == 'manifest.json' else files[name]['source']
+            restored = A.identity((target / name).stat())
+            for key in ('uid', 'gid', 'mode', 'mtime_ns', 'size'):
+                self.assertEqual(restored[key], metadata[key])
+        self.assertEqual(self.tree_state(archive), before)
+
+    def test_restore_rejects_wrong_or_untyped_level_even_with_matching_receipt_hash(self):
+        result = self.apply()
+        path = self.archive / 'archive-manifest.json'
+        original = path.read_bytes()
+        for level in (6 if self.profile.gzip_level == 1 else 1, 0, 9, True, 1.0, '6', None):
+            with self.subTest(level=level):
+                manifest = json.loads(original)
+                manifest['gzip']['level'] = level
+                raw = A.canonical(manifest).encode()
+                path.write_bytes(raw)
+                result['archive_manifest_sha256'] = A.digest(raw)
+                with self.assertRaisesRegex(A.Refused, 'ARCHIVE_REFUSED'):
+                    self.restore(result)
+                self.assertFalse((self.base / 'restore-check-0123456789abcdef').exists())
 
     def test_source_fds_closed_before_free_after_measurement(self):
         original_remove = A.remove_source
@@ -255,7 +347,8 @@ class ArchiveTest(unittest.TestCase):
         with A.directory(str(self.base), True) as parent:
             output = A.create_file(parent, 'engine.db.gz')
             try:
-                row = A.compress(source, A.Budget(), A.Sink(A.Budget(), fd=output))
+                row = A.compress(source, A.Budget(), A.Sink(A.Budget(), fd=output),
+                                 level=self.profile.gzip_level)
             finally:
                 os.close(output)
                 os.close(source)
@@ -285,9 +378,9 @@ class ArchiveTest(unittest.TestCase):
     def test_source_change_during_measurement_refused(self):
         original_compress = A.compress
         changed = False
-        def compress(*args):
+        def compress(*args, **kwargs):
             nonlocal changed
-            result = original_compress(*args)
+            result = original_compress(*args, **kwargs)
             if not changed:
                 changed = True
                 (self.original / 'engine.db').chmod(0o600)
@@ -354,6 +447,77 @@ class ArchiveTest(unittest.TestCase):
         result = self.execute(budget=A.Budget(clock))
         self.assertEqual(result['reason'], 'TIME_LIMIT')
         self.assertTrue(self.original.exists())
+
+    def test_timeout_during_archive_write_keeps_source_and_partial_archive(self):
+        plan = self.plan()
+        before = self.tree_state(self.original)
+        clock = [0]
+        budget = A.Budget(lambda: clock[0])
+        write = A.Sink.write
+        def expire_after_disk_write(sink, data):
+            result = write(sink, data)
+            if sink.fd is not None:
+                clock[0] = A.TIME_BUDGET + 1
+            return result
+        with mock.patch.object(A.Sink, 'write', new=expire_after_disk_write):
+            result = self.execute('apply', plan['plan_sha256'], self.profile.confirm, budget=budget)
+        self.assertEqual(result['reason'], 'TIME_LIMIT', result)
+        self.assertTrue(result['archive_started'])
+        self.assertFalse(result['archive_published'])
+        self.assertFalse(result['cleanup_started'])
+        self.assertEqual(self.tree_state(self.original), before)
+        self.assertTrue(any(self.archive.glob('*.gz')))
+
+    def test_timeout_after_publication_keeps_all_source_and_recoverable_archive(self):
+        plan = self.plan()
+        before = self.tree_state(self.original)
+        clock = [0]
+        budget = A.Budget(lambda: clock[0])
+        publish = A.publish
+        def expire_after_publication(fd):
+            publish(fd)
+            clock[0] = A.TIME_BUDGET + 1
+        with mock.patch.object(A, 'publish', side_effect=expire_after_publication):
+            result = self.execute('apply', plan['plan_sha256'], self.profile.confirm, budget=budget)
+        self.assertEqual(result['reason'], 'TIME_LIMIT', result)
+        self.assertTrue(result['archive_published'])
+        self.assertTrue(result['archive_verified'])
+        self.assertFalse(result['cleanup_complete'])
+        self.assertEqual(result['removed_files'], 0)
+        self.assertEqual(self.tree_state(self.original), before)
+        self.restore(result)
+
+    def test_timeout_during_decompression_verification_preserves_source_before_publication(self):
+        plan = self.plan()
+        before = self.tree_state(self.original)
+        clock = [0]
+        budget = A.Budget(lambda: clock[0])
+        decompressobj = A.zlib.decompressobj
+        decoded = []
+        class Decoder:
+            def __init__(self, *args, **kwargs):
+                self.inner = decompressobj(*args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+            def decompress(self, *args, **kwargs):
+                raw = self.inner.decompress(*args, **kwargs)
+                decoded.append(len(raw))
+                clock[0] = A.TIME_BUDGET + 1
+                return raw
+
+        with mock.patch.object(A.zlib, 'decompressobj', side_effect=Decoder):
+            result = self.execute('apply', plan['plan_sha256'], self.profile.confirm, budget=budget)
+        self.assertTrue(decoded)
+        self.assertGreater(decoded[0], 0)
+        self.assertEqual(result['reason'], 'TIME_LIMIT', result)
+        self.assertTrue(result['archive_started'])
+        self.assertFalse(result['archive_published'])
+        self.assertFalse(result['cleanup_started'])
+        self.assertTrue((self.archive / '.manifest.pending').exists())
+        self.assertFalse((self.archive / 'archive-manifest.json').exists())
+        self.assertEqual(self.tree_state(self.original), before)
 
     def test_protected_container_change_refused(self):
         snapshot = A.snapshot
@@ -443,7 +607,7 @@ class ArchiveTest(unittest.TestCase):
 
 
     def other_profile(self):
-        return next(profile for profile in A.PROFILES.values() if profile.scope != self.scope)
+        return next(profile for profile in A.PROFILES.values() if profile.backup != self.profile.backup)
 
     @unittest.skipUnless(os.geteuid() == 0, 'root Linux ownership fixture')
     def test_engine_uid_gid_10001_round_trip_on_root_linux(self):
@@ -507,16 +671,23 @@ class ArchiveTest(unittest.TestCase):
         self.archives.chmod(0o700)
         paths = []
         folders = []
+        sources = set()
         for other in A.PROFILES.values():
-            if other.scope == self.scope:
+            # Sibling compression profiles share this exact source. Their
+            # destinations must refuse the operation, tested separately below.
+            if other.backup == self.profile.backup:
                 continue
             other_source = self.backups / other.backup
-            other_source.mkdir(mode=0o700)
             other_archive = self.archives / other.archive
             other_archive.mkdir(mode=0o700)
-            folders.extend((other_source, other_archive))
-            for folder, name in ((other_source, 'engine.db'), (other_archive, 'archive-manifest.json'),
-                                 (other_archive, 'engine.db.gz')):
+            folders.append(other_archive)
+            entries = [(other_archive, 'archive-manifest.json'), (other_archive, 'engine.db.gz')]
+            if other.backup not in sources:
+                sources.add(other.backup)
+                other_source.mkdir(mode=0o700)
+                folders.append(other_source)
+                entries.append((other_source, 'engine.db'))
+            for folder, name in entries:
                 path = folder / name
                 path.write_bytes(b'synthetic-other-profile-must-remain')
                 path.chmod(0o600)
@@ -594,15 +765,113 @@ class ArchiveBB151Test(ArchiveTest):
     scope = 'bb151-cold-backup-lossless-v1'
 
 
-class ArchiveD633Test(ArchiveTest):
+class SameBackupProfileTests:
+    def sibling_profile(self):
+        return next(profile for profile in A.PROFILES.values()
+                    if profile.backup == self.profile.backup and profile.scope != self.scope)
+
+    def test_sibling_level_plan_and_confirmation_cannot_authorize_apply(self):
+        sibling = self.sibling_profile()
+        own = self.plan()
+        other = self.execute(scope=sibling.scope)
+        self.assertEqual(other['status'], 'planned', other)
+        self.assertNotEqual(own['plan_sha256'], other['plan_sha256'])
+        before = self.tree_state(self.original)
+        result = self.apply(other)
+        self.assertEqual(result['reason'], 'PLAN_MISMATCH', result)
+        self.commands.clear()
+        result = self.execute('apply', own['plan_sha256'], sibling.confirm)
+        self.assertEqual(result['reason'], 'INPUT_REFUSED', result)
+        self.assertEqual(self.commands, [])
+        self.assertFalse(self.archives.exists())
+        self.assertEqual(self.tree_state(self.original), before)
+
+    def assert_sibling_destination_refuses_all_archive_entries(self, published):
+        own = self.plan()
+        sibling = self.sibling_profile()
+        sibling_archive = self.archives / sibling.archive
+        if published:
+            other = self.execute(scope=sibling.scope)
+            # Produce a genuinely valid published sibling, preserving the
+            # original source as a crash before its first deletion would.
+            with mock.patch.object(A, 'remove_source', side_effect=A.Refused('TIME_LIMIT')):
+                result = self.execute('apply', other['plan_sha256'], sibling.confirm, scope=sibling.scope)
+            self.assertTrue(result['archive_published'], result)
+            self.assertTrue(result['archive_verified'], result)
+            self.assertFalse(result['cleanup_started'])
+        else:
+            sibling_archive.mkdir(mode=0o700, parents=True)
+            self.archives.chmod(0o700)
+            for name in ('engine.db.gz', '.manifest.pending'):
+                path = sibling_archive / name
+                path.write_bytes(b'synthetic-interrupted-sibling-must-remain')
+                path.chmod(0o600)
+        source_before = self.tree_state(self.backups)
+        archive_before = self.tree_state(self.archives)
+        for mode, plan, confirm in (('plan', '', ''), ('apply', own['plan_sha256'], self.profile.confirm)):
+            with self.subTest(mode=mode, published=published):
+                result = self.execute(mode, plan, confirm)
+                self.assertEqual(result['reason'], 'ARCHIVE_EXISTS', result)
+                self.assertFalse(result['archive_started'])
+                self.assertFalse(result['cleanup_started'])
+                self.assertEqual(self.tree_state(self.backups), source_before)
+                self.assertEqual(self.tree_state(self.archives), archive_before)
+        # The creation boundary must independently repeat the sibling check,
+        # covering a destination appearing after the first read-only guard.
+        with self.assertRaisesRegex(A.Refused, 'ARCHIVE_EXISTS'):
+            with A.new_archive(self.original.stat().st_dev, self.scope):
+                self.fail('a sibling destination authorized a second archive')
+        self.assertFalse(self.archive.exists())
+        self.assertEqual(self.tree_state(self.backups), source_before)
+        self.assertEqual(self.tree_state(self.archives), archive_before)
+
+    def test_partial_sibling_destination_refuses_plan_apply_and_creation_without_changes(self):
+        self.assert_sibling_destination_refuses_all_archive_entries(published=False)
+
+    def test_published_sibling_destination_refuses_plan_apply_and_creation_without_changes(self):
+        self.assert_sibling_destination_refuses_all_archive_entries(published=True)
+
+    def test_restore_completed_archive_ignores_partial_sibling_destination(self):
+        result = self.apply()
+        sibling_archive = self.archives / self.sibling_profile().archive
+        sibling_archive.mkdir(mode=0o700)
+        partial = sibling_archive / '.manifest.pending'
+        partial.write_bytes(b'synthetic-other-compression-partial')
+        partial.chmod(0o600)
+        before = self.tree_state(self.archives)
+        restored = self.restore(result)
+        self.assertEqual((restored / 'engine.db').read_bytes(), self.payloads['engine.db'])
+        self.assertEqual(self.tree_state(self.archives), before)
+
+    def test_restore_rejects_sibling_identity_with_original_compression_level(self):
+        result = self.apply()
+        sibling = self.sibling_profile()
+        path = self.archive / 'archive-manifest.json'
+        manifest = json.loads(path.read_bytes())
+        manifest.update(scope=sibling.scope, archive=sibling.archive)
+        raw = A.canonical(manifest).encode()
+        path.write_bytes(raw)
+        name = 'restore-check-1111111111111111'
+        with self.assertRaisesRegex(A.Refused, 'ARCHIVE_REFUSED'):
+            A.restore_isolated(str(self.archive), str(self.base), name, A.digest(raw), scope=sibling.scope)
+        self.assertFalse((self.base / name).exists())
+
+
+class ArchiveD633Test(SameBackupProfileTests, ArchiveTest):
     # Exercise the same full byte/metadata restoration and refusal contract.
-    scope = 'd633-cold-backup-lossless-v1'
+    scope = D633_SCOPE
+
+
+class ArchiveD633Gzip6Test(SameBackupProfileTests, ArchiveTest):
+    # Every existing corruption, recovery and preservation regression also runs
+    # against the explicit gzip6 profile; it is not a reduced happy-path suite.
+    scope = D633_GZIP6_SCOPE
 
 
 class FixedProfileTest(unittest.TestCase):
-    def test_only_four_fixed_profiles_and_original_c44_format_preserved(self):
+    def test_only_five_fixed_profiles_and_four_original_profiles_preserved(self):
         self.assertEqual(set(A.PROFILES), {'c44-cold-backup-lossless-v1', 'a377-cold-backup-lossless-v1',
-                                         'bb151-cold-backup-lossless-v1', 'd633-cold-backup-lossless-v1'})
+                                         'bb151-cold-backup-lossless-v1', D633_SCOPE, D633_GZIP6_SCOPE})
         self.assertEqual(A.profile_for(), A.Profile(A.SCOPE, A.BACKUP_NAME, A.ARCHIVE_NAME, A.CONFIRM))
         self.assertEqual(A.profile_for('a377-cold-backup-lossless-v1'), A.Profile(
             'a377-cold-backup-lossless-v1', '20261102T185748Z-a3770876f746',
@@ -613,6 +882,11 @@ class FixedProfileTest(unittest.TestCase):
         self.assertEqual(A.profile_for('d633-cold-backup-lossless-v1'), A.Profile(
             'd633-cold-backup-lossless-v1', '20261102T230515Z-d633ff4450bb',
             '20261102T230515Z-d633ff4450bb-v1', 'ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY'))
+        self.assertEqual(A.profile_for(D633_GZIP6_SCOPE), A.Profile(
+            D633_GZIP6_SCOPE, '20261102T230515Z-d633ff4450bb',
+            '20261102T230515Z-d633ff4450bb-gzip6-v1', 'ARCHIVE_D633_COLD_BACKUP_GZIP6_LOSSLESSLY', 6))
+        for scope, profile in A.PROFILES.items():
+            self.assertEqual(profile.gzip_level, 6 if scope == D633_GZIP6_SCOPE else 1)
         with self.assertRaises(TypeError):
             A.PROFILES['arbitrary'] = A.profile_for()
         with self.assertRaises(AttributeError):
