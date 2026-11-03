@@ -70,6 +70,32 @@ DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
 
 
+def limit_caps():
+    return dict(task_population=MAX_PROCESSES, task_generations=MAX_PROCESSES,
+                fd_table=MAX_TABLE_FDS, fd_total=MAX_FDS, maps_bytes=MAX_MAPS,
+                late_generations=MAX_LATE, stat_bytes=4096, fdinfo_bytes=4096)
+
+
+def validate_limit_diagnostic(value):
+    if (type(value) is not dict or set(value) != {'kind', 'cap', 'observed_lower_bound'} or
+            type(value['kind']) is not str):
+        raise Refused('ARCHIVE_REFUSED')
+    kind, cap, observed = (value[k] for k in ('kind', 'cap', 'observed_lower_bound'))
+    if kind in ('malformed_fd_table', 'malformed_maps'):
+        if cap is not None or observed is not None:
+            raise Refused('ARCHIVE_REFUSED')
+    elif (kind not in limit_caps() or type(cap) is not int or cap != limit_caps()[kind] or
+            type(observed) is not int or not cap < observed < 2 ** 63):
+        raise Refused('ARCHIVE_REFUSED')
+    return value
+
+
+class LimitRefused(Refused):
+    def __init__(self, kind, cap, observed_lower_bound):
+        super().__init__('PROC_LIMIT')
+        self.diagnostic = dict(kind=kind, cap=cap, observed_lower_bound=observed_lower_bound)
+
+
 def codec():
     return dict(level=6, mtime=0, zlib=zlib.ZLIB_RUNTIME_VERSION,
                 python='.'.join(str(x) for x in sys.version_info[:3]))
@@ -216,7 +242,8 @@ class Proc:
         try:
             raw = os.read(fd, limit + 1)
             if len(raw) > limit:
-                raise Refused('PROC_LIMIT')
+                kind = 'maps_bytes' if name == 'maps' else 'stat_bytes' if name == 'stat' else 'fdinfo_bytes'
+                raise LimitRefused(kind, limit, len(raw))
             return raw
         finally:
             os.close(fd)
@@ -251,7 +278,7 @@ class Proc:
                             raise Refused('PROC_UNAVAILABLE') from None
                         continue
                     if len(out) > MAX_PROCESSES:
-                        raise Refused('PROC_LIMIT')
+                        raise LimitRefused('task_population', MAX_PROCESSES, len(out))
             except (FileNotFoundError, ProcessLookupError):
                 if self.path_present(self.root / name):
                     raise Refused('PROC_UNAVAILABLE') from None
@@ -263,8 +290,10 @@ class Proc:
 
     def fds(self, pid, tid):
         names = os.listdir(self.path(pid, tid, 'fd'))
-        if len(names) > MAX_TABLE_FDS or any(not re.fullmatch(r'[0-9]{1,10}', n) for n in names):
-            raise Refused('PROC_LIMIT')
+        if len(names) > MAX_TABLE_FDS:
+            raise LimitRefused('fd_table', MAX_TABLE_FDS, len(names))
+        if any(not re.fullmatch(r'[0-9]{1,10}', n) for n in names):
+            raise LimitRefused('malformed_fd_table', None, None)
         return set(int(name) for name in names)
 
     def fd(self, pid, tid, number):
@@ -292,8 +321,10 @@ class Proc:
 
 def mapped_identities(raw):
     out = set()
-    if type(raw) is not bytes or len(raw) > MAX_MAPS:
-        raise Refused('PROC_LIMIT')
+    if type(raw) is not bytes:
+        raise LimitRefused('malformed_maps', None, None)
+    if len(raw) > MAX_MAPS:
+        raise LimitRefused('maps_bytes', MAX_MAPS, len(raw))
     for line in raw.splitlines():
         parts = line.split(None, 5)
         if (len(parts) < 5 or not re.fullmatch(rb'[r-][w-][x-][sp]', parts[1]) or
@@ -328,7 +359,7 @@ def scan_references(targets, budget, *, observer_fds=(), proc=None):
         budget.check()
         seen.add(generation)
         if len(seen) > MAX_PROCESSES:
-            raise Refused('PROC_LIMIT')
+            raise LimitRefused('task_generations', MAX_PROCESSES, len(seen))
         try:
             if proc.identity(pid, tid) != before:
                 raise Refused('PROC_CHANGED')
@@ -338,7 +369,7 @@ def scan_references(targets, budget, *, observer_fds=(), proc=None):
                 budget.check()
                 result['fd_observations'] += 1
                 if result['fd_observations'] > MAX_FDS:
-                    raise Refused('PROC_LIMIT')
+                    raise LimitRefused('fd_total', MAX_FDS, result['fd_observations'])
                 try:
                     metadata, flags = proc.fd(pid, tid, number)
                 except (FileNotFoundError, ProcessLookupError):
@@ -399,7 +430,7 @@ def scan_references(targets, budget, *, observer_fds=(), proc=None):
         tail = [(person, generation) for person, generation in last.items()
                 if (*person, generation) not in seen]
         if len(tail) > MAX_LATE:
-            raise Refused('PROC_LIMIT')
+            raise LimitRefused('late_generations', MAX_LATE, len(tail))
         result['late_generations'] = len(tail)
         for person, generation in tail:
             observe(person, generation)
@@ -743,7 +774,8 @@ def restore_snapshot_isolated(archive_path, target_parent, target_name, archive_
 
 
 REASONS = A.REASONS | frozenset(('ENTRY_LIMIT', 'PROC_LIMIT', 'PROC_INVALID',
-    'PROC_CHANGED', 'PROC_UNAVAILABLE', 'SOURCE_IN_USE', 'PRODUCER_REFUSED', 'PRODUCER_CHANGED'))
+    'PROC_CHANGED', 'PROC_UNAVAILABLE', 'SOURCE_IN_USE', 'PRODUCER_REFUSED', 'PRODUCER_CHANGED',
+    'METADATA_READY'))
 NUMBERS = ('source_bytes', 'source_allocated_bytes', 'compressed_bytes', 'archive_budget_bytes',
            'free_before_bytes', 'projected_free_bytes', 'free_after_bytes', 'removed_files',
            'containers', 'images', 'reference_checks')
@@ -753,17 +785,17 @@ HASHES = ('plan_sha256', 'archive_manifest_sha256', 'protected_sha256')
 
 
 def receipt(mode):
-    return dict(version=1, scope=SCOPE, mode=mode if mode in ('plan', 'apply') else 'invalid',
-                status='refused', reason='INTERNAL_ERROR', plan=None,
+    return dict(version=2, scope=SCOPE, mode=mode if mode in ('diagnose', 'plan', 'apply') else 'invalid',
+                status='refused', reason='INTERNAL_ERROR', plan=None, limit_diagnostic=None,
                 **{key: None for key in NUMBERS + HASHES}, **{key: False for key in FLAGS},
                 database_opened=False, services_changed=False, external_network_used=False)
 
 
 def validate_report(value):
     if (type(value) is not dict or set(value) != set(receipt('plan')) or
-            type(value['version']) is not int or value['version'] != 1 or value['scope'] != SCOPE or
-            value['mode'] not in ('plan', 'apply', 'invalid') or
-            value['status'] not in ('planned', 'applied', 'refused') or value['reason'] not in REASONS):
+            type(value['version']) is not int or value['version'] != 2 or value['scope'] != SCOPE or
+            value['mode'] not in ('diagnose', 'plan', 'apply', 'invalid') or
+            value['status'] not in ('observed', 'planned', 'applied', 'refused') or value['reason'] not in REASONS):
         raise Refused('ARCHIVE_REFUSED')
     for key in NUMBERS:
         if value[key] is not None and (type(value[key]) is not int or not 0 <= value[key] < 2 ** 63):
@@ -776,6 +808,10 @@ def validate_report(value):
             raise Refused('ARCHIVE_REFUSED')
     if any(value[k] for k in ('database_opened', 'services_changed', 'external_network_used')):
         raise Refused('ARCHIVE_REFUSED')
+    if value['limit_diagnostic'] is not None:
+        validate_limit_diagnostic(value['limit_diagnostic'])
+        if value['reason'] != 'PROC_LIMIT' or value['status'] != 'refused':
+            raise Refused('ARCHIVE_REFUSED')
     if value['plan'] is not None:
         validate_plan(value['plan'])
         if value['plan_sha256'] != hash_object(value['plan']):
@@ -783,6 +819,16 @@ def validate_report(value):
     if value['archive_verified'] and not value['archive_published']:
         raise Refused('ARCHIVE_REFUSED')
     if value['cleanup_started'] and not value['archive_verified']:
+        raise Refused('ARCHIVE_REFUSED')
+    if value['mode'] == 'diagnose' and (value['plan'] is not None or
+            any(value[k] is not None for k in ('plan_sha256', 'archive_manifest_sha256',
+                'source_bytes', 'source_allocated_bytes', 'compressed_bytes', 'archive_budget_bytes',
+                'projected_free_bytes', 'removed_files')) or
+            any(value[k] for k in FLAGS if k != 'protected_unchanged')):
+        raise Refused('ARCHIVE_REFUSED')
+    if value['status'] == 'observed' and (value['mode'] != 'diagnose' or
+            value['reason'] != 'METADATA_READY' or value['reference_checks'] != 1 or
+            not value['protected_unchanged']):
         raise Refused('ARCHIVE_REFUSED')
     if value['status'] == 'planned' and (value['mode'] != 'plan' or value['reason'] != 'PLAN_READY' or
             value['plan'] is None or value['archive_started'] or not value['protected_unchanged'] or
@@ -817,7 +863,7 @@ def execute(mode, plan_sha='', confirm='', plan_json='', *, runner=A.run, free=N
     producer_probe = producer_probe or producer_state
     reference_probe = reference_probe or observe_sources
     try:
-        if mode == 'plan':
+        if mode in ('diagnose', 'plan'):
             if plan_sha or confirm or plan_json:
                 raise Refused('INPUT_REFUSED')
             plan = None
@@ -855,6 +901,12 @@ def execute(mode, plan_sha='', confirm='', plan_json='', *, runner=A.run, free=N
                     raise Refused('PRODUCER_CHANGED')
 
             references()
+            if mode == 'diagnose':
+                # Metadata and source-code identity only. Do not read/hash the
+                # backup payloads, measure gzip, create archives or unlink.
+                unchanged()
+                result.update(status='observed', reason='METADATA_READY', free_after_bytes=free())
+                return validate_report(result)
             if mode == 'plan':
                 plan = make_plan(deployment, snapshot, protected, producer, budget)
             else:
@@ -909,6 +961,8 @@ def execute(mode, plan_sha='', confirm='', plan_json='', *, runner=A.run, free=N
                 result.update(status='applied', reason='ARCHIVED')
     except Refused as error:
         result['reason'] = str(error) if str(error) in REASONS else 'INTERNAL_ERROR'
+        if isinstance(error, LimitRefused):
+            result['limit_diagnostic'] = error.diagnostic
     except Exception:
         result['reason'] = 'INTERNAL_ERROR'
     return validate_report(result)
@@ -945,7 +999,7 @@ def main(args):
     except Exception:
         result['reason'] = 'INTERNAL_ERROR'
     print(A.canonical(validate_report(result)))
-    return 0 if result['status'] in ('planned', 'applied') else 2
+    return 0 if result['status'] in ('observed', 'planned', 'applied') else 2
 
 
 if __name__ == '__main__':

@@ -50,6 +50,7 @@ class BundleWorkflowTests(unittest.TestCase):
                 self.assertNotIn(CANARY.encode(), result.stdout + result.stderr)
         self.assertIn('group: deploy-logic-analysis\n  cancel-in-progress: false', self.text)
         self.assertIn('contents: read', self.text)
+        self.assertIn('options: [diagnose, plan, apply]', self.text)
         self.assertNotRegex(self.text, r'contents: write|workflow_run|schedule:|pull_request:')
         for action in re.findall(r'uses: ([^\n]+)', self.text):
             self.assertRegex(action, r'@[0-9a-f]{40}\Z')
@@ -58,9 +59,13 @@ class BundleWorkflowTests(unittest.TestCase):
         plan = T.ClosedPlanTests().plan()
         for mode, raw, digest, confirm, accepted in (
                 ('plan', '', '', '', True),
+                ('diagnose', '', '', '', True),
                 ('apply', B.A.canonical(plan), B.hash_object(plan), B.CONFIRM, True),
                 ('apply', B.A.canonical(plan), '0' * 64, B.CONFIRM, False),
                 ('plan', CANARY, '', '', False),
+                ('diagnose', CANARY, '', '', False),
+                ('diagnose', '', '0' * 64, '', False),
+                ('diagnose', '', '', B.CONFIRM, False),
                 ('apply', json.dumps(dict(plan, path=CANARY)), '0' * 64, B.CONFIRM, False),
                 ('apply', 'x' * 8193, '0' * 64, B.CONFIRM, False)):
             with self.subTest(mode=mode, accepted=accepted), tempfile.TemporaryDirectory() as tmp:
@@ -106,6 +111,19 @@ class BundleWorkflowTests(unittest.TestCase):
         for value in (raw + b'\n', CANARY.encode(), b'', b'x' * 16385,
                       B.A.canonical(dict(B.receipt('plan'), extra=CANARY)).encode()):
             self.assertFalse(self.validate(value))
+        observed = dict(B.receipt('diagnose'), status='observed', reason='METADATA_READY',
+                        reference_checks=1, protected_unchanged=True)
+        self.assertTrue(self.validate(B.A.canonical(observed).encode(), rc='0'))
+        self.assertFalse(self.validate(B.A.canonical(observed).encode(), rc='2'))
+        refused = dict(B.receipt('diagnose'), reason='PROC_LIMIT', limit_diagnostic=dict(
+                       kind='maps_bytes', cap=B.MAX_MAPS, observed_lower_bound=B.MAX_MAPS + 1))
+        self.assertTrue(self.validate(B.A.canonical(refused).encode()))
+        for invalid in (dict(observed, compressed_bytes=1), dict(observed, archive_started=True),
+                        dict(refused, version=1), dict(refused, limit_diagnostic=dict(
+                            refused['limit_diagnostic'], path=CANARY)),
+                        dict(refused, limit_diagnostic=dict(kind=CANARY, cap=1, observed_lower_bound=2))):
+            self.assertFalse(self.validate(B.A.canonical(invalid).encode(),
+                                          rc='0' if invalid['status'] == 'observed' else '2'))
         self.assertLess(self.invoke.index('ns["validate_report"](value)'), self.invoke.index("printf 'NAVER_BACKUP_BUNDLE_RESULT="))
         self.assertEqual(self.invoke.count("printf 'NAVER_BACKUP_BUNDLE_RESULT="), 1)
 
