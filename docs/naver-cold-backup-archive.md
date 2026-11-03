@@ -1,6 +1,6 @@
 # Fixed cold NAVER backups: lossless archive and isolated recovery
 
-This helper accepts exactly six reviewed profiles for five cold backups. Source and
+This helper accepts exactly seven reviewed profiles for six cold backups. Source and
 archive paths are fixed in the helper; neither the workflow nor CLI accepts an
 arbitrary path, commit, timestamp or confirmation phrase.
 
@@ -12,6 +12,7 @@ arbitrary path, commit, timestamp or confirmation phrase.
 | `d633-cold-backup-lossless-v1` | `20261102T230515Z-d633ff4450bb` | `ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY` |
 | `d633-cold-backup-lossless-gzip6-v1` | `20261102T230515Z-d633ff4450bb` (same source, gzip level 6) | `ARCHIVE_D633_COLD_BACKUP_GZIP6_LOSSLESSLY` |
 | `54fc-cold-backup-lossless-gzip6-v1` | `20261103T012239Z-54fcf985d9f5` (gzip level 6) | `ARCHIVE_54FC_COLD_BACKUP_GZIP6_LOSSLESSLY` |
+| `fb70-cold-backup-lossless-v1` | `20261103T081036Z-fb70e6d2ef90` (gzip level 1) | `ARCHIVE_FB70_COLD_BACKUP_LOSSLESSLY` |
 
 The a377 source is the previous-product backup recorded by the successful
 bb151c2a deployment, run `41502564117`; it is not the running database. Adding
@@ -29,6 +30,14 @@ deployment run `41557056268`. Its new fixed gzip-6 profile leaves all five older
 profiles and four older backups unchanged. Current source bytes, manifest hash,
 compressed size, capacity and elapsed time still require its own PLAN; this
 profile addition is not a claim that archival or the next deployment will fit.
+The fb70 source is the previous-product cold copy recorded by successful 8c13
+deployment run `41599325150`. Its fixed gzip-1 profile leaves all six existing
+profiles and five older backups unchanged. Level 1 follows the original profiles
+to reduce compression work within the unchanged 600-second deadline. This is
+not a measured timing or capacity guarantee: its own PLAN must establish current
+source identity, manifest hash, compressed bytes and capacity before APPLY.
+APPLY repeats measurement, writes and verifies, so even a successful PLAN does
+not guarantee completion within that deadline.
 Adding the profile does not run PLAN or APPLY, establish current capacity, or
 authorize lowering a guard. A fresh scope-bound PLAN is required before APPLY.
 It never opens SQLite, reads the live engine database, changes containers, or
@@ -85,12 +94,15 @@ For the fixed 54fc profile, isolated restoration uses
 `20261103T012239Z-54fcf985d9f5-gzip6-v1`, its own archive-manifest receipt hash,
 and `scope='54fc-cold-backup-lossless-gzip6-v1'`. It uses the same unchanged
 byte, metadata, scope and compression-level verification as the older profiles.
+For the fixed fb70 profile, use `20261103T081036Z-fb70e6d2ef90-v1`, its own
+archive-manifest receipt hash, and `scope='fb70-cold-backup-lossless-v1'`.
+The same verification applies with the profile's fixed compression level 1.
 
 ## Format and publication
 
 - Each original manifest member (`engine.db` and only its listed `-wal`, `-shm`,
   or `-journal` sidecars) becomes one same-name `.gz` file. Gzip uses the profile's
-  fixed level (1 for the four original profiles, 6 for the d633 alternative and 54fc profile),
+  fixed level (1 for the four original profiles and fb70, 6 for the d633 alternative and 54fc profile),
   an empty filename and timestamp zero. Empty sidecars are retained.
 - `source-manifest.json` contains the exact original `manifest.json` bytes,
   including whitespace. Original SHA-256 and size checks must pass first.
