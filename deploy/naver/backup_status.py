@@ -67,7 +67,11 @@ def timestamp(value):
         return None
     if type(value) is not str or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})', value):
         raise Refused('INVALID')
-    parsed = dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    # Python 3.10 only parses 3/6 fractional digits. Validate a microsecond
+    # copy while retaining every original digit for snapshot identity checks.
+    parse_value = re.sub(r'\.([0-9]+)',
+                        lambda match: '.' + match[1][:6].ljust(6, '0'), value)
+    parsed = dt.datetime.fromisoformat(parse_value.replace('Z', '+00:00'))
     if parsed.utcoffset() is None:
         raise Refused('INVALID')
     return value

@@ -84,6 +84,27 @@ class Fixture(unittest.TestCase):
 
 
 class ProjectionTest(unittest.TestCase):
+    def test_timestamp_all_supported_precisions_preserve_original_identity(self):
+        for precision in range(10):
+            fraction = '.' + '123456789'[:precision] if precision else ''
+            for zone in ('Z', '+00:00', '+09:00', '-05:30'):
+                value = '2024-02-29T23:59:59' + fraction + zone
+                with self.subTest(precision=precision, zone=zone):
+                    self.assertEqual(B.timestamp(value), value)
+        first = '2026-11-03T00:00:00.123456781Z'
+        second = '2026-11-03T00:00:00.123456789Z'
+        self.assertNotEqual(B.timestamp(first), B.timestamp(second))
+
+    def test_timestamp_compatibility_keeps_calendar_timezone_and_grammar_checks(self):
+        for value in ('2025-02-29T00:00:00.123456789Z', '2026-13-01T00:00:00.1Z',
+                      '2026-01-32T00:00:00.12Z', '0000-01-01T00:00:00.1234Z',
+                      '2026-11-03T24:00:00.12345Z', '2026-11-03T00:60:00.1234567Z',
+                      '2026-11-03T00:00:60.12345678Z', '2026-11-03T00:00:00.1+24:00',
+                      '2026-11-03T00:00:00.Z', '2026-11-03T00:00:00.1234567890Z',
+                      '2026-11-03T00:00:00.123456789', '2026-11-03T00:00:00.123456789Z\n'):
+            with self.subTest(value=value), self.assertRaises((B.Refused, ValueError)):
+                B.timestamp(value)
+
     def test_only_closed_backup_fields_escape(self):
         raw=dict(GOOD, secrets=CANARY)
         actual=B.project_health(json.dumps(raw).encode(),200)
@@ -220,6 +241,22 @@ class MetadataTest(Fixture):
 
 
 class ExecuteTest(Fixture):
+    def test_snapshot_matches_existing_cold_snapshot_and_keeps_nanosecond_changes(self):
+        spec = importlib.util.spec_from_file_location('cold_snapshot_contract',
+            Path(__file__).parents[1] / 'cold_backup_archive.py')
+        cold = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cold)
+        original = B.snapshot(self.runner)
+        self.assertEqual(original, cold.snapshot(self.runner))
+        def changed(command):
+            result = self.runner(command)
+            if B.SNAP_FORMAT in command:
+                result.stdout = result.stdout.replace(b'.123456789Z', b'.123456781Z')
+            return result
+        later = B.snapshot(changed)
+        self.assertNotEqual(original, later)
+        self.assertTrue(all(r['started'].endswith('.123456781Z') for r in later['containers']))
+
     def test_full_observation_preserves_state_and_fixed_docker_commands(self):
         self.file();self.file('outgoing',extension='cms')
         self.server(http_response(json.dumps(GOOD).encode()))
