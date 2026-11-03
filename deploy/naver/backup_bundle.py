@@ -906,6 +906,8 @@ def receipt(mode):
 
 
 def validate_report(value):
+    if type(value) is dict and value.get('mode') == 'finalize':
+        return validate_finalize_report(value)
     if type(value) is dict and value.get('mode') == 'inspect':
         return validate_inspect_report(value)
     if (type(value) is not dict or set(value) != set(receipt('plan')) or
@@ -1103,6 +1105,415 @@ def hard_deadline():
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, old)
+
+
+# Separate pending-only completion path; legacy modes and cold helper stay unchanged.
+FINALIZE_CONFIRM = 'FINALIZE_VERIFIED_FIXED_NAVER_BACKUP_BUNDLE'
+
+
+def finalize_receipt():
+    value = receipt('apply')
+    value.pop('archive_started')
+    value.update(version=1, mode='finalize', archive_reused=False, payload_verified=False,
+                 publication_started=False, published_markers=0, gzip_created=False,
+                 gzip_rewritten=False)
+    return value
+
+
+def validate_finalize_report(value):
+    if (type(value) is not dict or set(value) != set(finalize_receipt()) or
+            type(value['version']) is not int or value['version'] != 1 or
+            value['mode'] != 'finalize' or value['status'] not in ('refused', 'applied') or
+            any(type(value[k]) is not bool for k in ('archive_reused', 'payload_verified',
+                'publication_started', 'gzip_created', 'gzip_rewritten')) or
+            value['gzip_created'] or value['gzip_rewritten'] or
+            type(value['published_markers']) is not int or not 0 <= value['published_markers'] <= 3 or
+            (value['payload_verified'] and not value['archive_reused']) or
+            (value['publication_started'] and not value['payload_verified']) or
+            (value['published_markers'] and not value['publication_started']) or
+            value['archive_published'] != (value['published_markers'] == 3) or
+            (value['archive_verified'] and not value['payload_verified'])):
+        raise Refused('ARCHIVE_REFUSED')
+    legacy = {k: v for k, v in value.items() if k in receipt('apply')}
+    legacy.update(version=3, mode='apply', archive_started=value['publication_started'])
+    validate_report(legacy)
+    return value
+
+
+def verify_pinned_gzip(fd, expected, budget):
+    """Cold verifier's bounded algorithm on the caller's retained read-only FD."""
+    pinned = A.identity(os.fstat(fd))
+    if pinned['size'] != expected['gzip_size']:
+        raise Refused('ARCHIVE_VERIFY_FAILED')
+    os.lseek(fd, 0, os.SEEK_SET)
+    compressed_hash, raw_hash = hashlib.sha256(), hashlib.sha256()
+    total = 0
+    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        while True:
+            budget.check()
+            chunk = os.read(fd, A.CHUNK)
+            if not chunk:
+                break
+            compressed_hash.update(chunk)
+            while chunk:
+                budget.check()
+                data = decoder.decompress(chunk, A.CHUNK)
+                chunk = decoder.unconsumed_tail
+                total += len(data)
+                if total > expected['size'] or decoder.unused_data:
+                    raise Refused('ARCHIVE_VERIFY_FAILED')
+                raw_hash.update(data)
+        if (not decoder.eof or total != expected['size'] or
+                raw_hash.hexdigest() != expected['sha256'] or
+                compressed_hash.hexdigest() != expected['gzip_sha256']):
+            raise Refused('ARCHIVE_VERIFY_FAILED')
+        A.same(fd, pinned)
+    except (zlib.error, OSError):
+        raise Refused('ARCHIVE_VERIFY_FAILED') from None
+
+
+def verify_pinned_compressed(fd, expected, budget):
+    """Rebind the earlier full roundtrip to current compressed bytes before cleanup."""
+    pinned = A.identity(os.fstat(fd))
+    if pinned['size'] != expected['gzip_size']:
+        raise Refused('ARCHIVE_VERIFY_FAILED')
+    os.lseek(fd, 0, os.SEEK_SET)
+    digest, size = hashlib.sha256(), 0
+    while True:
+        budget.check()
+        chunk = os.read(fd, A.CHUNK)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > expected['gzip_size']:
+            raise Refused('ARCHIVE_VERIFY_FAILED')
+        digest.update(chunk)
+    if size != expected['gzip_size'] or digest.hexdigest() != expected['gzip_sha256']:
+        raise Refused('ARCHIVE_VERIFY_FAILED')
+    A.same(fd, pinned)
+
+
+class PendingBundle:
+    """Retain the actual verified descriptors and permit only our publication transitions."""
+    layout = {'bundle': {'deployment', 'snapshot'},
+              'deployment': {'engine.db.gz', 'source-manifest.json', '.manifest.pending'},
+              'snapshot': {'snapshot.sqlite.gz', '.manifest.pending'}}
+
+    def __init__(self, stack, parent, device, budget):
+        self.parent, self.budget = parent, budget
+        self.parent_meta = A.identity(os.fstat(parent))
+        self.dirs, self.files, self.published = {}, {}, set()
+        self.marker_bytes = {}
+        self.root_written = False
+        self.stack = stack
+        self.open_dir(parent, ARCHIVE_NAME, 'bundle', device)
+        for key in ('deployment', 'snapshot'):
+            self.open_dir(self.dirs['bundle'][0], key, key, device)
+        for folder in ('deployment', 'snapshot'):
+            for name in sorted(self.layout[folder]):
+                self.open_file(folder, name)
+        all_meta = [x[3] for x in self.dirs.values()] + [x[1] for x in self.files.values()]
+        if len({(v['device'], v['inode']) for v in all_meta}) != len(all_meta):
+            raise Refused('ARCHIVE_REFUSED')
+        self.check()
+
+    def names(self, fd):
+        names = set()
+        with os.scandir(fd) as iterator:
+            for entry in iterator:
+                self.budget.check()
+                if len(names) >= 8:
+                    raise Refused('ARCHIVE_REFUSED')
+                names.add(entry.name)
+        return names
+
+    def open_dir(self, parent, name, key, device):
+        info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != A.ROOT_UID or
+                info.st_gid != A.ROOT_GID or stat.S_IMODE(info.st_mode) != 0o700 or info.st_dev != device):
+            raise Refused('ARCHIVE_REFUSED')
+        fd = os.open(name, DIR_FLAGS, dir_fd=parent)
+        self.stack.callback(os.close, fd)
+        meta = A.identity(info)
+        A.same(fd, meta)
+        self.dirs[key] = (fd, parent, name, meta)
+        if self.names(fd) != self.layout[key]:
+            raise Refused('ARCHIVE_REFUSED')
+
+    def open_file(self, folder, name):
+        parent = self.dirs[folder][0]
+        info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != A.ROOT_UID or
+                info.st_gid != A.ROOT_GID or stat.S_IMODE(info.st_mode) != 0o600 or
+                info.st_nlink != 1 or info.st_dev != self.parent_meta['device']):
+            raise Refused('ARCHIVE_REFUSED')
+        meta = A.identity(info)
+        if not 0 <= meta['size'] <= (A.MAX_ARCHIVE if name.endswith('.gz') else 65536):
+            raise Refused('ARCHIVE_REFUSED')
+        fd = os.open(name, READ_FLAGS, dir_fd=parent)
+        self.stack.callback(os.close, fd)
+        A.same(fd, meta)
+        self.files[(folder, name)] = (fd, meta)
+
+    def read(self, folder, name):
+        fd, _ = self.files[(folder, name)]
+        os.lseek(fd, 0, os.SEEK_SET)
+        return A.read_small(fd)
+
+    @staticmethod
+    def equal_metadata(actual, expected, mutable=()):
+        return all(actual[k] == value for k, value in expected.items() if k not in mutable)
+
+    def check(self):
+        self.budget.check()
+        # File checks precede closing directory names and bindings, as in inspect.
+        for (folder, name), (fd, meta) in self.files.items():
+            published = name == '.manifest.pending' and folder in self.published
+            current_name = 'archive-manifest.json' if published else name
+            current = A.identity(os.fstat(fd))
+            if (current != meta or
+                    A.identity(os.stat(current_name, dir_fd=self.dirs[folder][0], follow_symlinks=False)) != current):
+                raise Refused('SOURCE_CHANGED')
+        for folder, (fd, parent, name, meta) in self.dirs.items():
+            expected = set(self.layout[folder])
+            if folder == 'bundle' and self.root_written:
+                expected.add('.manifest.pending')
+            if folder in self.published:
+                expected.remove('.manifest.pending')
+                expected.add('archive-manifest.json')
+            current = A.identity(os.fstat(fd))
+            if (self.names(fd) != expected or current != meta or
+                    A.identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != current):
+                raise Refused('SOURCE_CHANGED')
+        A.same(self.parent, self.parent_meta)
+
+    def verify(self, deployment, snapshot, protected, plan):
+        dplan = deployment_archive_plan(deployment, plan['files']['deployment'], protected)
+        splan = validate_snapshot_archive(snapshot_archive_plan(snapshot, plan['files']['snapshot']))
+        if (self.read('deployment', 'source-manifest.json') != deployment['raw'] or
+                self.read('deployment', '.manifest.pending') != A.canonical(dplan).encode() or
+                self.read('snapshot', '.manifest.pending') != A.canonical(splan).encode()):
+            raise Refused('ARCHIVE_VERIFY_FAILED')
+        self.marker_bytes = {'deployment': A.canonical(dplan).encode(), 'snapshot': A.canonical(splan).encode()}
+        self.gzip_expectations = plan['files']
+        self.check()
+        for folder, name in (('deployment', 'engine.db.gz'), ('snapshot', 'snapshot.sqlite.gz')):
+            verify_pinned_gzip(self.files[(folder, name)][0], plan['files'][folder], self.budget)
+            self.check()
+        return dict(version=1, scope=SCOPE, plan=plan, plan_sha256=hash_object(plan),
+                    deployment_archive_sha256=hash_object(dplan), snapshot_archive_sha256=hash_object(splan))
+
+    def directory_transition(self, folder, *, added_root_marker=False):
+        # Only immediately after our known write/link/unlink, never on a later check.
+        fd, parent, name, before = self.dirs[folder]
+        expected = set(self.layout[folder])
+        if folder == 'bundle' and self.root_written:
+            expected.add('.manifest.pending')
+        if folder in self.published:
+            expected.remove('.manifest.pending')
+            expected.add('archive-manifest.json')
+        after = A.identity(os.fstat(fd))
+        # A new regular entry changes directory nlink on APFS, but not ext4.
+        allowed_links = (before['links'], before['links'] + 1) if added_root_marker and folder == 'bundle' else (before['links'],)
+        if (self.names(fd) != expected or after['links'] not in allowed_links or
+                not self.equal_metadata(after, before, ('size', 'allocated_bytes', 'mtime_ns', 'ctime_ns', 'links')) or
+                A.identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != after):
+            raise Refused('SOURCE_CHANGED')
+        self.dirs[folder] = (fd, parent, name, after)
+
+    def marker_transition(self, folder):
+        fd, before = self.files[(folder, '.manifest.pending')]
+        after = A.identity(os.fstat(fd))
+        if (not self.equal_metadata(after, before, ('ctime_ns',)) or
+                A.identity(os.stat('archive-manifest.json', dir_fd=self.dirs[folder][0], follow_symlinks=False)) != after or
+                self.read(folder, '.manifest.pending') != self.marker_bytes[folder]):
+            raise Refused('SOURCE_CHANGED')
+        A.same(fd, after)
+        self.files[(folder, '.manifest.pending')] = (fd, after)
+        self.published.add(folder)
+        self.directory_transition(folder)
+
+    def check_final_contents(self, source_manifest):
+        # Timestamp resolution alone cannot bind the earlier verification to current bytes.
+        for folder, name in (('deployment', 'engine.db.gz'), ('snapshot', 'snapshot.sqlite.gz')):
+            verify_pinned_compressed(self.files[(folder, name)][0], self.gzip_expectations[folder], self.budget)
+        for folder, expected in self.marker_bytes.items():
+            self.budget.check()
+            if self.read(folder, '.manifest.pending') != expected:
+                raise Refused('ARCHIVE_VERIFY_FAILED')
+        if self.read('deployment', 'source-manifest.json') != source_manifest:
+            raise Refused('ARCHIVE_VERIFY_FAILED')
+        self.check()
+
+    def publish(self, manifest, result, free):
+        self.check()
+        for fd, _ in self.files.values():
+            self.budget.check()
+            os.fsync(fd)
+        for folder in ('deployment', 'snapshot'):
+            os.fsync(self.dirs[folder][0])
+        self.check()
+        for folder in ('deployment', 'snapshot'):
+            self.budget.check()
+            if free() < A.RESERVE:
+                raise Refused('SPACE_REFUSED')
+            self.check()
+            result['publication_started'] = True
+            A.publish(self.dirs[folder][0])
+            self.marker_transition(folder)
+            result['published_markers'] += 1
+            self.check()
+        raw = A.canonical(manifest).encode()
+        if len(raw) > 65536 or free() < A.RESERVE + len(raw):
+            raise Refused('SPACE_REFUSED')
+        fd = A.create_file(self.dirs['bundle'][0], '.manifest.pending')
+        try:
+            sink = A.Sink(self.budget, fd=fd, free=free, maximum=65536)
+            sink.write(raw)
+            sink.flush()
+            created_identity = A.identity(os.fstat(fd))
+        finally:
+            os.close(fd)
+        self.root_written = True
+        self.open_file('bundle', '.manifest.pending')
+        if self.files[('bundle', '.manifest.pending')][1] != created_identity:
+            raise Refused('SOURCE_CHANGED')
+        if self.read('bundle', '.manifest.pending') != raw:
+            raise Refused('ARCHIVE_VERIFY_FAILED')
+        self.marker_bytes['bundle'] = raw
+        os.fsync(self.dirs['bundle'][0])
+        self.directory_transition('bundle', added_root_marker=True)
+        self.check()
+        self.budget.check()
+        if free() < A.RESERVE:
+            raise Refused('SPACE_REFUSED')
+        A.publish(self.dirs['bundle'][0])
+        self.marker_transition('bundle')
+        result.update(published_markers=3, archive_published=True)
+        self.check()
+        if self.read('bundle', '.manifest.pending') != raw:
+            raise Refused('ARCHIVE_VERIFY_FAILED')
+        # The original held child marker contents also remain immutable across link/unlink.
+        for folder, key in (('deployment', 'deployment_archive_sha256'), ('snapshot', 'snapshot_archive_sha256')):
+            if A.digest(self.read(folder, '.manifest.pending')) != manifest[key]:
+                raise Refused('ARCHIVE_VERIFY_FAILED')
+        self.check()
+
+
+def finalize_execute(plan_sha, confirm, plan_json, *, runner=A.run, free=None,
+                     budget=None, producer_probe=None, reference_probe=None):
+    result = finalize_receipt()
+    budget = budget or A.Budget()
+    producer_probe = producer_probe or producer_state
+    reference_probe = reference_probe or observe_sources
+    try:
+        if confirm != FINALIZE_CONFIRM:
+            raise Refused('INPUT_REFUSED')
+        plan = parse_plan(plan_json, plan_sha)
+        if plan['codec'] != codec():
+            raise Refused('PLAN_MISMATCH')
+        result.update(plan=plan, plan_sha256=plan_sha)
+        budget.check()
+        protected = A.snapshot(runner)
+        result.update(protected_sha256=hash_object(protected), containers=len(protected['containers']),
+                      images=len(protected['images']), reference_checks=0)
+        A.archive_absent(DEPLOYMENT_SCOPE)
+        with A.source(DEPLOYMENT_SCOPE) as deployment, snapshot_source() as snapshot, \
+                A.directory(A.ARCHIVE_PARENT, True) as parent, contextlib.ExitStack() as stack:
+            source_rows(deployment, snapshot)
+            if os.fstat(parent).st_dev != deployment['folder']['device']:
+                raise Refused('PATH_REFUSED')
+            archive = PendingBundle(stack, parent, deployment['folder']['device'], budget)
+            result['archive_reused'] = True
+            free = free or (lambda: A.free_bytes(deployment['parent']))
+            result['free_before_bytes'] = free()
+            producer = producer_probe(protected, snapshot, budget, runner)
+
+            def references():
+                reference_probe(deployment, snapshot, budget)
+                result['reference_checks'] += 1
+
+            def unchanged():
+                budget.check()
+                A.verify_source(deployment)
+                verify_snapshot_source(snapshot)
+                result['protected_unchanged'] = A.snapshot(runner) == protected
+                if not result['protected_unchanged']:
+                    raise Refused('PROTECTED_CHANGED')
+                if producer_probe(protected, snapshot, budget, runner) != producer:
+                    raise Refused('PRODUCER_CHANGED')
+
+            references()
+            check_plan_sources(plan, deployment, snapshot, protected, producer, budget)
+            unchanged()
+            references()
+            allocated = deployment['identities']['engine.db']['allocated_bytes'] + snapshot['file']['allocated_bytes']
+            overhead = 2 * A.OVERHEAD
+            current_free = free()
+            projection = max(0, current_free + allocated - overhead)
+            capacity = current_free >= A.RESERVE + overhead and projection >= A.MIN_FREE_AFTER
+            result.update(source_bytes=sum(row['size'] for row in plan['files'].values()),
+                          source_allocated_bytes=allocated, compressed_bytes=sum(row['gzip_size'] for row in plan['files'].values()),
+                          archive_budget_bytes=overhead, projected_free_bytes=projection, capacity_ok=capacity)
+            if not capacity:
+                raise Refused('SPACE_REFUSED')
+            manifest = archive.verify(deployment, snapshot, protected, plan)
+            result['payload_verified'] = True
+            unchanged()
+            archive.publish(manifest, result, free)
+            result.update(archive_verified=True, archive_manifest_sha256=hash_object(manifest))
+            unchanged()
+            references()
+            unchanged()
+            archive.check_final_contents(deployment['raw'])
+            if free() + allocated < A.MIN_FREE_AFTER:
+                raise Refused('SPACE_REFUSED')
+            budget.check()
+            result.update(cleanup_started=True, removed_files=0)
+            child_result = {}
+            try:
+                A.remove_source(deployment, child_result, budget)
+            finally:
+                result['removed_files'] += child_result.get('removed_files', 0)
+            remove_snapshot(snapshot, result, budget)
+            result['cleanup_complete'] = True
+            result['protected_unchanged'] = A.snapshot(runner) == protected
+            result['free_after_bytes'] = free()
+            if not result['protected_unchanged']:
+                raise Refused('PROTECTED_CHANGED')
+            if result['free_after_bytes'] < A.MIN_FREE_AFTER:
+                result['capacity_ok'] = False
+                raise Refused('SPACE_REFUSED')
+            result.update(status='applied', reason='ARCHIVED')
+    except Refused as error:
+        result['reason'] = str(error) if str(error) in REASONS else 'INTERNAL_ERROR'
+        if isinstance(error, LimitRefused):
+            result['limit_diagnostic'] = error.diagnostic
+        if isinstance(error, ProcUnavailable):
+            result['proc_diagnostic'] = error.proc_diagnostic
+    except Exception:
+        result['reason'] = 'INTERNAL_ERROR'
+    return validate_finalize_report(result)
+
+
+def finalize_main(args):
+    result = finalize_receipt()
+    try:
+        if len(args) != 4 or args[0] != 'finalize':
+            raise Refused('INPUT_REFUSED')
+        if os.geteuid() != A.ROOT_UID:
+            raise Refused('NOT_ROOT')
+        os.umask(0o077)
+        os.nice(19)
+        with hard_deadline(), A.deployment_lock():
+            result = finalize_execute(args[1], args[2], args[3])
+    except Refused as error:
+        result['reason'] = str(error) if str(error) in REASONS else 'INTERNAL_ERROR'
+    except Exception:
+        result['reason'] = 'INTERNAL_ERROR'
+    print(A.canonical(validate_finalize_report(result)))
+    return 0 if result['status'] == 'applied' else 2
 
 
 # Separate metadata-only contract. Existing preservation receipts stay version 3.
@@ -1439,6 +1850,8 @@ def inspect_main(args):
 
 
 def main(args):
+    if args and args[0] == 'finalize':
+        return finalize_main(args)
     if args and args[0] == 'inspect':
         return inspect_main(args)
     result = receipt(args[0] if args else 'invalid')

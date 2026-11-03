@@ -4,21 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '고정 DIAGNOSE/PLAN/APPLY 또는 중단 묶음 INSPECT'
+        description: '고정 DIAGNOSE/PLAN/APPLY 또는 중단 묶음 INSPECT·FINALIZE'
         type: choice
-        options: [diagnose, plan, apply, inspect]
+        options: [diagnose, plan, apply, inspect, finalize]
         default: plan
         required: true
       plan_sha256:
-        description: 'APPLY·INSPECT용 PLAN SHA-256'
+        description: 'APPLY·INSPECT·FINALIZE용 PLAN SHA-256'
         type: string
         default: ''
       plan_json:
-        description: 'APPLY·INSPECT용 직전 결과의 고정 closed plan JSON'
+        description: 'APPLY·INSPECT·FINALIZE용 직전 결과의 고정 closed plan JSON'
         type: string
         default: ''
       confirm:
-        description: 'APPLY 전용 PRESERVE_FIXED_NAVER_BACKUP_BUNDLE_LOSSLESSLY'
+        description: 'APPLY 또는 FINALIZE 전용 고정 확인 문구'
         type: string
         default: ''
 
@@ -74,8 +74,8 @@ jobs:
           if mode in ('diagnose','plan'):
               assert not sha and not raw and not confirm
               encoded=''
-          elif mode in ('apply','inspect'):
-              assert confirm==(m.CONFIRM if mode=='apply' else '')
+          elif mode in ('apply','inspect','finalize'):
+              assert confirm=={'apply':m.CONFIRM,'inspect':'','finalize':m.FINALIZE_CONFIRM}[mode]
               plan=m.parse_plan(raw,sha)
               encoded=base64.b64encode(m.A.canonical(plan).encode()).decode()
           else:
