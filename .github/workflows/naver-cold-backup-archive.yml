@@ -6,7 +6,7 @@ on:
       scope:
         description: '고정 이전 배포 백업 선택 (경로 직접 입력 불가)'
         type: choice
-        options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1, bb151-cold-backup-lossless-v1, d633-cold-backup-lossless-v1, d633-cold-backup-lossless-gzip6-v1]
+        options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1, bb151-cold-backup-lossless-v1, d633-cold-backup-lossless-v1, d633-cold-backup-lossless-gzip6-v1, 54fc-cold-backup-lossless-gzip6-v1]
         default: c44-cold-backup-lossless-v1
         required: true
       mode:
@@ -21,7 +21,7 @@ on:
         default: ''
         required: false
       confirm:
-        description: 'apply 전용: 선택한 scope의 고정 확인문. d633 gzip6은 ARCHIVE_D633_COLD_BACKUP_GZIP6_LOSSLESSLY (docs/naver-cold-backup-archive.md 참조)'
+        description: 'apply 전용: 선택한 scope의 고정 확인문. 54fc gzip6은 ARCHIVE_54FC_COLD_BACKUP_GZIP6_LOSSLESSLY (docs/naver-cold-backup-archive.md 참조)'
         type: string
         default: ''
         required: false
@@ -62,6 +62,7 @@ jobs:
             bb151-cold-backup-lossless-v1) expected_confirm=ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY ;;
             d633-cold-backup-lossless-v1) expected_confirm=ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY ;;
             d633-cold-backup-lossless-gzip6-v1) expected_confirm=ARCHIVE_D633_COLD_BACKUP_GZIP6_LOSSLESSLY ;;
+            54fc-cold-backup-lossless-gzip6-v1) expected_confirm=ARCHIVE_54FC_COLD_BACKUP_GZIP6_LOSSLESSLY ;;
             *) echo INPUT_REFUSED; exit 1 ;;
           esac
           case "$MODE" in

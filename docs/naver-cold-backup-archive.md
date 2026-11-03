@@ -1,6 +1,6 @@
 # Fixed cold NAVER backups: lossless archive and isolated recovery
 
-This helper accepts exactly five reviewed profiles for four cold backups. Source and
+This helper accepts exactly six reviewed profiles for five cold backups. Source and
 archive paths are fixed in the helper; neither the workflow nor CLI accepts an
 arbitrary path, commit, timestamp or confirmation phrase.
 
@@ -11,6 +11,7 @@ arbitrary path, commit, timestamp or confirmation phrase.
 | `bb151-cold-backup-lossless-v1` | `20261102T205647Z-bb151c2a483a` | `ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY` |
 | `d633-cold-backup-lossless-v1` | `20261102T230515Z-d633ff4450bb` | `ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY` |
 | `d633-cold-backup-lossless-gzip6-v1` | `20261102T230515Z-d633ff4450bb` (same source, gzip level 6) | `ARCHIVE_D633_COLD_BACKUP_GZIP6_LOSSLESSLY` |
+| `54fc-cold-backup-lossless-gzip6-v1` | `20261103T012239Z-54fcf985d9f5` (gzip level 6) | `ARCHIVE_54FC_COLD_BACKUP_GZIP6_LOSSLESSLY` |
 
 The a377 source is the previous-product backup recorded by the successful
 bb151c2a deployment, run `41502564117`; it is not the running database. Adding
@@ -23,6 +24,11 @@ it does not read or overwrite either earlier archive.
 The d633 source is the previous-product backup recorded by successful 54fc
 deployment run `41540120997`. Its separate profile preserves the three earlier
 archives and keeps the same 5 GiB projected/actual free-space requirements.
+The 54fc source is the previous-product cold copy recorded by successful fb70
+deployment run `41557056268`. Its new fixed gzip-6 profile leaves all five older
+profiles and four older backups unchanged. Current source bytes, manifest hash,
+compressed size, capacity and elapsed time still require its own PLAN; this
+profile addition is not a claim that archival or the next deployment will fit.
 Adding the profile does not run PLAN or APPLY, establish current capacity, or
 authorize lowering a guard. A fresh scope-bound PLAN is required before APPLY.
 It never opens SQLite, reads the live engine database, changes containers, or
@@ -32,7 +38,7 @@ image ID set must remain unchanged. A changed snapshot refuses the operation.
 
 Each separate destination is below `/var/backups/metainc/naver-cold-archives/`,
 with the exact selected source directory name plus `-v1`, except the explicit
-gzip-6 alternative whose suffix is `-gzip6-v1`.
+gzip-6 profiles whose suffix is `-gzip6-v1`.
 Its parent and directory are root-owned mode `0700`; files are mode `0600`.
 The destination is never overwritten or automatically pruned. Only the chosen
 profile's source files may be removed, after the verified archive is published.
@@ -61,7 +67,7 @@ authorize another profile's APPLY. Unsupported scope strings are refused without
 printing the supplied value. Even identical source bytes do not make plans
 interchangeable.
 
-The gzip-6 alternative changes only the fixed compression level and its own
+The d633 gzip-6 alternative changes only the fixed compression level and its own
 scope/destination/confirmation. The four original profiles continue to use level
 1; their version-1 manifests, receipts and restore behavior remain valid. A new
 scope-bound PLAN is required: neither the old d633 plan nor its confirmation can
@@ -73,13 +79,18 @@ and APPLY, including an incomplete archive. The shared deployment lock and a
 second check before archive creation prevent cooperating runs from producing
 both alternatives. Existing conflicting archives are not inspected, overwritten
 or removed. This restriction does not prevent isolated restoration of either
-valid receipt-bound format. The gzip-6 profile does not add a source/deletion path.
+valid receipt-bound format. The d633 gzip-6 alternative does not add a source/deletion path.
+
+For the fixed 54fc profile, isolated restoration uses
+`20261103T012239Z-54fcf985d9f5-gzip6-v1`, its own archive-manifest receipt hash,
+and `scope='54fc-cold-backup-lossless-gzip6-v1'`. It uses the same unchanged
+byte, metadata, scope and compression-level verification as the older profiles.
 
 ## Format and publication
 
 - Each original manifest member (`engine.db` and only its listed `-wal`, `-shm`,
   or `-journal` sidecars) becomes one same-name `.gz` file. Gzip uses the profile's
-  fixed level (1 for the four original profiles, 6 for the explicit alternative),
+  fixed level (1 for the four original profiles, 6 for the d633 alternative and 54fc profile),
   an empty filename and timestamp zero. Empty sidecars are retained.
 - `source-manifest.json` contains the exact original `manifest.json` bytes,
   including whitespace. Original SHA-256 and size checks must pass first.
