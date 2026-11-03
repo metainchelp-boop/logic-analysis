@@ -116,3 +116,50 @@ may proceed to the existing bounded flags read, followed by the original second
 metadata-plus-flags observation. Missing, changed, malformed or over-limit
 observer evidence still refuses. All maps, cwd/root, process generations,
 two passes, late observations, ceilings and time/space guards remain unchanged.
+
+## Closed unavailable-observation diagnostics
+
+Receipt version 3 adds only `proc_diagnostic`, either null or the exact object
+`{phase, errno_bucket}`. `phase` is a fixed enum of observation operations or
+refusal conditions. A still-visible task with unavailable identity distinguishes
+its existing stat, PID namespace and mount namespace reads. The errno bucket is
+null or one of `ENOENT`, `ESRCH`, `EACCES`, `EPERM`, `EIO`, `OTHER_OS`,
+`INVALID_VALUE`, `INVALID_ENCODING`; no error message, path, PID, TID, FD or raw
+numeric errno is published. A direct namespace mismatch has a null errno.
+Uninstrumented exception origins remain explicitly `unknown`, rather than being
+inferred from earlier events. Non-null diagnostics are valid only on a refused
+`PROC_UNAVAILABLE` receipt. The existing limit diagnostic remains separate.
+
+The primitive observation wrapper records the closed fields on the current
+exception and rethrows the same object. There is no ambient last-error state.
+Existing ENOENT/ESRCH recovery, generation/presence rechecks, all-mode references,
+limits, existing /proc reads and their order stay unchanged. A recovered closed FD or exited
+task therefore cannot supply the cause of a later permission failure. A failed
+recheck reports its own error; when an existing semantic refusal follows a
+successful recheck, it retains the initiating error's bucket. Reused exception
+objects receive the current operation's annotation when raised again.
+
+This diagnostic does not establish that missing metadata is transient or that a
+visible task may safely be skipped. In an isolated Linux fixture an exited,
+unreaped child remains visible while its namespace metadata is unavailable; the
+existing code refuses it. This is a synthetic counterexample, not an observation
+of an operating-host zombie. A finite /proc scan is not an atomic snapshot or a
+proof of future non-use. The added fields identify the refused observation only;
+they do not change the refusal, retry, compression or cleanup policy.
+
+The v3 validator deliberately rejects an old v2 receipt; historical receipts
+retain their original pinned helper for verification. Stored plan and archive
+manifests remain version 1 with unchanged hashes and restore contracts. The
+workflow still verifies the exact shipped helper and invokes its closed
+validator before emitting one result line; no workflow or deployment input is
+added.
+
+Two additional namespace-refusal phases indicate `Z` in the stat bytes already
+read for that identity. They mean only `zombie_at_identity_read`, never current
+state, non-use, safe omission or deletion permission. A missing but still-listed
+FD also distinguishes the helper's own PID using `os.getpid()`; no identifier is
+published and no extra /proc read is made. An isolated native Linux scan exposed
+both an unreaped-child namespace refusal and a self-FD listing refusal: the
+listing can include its temporary directory FD, which closes and reappears at
+the same slot on the next listing. Both remain refusals. Neither local example
+establishes the first unavailable observation on the operating host.
