@@ -713,7 +713,7 @@ class BundlePreservationContractTests(unittest.TestCase):
         self.assertEqual(events, ['producer', 'references', 'producer'])
         self.assertEqual(protected.call_count, 2)
         self.assertEqual((result['version'], result['status'], result['reason']),
-                         (2, 'observed', 'METADATA_READY'))
+                         (3, 'observed', 'METADATA_READY'))
         self.assertEqual(result['reference_checks'], 1)
         self.assertTrue(result['protected_unchanged'])
         self.assertIsNone(result['limit_diagnostic'])
@@ -775,13 +775,13 @@ class BundlePreservationContractTests(unittest.TestCase):
             self.assertEqual(result['reason'], 'INPUT_REFUSED')
             snapshot.assert_not_called()
 
-    def test_receipt_version_two_does_not_upgrade_persisted_plan_or_archive_versions(self):
+    def test_receipt_version_three_does_not_upgrade_persisted_plan_or_archive_versions(self):
         plan = self.planned()
-        self.assertEqual(plan['version'], 2)
+        self.assertEqual(plan['version'], 3)
         self.assertEqual(plan['plan']['version'], 1)
         result = self.execute('apply', plan)
         self.assertEqual(result['status'], 'applied', result)
-        self.assertEqual(result['version'], 2)
+        self.assertEqual(result['version'], 3)
         for parent in (self.bundle, self.bundle / 'deployment', self.bundle / 'snapshot'):
             manifest = json.loads((parent / 'archive-manifest.json').read_bytes())
             self.assertEqual(manifest['version'], 1)
@@ -819,7 +819,7 @@ class LimitDiagnosticContractTests(unittest.TestCase):
             stat_bytes=4096, fdinfo_bytes=4096))
         report = B.receipt('diagnose')
         self.assertEqual(set(report), {'version', 'scope', 'mode', 'status', 'reason', 'plan',
-            'limit_diagnostic', 'source_bytes', 'source_allocated_bytes', 'compressed_bytes',
+            'limit_diagnostic', 'proc_diagnostic', 'source_bytes', 'source_allocated_bytes', 'compressed_bytes',
             'archive_budget_bytes', 'free_before_bytes', 'projected_free_bytes', 'free_after_bytes',
             'removed_files', 'containers', 'images', 'reference_checks', 'plan_sha256',
             'archive_manifest_sha256', 'protected_sha256', 'capacity_ok', 'archive_started',

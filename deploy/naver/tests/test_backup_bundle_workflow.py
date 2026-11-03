@@ -118,6 +118,14 @@ class BundleWorkflowTests(unittest.TestCase):
         refused = dict(B.receipt('diagnose'), reason='PROC_LIMIT', limit_diagnostic=dict(
                        kind='maps_bytes', cap=B.MAX_MAPS, observed_lower_bound=B.MAX_MAPS + 1))
         self.assertTrue(self.validate(B.A.canonical(refused).encode()))
+        unavailable = dict(B.receipt('plan'), reason='PROC_UNAVAILABLE', proc_diagnostic=dict(
+            phase='population_pidns_missing_present', errno_bucket='ENOENT'))
+        self.assertTrue(self.validate(B.A.canonical(unavailable).encode()))
+        for invalid in (dict(unavailable, version=2),
+                        dict(unavailable, proc_diagnostic=dict(unavailable['proc_diagnostic'], path=CANARY)),
+                        dict(unavailable, proc_diagnostic=dict(phase=CANARY, errno_bucket='EACCES')),
+                        dict(unavailable, proc_diagnostic=dict(phase='fd_metadata', errno_bucket=13))):
+            self.assertFalse(self.validate(B.A.canonical(invalid).encode()))
         for invalid in (dict(observed, compressed_bytes=1), dict(observed, archive_started=True),
                         dict(refused, version=1), dict(refused, limit_diagnostic=dict(
                             refused['limit_diagnostic'], path=CANARY)),

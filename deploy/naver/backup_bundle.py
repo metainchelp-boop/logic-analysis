@@ -5,6 +5,7 @@ The existing cold helper is loaded unchanged from one hash-bound sibling.
 """
 import contextlib
 import datetime as dt
+import errno
 import hashlib
 import json
 import os
@@ -94,6 +95,68 @@ class LimitRefused(Refused):
     def __init__(self, kind, cap, observed_lower_bound):
         super().__init__('PROC_LIMIT')
         self.diagnostic = dict(kind=kind, cap=cap, observed_lower_bound=observed_lower_bound)
+
+
+PROC_PHASES = frozenset(('unknown', 'visibility', 'population', 'task_list',
+    'identity_stat', 'identity_pid_namespace', 'identity_mount_namespace',
+    'process_presence', 'task_presence', 'fd_list', 'fd_metadata', 'observer_flags',
+    'maps', 'cwd', 'root', 'identity_parse', 'maps_parse', 'namespace_mismatch',
+    'population_stat_missing_present', 'population_pidns_missing_present',
+    'population_mntns_missing_present', 'population_identity_missing_present',
+    'population_pidns_missing_present_zombie_at_identity_read',
+    'population_mntns_missing_present_zombie_at_identity_read',
+    'population_tasks_missing_present', 'fd_missing_listed', 'fd_missing_listed_self', 'cwd_missing_with_refs',
+    'root_missing_with_refs', 'same_generation_metadata_missing', 'task_identity_missing_present'))
+PROC_ERRNOS = frozenset(('ENOENT', 'ESRCH', 'EACCES', 'EPERM', 'EIO', 'OTHER_OS',
+                        'INVALID_VALUE', 'INVALID_ENCODING'))
+
+
+def errno_bucket(error):
+    if isinstance(error, OSError):
+        for name in ('ENOENT', 'ESRCH', 'EACCES', 'EPERM', 'EIO'):
+            if error.errno == getattr(errno, name):
+                return name
+        return 'OTHER_OS'
+    if isinstance(error, UnicodeError):
+        return 'INVALID_ENCODING'
+    if isinstance(error, ValueError):
+        return 'INVALID_VALUE'
+    return None
+
+
+def proc_observation(phase, operation, *args, **kwargs):
+    # Bind only the current syscall/parse exception, never ambient last-error
+    # state. Rethrow the same object so existing ENOENT recovery stays intact.
+    try:
+        return operation(*args, **kwargs)
+    except (OSError, ValueError, UnicodeError) as error:
+        error._naver_proc_fault = dict(phase=phase, errno_bucket=errno_bucket(error))
+        raise
+
+
+def validate_proc_diagnostic(value):
+    if (type(value) is not dict or set(value) != {'phase', 'errno_bucket'} or
+            type(value['phase']) is not str or value['phase'] not in PROC_PHASES or
+            (value['errno_bucket'] is not None and
+             (type(value['errno_bucket']) is not str or value['errno_bucket'] not in PROC_ERRNOS))):
+        raise Refused('ARCHIVE_REFUSED')
+    return value
+
+
+def proc_fault(error):
+    value = getattr(error, '_naver_proc_fault', None)
+    if value is None:
+        value = dict(phase='unknown', errno_bucket=errno_bucket(error))
+    return dict(validate_proc_diagnostic(value))
+
+
+class ProcUnavailable(Refused):
+    def __init__(self, phase=None, error=None):
+        super().__init__('PROC_UNAVAILABLE')
+        value = proc_fault(error)
+        if phase is not None:
+            value['phase'] = phase
+        self.proc_diagnostic = validate_proc_diagnostic(value)
 
 
 def codec():
@@ -230,23 +293,24 @@ class Proc:
         return self.root / str(pid) / 'task' / str(tid) / name
 
     @staticmethod
-    def path_present(path):
+    def path_present(path, phase='process_presence'):
         try:
-            os.stat(path, follow_symlinks=False)
+            proc_observation(phase, os.stat, path, follow_symlinks=False)
             return True
         except (FileNotFoundError, ProcessLookupError):
             return False
 
     def read(self, pid, tid, name, limit):
-        fd = os.open(self.path(pid, tid, name), READ_FLAGS)
+        phase = 'identity_stat' if name == 'stat' else 'maps' if name == 'maps' else 'observer_flags'
+        fd = proc_observation(phase, os.open, self.path(pid, tid, name), READ_FLAGS)
         try:
-            raw = os.read(fd, limit + 1)
+            raw = proc_observation(phase, os.read, fd, limit + 1)
             if len(raw) > limit:
                 kind = 'maps_bytes' if name == 'maps' else 'stat_bytes' if name == 'stat' else 'fdinfo_bytes'
                 raise LimitRefused(kind, limit, len(raw))
             return raw
         finally:
-            os.close(fd)
+            proc_observation(phase, os.close, fd)
 
     def identity(self, pid, tid):
         raw = self.read(pid, tid, 'stat', 4096)
@@ -254,42 +318,57 @@ class Proc:
         fields = raw[end + 1:].split()
         if end < 0 or raw[:raw.find(b'(')].strip() != str(tid).encode() or len(fields) < 20:
             raise Refused('PROC_INVALID')
-        a = os.stat(self.path(pid, tid, 'ns/pid'))
-        b = os.stat(self.path(pid, tid, 'ns/mnt'))
-        return (int(fields[19]), int(fields[1]), a.st_dev, a.st_ino, b.st_dev, b.st_ino)
+        try:
+            a = proc_observation('identity_pid_namespace', os.stat, self.path(pid, tid, 'ns/pid'))
+            b = proc_observation('identity_mount_namespace', os.stat, self.path(pid, tid, 'ns/mnt'))
+        except (FileNotFoundError, ProcessLookupError) as error:
+            # Existing stat bytes only; this is not a non-use/skip condition.
+            error._naver_proc_zombie_at_identity_read = fields[0] == b'Z'
+            raise
+        return (proc_observation('identity_parse', int, fields[19]),
+                proc_observation('identity_parse', int, fields[1]), a.st_dev, a.st_ino, b.st_dev, b.st_ino)
 
     def population(self, budget):
         out = {}
-        for name in os.listdir(self.root):
+        for name in proc_observation('population', os.listdir, self.root):
             budget.check()
             if not name.isascii() or not name.isdigit():
                 continue
             pid = int(name)
             try:
-                for item in os.listdir(self.root / name / 'task'):
+                for item in proc_observation('task_list', os.listdir, self.root / name / 'task'):
                     budget.check()
                     if not item.isascii() or not item.isdigit():
                         raise Refused('PROC_INVALID')
                     tid = int(item)
                     try:
                         out[(pid, tid)] = self.identity(pid, tid)
-                    except (FileNotFoundError, ProcessLookupError):
+                    except (FileNotFoundError, ProcessLookupError) as error:
                         if self.present(pid, tid):
-                            raise Refused('PROC_UNAVAILABLE') from None
+                            phase = {'identity_stat': 'population_stat_missing_present',
+                                     'identity_pid_namespace': 'population_pidns_missing_present',
+                                     'identity_mount_namespace': 'population_mntns_missing_present'}.get(
+                                         proc_fault(error)['phase'], 'population_identity_missing_present')
+                            if getattr(error, '_naver_proc_zombie_at_identity_read', False) is True:
+                                phase = {'population_pidns_missing_present':
+                                    'population_pidns_missing_present_zombie_at_identity_read',
+                                    'population_mntns_missing_present':
+                                    'population_mntns_missing_present_zombie_at_identity_read'}.get(phase, phase)
+                            raise ProcUnavailable(phase, error) from None
                         continue
                     if len(out) > MAX_PROCESSES:
                         raise LimitRefused('task_population', MAX_PROCESSES, len(out))
-            except (FileNotFoundError, ProcessLookupError):
+            except (FileNotFoundError, ProcessLookupError) as error:
                 if self.path_present(self.root / name):
-                    raise Refused('PROC_UNAVAILABLE') from None
+                    raise ProcUnavailable('population_tasks_missing_present', error) from None
                 continue
         return out
 
     def present(self, pid, tid):
-        return self.path_present(self.root / str(pid) / 'task' / str(tid))
+        return self.path_present(self.root / str(pid) / 'task' / str(tid), phase='task_presence')
 
     def fds(self, pid, tid):
-        names = os.listdir(self.path(pid, tid, 'fd'))
+        names = proc_observation('fd_list', os.listdir, self.path(pid, tid, 'fd'))
         if len(names) > MAX_TABLE_FDS:
             raise LimitRefused('fd_table', MAX_TABLE_FDS, len(names))
         if any(not re.fullmatch(r'[0-9]{1,10}', n) for n in names):
@@ -297,7 +376,7 @@ class Proc:
         return set(int(name) for name in names)
 
     def fd_metadata(self, pid, tid, number):
-        info = os.stat(self.path(pid, tid, 'fd/' + str(number)))
+        info = proc_observation('fd_metadata', os.stat, self.path(pid, tid, 'fd/' + str(number)))
         return A.identity(info)
 
     def fd_flags(self, pid, tid, number):
@@ -305,7 +384,7 @@ class Proc:
         flags = re.findall(rb'^flags:\s*([0-7]+)\s*$', raw, re.M)
         if len(flags) != 1:
             raise Refused('PROC_INVALID')
-        return int(flags[0], 8)
+        return proc_observation('observer_flags', int, flags[0], 8)
 
     def fd(self, pid, tid, number):
         return self.fd_metadata(pid, tid, number), self.fd_flags(pid, tid, number)
@@ -314,15 +393,15 @@ class Proc:
         return self.read(pid, tid, 'maps', MAX_MAPS)
 
     def link(self, pid, tid, name):
-        info = os.stat(self.path(pid, tid, name))
+        info = proc_observation(name, os.stat, self.path(pid, tid, name))
         return info.st_dev, info.st_ino
 
     def visible(self):
         # Invoked by the fixed host-root SSH workflow, outside containers.
-        a = os.stat(self.root / 'self/ns/pid')
-        b = os.stat(self.root / '1/ns/pid')
+        a = proc_observation('visibility', os.stat, self.root / 'self/ns/pid')
+        b = proc_observation('visibility', os.stat, self.root / '1/ns/pid')
         if (a.st_dev, a.st_ino) != (b.st_dev, b.st_ino):
-            raise Refused('PROC_UNAVAILABLE')
+            raise ProcUnavailable('namespace_mismatch')
 
 
 def mapped_identities(raw):
@@ -387,9 +466,10 @@ def scan_references(targets, budget, *, observer_fds=(), proc=None):
                     # Access mode cannot excuse a source reference. Flags are
                     # needed only to confirm the exact pinned observer handle.
                     flags = proc.fd_flags(pid, tid, number)
-                except (FileNotFoundError, ProcessLookupError):
+                except (FileNotFoundError, ProcessLookupError) as error:
                     if number in proc.fds(pid, tid):
-                        raise Refused('PROC_UNAVAILABLE') from None
+                        phase = 'fd_missing_listed_self' if pid == os.getpid() else 'fd_missing_listed'
+                        raise ProcUnavailable(phase, error) from None
                     return
                 if expected != (metadata, flags):
                     raise Refused('SOURCE_IN_USE')
@@ -405,7 +485,7 @@ def scan_references(targets, budget, *, observer_fds=(), proc=None):
                 raise Refused('PROC_CHANGED')
             for _ in range(2):
                 budget.check()
-                refs = mapped_identities(proc.maps(pid, tid))
+                refs = proc_observation('maps_parse', mapped_identities, proc.maps(pid, tid))
                 result['map_observations'] += len(refs)
                 if targets & refs:
                     raise Refused('SOURCE_IN_USE')
@@ -413,22 +493,25 @@ def scan_references(targets, budget, *, observer_fds=(), proc=None):
                 try:
                     if proc.link(pid, tid, name) in targets:
                         raise Refused('SOURCE_IN_USE')
-                except (FileNotFoundError, ProcessLookupError):
+                except (FileNotFoundError, ProcessLookupError) as error:
                     # Kernel tasks can have no userspace root/cwd. A living
                     # userspace task with FDs/maps cannot use that exception.
                     if second or refs:
-                        raise Refused('PROC_UNAVAILABLE') from None
+                        phase = 'cwd_missing_with_refs' if name == 'cwd' else 'root_missing_with_refs'
+                        raise ProcUnavailable(phase, error) from None
             if proc.identity(pid, tid) != before:
                 raise Refused('PROC_CHANGED')
-        except (FileNotFoundError, ProcessLookupError):
+        except (FileNotFoundError, ProcessLookupError) as error:
             try:
                 after = proc.identity(pid, tid)
             except (FileNotFoundError, ProcessLookupError):
                 after = None
             if after is not None:
-                raise Refused('PROC_UNAVAILABLE' if after == before else 'PROC_CHANGED') from None
+                if after == before:
+                    raise ProcUnavailable('same_generation_metadata_missing', error) from None
+                raise Refused('PROC_CHANGED') from None
             if proc.present(pid, tid):
-                raise Refused('PROC_UNAVAILABLE') from None
+                raise ProcUnavailable('task_identity_missing_present', error) from None
             result['exited_generations'] += 1
 
     try:
@@ -447,8 +530,8 @@ def scan_references(targets, budget, *, observer_fds=(), proc=None):
             observe(person, generation)
         if any((*person, generation) not in seen for person, generation in proc.population(budget).items()):
             raise Refused('PROC_CHANGED')
-    except (OSError, ValueError, UnicodeError):
-        raise Refused('PROC_UNAVAILABLE') from None
+    except (OSError, ValueError, UnicodeError) as error:
+        raise ProcUnavailable(error=error) from None
     budget.check()
     result['process_generations'] = len(seen)
     return result
@@ -796,15 +879,15 @@ HASHES = ('plan_sha256', 'archive_manifest_sha256', 'protected_sha256')
 
 
 def receipt(mode):
-    return dict(version=2, scope=SCOPE, mode=mode if mode in ('diagnose', 'plan', 'apply') else 'invalid',
-                status='refused', reason='INTERNAL_ERROR', plan=None, limit_diagnostic=None,
+    return dict(version=3, scope=SCOPE, mode=mode if mode in ('diagnose', 'plan', 'apply') else 'invalid',
+                status='refused', reason='INTERNAL_ERROR', plan=None, limit_diagnostic=None, proc_diagnostic=None,
                 **{key: None for key in NUMBERS + HASHES}, **{key: False for key in FLAGS},
                 database_opened=False, services_changed=False, external_network_used=False)
 
 
 def validate_report(value):
     if (type(value) is not dict or set(value) != set(receipt('plan')) or
-            type(value['version']) is not int or value['version'] != 2 or value['scope'] != SCOPE or
+            type(value['version']) is not int or value['version'] != 3 or value['scope'] != SCOPE or
             value['mode'] not in ('diagnose', 'plan', 'apply', 'invalid') or
             value['status'] not in ('observed', 'planned', 'applied', 'refused') or value['reason'] not in REASONS):
         raise Refused('ARCHIVE_REFUSED')
@@ -819,6 +902,10 @@ def validate_report(value):
             raise Refused('ARCHIVE_REFUSED')
     if any(value[k] for k in ('database_opened', 'services_changed', 'external_network_used')):
         raise Refused('ARCHIVE_REFUSED')
+    if value['proc_diagnostic'] is not None:
+        validate_proc_diagnostic(value['proc_diagnostic'])
+        if value['reason'] != 'PROC_UNAVAILABLE' or value['status'] != 'refused':
+            raise Refused('ARCHIVE_REFUSED')
     if value['limit_diagnostic'] is not None:
         validate_limit_diagnostic(value['limit_diagnostic'])
         if value['reason'] != 'PROC_LIMIT' or value['status'] != 'refused':
@@ -974,6 +1061,8 @@ def execute(mode, plan_sha='', confirm='', plan_json='', *, runner=A.run, free=N
         result['reason'] = str(error) if str(error) in REASONS else 'INTERNAL_ERROR'
         if isinstance(error, LimitRefused):
             result['limit_diagnostic'] = error.diagnostic
+        if isinstance(error, ProcUnavailable):
+            result['proc_diagnostic'] = error.proc_diagnostic
     except Exception:
         result['reason'] = 'INTERNAL_ERROR'
     return validate_report(result)
