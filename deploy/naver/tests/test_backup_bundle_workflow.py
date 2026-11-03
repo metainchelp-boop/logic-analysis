@@ -50,7 +50,7 @@ class BundleWorkflowTests(unittest.TestCase):
                 self.assertNotIn(CANARY.encode(), result.stdout + result.stderr)
         self.assertIn('group: deploy-logic-analysis\n  cancel-in-progress: false', self.text)
         self.assertIn('contents: read', self.text)
-        self.assertIn('options: [diagnose, plan, apply]', self.text)
+        self.assertIn('options: [diagnose, plan, apply, inspect]', self.text)
         self.assertNotRegex(self.text, r'contents: write|workflow_run|schedule:|pull_request:')
         for action in re.findall(r'uses: ([^\n]+)', self.text):
             self.assertRegex(action, r'@[0-9a-f]{40}\Z')
@@ -61,6 +61,10 @@ class BundleWorkflowTests(unittest.TestCase):
                 ('plan', '', '', '', True),
                 ('diagnose', '', '', '', True),
                 ('apply', B.A.canonical(plan), B.hash_object(plan), B.CONFIRM, True),
+                ('inspect', B.A.canonical(plan), B.hash_object(plan), '', True),
+                ('inspect', B.A.canonical(plan), B.hash_object(plan), B.CONFIRM, False),
+                ('inspect', B.A.canonical(plan), '0' * 64, '', False),
+                ('inspect', '', '', '', False),
                 ('apply', B.A.canonical(plan), '0' * 64, B.CONFIRM, False),
                 ('plan', CANARY, '', '', False),
                 ('diagnose', CANARY, '', '', False),
@@ -104,6 +108,8 @@ class BundleWorkflowTests(unittest.TestCase):
             return accepted
 
     def test_exact_closed_output_and_source_hash_gate_before_public_result(self):
+        self.assertTrue(self.validate(B.A.canonical(B.inspect_receipt()).encode()))
+        self.assertFalse(self.validate(B.A.canonical(dict(B.inspect_receipt(), payload_verified=True)).encode()))
         raw = B.A.canonical(B.receipt('plan')).encode()
         self.assertTrue(self.validate(raw))
         self.assertFalse(self.validate(raw, rc='0'))

@@ -906,6 +906,8 @@ def receipt(mode):
 
 
 def validate_report(value):
+    if type(value) is dict and value.get('mode') == 'inspect':
+        return validate_inspect_report(value)
     if (type(value) is not dict or set(value) != set(receipt('plan')) or
             type(value['version']) is not int or value['version'] != 3 or value['scope'] != SCOPE or
             value['mode'] not in ('diagnose', 'plan', 'apply', 'invalid') or
@@ -1103,7 +1105,342 @@ def hard_deadline():
         signal.signal(signal.SIGALRM, old)
 
 
+# Separate metadata-only contract. Existing preservation receipts stay version 3.
+INSPECT_LAYOUT = {
+    'bundle': ('.manifest.pending', 'archive-manifest.json'),
+    'deployment': ('engine.db.gz', 'source-manifest.json', '.manifest.pending', 'archive-manifest.json'),
+    'snapshot': ('snapshot.sqlite.gz', '.manifest.pending', 'archive-manifest.json'),
+}
+INSPECT_SLOTS = {
+    folder + ':' + name: (folder, name)
+    for folder, names in INSPECT_LAYOUT.items() for name in names
+}
+INSPECT_REASONS = frozenset(('METADATA_READY', 'INPUT_REFUSED', 'PLAN_MISMATCH',
+    'NOT_ROOT', 'LOCKED', 'PATH_REFUSED', 'SOURCE_CHANGED', 'ENTRY_LIMIT',
+    'MANIFEST_LIMIT', 'SNAPSHOT_REFUSED', 'DOCKER_READ_FAILED', 'PROTECTED_CHANGED',
+    'TIME_LIMIT', 'INTERNAL_ERROR'))
+INSPECT_FALSE = ('payload_read', 'payload_verified', 'archive_mutated',
+                 'source_mutated', 'database_opened', 'services_changed', 'external_network_used')
+
+
+def inspect_file_receipt():
+    return dict(present=None, size=None, allocated_bytes=None, identity_sha256=None,
+                manifest_sha256=None, manifest_shape_valid=None,
+                manifest_plan_bound=None, payload_size_relation=None)
+
+
+def inspect_receipt():
+    return dict(version=1, scope=SCOPE, mode='inspect', status='refused',
+        reason='INTERNAL_ERROR', plan_sha256=None, protected_sha256=None,
+        protected_matches_plan=None, protected_unchanged=False,
+        free_before_bytes=None, free_after_bytes=None, total_allocated_bytes=None,
+        directories={k: dict(present=None, identity_sha256=None) for k in INSPECT_LAYOUT},
+        files={k: inspect_file_receipt() for k in INSPECT_SLOTS},
+        marker_pairs={k: 'unknown' for k in INSPECT_LAYOUT},
+        bundle_child_hashes_match=None, deployment_source_manifest_matches=None,
+        **{k: False for k in INSPECT_FALSE})
+
+
+def validate_inspect_report(value):
+    expected = inspect_receipt()
+    if (type(value) is not dict or set(value) != set(expected) or
+            type(value['version']) is not int or value['version'] != 1 or
+            value['scope'] != SCOPE or value['mode'] != 'inspect' or
+            value['status'] not in ('observed', 'refused') or value['reason'] not in INSPECT_REASONS):
+        raise Refused('ARCHIVE_REFUSED')
+    def maybe_bool(v):
+        return v is None or type(v) is bool
+    def maybe_number(v):
+        return v is None or (type(v) is int and 0 <= v < 2 ** 63)
+    def maybe_hash(v):
+        return v is None or (type(v) is str and A.SHA.fullmatch(v))
+    if (any(value[k] is not False for k in INSPECT_FALSE) or
+            type(value['protected_unchanged']) is not bool or
+            not all(maybe_bool(value[k]) for k in ('protected_matches_plan', 'bundle_child_hashes_match', 'deployment_source_manifest_matches')) or
+            not all(maybe_hash(value[k]) for k in ('plan_sha256', 'protected_sha256')) or
+            not all(maybe_number(value[k]) for k in ('free_before_bytes', 'free_after_bytes', 'total_allocated_bytes'))):
+        raise Refused('ARCHIVE_REFUSED')
+    for key in ('directories', 'marker_pairs', 'files'):
+        if type(value[key]) is not dict or set(value[key]) != set(expected[key]):
+            raise Refused('ARCHIVE_REFUSED')
+    for row in value['directories'].values():
+        if (type(row) is not dict or set(row) != {'present', 'identity_sha256'} or
+                not maybe_bool(row['present']) or not maybe_hash(row['identity_sha256']) or
+                (row['present'] is True) != (row['identity_sha256'] is not None)):
+            raise Refused('ARCHIVE_REFUSED')
+    for slot, row in value['files'].items():
+        if (type(row) is not dict or set(row) != set(inspect_file_receipt()) or
+                not all(maybe_bool(row[k]) for k in ('present', 'manifest_shape_valid', 'manifest_plan_bound')) or
+                not all(maybe_number(row[k]) for k in ('size', 'allocated_bytes')) or
+                not all(maybe_hash(row[k]) for k in ('identity_sha256', 'manifest_sha256')) or
+                row['payload_size_relation'] not in (None, 'short', 'equal', 'long') or
+                (row['present'] is True) != (row['identity_sha256'] is not None) or
+                (row['present'] is True and (row['size'] is None or row['allocated_bytes'] is None)) or
+                (row['present'] is not True and any(v is not None for k, v in row.items() if k != 'present')) or
+                (row['manifest_plan_bound'] is True and row['manifest_shape_valid'] is not True)):
+            raise Refused('ARCHIVE_REFUSED')
+        if row['present'] is True:
+            is_payload = INSPECT_SLOTS[slot][1].endswith('.gz')
+            if (is_payload and (any(row[k] is not None for k in
+                    ('manifest_sha256', 'manifest_shape_valid', 'manifest_plan_bound')) or
+                    row['payload_size_relation'] is None)) or (not is_payload and
+                    (row['payload_size_relation'] is not None or (value['status'] == 'observed' and
+                    any(row[k] is None for k in ('manifest_sha256', 'manifest_shape_valid', 'manifest_plan_bound'))))):
+                raise Refused('ARCHIVE_REFUSED')
+    if any(v not in ('unknown', 'absent', 'pending', 'published', 'link_window', 'conflict')
+           for v in value['marker_pairs'].values()):
+        raise Refused('ARCHIVE_REFUSED')
+    if value['status'] == 'observed' and (value['reason'] != 'METADATA_READY' or
+            not value['protected_unchanged'] or value['plan_sha256'] is None or
+            value['protected_sha256'] is None or value['protected_matches_plan'] is None or
+            value['free_before_bytes'] is None or value['free_after_bytes'] is None or value['total_allocated_bytes'] is None or
+            any(row['present'] is None for row in value['directories'].values()) or
+            any(row['present'] is None for row in value['files'].values()) or
+            'unknown' in value['marker_pairs'].values()):
+        raise Refused('ARCHIVE_REFUSED')
+    return value
+
+
+@contextlib.contextmanager
+def inspection_lock():
+    # An inspection never creates even a missing lock file.
+    with A.directory(A.LOCK_PARENT) as parent:
+        fd = os.open('lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != A.ROOT_UID or
+                    info.st_nlink != 1 or info.st_mode & 0o022):
+                raise Refused('PATH_REFUSED')
+            try:
+                A.fcntl.flock(fd, A.fcntl.LOCK_EX | A.fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise Refused('LOCKED') from None
+            yield
+        finally:
+            os.close(fd)
+
+
+def inspect_manifest(value, folder, name, plan):
+    """Return a schema/claim association only, never a payload verification."""
+    if name == 'source-manifest.json':
+        if type(value) is not dict or set(value) != {'engine.db'}:
+            raise ValueError('shape')
+        row = value['engine.db']
+        if (type(row) is not dict or set(row) != {'size', 'sha256'} or
+                type(row['size']) is not int or not 0 <= row['size'] <= A.MAX_SOURCE or
+                type(row['sha256']) is not str or not A.SHA.fullmatch(row['sha256'])):
+            raise ValueError('shape')
+        return row == {k: plan['files']['deployment'][k] for k in ('size', 'sha256')}
+    if folder == 'deployment':
+        A.validate_archive_plan(value, DEPLOYMENT_SCOPE)
+        if set(value['files']) != {'engine.db'}:
+            raise ValueError('shape')
+        row = {k: v for k, v in value['files']['engine.db'].items() if k != 'source'}
+        return (row == plan['files']['deployment'] and value['gzip'] == plan['codec'] and
+                hash_object(value['protected']) == plan['protected_sha256'])
+    if folder == 'snapshot':
+        validate_snapshot_archive(value)
+        return value['file'] == plan['files']['snapshot'] and value['codec'] == plan['codec']
+    keys = {'version', 'scope', 'plan', 'plan_sha256', 'deployment_archive_sha256', 'snapshot_archive_sha256'}
+    if (type(value) is not dict or set(value) != keys or type(value['version']) is not int or
+            value['version'] != 1 or value['scope'] != SCOPE or
+            any(type(value[k]) is not str or not A.SHA.fullmatch(value[k]) for k in
+                ('plan_sha256', 'deployment_archive_sha256', 'snapshot_archive_sha256'))):
+        raise ValueError('shape')
+    validate_plan(value['plan'])
+    if hash_object(value['plan']) != value['plan_sha256']:
+        raise ValueError('shape')
+    return value['plan'] == plan and value['plan_sha256'] == hash_object(plan)
+
+
+def inspect_execute(plan_sha, plan_json, *, runner=A.run, free=None, budget=None):
+    result = inspect_receipt()
+    budget = budget or A.Budget()
+    try:
+        try:
+            plan = parse_plan(plan_json, plan_sha)
+        except Refused as error:
+            raise Refused('PLAN_MISMATCH' if str(error) == 'PLAN_MISMATCH' else 'INPUT_REFUSED') from None
+        result['plan_sha256'] = plan_sha
+        budget.check()
+        protected = A.snapshot(runner)
+        result['protected_sha256'] = hash_object(protected)
+        result['protected_matches_plan'] = hash_object(protected) == plan['protected_sha256']
+        with A.directory(A.ARCHIVE_PARENT, True) as parent, contextlib.ExitStack() as stack:
+            parent_meta = A.identity(os.fstat(parent))
+            free = free or (lambda: A.free_bytes(parent))
+            result['free_before_bytes'] = free()
+            fds, dirs, entries, metadata, groups, seen = {}, {}, {}, {}, {}, set()
+            def names(fd, folder):
+                allowed = set(INSPECT_LAYOUT[folder]) | ({'deployment', 'snapshot'} if folder == 'bundle' else set())
+                out = set()
+                with os.scandir(fd) as iterator:
+                    for entry in iterator:
+                        budget.check()
+                        seen.add((folder, entry.name))
+                        if len(seen) > 16 or len(out) >= 16:
+                            raise Refused('ENTRY_LIMIT')
+                        if entry.name not in allowed:
+                            raise Refused('PATH_REFUSED')
+                        out.add(entry.name)
+                return out
+            def directory_at(container, name, folder):
+                try:
+                    info = os.stat(name, dir_fd=container, follow_symlinks=False)
+                except FileNotFoundError:
+                    result['directories'][folder]['present'] = False
+                    return
+                if (not stat.S_ISDIR(info.st_mode) or info.st_uid != A.ROOT_UID or
+                        info.st_gid != A.ROOT_GID or stat.S_IMODE(info.st_mode) != 0o700):
+                    raise Refused('PATH_REFUSED')
+                fd = os.open(name, DIR_FLAGS, dir_fd=container)
+                stack.callback(os.close, fd)
+                expected = A.identity(info)
+                A.same(fd, expected)
+                if expected['device'] != parent_meta['device']:
+                    raise Refused('PATH_REFUSED')
+                fds[folder], dirs[folder] = fd, (container, name, expected)
+                result['directories'][folder].update(present=True, identity_sha256=hash_object(expected))
+                entries[folder] = names(fd, folder)
+            directory_at(parent, ARCHIVE_NAME, 'bundle')
+            if 'bundle' in fds:
+                for folder in ('deployment', 'snapshot'):
+                    directory_at(fds['bundle'], folder, folder)
+            else:
+                for folder in ('deployment', 'snapshot'):
+                    result['directories'][folder]['present'] = False
+            if len({(row[2]['device'], row[2]['inode']) for row in dirs.values()}) != len(dirs):
+                raise Refused('PATH_REFUSED')
+            for slot, (folder, name) in INSPECT_SLOTS.items():
+                budget.check()
+                row = result['files'][slot]
+                if name not in entries.get(folder, set()):
+                    row['present'] = False
+                    continue
+                info = os.stat(name, dir_fd=fds[folder], follow_symlinks=False)
+                value = A.identity(info)
+                if (not stat.S_ISREG(info.st_mode) or value['uid'] != A.ROOT_UID or
+                        value['gid'] != A.ROOT_GID or value['mode'] != 0o600 or
+                        value['links'] not in (1, 2) or value['device'] != parent_meta['device'] or
+                        not 0 <= value['size'] <= A.MAX_ARCHIVE or
+                        not 0 <= value['allocated_bytes'] < 2 ** 63):
+                    raise Refused('PATH_REFUSED')
+                metadata[slot] = value
+                groups.setdefault((value['device'], value['inode']), []).append(slot)
+                row.update(present=True, size=value['size'], allocated_bytes=value['allocated_bytes'],
+                           identity_sha256=hash_object(value))
+                if name.endswith('.gz'):
+                    expected = plan['files'][folder]['gzip_size']
+                    row['payload_size_relation'] = 'short' if value['size'] < expected else 'long' if value['size'] > expected else 'equal'
+            for slots in groups.values():
+                value = metadata[slots[0]]
+                if len(slots) == 1 and value['links'] == 1:
+                    continue
+                pairs = {INSPECT_SLOTS[k] for k in slots}
+                folder = INSPECT_SLOTS[slots[0]][0]
+                if (value['links'] != 2 or pairs != {(folder, '.manifest.pending'), (folder, 'archive-manifest.json')} or
+                        any(metadata[k] != value for k in slots)):
+                    raise Refused('PATH_REFUSED')
+            parsed, cached, read_bytes = {}, {}, 0
+            for slot, value in metadata.items():
+                folder, name = INSPECT_SLOTS[slot]
+                if name.endswith('.gz'):
+                    continue
+                budget.check()
+                inode = value['device'], value['inode']
+                if value['size'] > 65536:
+                    raise Refused('MANIFEST_LIMIT')
+                if inode not in cached:
+                    fd = os.open(name, READ_FLAGS, dir_fd=fds[folder])
+                    try:
+                        A.same(fd, value)
+                        data = os.read(fd, 65537)
+                        if len(data) > 65536:
+                            raise Refused('MANIFEST_LIMIT')
+                        A.same(fd, value)
+                    finally:
+                        os.close(fd)
+                    read_bytes += len(data)
+                    if read_bytes > 7 * 65536:
+                        raise Refused('MANIFEST_LIMIT')
+                    cached[inode] = data
+                data = cached[inode]
+                row = result['files'][slot]
+                row['manifest_sha256'] = A.digest(data)
+                try:
+                    doc = A.strict_json(data)
+                    bound = inspect_manifest(doc, folder, name, plan)
+                    row.update(manifest_shape_valid=True, manifest_plan_bound=bound)
+                    parsed[slot] = doc
+                except (Refused, ValueError, TypeError, KeyError, OverflowError):
+                    row.update(manifest_shape_valid=False, manifest_plan_bound=False)
+            for folder in INSPECT_LAYOUT:
+                a, b = folder + ':.manifest.pending', folder + ':archive-manifest.json'
+                if a in metadata and b in metadata:
+                    state = 'link_window' if metadata[a] == metadata[b] else 'conflict'
+                else:
+                    state = 'pending' if a in metadata else 'published' if b in metadata else 'absent'
+                result['marker_pairs'][folder] = state
+            root_doc = parsed.get('bundle:archive-manifest.json') or parsed.get('bundle:.manifest.pending')
+            children = {k: 'archive-manifest.json' if k + ':archive-manifest.json' in parsed else '.manifest.pending'
+                        for k in ('deployment', 'snapshot')}
+            if root_doc is not None and all(k + ':' + n in parsed for k, n in children.items()):
+                result['bundle_child_hashes_match'] = all(root_doc[k + '_archive_sha256'] ==
+                    hash_object(parsed[k + ':' + n]) for k, n in children.items())
+            ddoc = parsed.get('deployment:archive-manifest.json') or parsed.get('deployment:.manifest.pending')
+            copied = result['files']['deployment:source-manifest.json']
+            if ddoc is not None and copied['manifest_sha256'] is not None:
+                result['deployment_source_manifest_matches'] = ddoc['source_manifest_sha256'] == copied['manifest_sha256']
+            # Recheck files before closing each directory over entries and its parent binding.
+            for slot, value in metadata.items():
+                folder, name = INSPECT_SLOTS[slot]
+                if A.identity(os.stat(name, dir_fd=fds[folder], follow_symlinks=False)) != value:
+                    raise Refused('SOURCE_CHANGED')
+            for folder, (container, name, value) in dirs.items():
+                if names(fds[folder], folder) != entries[folder]:
+                    raise Refused('SOURCE_CHANGED')
+                A.same(fds[folder], value)
+                if A.identity(os.stat(name, dir_fd=container, follow_symlinks=False)) != value:
+                    raise Refused('SOURCE_CHANGED')
+            A.same(parent, parent_meta)
+            result['total_allocated_bytes'] = sum(v[2]['allocated_bytes'] for v in dirs.values()) + sum(metadata[v[0]]['allocated_bytes'] for v in groups.values())
+            budget.check()
+            result['protected_unchanged'] = A.snapshot(runner) == protected
+            if not result['protected_unchanged']:
+                raise Refused('PROTECTED_CHANGED')
+            result['free_after_bytes'] = free()
+            result.update(status='observed', reason='METADATA_READY')
+    except Refused as error:
+        result['reason'] = str(error) if str(error) in INSPECT_REASONS else 'INTERNAL_ERROR'
+    except OSError:
+        result['reason'] = 'PATH_REFUSED'
+    except Exception:
+        result['reason'] = 'INTERNAL_ERROR'
+    return validate_inspect_report(result)
+
+
+def inspect_main(args):
+    result = inspect_receipt()
+    try:
+        if len(args) != 4 or args[0] != 'inspect' or args[2]:
+            raise Refused('INPUT_REFUSED')
+        if os.geteuid() != A.ROOT_UID:
+            raise Refused('NOT_ROOT')
+        with hard_deadline(), inspection_lock():
+            result = inspect_execute(args[1], args[3])
+    except Refused as error:
+        result['reason'] = str(error) if str(error) in INSPECT_REASONS else 'INTERNAL_ERROR'
+    except OSError:
+        result['reason'] = 'PATH_REFUSED'
+    except Exception:
+        result['reason'] = 'INTERNAL_ERROR'
+    print(A.canonical(validate_inspect_report(result)))
+    return 0 if result['status'] == 'observed' else 2
+
+
 def main(args):
+    if args and args[0] == 'inspect':
+        return inspect_main(args)
     result = receipt(args[0] if args else 'invalid')
     try:
         if len(args) != 4:

@@ -203,3 +203,46 @@ RO/RW/O_PATH and unlinked handles, a same-PID thread with a genuinely unshared
 FD table, reuse around the probe, broken pinned slots, flags failures, changed
 generations and the unchanged total-FD cap. Native Linux cases are required on
 Linux; they are explicitly skipped on other operating systems.
+
+
+## Interrupted bundle metadata inspection
+
+The fixed `inspect` mode observes only the already selected bundle after an
+interrupted APPLY. It accepts the same closed plan JSON and SHA, and no confirm
+or caller path. Its separate version-1 receipt does not change the existing
+version-3 diagnose/plan/apply contract. The existing 600-second deadline, global
+lock, 512 MiB reserve and 5 GiB preservation floor are unchanged. Inspection
+opens the existing lock read-only without creating it and takes an exclusive
+nonblocking flock. It does not run host reference scans because it never reads
+backup payloads, writes an archive or removes an original.
+
+Only the fixed bundle, deployment and snapshot directories and nine fixed file
+slots are traversed, with a shared sixteen-distinct-entry bound including final rechecks. Every ancestor and child
+is pinned without following symlinks. Regular payloads are statted, never opened.
+Only the seven possible JSON manifest names can be opened, at most 64 KiB each
+and 448 KiB total. Same-inode JSON is read once. The sole allowed multi-link case
+is a same-directory `.manifest.pending`/`archive-manifest.json` pair with exactly
+two links; this is the existing link-then-unlink publication window. Other aliases
+or links are refused. Fixed directory entries, parent bindings and complete file
+identities are checked again after observation. Docker protected state is checked
+before and after; incomplete observations never become a successful result.
+
+The closed result exposes presence, sizes, allocated bytes, identity/content
+hashes and manifest shape/plan-claim checks, never raw content, dynamic paths,
+process identifiers or exception messages. Gzip length equality is only a size
+comparison. A well-formed plan-bound manifest is a claim about payload hashes,
+not a fresh payload verification. Child plan association covers the measured
+values/codec and deployment protected-state claim; it cannot reconstruct the
+whole original source-identity hash or attest current originals. The root plan
+claim and copied source-manifest hash are checked separately; the fixed
+`bundle_child_hashes_match` field compares only manifest claims. `payload_verified` and all mutation flags stay
+false, including when a published marker exists. Directory/file allocation is
+counted once per inode. A malformed/truncated JSON is reported as such without
+printing it. No inspection result authorizes recovery, cleanup or a retry.
+
+Regression coverage includes partial and published fixtures, the publication
+link window, cross-role aliases, wrong owners/modes/symlinks, unknown entries,
+manifest limits and races, exact source/plan association, failure output closure,
+read-only lock behavior, protected-state failure, and spies that reject payload
+opens, compression, publication, source writes or removal. Existing bundle and
+single-backup suites remain required; actual operating state remains separate.
