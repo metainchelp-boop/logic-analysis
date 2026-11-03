@@ -36,3 +36,20 @@ symlink/special/name/mode/ownership refusal, caps, concurrent changes and no fil
 content reads. Test workflow guards, hash-bound helper and closed receipt, public
 output canaries, exact CI and secrets. Source-only owner branch/PR is authorized;
 merge and actual observation remain the coordinating agent's next decision.
+
+## Python 3.10 timestamp compatibility
+
+The initial observation refused before health or backup metadata was observed.
+An isolated Python 3.10 reproduction confirmed that the previous parser rejected
+Docker timestamps with 1/2/4/5/7/8/9 fractional digits, including nanoseconds;
+the existing cold-backup snapshot accepts these. No raw operating timestamp was
+retained, so this is a confirmed compatibility defect, not proof of the sole live
+failure cause.
+
+Keep the existing strict timestamp grammar and calendar/timezone validation.
+Only the temporary parsing copy pads or truncates its fraction to six digits;
+return the original string unchanged. Thus timestamps differing below one
+microsecond remain different protected identities. No observation, policy,
+permission, output field, command or retry scope is added. Verify all supported
+precisions, invalid dates/timezones and old/new snapshot equality on Python 3.10
+and 3.12 before the coordinating agent considers another observation.
