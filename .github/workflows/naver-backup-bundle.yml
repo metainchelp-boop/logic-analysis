@@ -4,17 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '고정 metadata DIAGNOSE, 두 원본 PLAN 또는 검증 후 APPLY'
+        description: '고정 DIAGNOSE/PLAN/APPLY 또는 중단 묶음 INSPECT'
         type: choice
-        options: [diagnose, plan, apply]
+        options: [diagnose, plan, apply, inspect]
         default: plan
         required: true
       plan_sha256:
-        description: 'APPLY 전용 PLAN SHA-256'
+        description: 'APPLY·INSPECT용 PLAN SHA-256'
         type: string
         default: ''
       plan_json:
-        description: 'APPLY 전용 직전 결과의 고정 closed plan JSON'
+        description: 'APPLY·INSPECT용 직전 결과의 고정 closed plan JSON'
         type: string
         default: ''
       confirm:
@@ -74,8 +74,8 @@ jobs:
           if mode in ('diagnose','plan'):
               assert not sha and not raw and not confirm
               encoded=''
-          elif mode=='apply':
-              assert confirm==m.CONFIRM
+          elif mode in ('apply','inspect'):
+              assert confirm==(m.CONFIRM if mode=='apply' else '')
               plan=m.parse_plan(raw,sha)
               encoded=base64.b64encode(m.A.canonical(plan).encode()).decode()
           else:
