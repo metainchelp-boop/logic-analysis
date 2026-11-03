@@ -161,7 +161,8 @@ FD also distinguishes the helper's own PID using `os.getpid()`; no identifier is
 published and no extra /proc read is made. An isolated native Linux scan exposed
 both an unreaped-child namespace refusal and a self-FD listing refusal: the
 listing can include its temporary directory FD, which closes and reappears at
-the same slot on the next listing. Both remain refusals. Neither local example
+the same slot on the next listing. In the diagnostic-only version both remain
+refusals. Neither local example
 establishes the first unavailable observation on the operating host.
 
 ## Closed current-task listing descriptor
