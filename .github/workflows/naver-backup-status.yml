@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: 읽기 진단 도구 합성 검사
-        run: python -I -B -m unittest discover -s deploy/naver/tests -p 'test_backup_status*.py' -v
+        run: python -I -B -m unittest discover -s deploy/naver/tests -p 'test_backup_*.py' -v
       - name: 검사한 helper 한 파일 준비
         run: |
           set -euo pipefail

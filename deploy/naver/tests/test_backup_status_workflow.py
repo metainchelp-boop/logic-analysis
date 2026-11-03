@@ -79,6 +79,28 @@ class WorkflowTest(unittest.TestCase):
         self.assertLess(self.invoke.index('ns["validate_report"](value)'),self.invoke.index("printf 'NAVER_BACKUP_STATUS_RESULT="))
         self.assertEqual(self.invoke.count("printf 'NAVER_BACKUP_STATUS_RESULT="),1)
 
+    def test_versioned_metadata_validator_preserves_unknown_archive_and_rejects_leaks(self):
+        with tempfile.TemporaryDirectory(prefix='nbmeta-',dir=Path.home()) as directory:
+            root=Path(directory);root.chmod(0o700)
+            (root/'local').mkdir(mode=0o700)
+            building=root/'local'/'.building-abc123__';building.mkdir(mode=0o700)
+            (building/'snapshot.sqlite').write_bytes(CANARY.encode())
+            with patch.multiple(B,BACKUP_ROOT=str(root),ENGINE_UID=os.getuid()):
+                local=B.summarize_folder('local','zip')
+            self.assertEqual(local['reason'],'UNEXPECTED_ENTRY')
+            self.assertIsNone(local['logical_bytes'])
+            self.assertEqual(local['metadata']['status'],'observed')
+            v=B.receipt();v['local']=local
+            raw=json.dumps(v).encode()
+            self.assertLess(len(raw),32768);self.assertNotIn(CANARY.encode(),raw)
+            self.assertTrue(self.validate_output(raw))
+            self.assertEqual(v['version'],2);self.assertEqual(v['scope'],'naver-backup-status-v2')
+            v['version']=1
+            self.assertFalse(self.validate_output(json.dumps(v).encode()))
+            v['version']=2;v['local']['metadata']['raw_name']=CANARY
+            self.assertFalse(self.validate_output(json.dumps(v).encode()))
+        self.assertIn("-p 'test_backup_*.py'",self.text)
+
     def test_cleanup_only_temporary_helper_and_empty_directory(self):
         clean=self.blocks[-1]
         self.assertNotIn('/var/backups',self.text);self.assertNotRegex(self.text,r'rm\s+-rf')

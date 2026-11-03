@@ -19,8 +19,9 @@ logical/allocated bytes and oldest/newest filename KST day; filenames, UUIDs,
 paths and raw values are not included in the result. The filename date is not a
 verified archive manifest date. Reject symlinks/special files and mark unknown
 entries, active building directories or concurrent changes incomplete. Bound
-entries at 4096 per folder and share one 10-second metadata deadline across both
-folders together. No recursive scan.
+entries at 4096 shared across both folders and any permitted immediate building
+children, and share one 10-second metadata deadline across both folders together.
+Only the one-level building observation described below is permitted.
 
 Protect the existing container/image identity baseline before and after the
 observation. Reuse the same owner/main/first-attempt/host-pin/global concurrency
@@ -53,3 +54,52 @@ microsecond remain different protected identities. No observation, policy,
 permission, output field, command or retry scope is added. Verify all supported
 precisions, invalid dates/timezones and old/new snapshot equality on Python 3.10
 and 3.12 before the coordinating agent considers another observation.
+
+## Version 2: unexpected-entry metadata
+
+The existing archive aggregate stays strict: an unexpected root item still makes
+the count, logical/allocated bytes and filename dates unknown. The separate
+`metadata` object does not certify an item as a backup. Its closed root buckets
+classify archive-shaped regular files, producer-shaped building directories,
+other regular files/directories, symlinks and special entries. Archive-shaped
+means the existing name grammar, not a correct extension, valid date or verified
+manifest. Archive eligibility violation counters are independent and may overlap:
+name, extension, type, owner, mode, links, size and date. Directory owner/mode
+violations here compare against the archive-file contract, not a directory policy.
+Invalid numeric size/allocation makes the entire diagnostic incomplete, because
+no numeric aggregate can be trusted in that case.
+
+Only real `.building-[a-z0-9_]{8}` directories owned by engine UID 10001 with exact
+0700 permissions can be opened. Use `O_DIRECTORY|O_NOFOLLOW`, pin the descriptor
+identity and inspect its immediate children by nofollow stat. Child buckets name
+only fixed producer categories (snapshot, packed, encrypted), other regular
+files, directories, symlinks and special entries. Never open a regular file or
+descend a nested/unrecognized directory. Count unscanned directories and keep
+their subtree bytes null when any exist; zero means no such directories were
+encountered, not that symlink targets or filesystem overhead were measured.
+
+Each bucket reports entry count, regular-file logical bytes and inode-allocated
+bytes. Deduplicate `(device,inode)` within each folder across root and child
+items, attributing an inode to its first sorted root name and then sorted
+building/child name. Count duplicate appearances separately; root and child
+bucket amounts are additive within one folder, not a guaranteed reclaim amount.
+Folder inode allocation is not subtree allocation. Hard links outside the
+observed folder, shared/reflink extents and symlink target contents are unmeasured.
+No directory is labelled orphaned, inactive, safe to delete or safe to restore.
+
+Only producer-shaped root directory mtimes have closed oldest/newest UTC fields.
+They use the already captured stat values and retain full nanosecond identity
+in the internal race check; displayed times have microsecond precision. Mtime is
+not a creation time, process-liveness signal or reliable completion timestamp.
+No raw paths, filenames, UUIDs, UIDs, permission strings or file contents escape.
+
+One shared budget covers local and outgoing together: 4096 root/child entries,
+16 opened building directories, and 10 seconds. Recheck all observed entry and
+directory identities. Changes, caps or stat/open failures leave all diagnostic
+numbers unknown with a closed reason; no partial numeric estimate is emitted.
+An observed diagnostic describes only this bounded metadata view. It cannot
+upgrade an incomplete archive summary, nor prove a backup upload or restoration.
+Keep the exact hash-bound helper, closed receipt validator, container/image
+protection, global lock and existing owner/main/host guard. The receipt version
+and scope change to 2 and `naver-backup-status-v2`; the workflow adds the new
+contract module to its focused checks without changing its operating actions.

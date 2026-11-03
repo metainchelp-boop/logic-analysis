@@ -12,12 +12,13 @@ import subprocess
 import sys
 import time
 
-SCOPE = 'naver-backup-status-v1'
+SCOPE = 'naver-backup-status-v2'
 BACKUP_ROOT = '/var/backups/metainc/naver-engine'
 SOCKET_PATH = '/run/metainc/naver-engine/engine.sock'
 LOCK_PATH = '/var/lib/metainc/naver-deploy/lock'
 ENGINE_UID = 10001
 MAX_ENTRIES = 4096
+MAX_BUILDING_DIRECTORIES = 16
 MAX_BODY = 65536
 METADATA_SECONDS = 10
 HEALTH_SECONDS = 3
@@ -25,10 +26,16 @@ DOCKER = ('/usr/bin/docker', '--host=unix:///var/run/docker.sock')
 ID = re.compile(r'[0-9a-f]{64}\Z')
 IMAGE = re.compile(r'sha256:[0-9a-f]{64}\Z')
 NAME = re.compile(r'naver-([0-9]{8}T[0-9]{6}Z)-[0-9a-f]{32}\.(zip|cms)\Z')
+BUILDING = re.compile(r'\.building-[a-z0-9_]{8}\Z')
+ROOT_BUCKETS = ('archive_regular', 'building_directory', 'other_regular',
+                'other_directory', 'symlink', 'special')
+CHILD_BUCKETS = ('snapshot_regular', 'packed_regular', 'encrypted_regular',
+                 'other_regular', 'directory', 'symlink', 'special')
+VIOLATIONS = ('name', 'extension', 'type', 'owner', 'mode', 'links', 'size', 'date')
 CODES = frozenset(('NEVER', 'IN_PROGRESS', 'LOCAL_FAILED', 'ENCRYPTION_FAILED', 'READY',
                   'LOCAL_READY', 'UPLOAD_FAILED', 'OFFSITE_OK', 'RETENTION_FAILED'))
 REASONS = frozenset(('OK', 'MISSING', 'UNAVAILABLE', 'INVALID', 'TIME_LIMIT', 'ENTRY_LIMIT',
-                     'UNEXPECTED_ENTRY', 'CHANGED', 'MOUNT_REFUSED', 'PROTECTED_CHANGED',
+                     'UNEXPECTED_ENTRY', 'BUILDING_LIMIT', 'CHANGED', 'MOUNT_REFUSED', 'PROTECTED_CHANGED',
                      'LOCKED', 'PATH_REFUSED', 'NOT_ROOT', 'INPUT_REFUSED', 'INTERNAL_ERROR'))
 SNAP_FORMAT = ('{"id":{{json .Id}},"image":{{json .Image}},"running":{{json .State.Running}},'
                '"pid":{{json .State.Pid}},"started":{{json .State.StartedAt}},'
@@ -201,65 +208,199 @@ def read_health():
             connection.close()
 
 
-def empty_folder(reason):
+def empty_metadata(reason):
+    return dict(status='incomplete', reason=reason, root_entries=None, child_entries=None,
+                root_buckets=None, child_buckets=None, archive_violations=None,
+                building_directories_scanned=None, unscanned_directory_count=None,
+                unscanned_subtree_bytes=None, duplicate_inode_count=None,
+                building_oldest_mtime_utc=None, building_newest_mtime_utc=None)
+
+
+def empty_folder(reason, metadata=None):
     return dict(status='incomplete', reason=reason, file_count=None, logical_bytes=None,
-                allocated_bytes=None, oldest_filename_kst_day=None, newest_filename_kst_day=None)
+                allocated_bytes=None, oldest_filename_kst_day=None, newest_filename_kst_day=None,
+                metadata=empty_metadata(reason) if metadata is None else metadata)
 
 
-def summarize_folder(folder, extension, *, monotonic=time.monotonic):
-    started = monotonic()
-    def check_time():
-        if monotonic() - started >= METADATA_SECONDS:
+class MetadataBudget:
+    """One work bound for both folders and their immediate building children."""
+    def __init__(self, monotonic=time.monotonic):
+        self.monotonic = monotonic
+        self.started = monotonic()
+        self.entries = 0
+        self.buildings = 0
+
+    def check(self):
+        if self.monotonic() - self.started >= METADATA_SECONDS:
             raise Refused('TIME_LIMIT')
+
+    def entry(self):
+        self.check()
+        if self.entries >= MAX_ENTRIES:
+            raise Refused('ENTRY_LIMIT')
+        self.entries += 1
+
+    def building(self):
+        self.check()
+        if self.buildings >= MAX_BUILDING_DIRECTORIES:
+            raise Refused('BUILDING_LIMIT')
+        self.buildings += 1
+
+
+def bucket_rows(names):
+    return {name: dict(entries=0, regular_logical_bytes=0, inode_allocated_bytes=0)
+            for name in names}
+
+
+def entry_bucket(name, info, *, child=False):
+    if stat.S_ISREG(info.st_mode):
+        if child:
+            return {'snapshot.sqlite': 'snapshot_regular', 'packed.zip': 'packed_regular',
+                    'encrypted.cms': 'encrypted_regular'}.get(name, 'other_regular')
+        return 'archive_regular' if NAME.fullmatch(name) else 'other_regular'
+    if stat.S_ISDIR(info.st_mode):
+        return 'directory' if child else ('building_directory' if BUILDING.fullmatch(name) else 'other_directory')
+    return 'symlink' if stat.S_ISLNK(info.st_mode) else 'special'
+
+
+def summarize_folder(folder, extension, *, monotonic=time.monotonic, budget=None):
+    budget = MetadataBudget(monotonic) if budget is None else budget
     try:
-        with directory(BACKUP_ROOT) as parent:
+        with directory(BACKUP_ROOT) as parent, contextlib.ExitStack() as opened:
             info = os.fstat(parent)
             if info.st_uid != ENGINE_UID or stat.S_IMODE(info.st_mode) != 0o700:
                 raise Refused('PATH_REFUSED')
             fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
-            try:
-                before = os.fstat(fd)
-                if before.st_uid != ENGINE_UID or stat.S_IMODE(before.st_mode) != 0o700:
-                    raise Refused('PATH_REFUSED')
-                entries = []
-                with os.scandir(fd) as rows:
-                    for row in rows:
-                        check_time()
-                        if len(entries) >= MAX_ENTRIES:
-                            raise Refused('ENTRY_LIMIT')
-                        match = NAME.fullmatch(row.name)
-                        if match is None or match[2] != extension:
-                            raise Refused('UNEXPECTED_ENTRY')
-                        day = dt.datetime.strptime(match[1], '%Y%m%dT%H%M%SZ').replace(tzinfo=dt.timezone.utc)
-                        day = day.astimezone(dt.timezone(dt.timedelta(hours=9))).date().isoformat()
-                        item = os.stat(row.name, dir_fd=fd, follow_symlinks=False)
-                        if (not stat.S_ISREG(item.st_mode) or item.st_uid != ENGINE_UID or
-                                item.st_nlink != 1 or stat.S_IMODE(item.st_mode) != 0o600 or
-                                not 0 <= item.st_size < 2 ** 63 or not 0 <= item.st_blocks * 512 < 2 ** 63):
-                            raise Refused('UNEXPECTED_ENTRY')
-                        entries.append((row.name, identity(item), day, item.st_size, item.st_blocks * 512))
-                for name, expected, *_ in entries:
-                    check_time()
-                    if identity(os.stat(name, dir_fd=fd, follow_symlinks=False)) != expected:
-                        raise Refused('CHANGED')
-                if (identity(before) != identity(os.fstat(fd)) or
-                        identity(before) != identity(os.stat(folder, dir_fd=parent, follow_symlinks=False)) or
-                        identity(info) != identity(os.fstat(parent))):
+            opened.callback(os.close, fd)
+            before = os.fstat(fd)
+            if before.st_uid != ENGINE_UID or stat.S_IMODE(before.st_mode) != 0o700:
+                raise Refused('PATH_REFUSED')
+            metadata = dict(status='observed', reason='OK', root_entries=0, child_entries=0,
+                root_buckets=bucket_rows(ROOT_BUCKETS), child_buckets=bucket_rows(CHILD_BUCKETS),
+                archive_violations=dict.fromkeys(VIOLATIONS, 0), building_directories_scanned=0,
+                unscanned_directory_count=0, unscanned_subtree_bytes=0, duplicate_inode_count=0,
+                building_oldest_mtime_utc=None, building_newest_mtime_utc=None)
+            seen, checks, buildings, archives = set(), [], [], []
+            building_descriptors = []
+            building_mtimes = []
+            archive_reason = None
+
+            def rows(directory_fd):
+                names = []
+                with os.scandir(directory_fd) as entries:
+                    for entry in entries:
+                        budget.entry()
+                        names.append(entry.name)
+                return sorted(names)
+
+            def observe(name, directory_fd, *, child=False):
+                budget.check()
+                item = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                checks.append((directory_fd, name, identity(item)))
+                if not 0 <= item.st_size < 2 ** 63 or not 0 <= item.st_blocks * 512 < 2 ** 63:
+                    raise Refused('INVALID' if child else 'UNEXPECTED_ENTRY')
+                kind = entry_bucket(name, item, child=child)
+                bucket = metadata['child_buckets' if child else 'root_buckets'][kind]
+                metadata['child_entries' if child else 'root_entries'] += 1
+                bucket['entries'] += 1
+                inode = (item.st_dev, item.st_ino)
+                if inode in seen:
+                    metadata['duplicate_inode_count'] += 1
+                else:
+                    seen.add(inode)
+                    bucket['inode_allocated_bytes'] += item.st_blocks * 512
+                    if stat.S_ISREG(item.st_mode):
+                        bucket['regular_logical_bytes'] += item.st_size
+                return item
+
+            # Deterministic first-inode attribution: sorted root entries, then
+            # sorted immediate children of sorted eligible building directories.
+            for name in rows(fd):
+                item = observe(name, fd)
+                match = NAME.fullmatch(name)
+                violations = dict(name=match is None, extension=match is not None and match[2] != extension,
+                    type=not stat.S_ISREG(item.st_mode), owner=item.st_uid != ENGINE_UID,
+                    mode=stat.S_IMODE(item.st_mode) != 0o600, links=item.st_nlink != 1,
+                    size=not 0 <= item.st_size < 2 ** 63 or not 0 <= item.st_blocks * 512 < 2 ** 63,
+                    date=False)
+                day = None
+                if match is not None:
+                    try:
+                        instant = dt.datetime.strptime(match[1], '%Y%m%dT%H%M%SZ').replace(tzinfo=dt.timezone.utc)
+                        day = instant.astimezone(dt.timezone(dt.timedelta(hours=9))).date().isoformat()
+                    except ValueError:
+                        violations['date'] = True
+                for key, failed in violations.items():
+                    metadata['archive_violations'][key] += int(failed)
+                if any(violations.values()):
+                    # Keep the original archive-only eligibility and null totals.
+                    if archive_reason is None:
+                        archive_reason = ('UNAVAILABLE' if match is not None and match[2] == extension
+                                          and violations['date'] else 'UNEXPECTED_ENTRY')
+                else:
+                    archives.append((day, item.st_size, item.st_blocks * 512))
+                if stat.S_ISDIR(item.st_mode):
+                    if BUILDING.fullmatch(name):
+                        seconds, nanos = divmod(item.st_mtime_ns, 10 ** 9)
+                        building_mtimes.append(dt.datetime.fromtimestamp(seconds, dt.timezone.utc)
+                                               + dt.timedelta(microseconds=nanos // 1000))
+                    if BUILDING.fullmatch(name) and item.st_uid == ENGINE_UID and stat.S_IMODE(item.st_mode) == 0o700:
+                        buildings.append((name, identity(item)))
+                    else:
+                        metadata['unscanned_directory_count'] += 1
+
+            for name, expected in buildings:
+                budget.building()
+                child_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+                opened.callback(os.close, child_fd)
+                if identity(os.fstat(child_fd)) != expected:
                     raise Refused('CHANGED')
-                sizes, allocated = sum(x[3] for x in entries), sum(x[4] for x in entries)
-                if max(sizes, allocated) >= 2 ** 63:
-                    raise Refused('INVALID')
-                days = [x[2] for x in entries]
-                return dict(status='observed', reason='OK', file_count=len(entries), logical_bytes=sizes,
-                            allocated_bytes=allocated, oldest_filename_kst_day=min(days) if days else None,
-                            newest_filename_kst_day=max(days) if days else None)
-            finally:
-                os.close(fd)
+                building_descriptors.append((child_fd, name, expected))
+                metadata['building_directories_scanned'] += 1
+                for child_name in rows(child_fd):
+                    child = observe(child_name, child_fd, child=True)
+                    if stat.S_ISDIR(child.st_mode):
+                        metadata['unscanned_directory_count'] += 1
+                # The final root-entry recheck also checks the directory identity;
+                # fstat binds it to the opened descriptor rather than only a name.
+                if identity(os.fstat(child_fd)) != expected:
+                    raise Refused('CHANGED')
+            for directory_fd, name, expected in checks:
+                budget.check()
+                if identity(os.stat(name, dir_fd=directory_fd, follow_symlinks=False)) != expected:
+                    raise Refused('CHANGED')
+            for child_fd, name, expected in building_descriptors:
+                budget.check()
+                if (identity(os.fstat(child_fd)) != expected or
+                        identity(os.stat(name, dir_fd=fd, follow_symlinks=False)) != expected):
+                    raise Refused('CHANGED')
+            budget.check()
+            if (identity(before) != identity(os.fstat(fd)) or
+                    identity(before) != identity(os.stat(folder, dir_fd=parent, follow_symlinks=False)) or
+                    identity(info) != identity(os.fstat(parent))):
+                raise Refused('CHANGED')
+            if any(sum(row[key] for buckets in (metadata['root_buckets'], metadata['child_buckets'])
+                       for row in buckets.values()) >= 2 ** 63
+                   for key in ('regular_logical_bytes', 'inode_allocated_bytes')):
+                raise Refused('INVALID')
+            metadata['unscanned_subtree_bytes'] = None if metadata['unscanned_directory_count'] else 0
+            if building_mtimes:
+                metadata['building_oldest_mtime_utc'] = min(building_mtimes).isoformat()
+                metadata['building_newest_mtime_utc'] = max(building_mtimes).isoformat()
+            if archive_reason is not None:
+                return empty_folder(archive_reason, metadata)
+            sizes, allocated = sum(x[1] for x in archives), sum(x[2] for x in archives)
+            if max(sizes, allocated) >= 2 ** 63:
+                raise Refused('INVALID')
+            days = [x[0] for x in archives]
+            return dict(status='observed', reason='OK', file_count=len(archives), logical_bytes=sizes,
+                        allocated_bytes=allocated, oldest_filename_kst_day=min(days) if days else None,
+                        newest_filename_kst_day=max(days) if days else None, metadata=metadata)
     except FileNotFoundError:
         return empty_folder('MISSING')
     except Refused as error:
         return empty_folder(str(error))
-    except (OSError, ValueError):
+    except (OSError, ValueError, OverflowError):
         return empty_folder('UNAVAILABLE')
 
 
@@ -324,7 +465,7 @@ def verify_mounts(protected, runner):
 
 
 def receipt():
-    return dict(version=1, scope=SCOPE, status='unavailable', reason='INTERNAL_ERROR',
+    return dict(version=2, scope=SCOPE, status='unavailable', reason='INTERNAL_ERROR',
                 observed_at=None, health=empty_health('UNAVAILABLE'), local=empty_folder('UNAVAILABLE'),
                 outgoing=empty_folder('UNAVAILABLE'), protected_unchanged=None,
                 containers=None, images=None, database_opened=False, file_contents_read=False,
@@ -341,8 +482,9 @@ def execute(runner=run):
         value['health'] = read_health()
         try:
             with deadline(METADATA_SECONDS):
-                value['local'] = summarize_folder('local', 'zip')
-                value['outgoing'] = summarize_folder('outgoing', 'cms')
+                budget = MetadataBudget()
+                value['local'] = summarize_folder('local', 'zip', budget=budget)
+                value['outgoing'] = summarize_folder('outgoing', 'cms', budget=budget)
         except DeadlineExpired:
             for key in ('local', 'outgoing'):
                 if value[key]['status'] != 'observed':
@@ -359,8 +501,70 @@ def execute(runner=run):
     return validate_report(value)
 
 
+def validate_metadata(value):
+    if (type(value) is not dict or set(value) != set(empty_metadata('OK')) or
+            value['status'] not in ('observed', 'incomplete') or value['reason'] not in REASONS):
+        raise Refused('INVALID')
+    if value['status'] == 'incomplete':
+        if value['reason'] == 'OK' or any(value[k] is not None for k in value if k not in ('status', 'reason')):
+            raise Refused('INVALID')
+        return value
+    if value['reason'] != 'OK':
+        raise Refused('INVALID')
+    numeric = ('root_entries', 'child_entries', 'building_directories_scanned',
+               'unscanned_directory_count', 'duplicate_inode_count')
+    if any(type(value[k]) is not int or not 0 <= value[k] <= MAX_ENTRIES for k in numeric):
+        raise Refused('INVALID')
+    total = value['root_entries'] + value['child_entries']
+    if total > MAX_ENTRIES or value['building_directories_scanned'] > MAX_BUILDING_DIRECTORIES:
+        raise Refused('INVALID')
+    for key, names, count_key in (('root_buckets', ROOT_BUCKETS, 'root_entries'),
+                                  ('child_buckets', CHILD_BUCKETS, 'child_entries')):
+        buckets = value[key]
+        if type(buckets) is not dict or set(buckets) != set(names):
+            raise Refused('INVALID')
+        for name, row in buckets.items():
+            if (type(row) is not dict or set(row) != {'entries', 'regular_logical_bytes', 'inode_allocated_bytes'} or
+                    any(type(n) is not int or not 0 <= n < 2 ** 63 for n in row.values()) or
+                    row['entries'] > MAX_ENTRIES or
+                    (not name.endswith('_regular') and row['regular_logical_bytes'] != 0) or
+                    (row['entries'] == 0 and (row['regular_logical_bytes'] or row['inode_allocated_bytes']))):
+                raise Refused('INVALID')
+        if (sum(row['entries'] for row in buckets.values()) != value[count_key] or
+                any(sum(row[k] for row in buckets.values()) >= 2 ** 63
+                    for k in ('regular_logical_bytes', 'inode_allocated_bytes'))):
+            raise Refused('INVALID')
+    violations = value['archive_violations']
+    if any(sum(row[k] for buckets in (value['root_buckets'], value['child_buckets'])
+               for row in buckets.values()) >= 2 ** 63
+           for k in ('regular_logical_bytes', 'inode_allocated_bytes')):
+        raise Refused('INVALID')
+    if (type(violations) is not dict or set(violations) != set(VIOLATIONS) or
+            any(type(n) is not int or not 0 <= n <= value['root_entries'] for n in violations.values())):
+        raise Refused('INVALID')
+    root = value['root_buckets']
+    building_count = root['building_directory']['entries']
+    scanned = value['building_directories_scanned']
+    unscanned = building_count - scanned + root['other_directory']['entries'] + value['child_buckets']['directory']['entries']
+    if (scanned > building_count or value['unscanned_directory_count'] != unscanned or
+            (not scanned and value['child_entries']) or value['duplicate_inode_count'] > total):
+        raise Refused('INVALID')
+    if (unscanned and value['unscanned_subtree_bytes'] is not None) or (not unscanned and (type(value['unscanned_subtree_bytes']) is not int or value['unscanned_subtree_bytes'] != 0)):
+        raise Refused('INVALID')
+    times = [value['building_oldest_mtime_utc'], value['building_newest_mtime_utc']]
+    if building_count:
+        for item in times:
+            if timestamp(item) is None or not item.endswith('+00:00'):
+                raise Refused('INVALID')
+        if dt.datetime.fromisoformat(times[0]) > dt.datetime.fromisoformat(times[1]):
+            raise Refused('INVALID')
+    elif times != [None, None]:
+        raise Refused('INVALID')
+    return value
+
+
 def validate_report(v):
-    if type(v) is not dict or set(v) != set(receipt()) or type(v['version']) is not int or v['version'] != 1 or v['scope'] != SCOPE or v['status'] not in ('observed', 'partial', 'unavailable') or v['reason'] not in REASONS:
+    if type(v) is not dict or set(v) != set(receipt()) or type(v['version']) is not int or v['version'] != 2 or v['scope'] != SCOPE or v['status'] not in ('observed', 'partial', 'unavailable') or v['reason'] not in REASONS:
         raise Refused('INVALID')
     timestamp(v['observed_at'])
     for k in ('database_opened', 'file_contents_read', 'external_network_used', 'operating_files_changed'):
@@ -384,6 +588,7 @@ def validate_report(v):
         row = v[key]
         if type(row) is not dict or set(row) != set(empty_folder('OK')) or row['status'] not in ('observed', 'incomplete') or row['reason'] not in REASONS:
             raise Refused('INVALID')
+        metadata = validate_metadata(row['metadata'])
         fields = ('file_count', 'logical_bytes', 'allocated_bytes')
         if row['status'] == 'observed':
             if row['reason'] != 'OK' or any(type(row[k]) is not int or not 0 <= row[k] < 2 ** 63 for k in fields) or row['file_count'] > MAX_ENTRIES:
@@ -397,8 +602,21 @@ def validate_report(v):
                     raise Refused('INVALID')
             if row['file_count'] and row['oldest_filename_kst_day'] > row['newest_filename_kst_day']:
                 raise Refused('INVALID')
+            if (metadata['status'] != 'observed' or metadata['root_entries'] != row['file_count'] or
+                    metadata['root_buckets']['archive_regular']['entries'] != row['file_count'] or
+                    any(metadata['archive_violations'].values()) or metadata['child_entries']):
+                raise Refused('INVALID')
+            archive = metadata['root_buckets']['archive_regular']
+            if row['logical_bytes'] != archive['regular_logical_bytes'] or row['allocated_bytes'] != archive['inode_allocated_bytes']:
+                raise Refused('INVALID')
         elif row['reason'] == 'OK' or any(row[k] is not None for k in (*fields, 'oldest_filename_kst_day', 'newest_filename_kst_day')):
             raise Refused('INVALID')
+        elif metadata['status'] == 'observed' and (row['reason'] not in ('UNEXPECTED_ENTRY', 'UNAVAILABLE') or not any(metadata['archive_violations'].values())):
+            raise Refused('INVALID')
+    known_metadata = [v[k]['metadata'] for k in ('local', 'outgoing') if v[k]['metadata']['status'] == 'observed']
+    if (sum(m['root_entries'] + m['child_entries'] for m in known_metadata) > MAX_ENTRIES or
+            sum(m['building_directories_scanned'] for m in known_metadata) > MAX_BUILDING_DIRECTORIES):
+        raise Refused('INVALID')
     if v['status'] == 'unavailable' and v['reason'] == 'OK':
         raise Refused('INVALID')
     if v['status'] in ('observed', 'partial') and (v['reason'] != 'OK' or v['protected_unchanged'] is not True or v['observed_at'] is None or v['containers'] != 5 or not v['images']):
