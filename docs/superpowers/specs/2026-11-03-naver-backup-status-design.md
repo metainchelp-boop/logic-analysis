@@ -5,7 +5,7 @@ it does not change backup, retention, permission, encryption or collection polic
 
 ## Exact scope
 
-Read one fixed engine Unix health GET (3-second whole request, 64 KiB body),
+Read one fixed engine Unix health GET (3-second whole request, 64 KiB total HTTP response including headers),
 project only backup code/last_attempt_at/last_offsite_at and last_tick using closed
 values. Missing backup state, unavailable health and invalid response remain
 explicitly unknown; they are never converted to NEVER or a successful zero.
@@ -19,7 +19,8 @@ logical/allocated bytes and oldest/newest filename KST day; filenames, UUIDs,
 paths and raw values are not included in the result. The filename date is not a
 verified archive manifest date. Reject symlinks/special files and mark unknown
 entries, active building directories or concurrent changes incomplete. Bound
-entries at 4096 per folder and metadata work at 10 seconds. No recursive scan.
+entries at 4096 per folder and share one 10-second metadata deadline across both
+folders together. No recursive scan.
 
 Protect the existing container/image identity baseline before and after the
 observation. Reuse the same owner/main/first-attempt/host-pin/global concurrency
