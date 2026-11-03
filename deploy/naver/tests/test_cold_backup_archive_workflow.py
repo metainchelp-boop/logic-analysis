@@ -27,6 +27,8 @@ D633_SCOPE = 'd633-cold-backup-lossless-v1'
 D633_CONFIRM = 'ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY'
 D633_GZIP6_SCOPE = 'd633-cold-backup-lossless-gzip6-v1'
 D633_GZIP6_CONFIRM = 'ARCHIVE_D633_COLD_BACKUP_GZIP6_LOSSLESSLY'
+F54FC_GZIP6_SCOPE = '54fc-cold-backup-lossless-gzip6-v1'
+F54FC_GZIP6_CONFIRM = 'ARCHIVE_54FC_COLD_BACKUP_GZIP6_LOSSLESSLY'
 
 
 def blocks(source):
@@ -72,7 +74,7 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
         self.assertEqual(re.findall(r'^  ([a-z_]+):', header, re.M), ['workflow_dispatch'])
         self.assertEqual(re.findall(r'^      ([a-z_0-9]+):', header, re.M),
                          ['scope', 'mode', 'plan_sha256', 'confirm'])
-        self.assertIn('options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1, bb151-cold-backup-lossless-v1, d633-cold-backup-lossless-v1, d633-cold-backup-lossless-gzip6-v1]', header)
+        self.assertIn('options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1, bb151-cold-backup-lossless-v1, d633-cold-backup-lossless-v1, d633-cold-backup-lossless-gzip6-v1, 54fc-cold-backup-lossless-gzip6-v1]', header)
         self.assertIn('default: c44-cold-backup-lossless-v1', header)
         self.assertIn('options: [plan, apply]', header)
         self.assertIn('default: plan', header)
@@ -89,14 +91,17 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
                        dict(SCOPE=D633_SCOPE),
                        dict(SCOPE=D633_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=D633_CONFIRM),
                        dict(SCOPE=D633_GZIP6_SCOPE),
-                       dict(SCOPE=D633_GZIP6_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=D633_GZIP6_CONFIRM)):
+                       dict(SCOPE=D633_GZIP6_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=D633_GZIP6_CONFIRM),
+                       dict(SCOPE=F54FC_GZIP6_SCOPE),
+                       dict(SCOPE=F54FC_GZIP6_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=F54FC_GZIP6_CONFIRM)):
             result = self.gate(**values)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout + result.stderr, '')
 
     def test_each_profile_rejects_every_other_confirmation(self):
         profiles = ((SCOPE, CONFIRM), (A377_SCOPE, A377_CONFIRM), (BB151_SCOPE, BB151_CONFIRM),
-                    (D633_SCOPE, D633_CONFIRM), (D633_GZIP6_SCOPE, D633_GZIP6_CONFIRM))
+                    (D633_SCOPE, D633_CONFIRM), (D633_GZIP6_SCOPE, D633_GZIP6_CONFIRM),
+                    (F54FC_GZIP6_SCOPE, F54FC_GZIP6_CONFIRM))
         for scope, expected in profiles:
             for _, supplied in profiles:
                 if supplied != expected:

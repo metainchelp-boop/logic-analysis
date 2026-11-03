@@ -17,6 +17,7 @@ A = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(A)
 D633_SCOPE = 'd633-cold-backup-lossless-v1'
 D633_GZIP6_SCOPE = 'd633-cold-backup-lossless-gzip6-v1'
+F54FC_GZIP6_SCOPE = '54fc-cold-backup-lossless-gzip6-v1'
 
 
 class ArchiveTest(unittest.TestCase):
@@ -868,10 +869,26 @@ class ArchiveD633Gzip6Test(SameBackupProfileTests, ArchiveTest):
     scope = D633_GZIP6_SCOPE
 
 
+class Archive54FCGzip6Test(ArchiveTest):
+    # Full existing preservation/refusal suite on the newly fixed cold source.
+    scope = F54FC_GZIP6_SCOPE
+
+    def test_every_prior_confirmation_refused_before_io(self):
+        for other in A.PROFILES.values():
+            if other.scope == self.scope:
+                continue
+            with self.subTest(scope=other.scope):
+                result = self.execute('apply', 'a' * 64, other.confirm)
+                self.assertEqual(result['reason'], 'INPUT_REFUSED')
+                self.assertEqual(self.commands, [])
+                self.assertFalse(self.archives.exists())
+                self.assertTrue(self.original.exists())
+
+
 class FixedProfileTest(unittest.TestCase):
-    def test_only_five_fixed_profiles_and_four_original_profiles_preserved(self):
+    def test_only_six_fixed_profiles_and_five_prior_profiles_preserved(self):
         self.assertEqual(set(A.PROFILES), {'c44-cold-backup-lossless-v1', 'a377-cold-backup-lossless-v1',
-                                         'bb151-cold-backup-lossless-v1', D633_SCOPE, D633_GZIP6_SCOPE})
+                                         'bb151-cold-backup-lossless-v1', D633_SCOPE, D633_GZIP6_SCOPE, F54FC_GZIP6_SCOPE})
         self.assertEqual(A.profile_for(), A.Profile(A.SCOPE, A.BACKUP_NAME, A.ARCHIVE_NAME, A.CONFIRM))
         self.assertEqual(A.profile_for('a377-cold-backup-lossless-v1'), A.Profile(
             'a377-cold-backup-lossless-v1', '20261102T185748Z-a3770876f746',
@@ -885,8 +902,13 @@ class FixedProfileTest(unittest.TestCase):
         self.assertEqual(A.profile_for(D633_GZIP6_SCOPE), A.Profile(
             D633_GZIP6_SCOPE, '20261102T230515Z-d633ff4450bb',
             '20261102T230515Z-d633ff4450bb-gzip6-v1', 'ARCHIVE_D633_COLD_BACKUP_GZIP6_LOSSLESSLY', 6))
+        self.assertEqual(A.profile_for(F54FC_GZIP6_SCOPE), A.Profile(
+            F54FC_GZIP6_SCOPE, '20261103T012239Z-54fcf985d9f5',
+            '20261103T012239Z-54fcf985d9f5-gzip6-v1', 'ARCHIVE_54FC_COLD_BACKUP_GZIP6_LOSSLESSLY', 6))
+        self.assertEqual((A.MIN_FREE_AFTER, A.RESERVE, A.TIME_BUDGET),
+                         (5 * 1024 ** 3, 512 * 1024 ** 2, 600))
         for scope, profile in A.PROFILES.items():
-            self.assertEqual(profile.gzip_level, 6 if scope == D633_GZIP6_SCOPE else 1)
+            self.assertEqual(profile.gzip_level, 6 if scope in (D633_GZIP6_SCOPE, F54FC_GZIP6_SCOPE) else 1)
         with self.assertRaises(TypeError):
             A.PROFILES['arbitrary'] = A.profile_for()
         with self.assertRaises(AttributeError):
