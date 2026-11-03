@@ -19,7 +19,7 @@ import time
 import types
 import zlib
 
-COLD_SHA = '5d44ac38a0bdcc08303a5899e1081c6444fa1a7d1761fc59ea487f24bab602af'
+COLD_SHA = 'b18e2ae1d704d93de752eb3d81a4480991f6d25568f2c6b19bd9a4aae5be85c7'
 
 
 def load_cold():

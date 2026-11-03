@@ -1,4 +1,4 @@
-"""Losslessly archive one of five fixed, already-cold deployment backups.
+"""Losslessly archive one of six fixed, already-cold deployment backups.
 
 This does not open SQLite, inspect live database files, stop containers, or prune
 images. The original byte manifest is retained verbatim. Publication means an
@@ -47,6 +47,9 @@ PROFILES = MappingProxyType({
     '54fc-cold-backup-lossless-gzip6-v1': Profile(
         '54fc-cold-backup-lossless-gzip6-v1', '20261103T012239Z-54fcf985d9f5',
         '20261103T012239Z-54fcf985d9f5-gzip6-v1', 'ARCHIVE_54FC_COLD_BACKUP_GZIP6_LOSSLESSLY', 6),
+    'fb70-cold-backup-lossless-v1': Profile(
+        'fb70-cold-backup-lossless-v1', '20261103T081036Z-fb70e6d2ef90',
+        '20261103T081036Z-fb70e6d2ef90-v1', 'ARCHIVE_FB70_COLD_BACKUP_LOSSLESSLY'),
 })
 ROOT_UID = 0
 ROOT_GID = 0
