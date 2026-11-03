@@ -20,6 +20,7 @@ on:
       - '.github/workflows/naver-autobid-key-preflight.yml'  # 고정 키 보관 후보 metadata, 앱 배포 없음
       - '.github/workflows/naver-data-preservation.yml'  # 앱 데이터 일관 사본 보존, 제품 재배포 없음
       - '.github/workflows/naver-data-preflight.yml'
+      - '.github/workflows/naver-collector-diagnostic.yml'  # 고정 현재판 수집기 오류 읽기 전용 관찰
       - '.github/workflows/naver-login-audit-diagnostic.yml'  # 고정 관제 로그인 오류 읽기 전용 관찰
       - '.github/workflows/naver-inspection-aggregate.yml'  # 일회 읽기·암호문 집계, 앱 배포 없음
       - '.github/workflows/naver-data-diagnostic.yml'  # 정지된 원본 읽기 전용 진단, 앱 배포 없음
