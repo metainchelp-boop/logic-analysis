@@ -57,5 +57,6 @@ termination. Timeout leaves the existing preservation/refusal state intact.
 4. Merge and production PLAN/APPLY remain the coordinating owner's work. No
    implementation or synthetic result is a capacity or production recovery claim.
 
-The coordinating owner approved this design and implementation scope before
-source changes. The specification contains no pending decisions.
+The coordinating agent selected this implementation under the representative's
+existing normalization and preservation authorization. This does not claim a
+separate representative approval of the gzip-6 design.

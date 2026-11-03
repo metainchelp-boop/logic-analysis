@@ -1,6 +1,6 @@
 # Fixed cold NAVER backups: lossless archive and isolated recovery
 
-This helper accepts exactly four reviewed cold-backup profiles. Source and
+This helper accepts exactly five reviewed profiles for four cold backups. Source and
 archive paths are fixed in the helper; neither the workflow nor CLI accepts an
 arbitrary path, commit, timestamp or confirmation phrase.
 
@@ -10,6 +10,7 @@ arbitrary path, commit, timestamp or confirmation phrase.
 | `a377-cold-backup-lossless-v1` | `20261102T185748Z-a3770876f746` | `ARCHIVE_A377_COLD_BACKUP_LOSSLESSLY` |
 | `bb151-cold-backup-lossless-v1` | `20261102T205647Z-bb151c2a483a` | `ARCHIVE_BB151_COLD_BACKUP_LOSSLESSLY` |
 | `d633-cold-backup-lossless-v1` | `20261102T230515Z-d633ff4450bb` | `ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY` |
+| `d633-cold-backup-lossless-gzip6-v1` | `20261102T230515Z-d633ff4450bb` (same source, gzip level 6) | `ARCHIVE_D633_COLD_BACKUP_GZIP6_LOSSLESSLY` |
 
 The a377 source is the previous-product backup recorded by the successful
 bb151c2a deployment, run `41502564117`; it is not the running database. Adding
@@ -30,7 +31,8 @@ container identities, images, PIDs, start times and restart counts, and the full
 image ID set must remain unchanged. A changed snapshot refuses the operation.
 
 Each separate destination is below `/var/backups/metainc/naver-cold-archives/`,
-with the exact selected source directory name plus `-v1`.
+with the exact selected source directory name plus `-v1`, except the explicit
+gzip-6 alternative whose suffix is `-gzip6-v1`.
 Its parent and directory are root-owned mode `0700`; files are mode `0600`.
 The destination is never overwritten or automatically pruned. Only the chosen
 profile's source files may be removed, after the verified archive is published.
@@ -59,10 +61,25 @@ authorize another profile's APPLY. Unsupported scope strings are refused without
 printing the supplied value. Even identical source bytes do not make plans
 interchangeable.
 
+The gzip-6 alternative changes only the fixed compression level and its own
+scope/destination/confirmation. The four original profiles continue to use level
+1; their version-1 manifests, receipts and restore behavior remain valid. A new
+scope-bound PLAN is required: neither the old d633 plan nor its confirmation can
+authorize the gzip-6 profile. The manifest validator requires the exact level for
+the selected profile, not a general allowlist of levels.
+
+For both d633 profiles, either alternative destination's existence refuses PLAN
+and APPLY, including an incomplete archive. The shared deployment lock and a
+second check before archive creation prevent cooperating runs from producing
+both alternatives. Existing conflicting archives are not inspected, overwritten
+or removed. This restriction does not prevent isolated restoration of either
+valid receipt-bound format. The gzip-6 profile does not add a source/deletion path.
+
 ## Format and publication
 
 - Each original manifest member (`engine.db` and only its listed `-wal`, `-shm`,
-  or `-journal` sidecars) becomes one same-name `.gz` file. Gzip uses level 1,
+  or `-journal` sidecars) becomes one same-name `.gz` file. Gzip uses the profile's
+  fixed level (1 for the four original profiles, 6 for the explicit alternative),
   an empty filename and timestamp zero. Empty sidecars are retained.
 - `source-manifest.json` contains the exact original `manifest.json` bytes,
   including whitespace. Original SHA-256 and size checks must pass first.
@@ -91,8 +108,13 @@ source identity check. Each source descriptor is immediately closed so its
 blocks are released before measuring free space. No live database path is used.
 
 This helper runs at CPU nice level 19 with a 600-second cooperative deadline.
-The workflow also has a hard execution timeout. A timeout is never retried
-automatically. Kernel I/O may not return before a cooperative deadline.
+The workflow has a 30-minute job limit and a 21-minute SSH command timeout;
+those do not establish forced termination of a remote Python process blocked in
+kernel I/O. A timeout is never retried automatically. Compression savings and
+elapsed time require measurement on the actual fixed source. PLAN success does
+not guarantee APPLY finishes within the same 600-second limit: APPLY repeats
+compression measurement, writes compression, and fully decompresses the result.
+The 5 GiB projected/actual guard and 512 MiB working reserve are unchanged.
 
 ## Isolated restore exercise
 
@@ -135,6 +157,9 @@ manifest identity or receipt hash requirement.
 For a d633 isolated exercise, use
 `/var/backups/metainc/naver-cold-archives/20261102T230515Z-d633ff4450bb-v1`,
 the d633 APPLY receipt hash, and `scope='d633-cold-backup-lossless-v1'`.
+For its gzip-6 alternative, use the same base name with `-gzip6-v1`, its own
+receipt hash, and `scope='d633-cold-backup-lossless-gzip6-v1'`. Decompression still
+verifies both compressed and original bytes before restoring any data.
 
 Before creating the target, restore verifies the receipt-bound archive manifest,
 its closed metadata types/allowlist, the verbatim original manifest, and every

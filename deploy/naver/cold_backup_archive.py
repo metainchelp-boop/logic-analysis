@@ -29,7 +29,7 @@ ARCHIVE_NAME = BACKUP_NAME + '-v1'
 LOCK_PARENT = '/var/lib/metainc/naver-deploy'
 CONFIRM = 'ARCHIVE_C44_COLD_BACKUP_LOSSLESSLY'
 SCOPE = 'c44-cold-backup-lossless-v1'
-Profile = namedtuple('Profile', 'scope backup archive confirm')
+Profile = namedtuple('Profile', 'scope backup archive confirm gzip_level', defaults=(1,))
 PROFILES = MappingProxyType({
     SCOPE: Profile(SCOPE, BACKUP_NAME, ARCHIVE_NAME, CONFIRM),
     'a377-cold-backup-lossless-v1': Profile(
@@ -41,6 +41,9 @@ PROFILES = MappingProxyType({
     'd633-cold-backup-lossless-v1': Profile(
         'd633-cold-backup-lossless-v1', '20261102T230515Z-d633ff4450bb',
         '20261102T230515Z-d633ff4450bb-v1', 'ARCHIVE_D633_COLD_BACKUP_LOSSLESSLY'),
+    'd633-cold-backup-lossless-gzip6-v1': Profile(
+        'd633-cold-backup-lossless-gzip6-v1', '20261102T230515Z-d633ff4450bb',
+        '20261102T230515Z-d633ff4450bb-gzip6-v1', 'ARCHIVE_D633_COLD_BACKUP_GZIP6_LOSSLESSLY', 6),
 })
 ROOT_UID = 0
 ROOT_GID = 0
@@ -245,10 +248,10 @@ class Sink:
             os.fsync(self.fd)
 
 
-def compress(fd, budget, sink):
+def compress(fd, budget, sink, *, level=1):
     os.lseek(fd, 0, os.SEEK_SET)
     raw_hash, raw_size = hashlib.sha256(), 0
-    with gzip.GzipFile(filename='', mode='wb', fileobj=sink, compresslevel=1, mtime=0) as output:
+    with gzip.GzipFile(filename='', mode='wb', fileobj=sink, compresslevel=level, mtime=0) as output:
         while True:
             budget.check()
             chunk = os.read(fd, CHUNK)
@@ -358,15 +361,15 @@ def verify_source(src):
 
 def measure(src, budget, protected):
     rows = {}
+    profile = src['profile']
     for name in sorted(src['manifest']):
-        row = compress(src['handles'][name], budget, Sink(budget))
+        row = compress(src['handles'][name], budget, Sink(budget), level=profile.gzip_level)
         if {key: row[key] for key in ('size', 'sha256')} != src['manifest'][name]:
             raise Refused('HASH_MISMATCH')
         rows[name] = dict(row, source=src['identities'][name])
     verify_source(src)
-    profile = src['profile']
     return validate_archive_plan(dict(version=1, scope=profile.scope, backup=profile.backup, archive=profile.archive,
-                gzip=dict(level=1, mtime=0, zlib=zlib.ZLIB_RUNTIME_VERSION, python=sys.version.split()[0]),
+                gzip=dict(level=profile.gzip_level, mtime=0, zlib=zlib.ZLIB_RUNTIME_VERSION, python=sys.version.split()[0]),
                 source_folder=src['folder'], source_manifest=src['identities']['manifest.json'],
                 source_manifest_sha256=digest(src['raw']), files=rows, protected=protected,
                 reserve_bytes=RESERVE, minimum_free_after_bytes=MIN_FREE_AFTER,
@@ -392,7 +395,8 @@ def archive_absent(scope=SCOPE):
         name = ARCHIVE_PARENT.split('/')[-1]
         if exists(parent, name):
             with directory(ARCHIVE_PARENT, True) as archive_parent:
-                if exists(archive_parent, profile.archive):
+                if any(exists(archive_parent, candidate.archive) for candidate in PROFILES.values()
+                       if candidate.backup == profile.backup):
                     raise Refused('ARCHIVE_EXISTS')
 
 
@@ -408,7 +412,8 @@ def new_archive(source_device, scope=SCOPE):
         with directory(ARCHIVE_PARENT, True) as archive_parent:
             if os.fstat(archive_parent).st_dev != source_device:
                 raise Refused('PATH_REFUSED')
-            if exists(archive_parent, profile.archive):
+            if any(exists(archive_parent, candidate.archive) for candidate in PROFILES.values()
+                   if candidate.backup == profile.backup):
                 raise Refused('ARCHIVE_EXISTS')
             os.mkdir(profile.archive, 0o700, dir_fd=archive_parent)
             os.fsync(archive_parent)
@@ -572,7 +577,8 @@ def execute(mode, plan_sha='', confirm='', runner=run, free=None, budget=None, s
                     handle = create_file(archive, name + '.gz')
                     try:
                         actual = compress(src['handles'][name], budget,
-                            Sink(budget, fd=handle, free=free, maximum=expected['gzip_size']))
+                            Sink(budget, fd=handle, free=free, maximum=expected['gzip_size']),
+                            level=profile.gzip_level)
                     finally:
                         os.close(handle)
                     if actual != {key: expected[key] for key in ('size', 'sha256', 'gzip_size', 'gzip_sha256')}:
@@ -636,7 +642,7 @@ def validate_archive_plan(plan, expected_scope=None):
             raise Refused('ARCHIVE_REFUSED')
     gz = plan['gzip']
     if (type(gz) is not dict or set(gz) != {'level', 'mtime', 'zlib', 'python'} or
-            type(gz['level']) is not int or gz['level'] != 1 or type(gz['mtime']) is not int or gz['mtime'] != 0 or
+            type(gz['level']) is not int or gz['level'] != profile.gzip_level or type(gz['mtime']) is not int or gz['mtime'] != 0 or
             any(type(gz[k]) is not str or not re.fullmatch(r'[0-9A-Za-z.+-]{1,32}', gz[k]) for k in ('zlib', 'python'))):
         raise Refused('ARCHIVE_REFUSED')
 
