@@ -74,3 +74,29 @@ Tests cover all-mode references, PID/TID reuse and observer exceptions; bounded
 unknown outcomes; candidate identity changes; both archives verified before any
 unlink; corrupted/truncated archives and manifests; partial preservation;
 working/final capacity and timeout; old restore compatibility; and closed output.
+
+## Metadata-only limit diagnosis
+
+The first operational PLAN stopped with `PROC_LIMIT` before any completed
+reference scan or gzip measurement. That result alone does not identify the
+limit or establish source use, non-use or sufficient capacity.
+
+The fixed `diagnose` mode follows the same source metadata, immutable producer
+binding and first all-mode reference scan, then rechecks source/protected state
+and producer generation. It stops before backup payload reads/hashes, gzip,
+archive creation or source cleanup. Existing manifest metadata and pinned public
+producer source code are still read; backup payload FDs are opened for metadata
+and identity checks. Success is `observed/METADATA_READY`, not a preservation or
+capacity result. No arbitrary path, limit or process selector is accepted.
+
+Receipt version 2 adds only `limit_diagnostic`: null or the exact fields `kind`,
+`cap`, `observed_lower_bound`. The closed kinds distinguish population, observed
+generations, per-task FD table, total FD observations, maps bytes, late
+generations and the bounded stat/fdinfo reads. A bounded read reports only the
+bytes actually read (at most cap plus one), not an invented full size. Existing
+malformed FD-table names or non-bytes maps retain `PROC_LIMIT`, with separate
+shape kinds and null bounds. Invalid maps-line grammar retains `PROC_INVALID`.
+No paths, PIDs, descriptor numbers, raw data or further /proc reads are added.
+
+PLAN/APPLY execution, source/plan/archive formats and all existing bounds remain
+unchanged. A failed diagnosis stays unknown; it never raises a cap or retries.

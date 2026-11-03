@@ -660,5 +660,264 @@ class BundlePreservationContractTests(unittest.TestCase):
         self.assertEqual((snapshot / 'snapshot.sqlite').read_bytes(), self.payloads['snapshot.sqlite'])
 
 
+    @contextlib.contextmanager
+    def metadata_only(self):
+        payload_ids = {(path.stat().st_dev, path.stat().st_ino) for path in
+                       (self.deployment / 'engine.db', self.building / 'snapshot.sqlite')}
+        native_read = os.read
+        def read(fd, size):
+            info = os.fstat(fd)
+            self.assertNotIn((info.st_dev, info.st_ino), payload_ids,
+                             'diagnose must not read backup payloads')
+            return native_read(fd, size)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(B.os, 'read', side_effect=read))
+            forbidden = []
+            for owner, names in ((B, ('make_plan', 'check_plan_sources', 'rehash', 'new_bundle',
+                                     'stage_bundle', 'remove_snapshot')),
+                                 (B.A, ('compress', 'verify_gzip', 'remove_source')),
+                                 (B.os, ('mkdir', 'unlink', 'rmdir', 'rename', 'replace'))):
+                for name in names:
+                    forbidden.append(stack.enter_context(mock.patch.object(
+                        owner, name, side_effect=AssertionError('metadata-only boundary'))))
+            yield
+            for operation in forbidden:
+                operation.assert_not_called()
+        self.assert_sources_untouched()
+        self.assertEqual(list(self.archives.iterdir()), [])
+
+    def diagnose(self, **kwargs):
+        defaults = dict(runner=self.runner, free=lambda: 10 * 1024 ** 3, budget=self.budget,
+                        producer_probe=lambda *args: {'synthetic_generation': 1},
+                        reference_probe=lambda *args: None)
+        defaults.update(kwargs)
+        return B.execute('diagnose', **defaults)
+
+    def test_diagnose_observes_once_rechecks_generation_and_never_reads_or_writes_payloads(self):
+        events = []
+        def producer(*args):
+            events.append('producer')
+            return {'generation': 1}
+        def reference(*args):
+            events.append('references')
+        with self.metadata_only(), mock.patch.object(B.A, 'snapshot', wraps=B.A.snapshot) as protected:
+            result = self.diagnose(producer_probe=producer, reference_probe=reference)
+        self.assertEqual(events, ['producer', 'references', 'producer'])
+        self.assertEqual(protected.call_count, 2)
+        self.assertEqual((result['version'], result['status'], result['reason']),
+                         (2, 'observed', 'METADATA_READY'))
+        self.assertEqual(result['reference_checks'], 1)
+        self.assertTrue(result['protected_unchanged'])
+        self.assertIsNone(result['limit_diagnostic'])
+        self.assertEqual(B.validate_report(result), result)
+        for key in ('plan', 'plan_sha256', 'archive_manifest_sha256', 'source_bytes',
+                    'source_allocated_bytes', 'compressed_bytes', 'archive_budget_bytes',
+                    'projected_free_bytes', 'removed_files'):
+            self.assertIsNone(result[key], key)
+        for key in ('capacity_ok', 'archive_started', 'archive_published', 'archive_verified',
+                    'cleanup_started', 'cleanup_complete', 'database_opened',
+                    'services_changed', 'external_network_used'):
+            self.assertIs(result[key], False, key)
+
+    def test_diagnose_refusals_emit_only_closed_limit_metadata_without_retry_or_payload_access(self):
+        cap = B.MAX_FDS
+        for failure, diagnostic in (
+                (B.LimitRefused('fd_total', cap, cap + 1),
+                 dict(kind='fd_total', cap=cap, observed_lower_bound=cap + 1)),
+                (B.Refused('PROC_LIMIT'), None), (B.Refused('PROC_INVALID'), None)):
+            with self.subTest(reason=str(failure), diagnostic=diagnostic), self.metadata_only():
+                probe = mock.Mock(side_effect=failure)
+                producer = mock.Mock(return_value={'generation': 1})
+                result = self.diagnose(reference_probe=probe, producer_probe=producer)
+            self.assertEqual((result['status'], result['reason']), ('refused', str(failure)))
+            self.assertEqual(result['limit_diagnostic'], diagnostic)
+            self.assertEqual(result['reference_checks'], 0)
+            self.assertEqual(probe.call_count, 1)
+            self.assertEqual(producer.call_count, 1)
+            self.assertIsNone(result['plan'])
+            self.assertNotIn(CANARY, B.A.canonical(result))
+
+    def test_diagnose_retains_protected_generation_and_shared_deadline_refusals(self):
+        changed = dict(self.protected, images=[])
+        for kind in ('protected', 'producer', 'deadline'):
+            with self.subTest(kind=kind), self.metadata_only(), contextlib.ExitStack() as stack:
+                kwargs = {}
+                if kind == 'protected':
+                    stack.enter_context(mock.patch.object(B.A, 'snapshot',
+                        side_effect=[self.protected, changed]))
+                    reason = 'PROTECTED_CHANGED'
+                elif kind == 'producer':
+                    kwargs['producer_probe'] = mock.Mock(side_effect=[{'generation': 1}, {'generation': 2}])
+                    reason = 'PRODUCER_CHANGED'
+                else:
+                    clock = [0]
+                    kwargs['budget'] = B.A.Budget(clock=lambda: clock[0])
+                    kwargs['reference_probe'] = lambda *args: clock.__setitem__(0, 601)
+                    reason = 'TIME_LIMIT'
+                result = self.diagnose(**kwargs)
+            self.assertEqual((result['status'], result['reason']), ('refused', reason))
+            self.assertEqual(result['reference_checks'], 1)
+            self.assertIsNone(result['limit_diagnostic'])
+
+    def test_diagnose_rejects_plan_arguments_before_any_metadata_probe(self):
+        for supplied in ({'plan_sha': '1' * 64}, {'confirm': B.CONFIRM}, {'plan_json': '{}'}):
+            with self.subTest(field=next(iter(supplied))), self.metadata_only(), \
+                    mock.patch.object(B.A, 'snapshot') as snapshot:
+                result = self.diagnose(**supplied)
+            self.assertEqual(result['reason'], 'INPUT_REFUSED')
+            snapshot.assert_not_called()
+
+    def test_receipt_version_two_does_not_upgrade_persisted_plan_or_archive_versions(self):
+        plan = self.planned()
+        self.assertEqual(plan['version'], 2)
+        self.assertEqual(plan['plan']['version'], 1)
+        result = self.execute('apply', plan)
+        self.assertEqual(result['status'], 'applied', result)
+        self.assertEqual(result['version'], 2)
+        for parent in (self.bundle, self.bundle / 'deployment', self.bundle / 'snapshot'):
+            manifest = json.loads((parent / 'archive-manifest.json').read_bytes())
+            self.assertEqual(manifest['version'], 1)
+
+
+class LimitDiagnosticContractTests(unittest.TestCase):
+    def budget(self):
+        return B.A.Budget(clock=lambda: 0)
+
+    def limit(self, operation, kind, cap, observed):
+        with self.assertRaises(B.LimitRefused) as caught:
+            operation()
+        self.assertIsInstance(caught.exception, B.Refused)
+        self.assertEqual(str(caught.exception), 'PROC_LIMIT')
+        value = caught.exception.diagnostic
+        self.assertEqual(value, dict(kind=kind, cap=cap, observed_lower_bound=observed))
+        self.assertEqual(B.validate_limit_diagnostic(value), value)
+        self.assertNotIn(CANARY, B.A.canonical(value))
+
+    @contextlib.contextmanager
+    def traced(self, proc):
+        with contextlib.ExitStack() as stack:
+            calls = {name: stack.enter_context(mock.patch.object(proc, name, wraps=getattr(proc, name)))
+                     for name in ('visible', 'population', 'identity', 'present', 'fds', 'fd', 'maps', 'link')}
+            yield calls
+
+    def counts(self, calls, **expected):
+        self.assertEqual({key: call.call_count for key, call in calls.items()},
+                         {key: expected.get(key, 0) for key in calls})
+
+    def test_fixed_caps_and_closed_receipt_reject_extra_keys_wrong_types_and_forged_bounds(self):
+        self.assertEqual(B.limit_caps(), dict(task_population=4096, task_generations=4096,
+            fd_table=4096, fd_total=131072, maps_bytes=262144, late_generations=64,
+            stat_bytes=4096, fdinfo_bytes=4096))
+        report = B.receipt('diagnose')
+        self.assertEqual(set(report), {'version', 'scope', 'mode', 'status', 'reason', 'plan',
+            'limit_diagnostic', 'source_bytes', 'source_allocated_bytes', 'compressed_bytes',
+            'archive_budget_bytes', 'free_before_bytes', 'projected_free_bytes', 'free_after_bytes',
+            'removed_files', 'containers', 'images', 'reference_checks', 'plan_sha256',
+            'archive_manifest_sha256', 'protected_sha256', 'capacity_ok', 'archive_started',
+            'archive_published', 'archive_verified', 'cleanup_started', 'cleanup_complete',
+            'protected_unchanged', 'database_opened', 'services_changed', 'external_network_used'})
+        for kind, cap in B.limit_caps().items():
+            good = dict(kind=kind, cap=cap, observed_lower_bound=cap + 1)
+            B.validate_report(dict(report, reason='PROC_LIMIT', limit_diagnostic=good))
+            for bad in (dict(good, cap=True), dict(good, cap=cap + 1),
+                        dict(good, observed_lower_bound=True), dict(good, observed_lower_bound=cap),
+                        dict(good, observed_lower_bound=2 ** 63), dict(good, path=CANARY),
+                        dict(good, kind=CANARY), {'kind': kind, 'cap': cap}):
+                with self.subTest(kind=kind, bad=bad), self.assertRaises(B.Refused):
+                    B.validate_report(dict(report, reason='PROC_LIMIT', limit_diagnostic=bad))
+        for kind in ('malformed_fd_table', 'malformed_maps'):
+            good = dict(kind=kind, cap=None, observed_lower_bound=None)
+            B.validate_report(dict(report, reason='PROC_LIMIT', limit_diagnostic=good))
+            for bad in (dict(good, cap=0), dict(good, observed_lower_bound=0)):
+                with self.assertRaises(B.Refused):
+                    B.validate_limit_diagnostic(bad)
+        for bad in (dict(report, version=1), dict(report, version=True), dict(report, extra=CANARY),
+                    dict(report, limit_diagnostic=dict(kind='fd_table', cap=4096, observed_lower_bound=4097))):
+            with self.assertRaises(B.Refused):
+                B.validate_report(bad)
+        observed = dict(report, status='observed', reason='METADATA_READY', reference_checks=1,
+                        protected_unchanged=True)
+        B.validate_report(observed)
+        for change in ({'mode': 'plan'}, {'reason': 'PLAN_READY'}, {'reference_checks': 2},
+                       {'protected_unchanged': False}, {'source_bytes': 0}, {'plan_sha256': '1' * 64},
+                       {'archive_started': True}, {'capacity_ok': True}):
+            with self.subTest(change=change), self.assertRaises(B.Refused):
+                B.validate_report(dict(observed, **change))
+
+    def test_population_and_fd_table_report_existing_list_sizes_without_relisting(self):
+        proc = B.Proc('/synthetic-proc')
+        with mock.patch.object(B.os, 'listdir', side_effect=[['101'], ['101', '102']]) as listing, \
+                mock.patch.object(proc, 'identity', return_value=(1, 1, 1, 1, 1, 1)) as identity, \
+                mock.patch.object(B, 'MAX_PROCESSES', 1):
+            self.limit(lambda: proc.population(self.budget()), 'task_population', 1, 2)
+        self.assertEqual(listing.call_count, 2)
+        self.assertEqual(identity.call_count, 2)
+        with mock.patch.object(B.os, 'listdir', return_value=['3', '4', '5']) as listing, \
+                mock.patch.object(B, 'MAX_TABLE_FDS', 2):
+            self.limit(lambda: proc.fds(101, 101), 'fd_table', 2, 3)
+        listing.assert_called_once()
+        with mock.patch.object(B.os, 'listdir', return_value=[CANARY]) as listing:
+            self.limit(lambda: proc.fds(101, 101), 'malformed_fd_table', None, None)
+        listing.assert_called_once()
+
+    def test_native_byte_limits_read_only_cap_plus_one_once_and_close_on_refusal(self):
+        proc = B.Proc('/synthetic-proc')
+        for name, kind, cap in (('stat', 'stat_bytes', 4096), ('fdinfo/3', 'fdinfo_bytes', 4096),
+                                ('maps', 'maps_bytes', B.MAX_MAPS)):
+            for length in (cap, cap + 1):
+                with self.subTest(kind=kind, length=length), \
+                        mock.patch.object(B.os, 'open', return_value=99) as opened, \
+                        mock.patch.object(B.os, 'read', return_value=b'x' * length) as read, \
+                        mock.patch.object(B.os, 'close') as closed:
+                    if length == cap:
+                        self.assertEqual(len(proc.read(101, 101, name, cap)), cap)
+                    else:
+                        self.limit(lambda: proc.read(101, 101, name, cap), kind, cap, cap + 1)
+                opened.assert_called_once_with(proc.path(101, 101, name), B.READ_FLAGS)
+                read.assert_called_once_with(99, cap + 1)
+                closed.assert_called_once_with(99)
+
+    def test_maps_diagnostic_preserves_line_grammar_refusal_and_does_not_publish_raw_data(self):
+        self.limit(lambda: B.mapped_identities(CANARY), 'malformed_maps', None, None)
+        self.limit(lambda: B.mapped_identities(b'x' * (B.MAX_MAPS + 7)),
+                   'maps_bytes', B.MAX_MAPS, B.MAX_MAPS + 7)
+        with self.assertRaises(B.Refused) as caught:
+            B.mapped_identities(mapping(permissions='r--z'))
+        self.assertNotIsInstance(caught.exception, B.LimitRefused)
+        self.assertEqual(str(caught.exception), 'PROC_INVALID')
+        self.assertFalse(hasattr(caught.exception, 'diagnostic'))
+
+    def test_global_generation_and_fd_limits_do_not_collect_extra_observations(self):
+        proc = SyntheticProc(((101, 101), (101, 102)))
+        with self.traced(proc) as calls, mock.patch.object(B, 'MAX_PROCESSES', 1):
+            self.limit(lambda: B.scan_references({TARGET}, self.budget(), proc=proc),
+                       'task_generations', 1, 2)
+        self.counts(calls, visible=1, population=1, identity=2, fds=3, maps=2, link=2)
+        proc = SyntheticProc()
+        proc.tasks[(101, 101)]['fds'][3] = (metadata(UNRELATED), 0)
+        with self.traced(proc) as calls, mock.patch.object(B, 'MAX_FDS', 1):
+            self.limit(lambda: B.scan_references({TARGET}, self.budget(), proc=proc), 'fd_total', 1, 2)
+        self.counts(calls, visible=1, population=2, identity=3, fds=4, fd=1, maps=2, link=2)
+
+    def test_late_generation_limit_uses_existing_tail_without_extra_population_or_identity(self):
+        proc = SyntheticProc(((101, 101), (202, 202)))
+        both = proc.population(self.budget())
+        first = {(101, 101): both[(101, 101)]}
+        with self.traced(proc) as calls, mock.patch.object(B, 'MAX_LATE', 0):
+            calls['population'].side_effect = [first, first, both]
+            self.limit(lambda: B.scan_references({TARGET}, self.budget(), proc=proc),
+                       'late_generations', 0, 1)
+        self.counts(calls, visible=1, population=3, identity=4, fds=6, maps=4, link=4)
+
+    def test_successful_scan_keeps_original_two_passes_and_exact_metadata_call_counts(self):
+        proc = SyntheticProc()
+        proc.tasks[(101, 101)]['fds'][3] = (metadata(UNRELATED), 0)
+        with self.traced(proc) as calls:
+            result = B.scan_references({TARGET}, self.budget(), proc=proc)
+        self.assertEqual(result, dict(process_generations=1, fd_observations=2, map_observations=0,
+            late_generations=0, exited_generations=0, reference_count=0, passes=2))
+        self.counts(calls, visible=1, population=4, identity=4, fds=6, fd=2, maps=4, link=4)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '고정 두 원본 PLAN 또는 검증 후 APPLY'
+        description: '고정 metadata DIAGNOSE, 두 원본 PLAN 또는 검증 후 APPLY'
         type: choice
-        options: [plan, apply]
+        options: [diagnose, plan, apply]
         default: plan
         required: true
       plan_sha256:
@@ -71,7 +71,7 @@ jobs:
           spec=importlib.util.spec_from_file_location('bundle','deploy/naver/backup_bundle.py')
           m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
           mode,sha,raw,confirm=(os.environ[k] for k in ('INPUT_MODE','INPUT_PLAN','INPUT_JSON','INPUT_CONFIRM'))
-          if mode=='plan':
+          if mode in ('diagnose','plan'):
               assert not sha and not raw and not confirm
               encoded=''
           elif mode=='apply':
@@ -118,7 +118,7 @@ jobs:
           target: /tmp/metainc-naver-backup-bundle-${{ github.run_id }}-${{ github.run_attempt }}
           strip_components: 1
           overwrite: false
-      - name: 고정 묶음 PLAN 또는 검증한 APPLY
+      - name: 고정 metadata 진단 또는 묶음 PLAN·검증한 APPLY
         env:
           NBB_MODE: ${{ inputs.mode }}
           NBB_PLAN: ${{ inputs.plan_sha256 }}
@@ -165,7 +165,7 @@ jobs:
             data=sys.stdin.buffer.read(16385)
             assert 0<len(data)<=16384 and b"\n" not in data
             value=ns["A"].strict_json(data);ns["validate_report"](value)
-            assert (rc=="0" and value["status"] in ("planned","applied")) or (rc=="2" and value["status"]=="refused")
+            assert (rc=="0" and value["status"] in ("observed","planned","applied")) or (rc=="2" and value["status"]=="refused")
             ' "$helper" "$NBB_SHA" "$rc" 2>/dev/null || { echo NAVER_BACKUP_BUNDLE_OUTPUT_REFUSED; exit 1; }
             printf 'NAVER_BACKUP_BUNDLE_RESULT=%s\n' "$out"
             exit "$rc"
