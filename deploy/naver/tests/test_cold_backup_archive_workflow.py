@@ -31,6 +31,8 @@ F54FC_GZIP6_SCOPE = '54fc-cold-backup-lossless-gzip6-v1'
 F54FC_GZIP6_CONFIRM = 'ARCHIVE_54FC_COLD_BACKUP_GZIP6_LOSSLESSLY'
 FB70_SCOPE = 'fb70-cold-backup-lossless-v1'
 FB70_CONFIRM = 'ARCHIVE_FB70_COLD_BACKUP_LOSSLESSLY'
+C8C13_SCOPE = '8c13-cold-backup-lossless-v1'
+C8C13_CONFIRM = 'ARCHIVE_8C13_COLD_BACKUP_LOSSLESSLY'
 
 
 def blocks(source):
@@ -76,7 +78,7 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
         self.assertEqual(re.findall(r'^  ([a-z_]+):', header, re.M), ['workflow_dispatch'])
         self.assertEqual(re.findall(r'^      ([a-z_0-9]+):', header, re.M),
                          ['scope', 'mode', 'plan_sha256', 'confirm'])
-        self.assertIn('options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1, bb151-cold-backup-lossless-v1, d633-cold-backup-lossless-v1, d633-cold-backup-lossless-gzip6-v1, 54fc-cold-backup-lossless-gzip6-v1, fb70-cold-backup-lossless-v1]', header)
+        self.assertIn('options: [c44-cold-backup-lossless-v1, a377-cold-backup-lossless-v1, bb151-cold-backup-lossless-v1, d633-cold-backup-lossless-v1, d633-cold-backup-lossless-gzip6-v1, 54fc-cold-backup-lossless-gzip6-v1, fb70-cold-backup-lossless-v1, 8c13-cold-backup-lossless-v1]', header)
         self.assertIn('default: c44-cold-backup-lossless-v1', header)
         self.assertIn('options: [plan, apply]', header)
         self.assertIn('default: plan', header)
@@ -97,7 +99,9 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
                        dict(SCOPE=F54FC_GZIP6_SCOPE),
                        dict(SCOPE=F54FC_GZIP6_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=F54FC_GZIP6_CONFIRM),
                        dict(SCOPE=FB70_SCOPE),
-                       dict(SCOPE=FB70_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=FB70_CONFIRM)):
+                       dict(SCOPE=FB70_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=FB70_CONFIRM),
+                       dict(SCOPE=C8C13_SCOPE),
+                       dict(SCOPE=C8C13_SCOPE, MODE='apply', PLAN_SHA='a' * 64, CONFIRM=C8C13_CONFIRM)):
             result = self.gate(**values)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout + result.stderr, '')
@@ -105,7 +109,8 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
     def test_each_profile_rejects_every_other_confirmation(self):
         profiles = ((SCOPE, CONFIRM), (A377_SCOPE, A377_CONFIRM), (BB151_SCOPE, BB151_CONFIRM),
                     (D633_SCOPE, D633_CONFIRM), (D633_GZIP6_SCOPE, D633_GZIP6_CONFIRM),
-                    (F54FC_GZIP6_SCOPE, F54FC_GZIP6_CONFIRM), (FB70_SCOPE, FB70_CONFIRM))
+                    (F54FC_GZIP6_SCOPE, F54FC_GZIP6_CONFIRM), (FB70_SCOPE, FB70_CONFIRM),
+                    (C8C13_SCOPE, C8C13_CONFIRM))
         for scope, expected in profiles:
             for _, supplied in profiles:
                 if supplied != expected:
@@ -290,7 +295,7 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
         self.assertIn('envs: NCA_RUN,NCA_SHA,NCA_MODE,NCA_PLAN,NCA_CONFIRM,NCA_SCOPE', self.source)
         self.assertIn('"$rc" "$NCA_SCOPE" 2>/dev/null', self.invoke)
         for scope in (SCOPE, A377_SCOPE, BB151_SCOPE, D633_SCOPE, D633_GZIP6_SCOPE,
-                      F54FC_GZIP6_SCOPE, FB70_SCOPE):
+                      F54FC_GZIP6_SCOPE, FB70_SCOPE, C8C13_SCOPE):
             raw = json.dumps({'status': 'planned', 'scope': scope}).encode()
             self.assertTrue(self.validate_output(raw, scope=scope))
             other = A377_SCOPE if scope == SCOPE else SCOPE
@@ -301,7 +306,7 @@ class ColdBackupArchiveWorkflowTest(unittest.TestCase):
         ns = {'__name__': 'workflow_helper_fixture'}
         exec(compile(source, '<public-helper-fixture>', 'exec'), ns)
         for scope in (SCOPE, A377_SCOPE, BB151_SCOPE, D633_SCOPE, D633_GZIP6_SCOPE,
-                      F54FC_GZIP6_SCOPE, FB70_SCOPE):
+                      F54FC_GZIP6_SCOPE, FB70_SCOPE, C8C13_SCOPE):
             raw = json.dumps(ns['receipt']('plan', scope)).encode()
             self.assertTrue(self.validate_output(raw, '2', scope=scope, helper_source=source))
             other = A377_SCOPE if scope == SCOPE else SCOPE

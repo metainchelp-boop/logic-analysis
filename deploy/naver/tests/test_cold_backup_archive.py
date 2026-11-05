@@ -19,6 +19,7 @@ D633_SCOPE = 'd633-cold-backup-lossless-v1'
 D633_GZIP6_SCOPE = 'd633-cold-backup-lossless-gzip6-v1'
 F54FC_GZIP6_SCOPE = '54fc-cold-backup-lossless-gzip6-v1'
 FB70_SCOPE = 'fb70-cold-backup-lossless-v1'
+C8C13_SCOPE = '8c13-cold-backup-lossless-v1'
 
 
 class ArchiveTest(unittest.TestCase):
@@ -902,11 +903,27 @@ class ArchiveFB70Test(ArchiveTest):
                 self.assertTrue(self.original.exists())
 
 
+class Archive8C13Test(ArchiveTest):
+    # The newly fixed source uses the full byte/metadata and refusal contract.
+    scope = C8C13_SCOPE
+
+    def test_every_prior_confirmation_refused_before_io(self):
+        for other in A.PROFILES.values():
+            if other.scope == self.scope:
+                continue
+            with self.subTest(scope=other.scope):
+                result = self.execute('apply', 'a' * 64, other.confirm)
+                self.assertEqual(result['reason'], 'INPUT_REFUSED')
+                self.assertEqual(self.commands, [])
+                self.assertFalse(self.archives.exists())
+                self.assertTrue(self.original.exists())
+
+
 class FixedProfileTest(unittest.TestCase):
-    def test_only_seven_fixed_profiles_and_six_prior_profiles_preserved(self):
+    def test_only_eight_fixed_profiles_and_seven_prior_profiles_preserved(self):
         self.assertEqual(set(A.PROFILES), {'c44-cold-backup-lossless-v1', 'a377-cold-backup-lossless-v1',
                                          'bb151-cold-backup-lossless-v1', D633_SCOPE, D633_GZIP6_SCOPE,
-                                         F54FC_GZIP6_SCOPE, FB70_SCOPE})
+                                         F54FC_GZIP6_SCOPE, FB70_SCOPE, C8C13_SCOPE})
         self.assertEqual(A.profile_for(), A.Profile(A.SCOPE, A.BACKUP_NAME, A.ARCHIVE_NAME, A.CONFIRM))
         self.assertEqual(A.profile_for('a377-cold-backup-lossless-v1'), A.Profile(
             'a377-cold-backup-lossless-v1', '20261102T185748Z-a3770876f746',
@@ -926,6 +943,9 @@ class FixedProfileTest(unittest.TestCase):
         self.assertEqual(A.profile_for(FB70_SCOPE), A.Profile(
             FB70_SCOPE, '20261103T081036Z-fb70e6d2ef90',
             '20261103T081036Z-fb70e6d2ef90-v1', 'ARCHIVE_FB70_COLD_BACKUP_LOSSLESSLY', 1))
+        self.assertEqual(A.profile_for(C8C13_SCOPE), A.Profile(
+            C8C13_SCOPE, '20261103T143402Z-8c13b0b72a61',
+            '20261103T143402Z-8c13b0b72a61-v1', 'ARCHIVE_8C13_COLD_BACKUP_LOSSLESSLY', 1))
         self.assertEqual((A.MIN_FREE_AFTER, A.RESERVE, A.TIME_BUDGET,
                           A.MAX_SOURCE, A.MAX_ARCHIVE, A.OVERHEAD),
                          (5 * 1024 ** 3, 512 * 1024 ** 2, 600,
