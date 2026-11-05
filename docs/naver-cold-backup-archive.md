@@ -41,9 +41,10 @@ APPLY repeats measurement, writes and verifies, so even a successful PLAN does
 not guarantee completion within that deadline.
 The 8c13 source is the previous-product cold copy recorded by the 0b9a6e23
 deployment (`deploy_state.current.previous_commit`, inspect run `42009161095`).
-It is the only generation left in `naver-deploy-db`. Its raw form occupies the
-space the nightly backup needs for its uncompressed snapshot, so the backup has
-returned `LOCAL_FAILED` since 2026-11-04 (status run `42033904794`). The fixed
+It is the only generation left in `naver-deploy-db`. Low free space and a
+nightly backup `LOCAL_FAILED` since 2026-11-04 are both observed (status run
+`42033904794`); compression is an option to recover space, and the direct cause
+of the backup failure is not established. The fixed
 gzip-1 profile keeps every byte and the original manifest; the rollback copy
 becomes an archive that is restored through the isolated restore path below.
 The same PLAN-before-APPLY limits apply; nothing here claims it fits.
