@@ -12,6 +12,7 @@ on:
       - '.github/workflows/naver-deploy.yml'
       - '.github/workflows/naver-grammar-preflight.yml'  # 고정 합성 AI 문법 검사, 제품 배포 없음
       - '.github/workflows/naver-build-cache-maintenance.yml'  # 미사용 빌드 캐시 정리, 앱 배포 없음
+      - '.github/workflows/naver-retired-image-inspect.yml'  # 퇴역 이미지 참조 조회, 앱 배포 없음
       - '.github/workflows/naver-backup-status.yml'  # 백업 상태·파일 metadata 읽기 전용, 앱 배포 없음
       - '.github/workflows/naver-backup-bundle.yml'  # 고정 두 복구 사본 보존 전용, 앱 배포 없음
       - '.github/workflows/naver-cold-backup-archive.yml'  # 기존 복구 사본 무손실 압축, 앱 배포 없음
