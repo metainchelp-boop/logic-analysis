@@ -9,6 +9,7 @@ DB 를 열지 않으며 압축 해제 내용을 디스크에 쓰지 않는다(�
 두 파일은 O_NOFOLLOW 로 연 fd 에 고정하고, 해시·검증은 그 fd 로만 하며, 경로 작업 직전마다 경로가 같은
 inode 를 가리키는지 다시 대조한다.
 """
+import errno
 import hashlib
 import json
 import os
@@ -76,19 +77,17 @@ def nobody_uses(keys):
         try:
             refs += [base + '/fd/' + n for n in os.listdir(base + '/fd')]
             refs += [base + '/map_files/' + n for n in os.listdir(base + '/map_files')]
-        except FileNotFoundError:
-            continue                                   # 프로세스 종료
-        except PermissionError:
+        except OSError as e:
+            if e.errno in (errno.ENOENT, errno.ESRCH):
+                continue                               # 프로세스 종료
             raise Stop('PROC_UNREADABLE pid=' + pid)
         for ref in refs:
             try:
                 s = os.stat(ref)
-            except FileNotFoundError:
-                continue                               # 그 fd 하나만 닫힘
-            except PermissionError:
+            except OSError as e:
+                if e.errno in (errno.ENOENT, errno.ESRCH):
+                    continue                           # 그 항목만 닫힘 또는 프로세스 종료
                 raise Stop('PROC_UNREADABLE pid=' + pid)
-            except OSError:
-                continue                               # 소켓·익명 등 경로 없는 대상
             need((s.st_dev, s.st_ino) not in keys, 'PATH_IN_USE', 'pid=' + pid)
 
 
@@ -103,12 +102,12 @@ def ident(s):
     return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns, s.st_nlink)
 
 
-def same_path(path, fd):
+def same_path(path, fd, expected):
     a, b = os.lstat(path), os.fstat(fd)
-    need(stat.S_ISREG(a.st_mode) and ident(a) == ident(b), 'PATH_CHANGED', os.path.basename(path))
+    need(stat.S_ISREG(a.st_mode) and ident(a) == ident(b) == expected, 'PATH_CHANGED', os.path.basename(path))
 
 
-def find_target():
+def find_target(fds):
     no_symlink_parents(ROOT)
     root = os.lstat(ROOT)
     need(stat.S_ISDIR(root.st_mode), 'ROOT_NOT_DIR')
@@ -120,14 +119,13 @@ def find_target():
     need(s.st_uid == ENGINE_UID and stat.S_IMODE(s.st_mode) == 0o700, 'BUILDING_OWNER_MODE')
     need(s.st_dev == root.st_dev, 'BUILDING_OTHER_DEVICE')
     need(sorted(os.listdir(work)) == sorted(FILES), 'BUILDING_FILES')
-    fds = {}
     for name in FILES:
         fd = os.open(work + '/' + name, os.O_RDONLY | os.O_NOFOLLOW)
+        fds[name] = fd                                 # 실패해도 main 의 finally 가 닫는다
         f = os.fstat(fd)
         need(stat.S_ISREG(f.st_mode) and f.st_nlink == 1 and f.st_uid == ENGINE_UID and f.st_dev == root.st_dev,
              'FILE_SHAPE', name)
-        fds[name] = fd
-    return work, (s.st_dev, s.st_ino), fds
+    return work, (s.st_dev, s.st_ino)
 
 
 def sha_fd(fd):
@@ -164,7 +162,7 @@ def verify(work, fds):
     need({n: ident(os.fstat(fds[n])) for n in FILES} == before, 'CHANGED_DURING_CHECK')
     need(sha_fd(fds['packed.zip']) == zip_sha, 'ZIP_CHANGED_DURING_CHECK')
     for n in FILES:
-        same_path(work + '/' + n, fds[n])
+        same_path(work + '/' + n, fds[n], before[n])
     say('VERIFIED', 'snapshot_bytes=%d zip_bytes=%d' % (before['snapshot.sqlite'][2], before['packed.zip'][2]))
     return before, zip_sha
 
@@ -188,7 +186,8 @@ def apply(work, keys, fds, before, zip_sha):
     target = KEEP_DIR + '/packed.zip'
     services_stopped()
     nobody_uses(keys)
-    same_path(packed, fds['packed.zip'])
+    same_path(packed, fds['packed.zip'], before['packed.zip'])
+    same_path(snap, fds['snapshot.sqlite'], before['snapshot.sqlite'])
     STAGE[0] = 'ZIP 이동 중 또는 후(snapshot 삭제 전)'
     os.rename(packed, target)                      # 같은 파일시스템 rename 만(교차 FS 는 OSError, 목적지는 빈 새 폴더)
     os.fsync(fds['packed.zip'])
@@ -201,13 +200,26 @@ def apply(work, keys, fds, before, zip_sha):
     say('ZIP_KEPT', target)
     services_stopped()
     nobody_uses(keys)
-    same_path(snap, fds['snapshot.sqlite'])
+    same_path(snap, fds['snapshot.sqlite'], before['snapshot.sqlite'])
     STAGE[0] = 'snapshot 삭제 중 또는 후'
     os.unlink(snap)
+    os.close(fds.pop('snapshot.sqlite'))           # 열린 fd 가 공간을 붙잡지 않게 바로 닫는다
     fsync_dir(work)
     os.rmdir(work)
     fsync_dir(ROOT)
     say('SNAPSHOT_REMOVED', 'bytes=%d' % before['snapshot.sqlite'][2])
+
+
+def state_of(path):
+    if not path:
+        return 'unknown'
+    try:
+        os.lstat(path)
+        return 'present'
+    except FileNotFoundError:
+        return 'absent'
+    except OSError:
+        return 'unknown'
 
 
 def report_left():
@@ -217,24 +229,23 @@ def report_left():
         names = [n for n in os.listdir(ROOT) if n.startswith('.building-')]
         if len(names) == 1:
             snap, packed = ROOT + '/' + names[0] + '/snapshot.sqlite', ROOT + '/' + names[0] + '/packed.zip'
+        elif not names:
+            snap = packed = 'none'
     except OSError:
         pass
     for label, path in (('snapshot', snap), ('packed', packed), ('keep_dir', KEEP_DIR),
                         ('kept_zip', KEEP_DIR + '/packed.zip')):
-        try:
-            present = bool(path) and os.path.lexists(path)
-            say('LEFT', '%s=%s' % (label, 'present' if present else 'absent'))
-        except OSError:
-            say('LEFT', '%s=unknown' % label)
+        say('LEFT', '%s=%s' % (label, 'absent' if path == 'none' else state_of(path)))
 
 
 def main():
     mode = sys.argv[1] if len(sys.argv) == 2 else ''
+    fds = {}
     try:
         need(mode in ('check', 'apply'), 'USAGE', 'check|apply')
         need(os.geteuid() == 0, 'NOT_ROOT')
         services_stopped()
-        work, dir_key, fds = find_target()
+        work, dir_key = find_target(fds)
         keys = {dir_key} | {(os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in fds.values()}
         nobody_uses(keys)
         before, zip_sha = verify(work, fds)
@@ -252,6 +263,10 @@ def main():
         say('STOPPED', str(e))
     except Exception as e:                          # 원문 값은 출력하지 않는다
         say('STOPPED', 'ERROR ' + type(e).__name__)
+    finally:
+        for fd in fds.values():
+            os.close(fd)
+        fds.clear()
     report_left()
     say('HOLD', '엔진은 정지 상태 그대로. 재기동하지 말고 이 화면을 보내 주세요.')
     return 1
