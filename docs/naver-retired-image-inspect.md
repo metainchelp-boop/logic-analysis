@@ -56,6 +56,33 @@
 이미지 Size는 공유 레이어를 포함하므로 합계나 실제 확보량을 제시하지 않는다.
 정지 컨테이너의 참조도 참조 발견이며 컨테이너 삭제를 자동으로 포함하지 않는다.
 
+### CLI 호환성과 실패 진단 (schema 2)
+
+Docker API v1.52부터 비어 있는 `Parent`가 생략될 수 있으므로 Go template의
+`index`로 읽는다. 생략은 null, 빈 문자열은 빈 문자열로 유지하고, 누락된 부모
+관계를 확인된 0으로 바꾸지 않는다. API 버전을 강제로 낮추지는 않는다.
+
+JSON `schema_version=2`에는 `diagnostic`이 추가된다. 정상·변경 결과와 명령 호출
+외의 실패는 null이며, 명령 호출 실패에는 다음 제한된 값만 들어간다.
+
+- `snapshot`: 첫 번째 또는 두 번째 관찰(1/2).
+- `command_index`: 두 관찰 전체의 호출 순서(1..304).
+- `stage`: `INFO`, `IMAGE_LIST`, `CONTAINER_LIST`, `IMAGE_INSPECT`,
+  `CONTAINER_INSPECT`, `ANCESTOR_FILTER` 중 하나.
+- `code`: `PARENT_KEY_MISSING`, `TEMPLATE_ERROR`, `DAEMON_UNAVAILABLE`,
+  `OBJECT_NOT_FOUND`, `COMMAND_NONZERO`, `OS_NOT_FOUND`, `OS_PERMISSION`, `OS_OTHER`,
+  `COMMAND_TIMEOUT`, `OUTPUT_LIMIT`, `INVALID_METADATA` 중 하나.
+- `exit_code`: 실제 비정상 종료값 또는 실행 결과 미확인 시 null.
+
+분류는 제한된 오류 문구로 구분한 관측 지표다. 원래 장애의 확정 원인이나 복구
+성공을 뜻하지 않는다. stderr는 기존 stdout+stderr 합산 상한 안에서만 메모리에
+보관하고, 원문·경로·명령·이미지 이름을 공개하지 않는다. 시간/출력 상한과
+실행 OS 오류에는 종료값을 추측해 넣지 않는다. 최상위 `reason`과 후보 `UNKNOWN`
+경계는 유지되며, `docker=null`만으로 최초 info 명령 실패라고 해석하지 않는다.
+
+기존 schema 1 결과에는 이 정보가 없으므로 실패 명령을 소급 확정할 수 없다.
+schema 2 생산자와 출력 검증기는 같은 해시 확인된 helper로 함께 반영한다.
+
 ## 수동 실행 경계
 
 GitHub Actions의 **퇴역 이미지 참조 읽기 전용 확인**은 수동 실행만 지원한다.
@@ -80,9 +107,15 @@ GitHub Actions의 **퇴역 이미지 참조 읽기 전용 확인**은 수동 실
 python3 -I -B -m unittest discover -s deploy/naver/tests -p 'test_retired_image_*.py' -v
 ```
 
-서버·실제 Docker를 사용하지 않는 fixture로 중지 컨테이너 참조, 누락·변경,
+서버·실제 Docker daemon을 사용하지 않는 fixture로 중지 컨테이너 참조, 누락·변경,
 잘린 ID, 태그·오류 원문 누출, 자원 상한, 고정 읽기 명령과 workflow 경계를 검사한다.
 실제 Linux Docker 운영 조회와 현재 후보 참조는 별도 실행 증거가 필요하다.
+
+추가 회귀는 실제 Docker CLI가 임시 전용 Unix socket의 모의 API에만 연결되게 하여
+Go template을 직접 검증한다. Parent 생략·빈값·유효한 값과 구형 템플릿 실패를
+비교하며, 실제 Docker daemon에는 접근하지 않는다. CI와 운영 workflow의 사전
+합성 검사에서는 `NAVER_REQUIRE_DOCKER_CLI=1`로 CLI 부재 시 실패시킨다.
+로컬에서 CLI가 없으면 이 회귀는 건너뛴 것으로 명시되므로 전체 검증으로 보지 않는다.
 
 - [Docker container ls: 전체 상태와 ancestor 필터](https://docs.docker.com/reference/cli/docker/container/ls/)
 - [Docker image ls: 전체 이미지·중복 태그·Size 의미](https://docs.docker.com/reference/cli/docker/image/ls/)

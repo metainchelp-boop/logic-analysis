@@ -3,6 +3,7 @@
 This is an observation of the active Docker image store, not a removal plan.
 Neither Parent nor layer similarity proves complete image ancestry.
 """
+import errno
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ import sys
 import time
 
 SCOPE = 'naver-retired-image-inspect-v1'
+SCHEMA_VERSION = 2
 DOCKER = ('/usr/bin/docker', '--host=unix:///var/run/docker.sock')
 ENV = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent',
        'DOCKER_CONFIG': '/nonexistent/metainc-retired-image-inspect', 'LC_ALL': 'C'}
@@ -34,6 +36,14 @@ MAX_REPORT_BYTES = 32768
 COMMAND_SECONDS = 10
 TOTAL_SECONDS = 120
 BATCH_SIZE = 32
+MAX_COMMANDS = 2 * (3 + (MAX_IMAGES + BATCH_SIZE - 1) // BATCH_SIZE
+                    + (MAX_CONTAINERS + BATCH_SIZE - 1) // BATCH_SIZE + len(CANDIDATES))
+STAGES = frozenset(('INFO', 'IMAGE_LIST', 'CONTAINER_LIST', 'IMAGE_INSPECT',
+                    'CONTAINER_INSPECT', 'ANCESTOR_FILTER'))
+NONZERO_CODES = frozenset(('PARENT_KEY_MISSING', 'TEMPLATE_ERROR', 'DAEMON_UNAVAILABLE',
+                           'OBJECT_NOT_FOUND', 'COMMAND_NONZERO'))
+OS_CODES = frozenset(('OS_NOT_FOUND', 'OS_PERMISSION', 'OS_OTHER'))
+READ_CODES = frozenset(('COMMAND_TIMEOUT', 'OUTPUT_LIMIT', 'INVALID_METADATA'))
 HEX = re.compile(r'[0-9a-f]{64}\Z')
 IMAGE_ID = re.compile(r'sha256:[0-9a-f]{64}\Z')
 STATES = frozenset(('created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead'))
@@ -45,7 +55,7 @@ INFO_FORMAT = ('{"id":{{json .ID}},"driver":{{json .Driver}},'
                '"driver_status":{{json .DriverStatus}},"root":{{json .DockerRootDir}},'
                '"server_version":{{json .ServerVersion}}}')
 IMAGE_FORMAT = ('{"id":{{json .Id}},"size":{{json .Size}},"tags":{{json .RepoTags}},'
-                '"digests":{{json .RepoDigests}},"parent":{{json .Parent}},'
+                '"digests":{{json .RepoDigests}},"parent":{{json (index . "Parent")}},'
                 '"rootfs":{{json .RootFS}}}')
 CONTAINER_FORMAT = ('{"id":{{json .Id}},"image":{{json .Image}},'
                     '"state":{{json .State.Status}}}')
@@ -55,6 +65,38 @@ CONTAINER_LIST = ('container', 'ls', '--all', '--quiet', '--no-trunc')
 
 class Refused(Exception):
     """Only fixed reason codes are allowed to leave the collector."""
+    def __init__(self, reason, code=None, exit_code=None):
+        super().__init__(reason)
+        self.code = code
+        self.exit_code = exit_code
+
+
+def failure_code(stderr):
+    """Classify bounded private bytes; never include a matched substring in output."""
+    if b'<.Parent>' in stderr and b'map has no entry for key "Parent"' in stderr:
+        return 'PARENT_KEY_MISSING'
+    if b'template parsing error' in stderr or b'template execution error' in stderr:
+        return 'TEMPLATE_ERROR'
+    if (b'Cannot connect to the Docker daemon' in stderr
+            or b'error during connect:' in stderr or b'failed to connect to the docker API' in stderr):
+        return 'DAEMON_UNAVAILABLE'
+    if b'No such image:' in stderr or b'No such container:' in stderr or b'No such object:' in stderr:
+        return 'OBJECT_NOT_FOUND'
+    return 'COMMAND_NONZERO'
+
+
+def command_stage(args):
+    if args == ('info', '--format', INFO_FORMAT):
+        return 'INFO'
+    if args == IMAGE_LIST:
+        return 'IMAGE_LIST'
+    if args == CONTAINER_LIST:
+        return 'CONTAINER_LIST'
+    if args[:2] == ('image', 'inspect'):
+        return 'IMAGE_INSPECT'
+    if args[:2] == ('container', 'inspect'):
+        return 'CONTAINER_INSPECT'
+    return 'ANCESTOR_FILTER'  # Called only after the exact command allowlist.
 
 
 def canonical(value):
@@ -146,6 +188,7 @@ class Runner:
         process = None
         selector = selectors.DefaultSelector()
         output = bytearray()
+        errors = bytearray()
         command_bytes = 0
         try:
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -168,6 +211,8 @@ class Runner:
                         raise Refused('OUTPUT_LIMIT')
                     if key.fileobj is process.stdout:
                         output.extend(block)
+                    else:
+                        errors.extend(block)
             remaining = until - time.monotonic()
             if remaining <= 0:
                 raise Refused('COMMAND_TIMEOUT')
@@ -176,10 +221,12 @@ class Runner:
             except subprocess.TimeoutExpired:
                 raise Refused('COMMAND_TIMEOUT') from None
             if result != 0:
-                raise Refused('COMMAND_FAILED')
+                raise Refused('COMMAND_FAILED', failure_code(errors), result)
             return bytes(output)
-        except OSError:
-            raise Refused('COMMAND_FAILED') from None
+        except OSError as error:
+            code = ('OS_NOT_FOUND' if error.errno == errno.ENOENT else
+                    'OS_PERMISSION' if error.errno in (errno.EACCES, errno.EPERM) else 'OS_OTHER')
+            raise Refused('COMMAND_FAILED', code) from None
         finally:
             selector.close()
             if process is not None:
@@ -195,22 +242,33 @@ class Session:
         self.runner = runner
         self.deadline = time.monotonic() + TOTAL_SECONDS
         self.total_bytes = 0
+        self.snapshot = 0
+        self.command_index = 0
+        self.diagnostic = None
 
     def read(self, args):
         command = DOCKER + args
         if not command_allowed(command):
             raise Refused('INPUT_REFUSED')
-        if time.monotonic() >= self.deadline:
-            raise Refused('COMMAND_TIMEOUT')
-        raw = self.runner(command)
-        if time.monotonic() >= self.deadline:
-            raise Refused('COMMAND_TIMEOUT')
-        if type(raw) is not bytes:
-            raise Refused('INVALID_METADATA')
-        self.total_bytes += len(raw)
-        if len(raw) > MAX_COMMAND_BYTES or self.total_bytes > MAX_TOTAL_BYTES:
-            raise Refused('OUTPUT_LIMIT')
-        return raw
+        self.command_index += 1
+        try:
+            if time.monotonic() >= self.deadline:
+                raise Refused('COMMAND_TIMEOUT')
+            raw = self.runner(command)
+            if time.monotonic() >= self.deadline:
+                raise Refused('COMMAND_TIMEOUT')
+            if type(raw) is not bytes:
+                raise Refused('INVALID_METADATA')
+            self.total_bytes += len(raw)
+            if len(raw) > MAX_COMMAND_BYTES or self.total_bytes > MAX_TOTAL_BYTES:
+                raise Refused('OUTPUT_LIMIT')
+            return raw
+        except Refused as error:
+            reason = str(error)
+            code = error.code or ('COMMAND_NONZERO' if reason == 'COMMAND_FAILED' else reason)
+            self.diagnostic = dict(snapshot=self.snapshot, command_index=self.command_index,
+                                   stage=command_stage(args), code=code, exit_code=error.exit_code)
+            raise
 
     def ids(self, args, image=False):
         raw = self.read(args)
@@ -306,6 +364,7 @@ def normalize_container(value):
 
 
 def snapshot(session):
+    session.snapshot += 1
     info = normalize_info(strict_json(session.read(('info', '--format', INFO_FORMAT))))
     image_ids = session.ids(IMAGE_LIST, True)
     container_ids = session.ids(CONTAINER_LIST)
@@ -325,8 +384,8 @@ def snapshot(session):
     return dict(info=info, images=images, containers=containers, ancestors=ancestors)
 
 
-def empty_report(reason='INTERNAL_ERROR', changed=False):
-    return dict(schema_version=1, scope=SCOPE,
+def empty_report(reason='INTERNAL_ERROR', changed=False, diagnostic=None):
+    return dict(schema_version=SCHEMA_VERSION, scope=SCOPE, diagnostic=diagnostic,
                 status='CHANGED' if changed else 'INCOMPLETE', reason=reason,
                 delete_authorized=False, reclaimable_bytes=None, backup_currently_verified=False,
                 docker=None, candidates=[dict(name=name, image_id=image, status='UNKNOWN',
@@ -373,6 +432,7 @@ def project(value):
 
 
 def collect_report(runner=None):
+    session = None
     try:
         session = Session(Runner() if runner is None else runner)
         before = snapshot(session)
@@ -383,15 +443,19 @@ def collect_report(runner=None):
         reason = str(error)
         if reason not in REASONS - {'OK', 'INVENTORY_CHANGED'}:
             reason = 'INTERNAL_ERROR'
-        return empty_report(reason)
+        result = empty_report(reason, diagnostic=session.diagnostic if session else None)
+        try:
+            return validate_report(result)
+        except Exception:
+            return empty_report()
     except Exception:
         return empty_report('INTERNAL_ERROR')
 
 
 def validate_report(value):
     keys(value, ('schema_version', 'scope', 'status', 'reason', 'delete_authorized',
-                 'reclaimable_bytes', 'backup_currently_verified', 'docker', 'candidates'))
-    if type(value['schema_version']) is not int or value['schema_version'] != 1 or value['scope'] != SCOPE:
+                 'reclaimable_bytes', 'backup_currently_verified', 'docker', 'candidates', 'diagnostic'))
+    if type(value['schema_version']) is not int or value['schema_version'] != SCHEMA_VERSION or value['scope'] != SCOPE:
         raise Refused('INVALID_METADATA')
     if value['delete_authorized'] is not False or value['reclaimable_bytes'] is not None or value['backup_currently_verified'] is not False:
         raise Refused('INVALID_METADATA')
@@ -401,6 +465,28 @@ def validate_report(value):
     if (status == 'COMPLETE_STABLE' and reason != 'OK') or (status == 'CHANGED' and reason != 'INVENTORY_CHANGED') or (status == 'INCOMPLETE' and reason in ('OK', 'INVENTORY_CHANGED')) or status not in ('COMPLETE_STABLE', 'INCOMPLETE', 'CHANGED'):
         raise Refused('INVALID_METADATA')
     complete = status == 'COMPLETE_STABLE'
+    diagnostic = value['diagnostic']
+    if diagnostic is not None:
+        keys(diagnostic, ('snapshot', 'command_index', 'stage', 'code', 'exit_code'))
+        if status != 'INCOMPLETE' or reason not in READ_CODES | {'COMMAND_FAILED'}:
+            raise Refused('INVALID_METADATA')
+        if number(diagnostic['snapshot'], 2) == 0 or number(diagnostic['command_index'], MAX_COMMANDS) == 0:
+            raise Refused('INVALID_METADATA')
+        if type(diagnostic['stage']) is not str or diagnostic['stage'] not in STAGES:
+            raise Refused('INVALID_METADATA')
+        code, exit_code = diagnostic['code'], diagnostic['exit_code']
+        if type(code) is not str or code not in NONZERO_CODES | OS_CODES | READ_CODES:
+            raise Refused('INVALID_METADATA')
+        if reason == 'COMMAND_FAILED':
+            if code not in NONZERO_CODES | OS_CODES:
+                raise Refused('INVALID_METADATA')
+        elif code != reason:
+            raise Refused('INVALID_METADATA')
+        if exit_code is not None:
+            if code not in NONZERO_CODES or type(exit_code) is not int or not -64 <= exit_code <= 255 or exit_code == 0:
+                raise Refused('INVALID_METADATA')
+        elif code in NONZERO_CODES - {'COMMAND_NONZERO'}:
+            raise Refused('INVALID_METADATA')
     docker = value['docker']
     if complete:
         keys(docker, ('server_identity_sha256', 'driver_sha256', 'server_version_sha256',
