@@ -51,8 +51,11 @@ def services_stopped():
         state = subprocess.run(('systemctl', 'is-active', unit), capture_output=True, text=True).stdout.strip()
         need(state in ('inactive', 'failed'), 'UNIT_NOT_STOPPED', unit + '=' + state)
     for project in PROJECTS:
-        ids = run('docker', 'ps', '-q', '--filter', 'label=com.docker.compose.project=' + project)
-        need(ids == '', 'CONTAINER_STILL_RUNNING', project)
+        label = 'label=com.docker.compose.project=' + project
+        known = run('docker', 'ps', '-a', '-q', '--filter', label).split()
+        need(len(known) == 1, 'CONTAINER_COUNT', '%s=%d' % (project, len(known)))
+        state = run('docker', 'inspect', '-f', '{{.State.Running}} {{.State.Pid}}', known[0])
+        need(state == 'false 0', 'CONTAINER_STILL_RUNNING', project)
 
 
 def no_process_uses(path):
@@ -209,6 +212,14 @@ def main():
     except OSError as e:
         say('STOPPED', 'OS_ERROR ' + type(e).__name__)
     say('STAGE', STAGE[0])
+    for label, path in (('snapshot', None), ('packed', None), ('kept', KEEP_DIR + '/packed.zip')):
+        if path is None:
+            try:
+                names = [n for n in os.listdir(ROOT) if n.startswith('.building-')]
+                path = ROOT + '/' + names[0] + ('/snapshot.sqlite' if label == 'snapshot' else '/packed.zip') if len(names) == 1 else ''
+            except OSError:
+                path = ''
+        say('LEFT', '%s=%s' % (label, 'present' if path and os.path.lexists(path) else 'absent_or_unknown'))
     say('HOLD', '엔진은 정지 상태 그대로. 재기동하지 말고 이 화면을 보내 주세요.')
     return 1
 
