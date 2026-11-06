@@ -2,7 +2,8 @@
 
 사용: python3 backup_snapshot_preserve.py check   # 검사·압축 크기 측정만, 디스크에 아무것도 쓰지 않음
       python3 backup_snapshot_preserve.py apply   # gzip 보존본 작성·전량 해제 대조 후 원본 snapshot 1개만 삭제
-(깨진 packed.zip 은 지우지 않고 그대로 둔다. 보존본은 state.json 이나 일일 백업으로 등록하지 않는다.)
+(깨진 packed.zip 은 지우지 않고 같은 파일시스템의 보존 폴더로 rename 해 함께 둔다.
+ 보존본은 state.json 이나 일일 백업으로 등록하지 않는다.)
 
 전제: relay → engine 을 먼저 정지한다. 터널은 그대로 둔다. state.json 은 읽지도 바꾸지도 않는다.
 어느 검사든 실패하면 즉시 멈추고(종료코드 1) 다음 단계로 가지 않는다. 엔진 재기동은 사람이 결정한다.
@@ -149,14 +150,20 @@ def sha_fd(fd):
     return h.hexdigest(), n
 
 
+def free_ok(extra, code):
+    s = os.statvfs(KEEP_DIR)
+    need(s.f_bavail * s.f_frsize >= RESERVE + extra, code)
+
+
 class Guarded:
-    """쓰기마다 남은 여유를 다시 재고 RESERVE 아래로 내려가면 중단한다."""
-    def __init__(self, raw):
-        self.raw = raw
+    """쓰기마다(마감 trailer 포함) 측정 크기 상한과 남은 여유를 다시 확인한다."""
+    def __init__(self, raw, limit):
+        self.raw, self.limit, self.n = raw, limit, 0
 
     def write(self, b):
-        s = os.statvfs(KEEP_DIR)
-        need(s.f_bavail * s.f_frsize >= RESERVE + len(b), 'SPACE_SHORT_DURING_WRITE')
+        need(self.n + len(b) <= self.limit, 'GZIP_OVER_MEASURED')
+        free_ok(len(b), 'SPACE_SHORT_DURING_WRITE')
+        self.n += len(b)
         return self.raw.write(b)
 
     def flush(self):
@@ -213,7 +220,7 @@ def apply(work, keys, fds, before, sha, size, compressed):
     out = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(out, 'wb') as raw:
         os.lseek(fds['snapshot.sqlite'], 0, os.SEEK_SET)
-        with gzip.GzipFile(filename='', mode='wb', compresslevel=GZ_LEVEL, fileobj=Guarded(raw), mtime=0) as g:
+        with gzip.GzipFile(filename='', mode='wb', compresslevel=GZ_LEVEL, fileobj=Guarded(raw, compressed), mtime=0) as g:
             for block in iter(lambda: os.read(fds['snapshot.sqlite'], CHUNK), b''):
                 g.write(block)
         raw.flush()
@@ -228,6 +235,7 @@ def apply(work, keys, fds, before, sha, size, compressed):
             n += len(block)
     need(h.hexdigest() == sha and n == size, 'GZIP_VERIFY_FAILED')
     need(sha_fd(fds['snapshot.sqlite']) == (sha, size), 'SNAPSHOT_CHANGED')
+    free_ok(MANIFEST_MAX, 'SPACE_SHORT_BEFORE_PUBLISH')
     os.rename(partial, final)
     meta = KEEP_DIR + '/snapshot.sqlite.json'
     mfd = os.open(meta, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -244,11 +252,27 @@ def apply(work, keys, fds, before, sha, size, compressed):
     nobody_uses(keys)
     same_path(snap, fds['snapshot.sqlite'], before['snapshot.sqlite'])
     same_path(packed, fds['packed.zip'], before['packed.zip'])
-    STAGE[0] = 'snapshot 삭제 중 또는 후(보존본 완성, 깨진 ZIP 유지)'
+    broken = KEEP_DIR + '/packed.zip.broken'
+    need(not os.path.lexists(broken), 'KEEP_TARGET_EXISTS')
+    STAGE[0] = '깨진 ZIP 보존 이동 중 또는 후(snapshot 무변경)'
+    os.rename(packed, broken)                      # 같은 파일시스템 rename, 추가 공간 없음
+    os.fsync(fds['packed.zip'])
+    fsync_dir(work)
+    fsync_dir(KEEP_DIR)
+    moved = os.lstat(broken)
+    need(ident(moved)[:3] == before['packed.zip'][:3] and not os.path.lexists(packed), 'ZIP_KEEP_IDENTITY')
+    os.close(fds.pop('packed.zip'))
+    say('BROKEN_ZIP_KEPT', broken)
+    services_stopped()
+    nobody_uses(keys)
+    same_path(snap, fds['snapshot.sqlite'], before['snapshot.sqlite'])
+    STAGE[0] = 'snapshot 삭제 중 또는 후(보존본 완성)'
     os.unlink(snap)
     os.close(fds.pop('snapshot.sqlite'))
     fsync_dir(work)
-    say('SNAPSHOT_REMOVED', 'bytes=%d broken_zip=kept' % size)
+    os.rmdir(work)
+    fsync_dir(ROOT)
+    say('SNAPSHOT_REMOVED', 'bytes=%d' % size)
 
 
 def report_left():
@@ -264,7 +288,8 @@ def report_left():
         pass
     for label, path in (('snapshot', snap), ('broken_zip', packed), ('keep_dir', KEEP_DIR),
                         ('gzip_partial', KEEP_DIR + '/snapshot.sqlite.gz.partial'),
-                        ('gzip_final', KEEP_DIR + '/snapshot.sqlite.gz')):
+                        ('gzip_final', KEEP_DIR + '/snapshot.sqlite.gz'),
+                        ('broken_zip_kept', KEEP_DIR + '/packed.zip.broken')):
         say('LEFT', '%s=%s' % (label, 'absent' if path == 'none' else state_of(path)))
 
 
@@ -302,7 +327,7 @@ def main():
         peak = db + db // 10 * 3 + GIB
         say('FREE', 'gib=%.2f db_gib=%.2f backup_peak_estimate_gib=%.2f estimate=%s' %
             (free / GIB, db / GIB, peak / GIB, 'enough' if free >= peak else 'short'))
-        say('DONE_' + mode.upper(), '재기동 여부는 이 화면을 보고 결정합니다')
+        say('DONE_' + mode.upper(), '정리 결과와 별개로 재기동 여부는 이 화면을 보고 결정합니다(estimate 는 추정)')
         return 0
     except Stop as e:
         say('STOPPED', str(e))
