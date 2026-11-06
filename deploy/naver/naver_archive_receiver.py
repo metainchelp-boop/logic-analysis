@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import stat
+import struct
 import sys
 
 DESTINATION = 'archives.gpg'
@@ -14,6 +15,8 @@ PARTIAL = 'archives.gpg.partial'
 LOCK = '.receive.lock'
 OWNER_UID, OWNER_GID = 0, 0
 BLOCK_BYTES = 64 * 1024
+WIRE_MAGIC = b'NAVER-ARCHIVE-CIPHER-FRAMES-V1\n'
+FRAME_BYTES = 64 * 1024
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
@@ -22,6 +25,7 @@ COMMAND = 'receive-naver-archives-20261106-v1'
 FETCH_COMMAND = 'fetch-naver-archives-20261106-v1'
 PARENTS = ('var', 'backups', 'metainc-app-retirement', SESSION)
 MAX_CIPHER = 12 * 1024 ** 3
+MAX_FRAMES = (MAX_CIPHER + FRAME_BYTES - 1) // FRAME_BYTES
 RESERVE_BYTES = 3 * 1024 ** 3
 MIN_FREE = MAX_CIPHER + RESERVE_BYTES
 TIMEOUT = 3600
@@ -129,6 +133,47 @@ def validate_partial(folder, fd, expected, links=1, name=PARTIAL):
         raise ReceiverError('partial_changed')
 
 
+def exact_frame(stream, size):
+    """Read only a bounded protocol field; EOF is never a completion signal."""
+    parts = []
+    remaining = size
+    while remaining:
+        block = stream.read(remaining)
+        if not isinstance(block, bytes) or len(block) > remaining:
+            raise ReceiverError('frame_invalid')
+        if not block:
+            raise ReceiverError('frame_truncated')
+        parts.append(block)
+        remaining -= len(block)
+    return b''.join(parts)
+
+
+def ciphertext_frames(stream):
+    """Unambiguous length framing; only a validated terminal frame can commit."""
+    if exact_frame(stream, len(WIRE_MAGIC)) != WIRE_MAGIC:
+        raise ReceiverError('frame_invalid')
+    digest, count, frames = hashlib.sha256(), 0, 0
+    while True:
+        size = struct.unpack('>I', exact_frame(stream, 4))[0]
+        if size == 0:
+            total = struct.unpack('>Q', exact_frame(stream, 8))[0]
+            expected = exact_frame(stream, 32)
+            if total != count or expected != digest.digest():
+                raise ReceiverError('frame_mismatch')
+            if stream.read(1) != b'':
+                raise ReceiverError('frame_trailing_data')
+            return
+        if size > FRAME_BYTES or frames >= MAX_FRAMES:
+            raise ReceiverError('frame_limit')
+        if count + size > MAX_CIPHER:
+            raise ReceiverError('size_limit')
+        block = exact_frame(stream, size)
+        digest.update(block)
+        count += size
+        frames += 1
+        yield block
+
+
 def receive_into(stream, root, state):
     with namespace(root) as (folder, validate), exclusive_lock(folder):
         validate()
@@ -147,12 +192,7 @@ def receive_into(stream, root, state):
             validate_partial(folder, fd, expected)
             os.fsync(folder)  # Persist the partial name, including on later failure.
             digest = hashlib.sha256()
-            while True:
-                block = stream.read(min(BLOCK_BYTES, MAX_CIPHER + 1 - state['bytes']))
-                if not block:
-                    break
-                if not isinstance(block, bytes) or state['bytes'] + len(block) > MAX_CIPHER:
-                    raise ReceiverError('size_limit')
+            for block in ciphertext_frames(stream):
                 validate()
                 validate_partial(folder, fd, expected)
                 free = os.fstatvfs(folder)

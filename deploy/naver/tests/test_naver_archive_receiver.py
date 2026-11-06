@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import struct
 import sys
 import tempfile
 import time
@@ -22,6 +23,19 @@ SPEC = importlib.util.spec_from_file_location(
 subject = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(subject)
 CANARY = b'PRIVATE_SYNTHETIC_PAYLOAD_NOT_A_REAL_KEY'
+
+
+def framed(payload, chunk=None, terminal=True):
+    chunk = min(subject.BLOCK_BYTES, subject.FRAME_BYTES) if chunk is None else chunk
+    wire = bytearray(subject.WIRE_MAGIC)
+    for start in range(0, len(payload), chunk):
+        block = payload[start:start + chunk]
+        wire.extend(struct.pack('>I', len(block)))
+        wire.extend(block)
+    if terminal:
+        wire.extend(struct.pack('>IQ', 0, len(payload)))
+        wire.extend(hashlib.sha256(payload).digest())
+    return bytes(wire)
 
 
 @contextlib.contextmanager
@@ -65,7 +79,7 @@ class ArchiveReceiverTest(unittest.TestCase):
         self.temp.cleanup()
 
     def call(self, payload=CANARY, stream=None, command=None, argv=(), uid=0):
-        stream = io.BytesIO(payload) if stream is None else stream
+        stream = io.BytesIO(framed(payload)) if stream is None else stream
         output = io.StringIO()
         original_mask = os.umask(0o077)
         try:
@@ -115,6 +129,85 @@ class ArchiveReceiverTest(unittest.TestCase):
         self.assertEqual(self.pending().stat().st_nlink, 1)
         self.assertFalse(self.partial().exists())
         self.assertGreaterEqual(sync.call_count, 4)
+
+    def test_raw_ciphertext_and_normal_eof_prefix_cannot_publish(self):
+        for wire in (CANARY, framed(CANARY, terminal=False)):
+            with self.subTest(framed=wire.startswith(subject.WIRE_MAGIC)):
+                answer, code, _ = self.call(stream=io.BytesIO(wire))
+                self.assertEqual(code, 2)
+                self.assertIn(answer['status'], ('frame_invalid', 'frame_truncated'))
+                self.assertFalse(self.pending().exists())
+                self.assertTrue(self.partial().exists())
+                self.partial().unlink()
+
+    def test_every_truncated_header_body_and_terminal_is_incomplete(self):
+        wire = framed(CANARY)
+        for length in range(len(wire)):
+            with self.subTest(length=length):
+                self.failed('frame_truncated', stream=io.BytesIO(wire[:length]))
+                self.assertFalse(self.pending().exists())
+                self.assertTrue(self.partial().exists())
+                self.partial().unlink()
+
+    def test_fragmented_reads_accept_one_byte_at_a_time_including_terminal(self):
+        class Fragmented(io.BytesIO):
+            def read(self, count):
+                return super().read(min(count, 1))
+        answer, code, _ = self.call(stream=Fragmented(framed(CANARY, chunk=7)))
+        self.assertEqual((code, answer['bytes']), (0, len(CANARY)))
+        self.assertEqual(self.pending().read_bytes(), CANARY)
+
+    def test_frame_count_and_length_are_bounded_before_payload_read(self):
+        oversized = subject.WIRE_MAGIC + struct.pack('>I', subject.FRAME_BYTES + 1)
+        self.failed('frame_limit', stream=io.BytesIO(oversized))
+        self.assertEqual(self.partial().read_bytes(), b'')
+        self.partial().unlink()
+        with mock.patch.object(subject, 'MAX_FRAMES', 1):
+            self.failed('frame_limit', stream=io.BytesIO(framed(CANARY, chunk=8)))
+        self.assertEqual(self.partial().read_bytes(), CANARY[:8])
+        self.assertFalse(self.pending().exists())
+
+    def test_terminal_size_and_digest_must_match_all_ciphertext(self):
+        good = framed(CANARY)
+        bad_count = good[:-40] + struct.pack('>Q', len(CANARY) + 1) + good[-32:]
+        bad_hash = good[:-32] + bytes(32)
+        for wire in (bad_count, bad_hash):
+            with self.subTest(count=wire == bad_count):
+                self.failed('frame_mismatch', stream=io.BytesIO(wire))
+                self.assertEqual(self.partial().read_bytes(), CANARY)
+                self.assertFalse(self.pending().exists())
+                self.partial().unlink()
+
+    def test_terminal_followed_by_data_or_another_terminal_is_refused(self):
+        good = framed(CANARY)
+        for suffix in (b'x', struct.pack('>IQ', 0, len(CANARY)) + hashlib.sha256(CANARY).digest()):
+            with self.subTest(length=len(suffix)):
+                self.failed('frame_trailing_data', stream=io.BytesIO(good + suffix))
+                self.assertEqual(self.partial().read_bytes(), CANARY)
+                self.assertFalse(self.pending().exists())
+                self.partial().unlink()
+
+    def test_nonbytes_or_overlong_read_is_invalid_and_preserved(self):
+        for answer in ('not bytes', b'x' * (len(subject.WIRE_MAGIC) + 1)):
+            class Invalid:
+                def read(self, count):
+                    return answer
+            self.failed('frame_invalid', stream=Invalid())
+            self.assertEqual(self.partial().read_bytes(), b'')
+            self.assertFalse(self.pending().exists())
+            self.partial().unlink()
+
+    def test_terminal_requires_eof_before_publication_and_has_deadline(self):
+        wire = framed(CANARY)
+        class HeldOpen(io.BytesIO):
+            def read(self, count):
+                if self.tell() == len(wire):
+                    time.sleep(5)
+                return super().read(count)
+        with mock.patch.object(subject, 'TIMEOUT', .02):
+            self.failed('deadline_exceeded', stream=HeldOpen(wire))
+        self.assertEqual(self.partial().read_bytes(), CANARY)
+        self.assertFalse(self.pending().exists())
 
     def test_archive_policy_is_fixed_and_image_command_is_refused(self):
         self.assertEqual(subject.PARENTS, ('var', 'backups', 'metainc-app-retirement',
@@ -293,10 +386,10 @@ class ArchiveReceiverTest(unittest.TestCase):
     def test_interrupted_stream_preserves_received_prefix_and_sanitizes_exception(self):
         class Broken(io.BytesIO):
             def read(self, count):
-                if self.tell():
+                if self.tell() >= len(subject.WIRE_MAGIC) + 4 + 8:
                     raise OSError(CANARY.decode())
-                return super().read(min(count, 8))
-        answer = self.failed('receive_failed', stream=Broken(CANARY))
+                return super().read(count)
+        answer = self.failed('receive_failed', stream=Broken(framed(CANARY, chunk=8)))
         self.assertEqual(answer['bytes'], 8)
         self.assertEqual(self.partial().read_bytes(), CANARY[:8])
         self.assertFalse(self.pending().exists())
@@ -364,7 +457,7 @@ class ArchiveReceiverTest(unittest.TestCase):
             def read(self, count):
                 partial.chmod(0o644)
                 return super().read(count)
-        self.failed('partial_changed', stream=Replacing(CANARY))
+        self.failed('partial_changed', stream=Replacing(framed(CANARY)))
         self.assertFalse(self.pending().exists())
 
     def test_all_acquired_descriptors_close_after_interrupted_transfer(self):
@@ -400,10 +493,11 @@ class ArchiveReceiverTest(unittest.TestCase):
         folder = self.folder
         class Replacing(io.BytesIO):
             def read(self, count):
-                folder.rename(folder.with_name('detached-original'))
-                folder.mkdir(mode=0o700)
+                if not self.tell():
+                    folder.rename(folder.with_name('detached-original'))
+                    folder.mkdir(mode=0o700)
                 return super().read(count)
-        self.failed('namespace_changed', stream=Replacing(CANARY))
+        self.failed('namespace_changed', stream=Replacing(framed(CANARY)))
         self.assertEqual(list(self.folder.iterdir()), [])
         self.assertTrue((self.folder.with_name('detached-original') / subject.PARTIAL).exists())
 
@@ -411,11 +505,12 @@ class ArchiveReceiverTest(unittest.TestCase):
         partial = self.partial()
         class Replacing(io.BytesIO):
             def read(self, count):
-                partial.rename(partial.with_name('detached-original'))
-                partial.write_bytes(b'replacement-must-stay')
-                partial.chmod(0o600)
+                if not self.tell():
+                    partial.rename(partial.with_name('detached-original'))
+                    partial.write_bytes(b'replacement-must-stay')
+                    partial.chmod(0o600)
                 return super().read(count)
-        self.failed('partial_changed', stream=Replacing(CANARY))
+        self.failed('partial_changed', stream=Replacing(framed(CANARY)))
         self.assertEqual(self.partial().read_bytes(), b'replacement-must-stay')
         self.assertFalse(self.pending().exists())
 
