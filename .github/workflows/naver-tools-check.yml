@@ -28,6 +28,8 @@ jobs:
         with:
           python-version: '3.12'
       - name: 정적 검사와 합성 회귀 (서버·DB·제품 키 없음)
+        env:
+          NAVER_REQUIRE_DOCKER_CLI: '1'
         run: |
           set -euo pipefail
           shellcheck -S warning deploy/naver/naver-deploy.sh deploy/naver/make-source-archive.sh deploy/naver/product-tests.sh
