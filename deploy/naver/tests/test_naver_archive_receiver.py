@@ -1,6 +1,7 @@
 """One synthetic namespace only: no SSH, live key, Docker, or backup access."""
 import contextlib
 import fcntl
+import gc
 import hashlib
 import importlib.util
 import io
@@ -13,6 +14,7 @@ import tempfile
 import time
 import types
 import unittest
+import warnings
 from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location(
@@ -20,6 +22,26 @@ SPEC = importlib.util.spec_from_file_location(
 subject = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(subject)
 CANARY = b'PRIVATE_SYNTHETIC_PAYLOAD_NOT_A_REAL_KEY'
+
+
+@contextlib.contextmanager
+def record_resource_warnings():
+    """Separate delayed fixture finalizers from the receiver's stderr protocol.
+
+    Other warnings and direct stderr writes remain visible and must still fail
+    strict JSON checks. No production receiver warning behavior is changed.
+    """
+    recorded = []
+    with warnings.catch_warnings():
+        original_showwarning = warnings.showwarning
+        warnings.simplefilter('always', ResourceWarning)
+        def showwarning(message, category, *args, **kwargs):
+            if issubclass(category, ResourceWarning):
+                recorded.append((str(message), category))
+            else:
+                original_showwarning(message, category, *args, **kwargs)
+        warnings.showwarning = showwarning
+        yield recorded
 
 
 class ArchiveReceiverTest(unittest.TestCase):
@@ -446,15 +468,22 @@ class ArchiveReceiverTest(unittest.TestCase):
                 mock.patch.object(subject.sys, 'stderr', errors), \
                 mock.patch.object(subject.os, 'geteuid', return_value=uid), \
                 mock.patch.dict(subject.os.environ, {'SSH_ORIGINAL_COMMAND': subject.FETCH_COMMAND if command is None else command}, clear=True), \
-                mock.patch.object(subject, 'fetch', side_effect=lambda sink, state: subject.fetch_from(sink, self.root, state)) as fetcher:
+                mock.patch.object(subject, 'fetch', side_effect=lambda sink, state: subject.fetch_from(sink, self.root, state)) as fetcher, \
+                record_resource_warnings() as resource_warnings:
             code = subject.main()
+        self.resource_warnings = resource_warnings
         public = errors.getvalue()
         self.assertLessEqual(len(public.encode()), 1024)
         for forbidden in (CANARY.decode(), str(self.base), '/var/backups/', 'Traceback'):
             self.assertNotIn(forbidden, public)
         if code:
             self.assertEqual(code, 2)
-            answer = json.loads(public)
+            self.assertTrue(public.startswith('{'), 'Unexpected synthetic receiver stderr: ' + repr(public))
+            try:
+                answer = json.loads(public)
+            except json.JSONDecodeError as error:
+                self.fail('Invalid synthetic receiver stderr: ' + repr(public) + '; ' + str(error))
+            self.assertEqual(public, json.dumps(answer, separators=(',', ':')) + '\n')
             self.assertEqual(set(answer), {'status', 'bytes', 'sha256'})
             self.assertIsNone(answer['sha256'])
         else:
@@ -667,6 +696,40 @@ class ArchiveReceiverTest(unittest.TestCase):
         with mock.patch.object(subject.os, 'read', side_effect=OSError(CANARY.decode())):
             code, data, error, _ = self.fetched()
         self.assertEqual((code, data, error['status']), (2, b'', 'fetch_failed'))
+
+    def test_delayed_external_finalizer_resource_warning_is_recorded_separately(self):
+        self.completed()
+        message = 'synthetic external fixture finalized during receiver read'
+        class ExternalFixture:
+            def __del__(self):
+                warnings.warn(message, ResourceWarning)
+        orphan = ExternalFixture()
+        orphan.cycle = orphan
+        retained = [orphan]
+        del orphan
+        def fail_read(*_):
+            retained.clear()
+            gc.collect()
+            raise OSError(CANARY.decode())
+        with mock.patch.object(subject.os, 'read', side_effect=fail_read):
+            code, data, error, _ = self.fetched()
+        self.assertEqual((code, data, error['status']), (2, b'', 'fetch_failed'))
+        self.assertIn((message, ResourceWarning), self.resource_warnings)
+
+    def test_other_warnings_and_direct_stderr_remain_strict_failures(self):
+        self.completed()
+        for mode in ('warning', 'direct'):
+            def fail_read(*_):
+                if mode == 'warning':
+                    warnings.warn('synthetic non-resource warning', UserWarning)
+                else:
+                    sys.stderr.write('synthetic unexpected product stderr\n')
+                raise OSError(CANARY.decode())
+            with self.subTest(mode=mode), warnings.catch_warnings():
+                warnings.simplefilter('always', UserWarning)
+                with mock.patch.object(subject.os, 'read', side_effect=fail_read), \
+                        self.assertRaisesRegex(AssertionError, 'Unexpected synthetic receiver stderr'):
+                    self.fetched()
 
     def test_fetch_truncated_read_is_refused_before_output(self):
         self.completed()

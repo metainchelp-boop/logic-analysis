@@ -46,9 +46,11 @@ def namespace(root, exclusive=False):
     with contextlib.ExitStack() as stack:
         chain, parent = [], root
         check_dir(os.fstat(root))
-        for i, name in enumerate(PARENT):
+        for name in PARENT:
             before = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            check_dir(before, i == len(PARENT) - 1)
+            # Existing deploy tooling restricts individual backup directories,
+            # not the shared metainc ancestor. Never require chmod on that parent.
+            check_dir(before)
             child = os.open(name, FLAGS, dir_fd=parent)
             stack.callback(os.close, child)
             c.need(dir_id(before) == dir_id(os.fstat(child)), 'namespace_changed')

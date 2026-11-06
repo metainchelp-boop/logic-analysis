@@ -272,6 +272,20 @@ class ArchiveSourceTest(unittest.TestCase):
             finally:
                 path.unlink()
 
+    def test_existing_shared_backup_ancestor_can_be_0755_without_chmod(self):
+        self.parent.chmod(0o755)
+        self.assertEqual(len(self.plan()['groups']), 2)
+        self.assertEqual(stat.S_IMODE(self.parent.stat().st_mode), 0o755)
+
+    def test_writable_shared_ancestor_and_nonprivate_payload_folder_are_refused(self):
+        self.parent.chmod(0o775)
+        with self.assertRaisesRegex(c.Refused, 'unsafe_directory'):
+            self.plan()
+        self.parent.chmod(0o755)
+        self.cold_parent.chmod(0o755)
+        with self.assertRaisesRegex(c.Refused, 'unsafe_directory'):
+            self.plan()
+
     def test_group_directory_symlink_and_path_swap_are_refused(self):
         original = self.interrupted.with_name('saved-interrupted')
         self.interrupted.rename(original)
