@@ -1,7 +1,8 @@
 """NAVER 중단된 백업 snapshot 무손실 gzip 보존 후 정리 (대표 콘솔 수동 실행, root 전용).
 
 사용: python3 backup_snapshot_preserve.py check   # 검사·압축 크기 측정만, 디스크에 아무것도 쓰지 않음
-      python3 backup_snapshot_preserve.py apply   # gzip 보존본 작성·전량 해제 대조 후 원본과 깨진 ZIP 삭제
+      python3 backup_snapshot_preserve.py apply   # gzip 보존본 작성·전량 해제 대조 후 원본 snapshot 1개만 삭제
+(깨진 packed.zip 은 지우지 않고 그대로 둔다. 보존본은 state.json 이나 일일 백업으로 등록하지 않는다.)
 
 전제: relay → engine 을 먼저 정지한다. 터널은 그대로 둔다. state.json 은 읽지도 바꾸지도 않는다.
 어느 검사든 실패하면 즉시 멈추고(종료코드 1) 다음 단계로 가지 않는다. 엔진 재기동은 사람이 결정한다.
@@ -148,6 +149,20 @@ def sha_fd(fd):
     return h.hexdigest(), n
 
 
+class Guarded:
+    """쓰기마다 남은 여유를 다시 재고 RESERVE 아래로 내려가면 중단한다."""
+    def __init__(self, raw):
+        self.raw = raw
+
+    def write(self, b):
+        s = os.statvfs(KEEP_DIR)
+        need(s.f_bavail * s.f_frsize >= RESERVE + len(b), 'SPACE_SHORT_DURING_WRITE')
+        return self.raw.write(b)
+
+    def flush(self):
+        self.raw.flush()
+
+
 class Counter:
     def __init__(self):
         self.n = 0
@@ -198,7 +213,7 @@ def apply(work, keys, fds, before, sha, size, compressed):
     out = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(out, 'wb') as raw:
         os.lseek(fds['snapshot.sqlite'], 0, os.SEEK_SET)
-        with gzip.GzipFile(filename='', mode='wb', compresslevel=GZ_LEVEL, fileobj=raw, mtime=0) as g:
+        with gzip.GzipFile(filename='', mode='wb', compresslevel=GZ_LEVEL, fileobj=Guarded(raw), mtime=0) as g:
             for block in iter(lambda: os.read(fds['snapshot.sqlite'], CHUNK), b''):
                 g.write(block)
         raw.flush()
@@ -217,7 +232,8 @@ def apply(work, keys, fds, before, sha, size, compressed):
     meta = KEEP_DIR + '/snapshot.sqlite.json'
     mfd = os.open(meta, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(mfd, 'w') as m:
-        json.dump({'source': 'interrupted nightly backup 2026-11-06 00:35 KST', 'sha256': sha, 'bytes': size,
+        json.dump({'source': 'interrupted nightly backup 2026-11-06 00:35 KST (not a daily backup, not in state.json)',
+                   'sha256': sha, 'bytes': size,
                    'gzip_bytes': compressed, 'gzip_level': GZ_LEVEL}, m, sort_keys=True)
         m.flush()
         os.fsync(m.fileno())
@@ -228,15 +244,11 @@ def apply(work, keys, fds, before, sha, size, compressed):
     nobody_uses(keys)
     same_path(snap, fds['snapshot.sqlite'], before['snapshot.sqlite'])
     same_path(packed, fds['packed.zip'], before['packed.zip'])
-    STAGE[0] = '원본 삭제 중 또는 후(보존본 완성)'
+    STAGE[0] = 'snapshot 삭제 중 또는 후(보존본 완성, 깨진 ZIP 유지)'
     os.unlink(snap)
     os.close(fds.pop('snapshot.sqlite'))
-    os.unlink(packed)
-    os.close(fds.pop('packed.zip'))
     fsync_dir(work)
-    os.rmdir(work)
-    fsync_dir(ROOT)
-    say('SNAPSHOT_REMOVED', 'bytes=%d broken_zip_removed=yes' % size)
+    say('SNAPSHOT_REMOVED', 'bytes=%d broken_zip=kept' % size)
 
 
 def report_left():
