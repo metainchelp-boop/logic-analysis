@@ -257,21 +257,27 @@ def cleanup(parent, sources, receipt, recovery_sha, state):
             os.fsync(fd)
             os.fsync(parent)
         persist()
-        for group in sources.groups:
-            for row in group['files']:
-                key = (group['kind'], group['name'], row['name'])
-                path = '/'.join(key)
-                folder, source_fd, expected = sources.files[key]
-                sources.recheck(state['removed_files'])
-                c.need(sources.hash_fd(source_fd, expected) == row['sha256'], 'source_changed')
-                state['pending'] = path
-                persist()
-                sources.recheck(state['removed_files'])
-                os.unlink(row['name'], dir_fd=folder)
-                os.fsync(folder)
-                state['removed_files'].append(path)
-                state['pending'] = None
-                persist()
+        # The wire plan stays manifest-first for bounded streaming verification.
+        # Cleanup removes every group's payloads before any metadata, so an
+        # interrupted payload removal retains all manifests for manual recovery.
+        for manifests in (False, True):
+            for group in sources.groups:
+                for row in group['files']:
+                    if row['name'].endswith('.json') != manifests:
+                        continue
+                    key = (group['kind'], group['name'], row['name'])
+                    path = '/'.join(key)
+                    folder, source_fd, expected = sources.files[key]
+                    sources.recheck(state['removed_files'])
+                    c.need(sources.hash_fd(source_fd, expected) == row['sha256'], 'source_changed')
+                    state['pending'] = path
+                    persist()
+                    sources.recheck(state['removed_files'])
+                    os.unlink(row['name'], dir_fd=folder)
+                    os.fsync(folder)
+                    state['removed_files'].append(path)
+                    state['pending'] = None
+                    persist()
         state['status'] = 'cleaned'
         persist()
     finally:

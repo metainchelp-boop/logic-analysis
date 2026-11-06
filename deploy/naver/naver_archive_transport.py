@@ -15,6 +15,7 @@ import re
 import selectors
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -33,6 +34,8 @@ MAX_RECEIPT = 4096
 MAX_STDERR = 65536
 DEADLINE = 3600
 BLOCK = 65536
+WIRE_MAGIC = b'NAVER-ARCHIVE-CIPHER-FRAMES-V1\n'
+FRAME_BYTES = 65536
 RESERVE = 512 * 1024 ** 2
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
 HEX = re.compile(r'[0-9a-f]{64}\Z')
@@ -303,7 +306,7 @@ def command(argv, timeout=30, limit=16384):
 
 
 def stream_send(source, gpg, ssh, timeout=DEADLINE, max_cipher=MAX_CIPHER):
-    """Only ciphertext enters the supervising process; all stages must finish."""
+    """Frame ciphertext; commit only after both upstream exits and stderr EOFs."""
     processes = []
     end = time.monotonic() + timeout
     try:
@@ -315,18 +318,29 @@ def stream_send(source, gpg, ssh, timeout=DEADLINE, max_cipher=MAX_CIPHER):
         remote = spawn(ssh, processes, stdin=subprocess.PIPE,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         digest, count, errors, receipt = hashlib.sha256(), 0, 0, bytearray()
-        pending, eof, cipher_registered, writable = bytearray(), False, True, False
+        pending, fragment = bytearray(WIRE_MAGIC), bytearray()
+        eof, cipher_registered, writable, terminal = False, True, True, False
+        stderr_done = set()
         with selectors.DefaultSelector() as selector:
-            for process in processes:
+            for index, process in enumerate(processes):
                 os.set_blocking(process.stderr.fileno(), False)
-                selector.register(process.stderr, selectors.EVENT_READ, 'stderr')
+                selector.register(process.stderr, selectors.EVENT_READ, ('stderr', index))
             for stream in (encryptor.stdout, remote.stdout, remote.stdin):
                 os.set_blocking(stream.fileno(), False)
-            selector.register(encryptor.stdout, selectors.EVENT_READ, 'cipher')
-            selector.register(remote.stdout, selectors.EVENT_READ, 'receipt')
+            selector.register(encryptor.stdout, selectors.EVENT_READ, ('cipher', None))
+            selector.register(remote.stdout, selectors.EVENT_READ, ('receipt', None))
+            selector.register(remote.stdin, selectors.EVENT_WRITE, ('send', None))
+
+            def enable_send():
+                nonlocal writable
+                if pending and not writable:
+                    selector.register(remote.stdin, selectors.EVENT_WRITE, ('send', None))
+                    writable = True
+
             while selector.get_map():
                 for key, _ in selector.select(min(remaining(end), .2)):
-                    if key.data == 'send':
+                    label, index = key.data
+                    if label == 'send':
                         try:
                             sent = os.write(key.fd, pending)
                         except BlockingIOError:
@@ -339,10 +353,10 @@ def stream_send(source, gpg, ssh, timeout=DEADLINE, max_cipher=MAX_CIPHER):
                         if not pending:
                             selector.unregister(remote.stdin)
                             writable = False
-                            if eof:
+                            if terminal:
                                 remote.stdin.close()
                         if not eof and not cipher_registered and len(pending) < 4 * BLOCK:
-                            selector.register(encryptor.stdout, selectors.EVENT_READ, 'cipher')
+                            selector.register(encryptor.stdout, selectors.EVENT_READ, ('cipher', None))
                             cipher_registered = True
                         continue
                     try:
@@ -351,15 +365,20 @@ def stream_send(source, gpg, ssh, timeout=DEADLINE, max_cipher=MAX_CIPHER):
                         continue
                     if not data:
                         selector.unregister(key.fileobj)
-                        if key.data == 'cipher':
+                        if label == 'cipher':
                             eof, cipher_registered = True, False
-                            if not pending:
-                                remote.stdin.close()
-                    elif key.data == 'stderr':
+                            if fragment:
+                                pending.extend(struct.pack('>I', len(fragment)))
+                                pending.extend(fragment)
+                                fragment.clear()
+                                enable_send()
+                        elif label == 'stderr':
+                            stderr_done.add(index)
+                    elif label == 'stderr':
                         errors += len(data)
                         if errors > MAX_STDERR:
                             raise Refused('output_limit')
-                    elif key.data == 'receipt':
+                    elif label == 'receipt':
                         receipt.extend(data)
                         if len(receipt) > MAX_RECEIPT:
                             raise Refused('receipt_invalid')
@@ -368,15 +387,31 @@ def stream_send(source, gpg, ssh, timeout=DEADLINE, max_cipher=MAX_CIPHER):
                         if count > max_cipher:
                             raise Refused('cipher_limit')
                         digest.update(data)
-                        pending.extend(data)
-                        if not writable:
-                            selector.register(remote.stdin, selectors.EVENT_WRITE, 'send')
-                            writable = True
+                        fragment.extend(data)
+                        while len(fragment) >= FRAME_BYTES:
+                            pending.extend(struct.pack('>I', FRAME_BYTES))
+                            pending.extend(fragment[:FRAME_BYTES])
+                            del fragment[:FRAME_BYTES]
+                        enable_send()
                         if len(pending) >= 4 * BLOCK:
                             selector.unregister(encryptor.stdout)
                             cipher_registered = False
+                upstream = (producer.poll(), encryptor.poll())
+                if any(code is not None and code != 0 for code in upstream):
+                    raise Refused('pipeline_failed')
+                if not terminal and remote.poll() is not None:
+                    raise Refused('pipeline_failed')
+                if not terminal and eof and {0, 1}.issubset(stderr_done) and upstream == (0, 0):
+                    if not count:
+                        raise Refused('pipeline_failed')
+                    # This is the sole commit signal. An interrupted pipeline
+                    # closes without it, even when GPG encrypted a valid prefix.
+                    pending.extend(struct.pack('>IQ', 0, count))
+                    pending.extend(digest.digest())
+                    terminal = True
+                    enable_send()
         if (any(process.wait(timeout=remaining(end)) != 0 for process in processes)
-                or not eof or pending or count == 0):
+                or not terminal or not eof or pending or fragment or count == 0):
             raise Refused('pipeline_failed')
         result = strict_json(receipt)
         if (not isinstance(result, dict) or set(result) != {'status', 'bytes', 'sha256'}
@@ -391,7 +426,7 @@ def stream_send(source, gpg, ssh, timeout=DEADLINE, max_cipher=MAX_CIPHER):
 
 
 def stream_fetch(ssh, receipt, output, files=None, timeout=DEADLINE):
-    """Partial ciphertext remains on every failure. Publication never overwrites."""
+    """Failures retain the partial or published final. Never overwrite either."""
     files = files or Files()
     validate_sent(receipt)
     processes = []
@@ -469,9 +504,26 @@ def stream_fetch(ssh, receipt, output, files=None, timeout=DEADLINE):
                 raise Refused('path_changed')
             os.link(partial, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
             os.fsync(parent)
-            linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            if (linked.st_dev, linked.st_ino) != (expected.st_dev, expected.st_ino):
-                raise Refused('path_changed')
+            # Linking changes ctime/nlink; every name and the pinned fd must
+            # still refer to the same private ciphertext immediately before unlink.
+            def publication_identity(info):
+                return (dir_identity(info), info.st_size, info.st_mtime_ns)
+            publication = publication_identity(expected)
+            def recheck_publication():
+                published = os.fstat(fd)
+                if (publication_identity(published) != publication or published.st_nlink != 2
+                        or not stat.S_ISREG(published.st_mode)
+                        or stat.S_IMODE(published.st_mode) != 0o600):
+                    raise Refused('path_changed')
+                for info in (os.stat(name, dir_fd=parent, follow_symlinks=False),
+                             os.stat(partial, dir_fd=parent, follow_symlinks=False),
+                             os.fstat(fd)):
+                    if identity(info) != identity(published):
+                        raise Refused('path_changed')
+            try:
+                recheck_publication()
+            except OSError:
+                raise Refused('path_changed') from None
             os.unlink(partial, dir_fd=parent)
             os.fsync(parent)
             return {'status': 'fetched_unverified', 'session': SESSION,

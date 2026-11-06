@@ -1,10 +1,11 @@
-"""Synthetic pipes and ciphertext only; never invokes real GPG, SSH, or keys."""
+"""Synthetic pipes/files plus optional isolated GPG; no SSH or company keys."""
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -28,9 +29,29 @@ def child(code):
 
 SOURCE = child('import os; os.write(1, (' + repr(CANARY.encode() + b'\0') + ')*17003)')
 PASSTHROUGH = child('import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data[::-1])')
-REMOTE = child('import sys,hashlib,json; data=sys.stdin.buffer.read(); '
-               'print(json.dumps({"status":"received_unverified","bytes":len(data),'
-               '"sha256":hashlib.sha256(data).hexdigest()}))')
+# Independent protocol consumer, not the production framing parser.
+REMOTE_CODE = """import sys,hashlib,json,struct
+stream = sys.stdin.buffer
+magic = b'NAVER-ARCHIVE-CIPHER-FRAMES-V1\\n'
+assert stream.read(len(magic)) == magic
+payload = bytearray()
+while True:
+    size = struct.unpack('>I', stream.read(4))[0]
+    if not size:
+        total = struct.unpack('>Q', stream.read(8))[0]
+        digest = stream.read(32)
+        assert total == len(payload) and digest == hashlib.sha256(payload).digest()
+        assert stream.read(1) == b''
+        break
+    assert 0 < size <= 65536
+    data = stream.read(size)
+    assert len(data) == size
+    payload.extend(data)
+print(json.dumps({'status':'received_unverified','bytes':len(payload),
+                  'sha256':hashlib.sha256(payload).hexdigest()}))
+"""
+REMOTE = child(REMOTE_CODE)
+
 
 
 class TransportTests(unittest.TestCase):
@@ -55,7 +76,7 @@ class TransportTests(unittest.TestCase):
         self.refuse('pipeline_failed', subject.stream_send, SOURCE, gpg, REMOTE, timeout=5)
 
     def test_ssh_nonzero_rejects_matching_receipt(self):
-        remote = child(REMOTE[-1] + '; raise SystemExit(8)')
+        remote = child(REMOTE[-1] + '\nraise SystemExit(8)')
         self.refuse('pipeline_failed', subject.stream_send, SOURCE, PASSTHROUGH, remote, timeout=5)
 
     def test_ssh_early_exit_cleans_up_pipeline(self):
@@ -67,6 +88,54 @@ class TransportTests(unittest.TestCase):
     def test_cipher_limit_aborts_before_acknowledgement(self):
         self.refuse('cipher_limit', subject.stream_send, SOURCE, PASSTHROUGH, REMOTE,
                     timeout=5, max_cipher=100)
+
+    def test_terminal_waits_for_source_exit_after_cipher_eof(self):
+        with tempfile.TemporaryDirectory() as folder:
+            marker = str(Path(folder) / 'source-exited')
+            source = child('import os,time,pathlib; os.write(1,b"payload"); os.close(1); '
+                           'time.sleep(.15); pathlib.Path(' + repr(marker) + ').write_text("done")')
+            remote = child(REMOTE_CODE.replace("print(json.dumps", 'assert __import__("os").path.exists('
+                           + repr(marker) + ')\nprint(json.dumps'))
+            result = subject.stream_send(source, PASSTHROUGH, remote, timeout=5)
+            self.assertEqual(result['sha256'], hashlib.sha256(b'payload'[::-1]).hexdigest())
+
+    def test_source_failure_after_gpg_success_cannot_send_terminal(self):
+        with tempfile.TemporaryDirectory() as folder:
+            captured = Path(folder) / 'wire'
+            source = child('import os,time; os.write(1,b"payload"); os.close(1); '
+                           'time.sleep(.25); raise SystemExit(7)')
+            capture = child('import os; f=open(' + repr(str(captured)) + ',"wb",buffering=0)\n'
+                            'while True:\n d=os.read(0,65536)\n if not d: break\n f.write(d)')
+            self.refuse('pipeline_failed', subject.stream_send, source, PASSTHROUGH, capture, timeout=5)
+            wire = captured.read_bytes()
+            self.assertEqual(wire, subject.WIRE_MAGIC + struct.pack('>I', 7) + b'payload'[::-1])
+
+    def test_terminal_waits_for_inherited_upstream_stderr_eof(self):
+        with tempfile.TemporaryDirectory() as folder:
+            marker = str(Path(folder) / 'stderr-released')
+            source = child('import os,time,pathlib; os.write(1,b"payload"); os.close(1); pid=os.fork()\n'
+                           'if pid == 0:\n time.sleep(.15)\n pathlib.Path(' + repr(marker)
+                           + ').write_text("done")\n os._exit(0)\nos._exit(0)')
+            remote = child(REMOTE_CODE.replace("print(json.dumps", 'assert __import__("os").path.exists('
+                           + repr(marker) + ')\nprint(json.dumps'))
+            result = subject.stream_send(source, PASSTHROUGH, remote, timeout=5)
+            self.assertEqual(result['bytes'], 7)
+
+    def test_combined_upstream_stderr_limit_blocks_terminal(self):
+        source = child('import os; os.write(2,b"x"*40000); os.write(1,b"payload")')
+        encryptor = child('import sys,os; d=sys.stdin.buffer.read(); '
+                          'os.write(1,d); os.write(2,b"x"*40000)')
+        self.refuse('output_limit', subject.stream_send, source, encryptor, REMOTE, timeout=5)
+
+    def test_small_cipher_reads_are_coalesced_into_bounded_full_frames(self):
+        length = 2 * subject.FRAME_BYTES + 13
+        source = child('import os; os.write(1,b"x"*' + str(length) + ')')
+        encryptor = child('import os\nwhile True:\n d=os.read(0,97)\n if not d: break\n os.write(1,d)')
+        remote_code = REMOTE_CODE.replace('payload = bytearray()', 'payload = bytearray(); sizes = []')
+        remote_code = remote_code.replace('data = stream.read(size)', 'sizes.append(size)\n    data = stream.read(size)')
+        remote_code = remote_code.replace('print(json.dumps', 'assert sizes == [65536,65536,13]\nprint(json.dumps')
+        result = subject.stream_send(source, encryptor, child(remote_code), timeout=5)
+        self.assertEqual(result['bytes'], length)
 
     def test_wrong_receipt_hash_rejected(self):
         remote = child('import sys,json; d=sys.stdin.buffer.read(); '
@@ -125,6 +194,95 @@ class TransportTests(unittest.TestCase):
         quoted = subject.ssh_args('/key', '/secure/a space/hosts', subject.FETCH)
         self.assertIn('UserKnownHostsFile="/secure/a space/hosts"', quoted)
         self.refuse('unsafe_path', subject.ssh_args, '/key', '/hosts\nother', subject.FETCH)
+
+
+class FramedGpgIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        candidates = ('/usr/bin/gpg', '/opt/homebrew/bin/gpg', '/usr/local/bin/gpg')
+        self.binary = next((path for path in candidates if os.path.isfile(path)), None)
+        if self.binary is None:
+            self.skipTest('GPG is not installed in the fixed executable locations')
+        temp = tempfile.TemporaryDirectory(prefix='nac-')
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        self.home = self.root / 'gpg'
+        self.home.mkdir(mode=0o700)
+        resolved = Path(self.binary).resolve()
+        gpgconf = resolved.with_name('gpgconf')
+        if gpgconf.is_file():
+            self.addCleanup(lambda: subprocess.run([str(gpgconf), '--homedir', str(self.home),
+                '--kill', 'gpg-agent'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=10, check=False))
+        # This public fixture phrase has no relationship to a company recovery key.
+        self.gpg = [self.binary, '--no-options', '--homedir', str(self.home), '--batch',
+                    '--no-tty', '--pinentry-mode', 'loopback', '--passphrase', 'synthetic-test-only',
+                    '--compress-algo', 'none', '--cipher-algo', 'AES256', '--s2k-count', '1024']
+
+    def receiver(self, name):
+        root = self.root / name
+        folder = root / 'var/backups/metainc-app-retirement/naver-archives-20261106-v1'
+        folder.mkdir(parents=True, mode=0o700)
+        folder.parent.chmod(0o700)
+        receiver_path = str(PATH.with_name('naver_archive_receiver.py'))
+        code = """import importlib.util,json,os,sys,types
+spec=importlib.util.spec_from_file_location('isolated_receiver',RECEIVER_PATH)
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+m.OWNER_UID=os.getuid();m.OWNER_GID=os.getgid()
+m.os.fstatvfs=lambda fd:types.SimpleNamespace(f_bavail=20*1024**3,f_frsize=1)
+root=os.open(ROOT_PATH,m.DIRECTORY_FLAGS);state={'bytes':0}
+try:
+    answer=m.receive_into(sys.stdin.buffer,root,state);code=0
+except m.ReceiverError as error:
+    answer=m.receipt(error.code,state['bytes']);code=2
+finally:
+    os.close(root)
+print(json.dumps(answer));raise SystemExit(code)
+""".replace('RECEIVER_PATH', repr(receiver_path)).replace('ROOT_PATH', repr(str(root)))
+        return child(code), folder
+
+    def test_real_gpg_framed_roundtrip_and_valid_cipher_without_terminal_refused(self):
+        payload = b'SYNTHETIC_ONLY\0' * 7001
+        # Keep the generated subprocess code small while preserving exact expected bytes.
+        source = child('import os; os.write(1,b"SYNTHETIC_ONLY\\0"*7001)')
+        remote, folder = self.receiver('roundtrip')
+        result = subject.stream_send(source, self.gpg + ['--output', '-', '--symmetric'], remote, timeout=20)
+        cipher = (folder / 'archives.gpg').read_bytes()
+        self.assertEqual(result, {'bytes': len(cipher), 'sha256': hashlib.sha256(cipher).hexdigest()})
+        decrypted = subprocess.run(self.gpg + ['--output', '-', '--decrypt'], input=cipher,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20, check=False)
+        self.assertEqual(decrypted.returncode, 0, 'Synthetic GPG decryption failed')
+        self.assertEqual(decrypted.stdout, payload)
+        self.assertFalse((folder / 'archives.gpg.partial').exists())
+        remote, folder = self.receiver('missing-terminal')
+        wire = bytearray(subject.WIRE_MAGIC)
+        for offset in range(0, len(cipher), subject.FRAME_BYTES):
+            block = cipher[offset:offset + subject.FRAME_BYTES]
+            wire.extend(struct.pack('>I', len(block)))
+            wire.extend(block)
+        refused = subprocess.run(remote, input=wire, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, timeout=10, check=False)
+        self.assertEqual(refused.returncode, 2)
+        self.assertEqual(json.loads(refused.stdout)['status'], 'frame_truncated')
+        self.assertEqual((folder / 'archives.gpg.partial').read_bytes(), cipher)
+        self.assertFalse((folder / 'archives.gpg').exists())
+
+    def test_real_gpg_success_cannot_commit_when_source_later_exits_nonzero(self):
+        marker = self.root / 'gpg-exit'
+        gpg = child('import subprocess,pathlib; result=subprocess.run(' + repr(self.gpg
+                    + ['--output', '-', '--symmetric']) + '); pathlib.Path(' + repr(str(marker))
+                    + ').write_text(str(result.returncode)); raise SystemExit(result.returncode)')
+        source = child('import os,time,pathlib; os.write(1,b"synthetic prefix"); os.close(1); '
+                       'deadline=time.monotonic()+10\nwhile not pathlib.Path(' + repr(str(marker))
+                       + ').exists():\n assert time.monotonic()<deadline\n time.sleep(.01)\n'
+                       'time.sleep(.15)\nraise SystemExit(7)')
+        remote, folder = self.receiver('source-failed')
+        with self.assertRaises(subject.Refused) as caught:
+            subject.stream_send(source, gpg, remote, timeout=20)
+        self.assertEqual(caught.exception.code, 'pipeline_failed')
+        self.assertEqual(marker.read_text(), '0')
+        self.assertFalse((folder / 'archives.gpg').exists())
+        self.assertTrue((folder / 'archives.gpg.partial').exists())
+        self.assertGreater((folder / 'archives.gpg.partial').stat().st_size, 0)
 
 
 class FilesTests(unittest.TestCase):
@@ -196,6 +354,69 @@ class FilesTests(unittest.TestCase):
                 self.fetch()
         self.assertEqual(caught.exception.code, 'path_changed')
         self.assertFalse((self.root / 'secure/cipher.gpg').exists())
+
+    def test_fetch_partial_replacement_after_final_link_is_preserved(self):
+        real_stat = subject.os.stat
+        partial = self.root / 'secure/cipher.gpg.partial'
+        detached = partial.with_name('retained-original.partial')
+        changed = False
+        def swapped(name, *args, **kwargs):
+            nonlocal changed
+            result = real_stat(name, *args, **kwargs)
+            if name == 'cipher.gpg' and kwargs.get('dir_fd') is not None and not changed:
+                changed = True
+                partial.rename(detached)
+                partial.write_bytes(b'replacement-must-stay')
+                partial.chmod(0o600)
+            return result
+        with mock.patch.object(subject.os, 'stat', side_effect=swapped):
+            with self.assertRaises(subject.Refused) as caught:
+                self.fetch()
+        self.assertEqual(caught.exception.code, 'path_changed')
+        self.assertEqual(partial.read_bytes(), b'replacement-must-stay')
+        self.assertEqual(detached.read_bytes(), self.payload)
+        self.assertEqual((self.root / 'secure/cipher.gpg').read_bytes(), self.payload)
+
+    def test_fetch_postlink_mode_change_blocks_unlink(self):
+        real_link = subject.os.link
+        partial = self.root / 'secure/cipher.gpg.partial'
+        def changed(*args, **kwargs):
+            result = real_link(*args, **kwargs)
+            partial.chmod(0o640)
+            return result
+        with mock.patch.object(subject.os, 'link', side_effect=changed):
+            with self.assertRaises(subject.Refused) as caught:
+                self.fetch()
+        self.assertEqual(caught.exception.code, 'path_changed')
+        self.assertTrue(partial.exists())
+        self.assertTrue((self.root / 'secure/cipher.gpg').exists())
+
+    def test_fetch_postlink_third_alias_blocks_unlink(self):
+        real_link = subject.os.link
+        partial = self.root / 'secure/cipher.gpg.partial'
+        def changed(*args, **kwargs):
+            result = real_link(*args, **kwargs)
+            real_link(partial, partial.with_name('third-alias'))
+            return result
+        with mock.patch.object(subject.os, 'link', side_effect=changed):
+            with self.assertRaises(subject.Refused) as caught:
+                self.fetch()
+        self.assertEqual(caught.exception.code, 'path_changed')
+        self.assertEqual(partial.stat().st_nlink, 3)
+
+    def test_fetch_postlink_partial_disappearance_is_path_changed(self):
+        real_link = subject.os.link
+        partial = self.root / 'secure/cipher.gpg.partial'
+        def changed(*args, **kwargs):
+            result = real_link(*args, **kwargs)
+            partial.rename(partial.with_name('detached'))
+            return result
+        with mock.patch.object(subject.os, 'link', side_effect=changed):
+            with self.assertRaises(subject.Refused) as caught:
+                self.fetch()
+        self.assertEqual(caught.exception.code, 'path_changed')
+        self.assertEqual((self.root / 'secure/detached').read_bytes(), self.payload)
+        self.assertEqual((self.root / 'secure/cipher.gpg').read_bytes(), self.payload)
 
     def test_fetch_capacity_checks_before_output_creation(self):
         small = types.SimpleNamespace(f_bavail=10, f_frsize=1)

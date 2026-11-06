@@ -131,6 +131,15 @@ class ArchiveSourceTest(unittest.TestCase):
                     plan_sha256=c.digest(c.canonical(plan)), cipher={'bytes': 123, 'sha256': 'a' * 64},
                     files=c.file_rows(plan), verification='gpg-authenticated-and-inner-gzip-v1')
 
+    def cleanup_paths(self):
+        # Independent fixture order: payloads from every group precede metadata.
+        cold = 'cold/' + self.profile.archive + '/'
+        interrupted = 'interrupted/' + c.INTERRUPTED + '/'
+        return [cold + 'engine.db-wal.gz', cold + 'engine.db.gz',
+                interrupted + 'snapshot.sqlite.gz', interrupted + 'packed.zip.broken',
+                cold + 'archive-manifest.json', cold + 'source-manifest.json',
+                interrupted + 'snapshot.sqlite.json']
+
     def cleanup(self, receipt=None, state=None):
         state = {} if state is None else state
         with self.sources(True) as (parent, sources):
@@ -189,7 +198,8 @@ class ArchiveSourceTest(unittest.TestCase):
         self.assertEqual((code, errors), (0, ''))
         status = c.strict_json(raw_status)
         self.assertEqual(status['status'], 'cleaned')
-        self.assertEqual(status['removed_files'], [f['path'] for f in c.file_rows(plan)])
+        self.assertEqual(status['removed_files'], self.cleanup_paths())
+        self.assertNotEqual(status['removed_files'], [f['path'] for f in c.file_rows(plan)])
         self.assertIsNone(status['pending'])
         self.assertTrue(self.cold_folder.is_dir())
         self.assertTrue(self.interrupted.is_dir())
@@ -344,21 +354,66 @@ class ArchiveSourceTest(unittest.TestCase):
                 if count == 2:
                     raise OSError('synthetic_unlink_failure')
             return original_unlink(name, *args, **kwargs)
-        plan = self.plan()
         with mock.patch.object(subject.os, 'unlink', side_effect=fail_second), self.assertRaises(OSError):
             self.cleanup(state=state)
         journal = self.journal_records()[-1]
-        expected_paths = [row['path'] for row in c.file_rows(plan)]
+        expected_paths = self.cleanup_paths()
         self.assertEqual(journal['removed_files'], expected_paths[:1])
         self.assertEqual(journal['pending'], expected_paths[1])
         self.assertEqual(journal['status'], 'cleanup_started')
-        self.assertFalse((self.cold_folder / 'archive-manifest.json').exists())
+        self.assertFalse((self.cold_folder / 'engine.db-wal.gz').exists())
+        self.assertTrue((self.cold_folder / 'engine.db.gz').exists())
+        self.assertTrue((self.cold_folder / 'archive-manifest.json').exists())
         self.assertTrue((self.cold_folder / 'source-manifest.json').exists())
+        self.assertTrue((self.interrupted / 'snapshot.sqlite.json').exists())
         self.assertEqual(len(self.snapshot()), len(expected_paths) - 1)
+
+    def test_last_payload_unlink_failure_retains_all_manifests_and_plan_binding(self):
+        original_unlink = os.unlink
+        plan, bundle = self.bundle()
+        canonical_plan = c.canonical(plan)
+        receipt = self.recovery(plan)
+        metadata = {path: (subject.identity(path.stat()), path.read_bytes()) for path in (
+            self.cold_folder / 'archive-manifest.json', self.cold_folder / 'source-manifest.json',
+            self.interrupted / 'snapshot.sqlite.json')}
+        state = {}
+        def refuse_broken_zip(name, *args, **kwargs):
+            if name == 'packed.zip.broken' and kwargs.get('dir_fd') is not None:
+                raise OSError('synthetic last payload failure')
+            return original_unlink(name, *args, **kwargs)
+        with self.sources(True) as (parent, sources):
+            with mock.patch.object(subject.os, 'unlink', side_effect=refuse_broken_zip), self.assertRaises(OSError):
+                subject.cleanup(parent, sources, receipt, c.digest(c.canonical(receipt)), state)
+            # Cleanup order never mutates the manifest-first wire plan or its hash.
+            self.assertEqual(c.canonical(sources.plan), canonical_plan)
+        self.assertEqual(c.verify_bundle(io.BytesIO(bundle), plan), {'files': receipt['files']})
+        self.assertEqual({path: (subject.identity(path.stat()), path.read_bytes()) for path in metadata}, metadata)
+        journal = self.journal_records()[-1]
+        self.assertEqual(journal['removed_files'], self.cleanup_paths()[:3])
+        self.assertEqual(journal['pending'], self.cleanup_paths()[3])
+        self.assertEqual(journal['plan_sha256'], c.digest(canonical_plan))
+        self.assertTrue((self.interrupted / 'packed.zip.broken').exists())
+        self.assertEqual(len(self.snapshot()), 4)
+
+    def test_first_manifest_unlink_failure_occurs_only_after_all_payloads_removed(self):
+        original_unlink = os.unlink
+        state = {}
+        def refuse_manifest(name, *args, **kwargs):
+            if name == 'archive-manifest.json' and kwargs.get('dir_fd') is not None:
+                raise OSError('synthetic first manifest failure')
+            return original_unlink(name, *args, **kwargs)
+        with mock.patch.object(subject.os, 'unlink', side_effect=refuse_manifest), self.assertRaises(OSError):
+            self.cleanup(state=state)
+        journal = self.journal_records()[-1]
+        self.assertEqual(journal['removed_files'], self.cleanup_paths()[:4])
+        self.assertEqual(journal['pending'], self.cleanup_paths()[4])
+        self.assertEqual(set(path.name for folder in (self.cold_folder, self.interrupted)
+                             for path in folder.iterdir()),
+                         {'archive-manifest.json', 'source-manifest.json', 'snapshot.sqlite.json'})
 
     def test_journal_write_failure_after_unlink_retains_last_durable_progress(self):
         original_write = os.write
-        first = self.cold_folder / 'archive-manifest.json'
+        first = self.cold_folder / 'engine.db-wal.gz'
         plan = self.plan()
         state = {}
         def failed_after_unlink(fd, data):
@@ -371,13 +426,13 @@ class ArchiveSourceTest(unittest.TestCase):
         raw = (self.parent / subject.JOURNAL).read_bytes()
         self.assertGreater(len(raw), 0, 'The last durable pending target must survive a journal rewrite failure')
         journal = self.journal_records()[-1]
-        first_path = c.file_rows(plan)[0]['path']
+        first_path = self.cleanup_paths()[0]
         self.assertTrue(first_path in journal['removed_files'] or journal['pending'] == first_path)
         self.assertEqual(len(self.snapshot()), len(c.file_rows(plan)) - 1)
 
     def test_partial_journal_append_keeps_previous_complete_pending_record(self):
         original_write = os.write
-        first = self.cold_folder / 'archive-manifest.json'
+        first = self.cold_folder / 'engine.db-wal.gz'
         plan, state = self.plan(), {}
         after_unlink_writes = 0
         def partial_then_fail(fd, data):
@@ -394,7 +449,7 @@ class ArchiveSourceTest(unittest.TestCase):
         self.assertFalse(raw.endswith(b'\n'))
         records = self.journal_records()
         self.assertGreaterEqual(len(records), 2)
-        self.assertEqual(records[-1]['pending'], c.file_rows(plan)[0]['path'])
+        self.assertEqual(records[-1]['pending'], self.cleanup_paths()[0])
         self.assertEqual(records[-1]['removed_files'], [])
         self.assertFalse(first.exists())
         self.assertEqual(len(self.snapshot()), len(c.file_rows(plan)) - 1)
