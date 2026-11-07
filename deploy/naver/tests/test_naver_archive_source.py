@@ -100,6 +100,45 @@ class ArchiveSourceTest(unittest.TestCase):
                             'archive-manifest.json': c.canonical(self.cold_manifest)}.items():
             self.put(self.cold_folder / name, value)
 
+    def make_fixed_bundle_layout(self):
+        # These bytes test source membership/identity only. This deliberately
+        # does not claim a verified backup_bundle manifest or recovery receipt.
+        self.fixed_bundle = self.cold_parent / c.BUNDLE
+        self.fixed_bundle.mkdir(mode=0o700)
+        for child in ('deployment', 'snapshot'):
+            (self.fixed_bundle / child).mkdir(mode=0o700)
+        for name in ('archive-manifest.json', 'deployment/archive-manifest.json',
+                     'deployment/source-manifest.json', 'deployment/engine.db.gz',
+                     'snapshot/archive-manifest.json', 'snapshot/snapshot.sqlite.gz'):
+            self.put(self.fixed_bundle / name, b'{}' if name.endswith('.json') else b'fixed-fixture-payload')
+
+    def make_verified_fixed_bundle(self):
+        spec = importlib.util.spec_from_file_location(
+            'fixed_archive_bundle_fixture', Path(__file__).with_name('test_naver_archive_bundle.py'))
+        fixture = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixture)
+        _, payloads, raw = fixture.make_fixture(c)
+        helper = c.bundle_helper()
+        self.patches.enter_context(mock.patch.object(c, 'bundle_helper', return_value=helper))
+        self.patches.enter_context(mock.patch.object(helper, 'CANDIDATE_BYTES', len(raw['snapshot'])))
+        self.fixed_bundle = self.cold_parent / c.BUNDLE
+        self.fixed_bundle.mkdir(mode=0o700)
+        for child in ('deployment', 'snapshot'):
+            (self.fixed_bundle / child).mkdir(mode=0o700)
+        prefix = 'bundle/' + c.BUNDLE + '/'
+        for path, data in payloads.items():
+            self.assertTrue(path.startswith(prefix))
+            self.put(self.fixed_bundle / path[len(prefix):], data)
+
+    def bundle_cleanup_paths(self):
+        base = 'bundle/' + c.BUNDLE + '/'
+        return ([base + 'deployment/engine.db.gz', base + 'snapshot/snapshot.sqlite.gz']
+                + self.cleanup_paths()[:4]
+                + [base + 'deployment/archive-manifest.json', base + 'deployment/source-manifest.json',
+                   base + 'snapshot/archive-manifest.json']
+                + self.cleanup_paths()[4:]
+                + [base + 'archive-manifest.json'])
+
     @contextlib.contextmanager
     def sources(self, exclusive=False):
         with subject.namespace(self.root, exclusive) as (parent, validate):
@@ -117,8 +156,11 @@ class ArchiveSourceTest(unittest.TestCase):
         return plan, data
 
     def snapshot(self):
+        folders = [self.cold_folder, self.interrupted]
+        if hasattr(self, 'fixed_bundle'):
+            folders.append(self.fixed_bundle)
         return {str(path.relative_to(self.parent)): (subject.identity(path.stat()), path.read_bytes())
-                for folder in (self.cold_folder, self.interrupted) for path in folder.iterdir()}
+                for folder in folders for path in folder.rglob('*') if path.is_file()}
 
     def journal_records(self):
         # A failed append may leave an incomplete final line. Keep prior records.
@@ -321,6 +363,219 @@ class ArchiveSourceTest(unittest.TestCase):
         with self.assertRaisesRegex(c.Refused, 'unexpected_files'):
             self.plan()
         self.assertEqual(extra.read_bytes(), b'separate-data')
+
+    def test_fixed_bundle_plan_has_three_bound_groups_and_six_closed_nested_paths(self):
+        self.make_fixed_bundle_layout()
+        before = self.snapshot()
+        plan = self.plan()
+        groups = [g for g in plan['groups'] if g['kind'].startswith('bundle')]
+        self.assertEqual([g['kind'] for g in groups], ['bundle', 'bundle-deployment', 'bundle-snapshot'])
+        self.assertEqual([g['name'] for g in groups], [c.BUNDLE] * 3)
+        self.assertEqual([len(g['files']) for g in groups], [1, 3, 2])
+        base = 'bundle/' + c.BUNDLE + '/'
+        self.assertEqual([r['path'] for r in c.file_rows(plan) if r['path'].startswith(base)], [
+            base + 'archive-manifest.json', base + 'deployment/archive-manifest.json',
+            base + 'deployment/source-manifest.json', base + 'deployment/engine.db.gz',
+            base + 'snapshot/archive-manifest.json', base + 'snapshot/snapshot.sqlite.gz'])
+        for group, path in zip(groups, (self.fixed_bundle, self.fixed_bundle / 'deployment',
+                                       self.fixed_bundle / 'snapshot')):
+            self.assertEqual(group['identity'], subject.identity(path.stat()))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_fixed_bundle_missing_or_pending_root_and_child_members_are_refused(self):
+        self.make_fixed_bundle_layout()
+        for parent, name in ((self.fixed_bundle, '.manifest.pending'),
+                             (self.fixed_bundle / 'deployment', '.manifest.pending'),
+                             (self.fixed_bundle / 'snapshot', 'unknown.gz')):
+            with self.subTest(parent=parent.name, name=name):
+                extra = parent / name
+                self.put(extra, b'preserve-unknown')
+                with self.assertRaisesRegex(c.Refused, 'unexpected_files'):
+                    self.plan()
+                self.assertEqual(extra.read_bytes(), b'preserve-unknown')
+                extra.unlink()
+        for path in (self.fixed_bundle / 'archive-manifest.json',
+                     self.fixed_bundle / 'deployment/source-manifest.json',
+                     self.fixed_bundle / 'snapshot/snapshot.sqlite.gz'):
+            with self.subTest(missing=str(path.relative_to(self.fixed_bundle))):
+                saved = path.read_bytes()
+                path.unlink()
+                with self.assertRaisesRegex(c.Refused, 'unexpected_files'):
+                    self.plan()
+                self.put(path, saved)
+
+    def test_fixed_bundle_child_directory_missing_symlink_or_nonprivate_is_refused(self):
+        self.make_fixed_bundle_layout()
+        for name in ('deployment', 'snapshot'):
+            child = self.fixed_bundle / name
+            saved = self.parent / ('saved-' + name)
+            child.rename(saved)
+            with self.subTest(child=name, case='missing'), self.assertRaisesRegex(c.Refused, 'unexpected_files'):
+                self.plan()
+            child.symlink_to(saved, target_is_directory=True)
+            with self.subTest(child=name, case='symlink'), self.assertRaisesRegex(c.Refused, 'unsafe_directory'):
+                self.plan()
+            child.unlink()
+            saved.rename(child)
+            child.chmod(0o755)
+            with self.subTest(child=name, case='mode'), self.assertRaisesRegex(c.Refused, 'unsafe_directory'):
+                self.plan()
+            child.chmod(0o700)
+
+    def test_fixed_bundle_file_symlink_hardlink_and_fifo_are_refused(self):
+        self.make_fixed_bundle_layout()
+        victim = self.parent / 'bundle-victim'
+        self.put(victim, b'never-delete-this')
+        for relative in ('archive-manifest.json', 'deployment/engine.db.gz', 'snapshot/archive-manifest.json'):
+            path = self.fixed_bundle / relative
+            original = path.read_bytes()
+            path.unlink()
+            for make in (lambda: path.symlink_to(victim), lambda: os.link(victim, path),
+                         lambda: os.mkfifo(path, 0o600)):
+                make()
+                try:
+                    with self.subTest(path=relative), self.assertRaises((c.Refused, OSError)):
+                        self.plan()
+                    self.assertEqual(victim.read_bytes(), b'never-delete-this')
+                finally:
+                    path.unlink()
+            self.put(path, original)
+
+    def test_new_cold_group_or_nested_member_after_pin_is_refused(self):
+        self.make_fixed_bundle_layout()
+        for folder, name in ((self.cold_parent, 'unknown-generation'),
+                             (self.fixed_bundle, '.manifest.pending'),
+                             (self.fixed_bundle / 'snapshot', '.manifest.pending')):
+            with self.subTest(folder=folder.name), self.sources() as (_, sources):
+                extra = folder / name
+                self.put(extra, b'new-unreviewed-data')
+                try:
+                    with self.assertRaisesRegex(c.Refused, 'source_members_changed'):
+                        sources.recheck()
+                    self.assertEqual(extra.read_bytes(), b'new-unreviewed-data')
+                finally:
+                    extra.unlink()
+
+    def test_fixed_bundle_child_path_replacement_after_pin_is_refused(self):
+        self.make_fixed_bundle_layout()
+        with self.sources() as (_, sources):
+            child = self.fixed_bundle / 'deployment'
+            saved = self.parent / 'detached-deployment'
+            child.rename(saved)
+            child.mkdir(mode=0o700)
+            with self.assertRaisesRegex(c.Refused, 'namespace_changed'):
+                sources.recheck()
+            self.assertTrue((saved / 'engine.db.gz').is_file())
+
+    def test_fixed_bundle_child_file_change_after_pin_is_refused(self):
+        self.make_fixed_bundle_layout()
+        with self.sources() as (_, sources):
+            path = self.fixed_bundle / 'snapshot/snapshot.sqlite.gz'
+            path.write_bytes(b'!' * path.stat().st_size)
+            with self.assertRaisesRegex(c.Refused, 'source_changed'):
+                sources.recheck()
+            self.assertTrue(path.is_file())
+
+    def test_fixed_bundle_full_verify_restore_cleanup_cycle_keeps_exact_bytes_and_root_manifest_last(self):
+        self.make_verified_fixed_bundle()
+        before = self.snapshot()
+        plan, bundle = self.bundle()
+        canonical_plan = c.canonical(plan)
+        self.assertEqual(c.verify_bundle(io.BytesIO(bundle), plan), {'files': c.file_rows(plan)})
+        output = self.base / 'fixed-bundle-restore'
+        output.mkdir(mode=0o700)
+        restored = c.restore_bundle(io.BytesIO(bundle), plan, str(output))
+        self.assertEqual(restored, {'files': c.file_rows(plan)})
+        for path in self.fixed_bundle.rglob('*'):
+            if path.is_file():
+                relative = Path('bundle') / c.BUNDLE / path.relative_to(self.fixed_bundle)
+                self.assertEqual((output / relative).read_bytes(), path.read_bytes())
+        self.assertEqual(self.snapshot(), before)
+        with self.sources(True) as (parent, sources):
+            receipt, state = self.recovery(plan), {}
+            subject.cleanup(parent, sources, receipt, c.digest(c.canonical(receipt)), state)
+            self.assertEqual(c.canonical(sources.plan), canonical_plan)
+            sources.recheck(state['removed_files'])
+        self.assertEqual(state['status'], 'cleaned')
+        self.assertEqual(state['removed_files'], self.bundle_cleanup_paths())
+        self.assertEqual(self.journal_records()[-1], state)
+        self.assertEqual(self.snapshot(), {})
+        self.assertEqual(set(path.name for path in self.fixed_bundle.iterdir()), {'deployment', 'snapshot'})
+        self.assertTrue(all(path.is_dir() for path in self.fixed_bundle.iterdir()))
+
+    def test_fixed_bundle_corrupt_inner_payload_is_held_without_journal_or_deletion(self):
+        self.make_verified_fixed_bundle()
+        target = self.fixed_bundle / 'snapshot/snapshot.sqlite.gz'
+        self.put(target, b'!' * target.stat().st_size)
+        before = self.snapshot()
+        with self.assertRaises(c.Refused):
+            self.cleanup()
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse((self.parent / subject.JOURNAL).exists())
+
+    def test_fixed_bundle_first_child_manifest_failure_keeps_all_metadata_and_pending_nested_path(self):
+        self.make_verified_fixed_bundle()
+        before = {path: value for path, value in self.snapshot().items() if path.endswith('.json')}
+        plan = self.plan()
+        actual_unlink, state = os.unlink, {}
+        def refuse_child_manifest(name, *args, **kwargs):
+            if name == 'archive-manifest.json' and kwargs.get('dir_fd') is not None:
+                raise OSError('synthetic first child manifest failure')
+            return actual_unlink(name, *args, **kwargs)
+        with mock.patch.object(subject.os, 'unlink', side_effect=refuse_child_manifest), self.assertRaises(OSError):
+            self.cleanup(state=state)
+        self.assertEqual(self.snapshot(), before)
+        durable = self.journal_records()[-1]
+        self.assertEqual(durable['removed_files'], self.bundle_cleanup_paths()[:6])
+        self.assertEqual(durable['pending'], self.bundle_cleanup_paths()[6])
+        self.assertEqual(durable['plan_sha256'], c.digest(c.canonical(plan)))
+        self.assertEqual(durable['status'], 'cleanup_started')
+
+    def test_fixed_bundle_root_manifest_unlink_failure_occurs_after_all_child_metadata(self):
+        self.make_verified_fixed_bundle()
+        root_manifest = self.fixed_bundle / 'archive-manifest.json'
+        original = (subject.identity(root_manifest.stat()), root_manifest.read_bytes())
+        actual_unlink, state = os.unlink, {}
+        root_inode = self.fixed_bundle.stat().st_ino
+        def refuse_root_manifest(name, *args, **kwargs):
+            folder = kwargs.get('dir_fd')
+            if name == 'archive-manifest.json' and folder is not None and os.fstat(folder).st_ino == root_inode:
+                raise OSError('synthetic final root manifest failure')
+            return actual_unlink(name, *args, **kwargs)
+        with mock.patch.object(subject.os, 'unlink', side_effect=refuse_root_manifest), self.assertRaises(OSError):
+            self.cleanup(state=state)
+        self.assertEqual((subject.identity(root_manifest.stat()), root_manifest.read_bytes()), original)
+        self.assertEqual(len(self.snapshot()), 1)
+        self.assertEqual(list((self.fixed_bundle / 'deployment').iterdir()), [])
+        self.assertEqual(list((self.fixed_bundle / 'snapshot').iterdir()), [])
+        durable = self.journal_records()[-1]
+        self.assertEqual(durable['removed_files'], self.bundle_cleanup_paths()[:-1])
+        self.assertEqual(durable['pending'], self.bundle_cleanup_paths()[-1])
+        self.assertEqual(durable['status'], 'cleanup_started')
+
+    def test_fixed_bundle_root_manifest_replacement_before_unlink_preserves_all_payloads(self):
+        self.make_verified_fixed_bundle()
+        root_manifest = self.fixed_bundle / 'archive-manifest.json'
+        saved = self.parent / 'detached-root-manifest.json'
+        actual_hash, changed, state = subject.Sources.hash_fd, False, {}
+        original = root_manifest.read_bytes()
+        def replace_after_hash(fd, expected):
+            nonlocal changed
+            digest = actual_hash(fd, expected)
+            if (self.parent / subject.JOURNAL).exists() and not changed:
+                changed = True
+                root_manifest.rename(saved)
+                self.put(root_manifest, original)
+            return digest
+        with mock.patch.object(subject.Sources, 'hash_fd', staticmethod(replace_after_hash)), \
+                self.assertRaisesRegex(c.Refused, 'source_changed'):
+            self.cleanup(state=state)
+        self.assertTrue(changed)
+        self.assertEqual(state['removed_files'], [])
+        self.assertEqual(root_manifest.read_bytes(), original)
+        self.assertEqual(saved.read_bytes(), original)
+        self.assertTrue((self.fixed_bundle / 'deployment/engine.db.gz').is_file())
+        self.assertTrue((self.fixed_bundle / 'snapshot/snapshot.sqlite.gz').is_file())
 
     def test_recovery_receipt_is_bound_to_plan_files_and_fixed_status(self):
         plan = self.plan()

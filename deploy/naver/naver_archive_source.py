@@ -80,6 +80,7 @@ class Sources:
     def __init__(self, parent, validate):
         self.parent, self.validate, self.stack = parent, validate, contextlib.ExitStack()
         self.groups, self.files, self.links = [], {}, []
+        self.group_folders, self.namespace_members = {}, []
 
     def folder(self, parent, name, private=True):
         before = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -92,19 +93,28 @@ class Sources:
 
     def __enter__(self):
         try:
-            parents = []
+            folders = []
             if optional_stat(self.parent, COLD_PARENT) is not None:
                 cold_parent = self.folder(self.parent, COLD_PARENT)
-                names = os.listdir(cold_parent)
-                c.need(set(names).issubset(c.COLD), 'unknown_cold_directory')
-                parents.extend(('cold', name, cold_parent) for name in sorted(names))
+                names = set(os.listdir(cold_parent))
+                c.need(names.issubset(set(c.COLD) | {c.BUNDLE}), 'unknown_cold_directory')
+                self.namespace_members.append((cold_parent, names))
+                for name in sorted(names - {c.BUNDLE}):
+                    folders.append(('cold', name, self.folder(cold_parent, name), set()))
+                if c.BUNDLE in names:
+                    bundle = self.folder(cold_parent, c.BUNDLE)
+                    children = {'deployment', 'snapshot'}
+                    c.need(set(os.listdir(bundle)) == children | {'archive-manifest.json'}, 'unexpected_files')
+                    folders.append(('bundle', c.BUNDLE, bundle, children))
+                    for kind, child in (('bundle-deployment', 'deployment'), ('bundle-snapshot', 'snapshot')):
+                        folders.append((kind, c.BUNDLE, self.folder(bundle, child), set()))
             if optional_stat(self.parent, c.INTERRUPTED) is not None:
-                parents.append(('interrupted', c.INTERRUPTED, self.parent))
-            c.need(parents, 'no_archives')
-            for kind, name, parent in parents:
-                folder = self.folder(parent, name)
+                folders.append(('interrupted', c.INTERRUPTED, self.folder(self.parent, c.INTERRUPTED), set()))
+            c.need(folders, 'no_archives')
+            for kind, name, folder, children in sorted(folders, key=lambda item: item[:2]):
+                self.group_folders[(kind, name)] = (folder, children)
                 files = []
-                for filename in c.names_for(kind, os.listdir(folder)):
+                for filename in c.names_for(kind, set(os.listdir(folder)) - children):
                     fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=folder)
                     self.stack.callback(os.close, fd)
                     info = os.fstat(fd)
@@ -151,16 +161,18 @@ class Sources:
         for parent, name, fd, expected in self.links:
             c.need(dir_id(os.stat(name, dir_fd=parent, follow_symlinks=False)) == expected == dir_id(os.fstat(fd)),
                    'namespace_changed')
+        for folder, expected_names in self.namespace_members:
+            c.need(set(os.listdir(folder)) == expected_names, 'source_members_changed')
         removed = set(removed)
         for key, (folder, fd, expected) in self.files.items():
-            if '/'.join(key) in removed:
+            if c.path_for(*key) in removed:
                 continue
             c.need(identity(os.fstat(fd)) == expected == identity(os.stat(key[2], dir_fd=folder, follow_symlinks=False)),
                    'source_changed')
         for group in self.groups:
-            folder = self.files[(group['kind'], group['name'], group['files'][0]['name'])][0]
-            expected_names = {f['name'] for f in group['files']
-                              if '/'.join((group['kind'], group['name'], f['name'])) not in removed}
+            folder, children = self.group_folders[(group['kind'], group['name'])]
+            expected_names = children | {f['name'] for f in group['files']
+                                        if c.path_for(group['kind'], group['name'], f['name']) not in removed}
             c.need(set(os.listdir(folder)) == expected_names, 'source_members_changed')
 
     def blocks(self):
@@ -258,15 +270,17 @@ def cleanup(parent, sources, receipt, recovery_sha, state):
             os.fsync(parent)
         persist()
         # The wire plan stays manifest-first for bounded streaming verification.
-        # Cleanup removes every group's payloads before any metadata, so an
-        # interrupted payload removal retains all manifests for manual recovery.
-        for manifests in (False, True):
+        # Keep every manifest until all payloads are removed, and keep the bundle
+        # root manifest until all child metadata is removed. An interrupted
+        # cleanup retains the remaining verification evidence; directories stay.
+        for phase in (0, 1, 2):
             for group in sources.groups:
                 for row in group['files']:
-                    if row['name'].endswith('.json') != manifests:
+                    rank = (2 if group['kind'] == 'bundle' else 1) if row['name'].endswith('.json') else 0
+                    if rank != phase:
                         continue
                     key = (group['kind'], group['name'], row['name'])
-                    path = '/'.join(key)
+                    path = c.path_for(*key)
                     folder, source_fd, expected = sources.files[key]
                     sources.recheck(state['removed_files'])
                     c.need(sources.hash_fd(source_fd, expected) == row['sha256'], 'source_changed')

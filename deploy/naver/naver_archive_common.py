@@ -23,6 +23,13 @@ MAX_TOTAL = 11 * 1024 ** 3
 MAX_RAW = 16 * 1024 ** 3
 SHA = re.compile(r'[0-9a-f]{64}\Z')
 INTERRUPTED = 'naver-engine-interrupted-20261106'
+BUNDLE = '54fc-and-20261021-regular-snapshot-gzip6-v1'
+BUNDLE_KINDS = ('bundle', 'bundle-deployment', 'bundle-snapshot')
+BUNDLE_FILES = {
+    'bundle': ('archive-manifest.json',),
+    'bundle-deployment': ('archive-manifest.json', 'source-manifest.json', 'engine.db.gz'),
+    'bundle-snapshot': ('archive-manifest.json', 'snapshot.sqlite.gz'),
+}
 INTERRUPTED_SOURCE = 'interrupted nightly backup 2026-11-06 00:35 KST (not a daily backup, not in state.json)'
 ID_KEYS = {'device', 'inode', 'mode', 'uid', 'gid', 'size', 'links',
            'mtime_ns', 'ctime_ns', 'allocated_bytes'}
@@ -85,29 +92,57 @@ def metadata(value):
 
 def names_for(kind, names):
     """Manifests precede payloads, so gzip checking needs bounded memory only."""
+    if kind in BUNDLE_KINDS:
+        expected = BUNDLE_FILES[kind]
+        need(set(names) == set(expected), 'unexpected_files')
+        return list(expected)
     if kind == 'interrupted':
         expected = ['snapshot.sqlite.json', 'snapshot.sqlite.gz', 'packed.zip.broken']
         need(set(names) == set(expected), 'unexpected_files')
         return expected
+    need(kind == 'cold', 'unexpected_kind')
     base = {'archive-manifest.json', 'source-manifest.json', 'engine.db.gz'}
     allowed = base | {n + '.gz' for n in cold.FILES}
     need(base.issubset(names) and set(names).issubset(allowed), 'unexpected_files')
     return ['archive-manifest.json', 'source-manifest.json'] + sorted(set(names) - base | {'engine.db.gz'})
 
 
+def path_for(kind, name, filename):
+    """Map only fixed group/member names to the isolated recovery namespace."""
+    if kind in BUNDLE_KINDS:
+        need(name == BUNDLE and filename in BUNDLE_FILES[kind], 'unexpected_path')
+        middle = '' if kind == 'bundle' else kind[len('bundle-'):] + '/'
+        return 'bundle/' + name + '/' + middle + filename
+    if kind == 'cold':
+        allowed = {'archive-manifest.json', 'source-manifest.json'} | {n + '.gz' for n in cold.FILES}
+        need(name in COLD and filename in allowed, 'unexpected_path')
+    else:
+        need(kind == 'interrupted' and name == INTERRUPTED and filename in
+             ('snapshot.sqlite.json', 'snapshot.sqlite.gz', 'packed.zip.broken'), 'unexpected_path')
+    return kind + '/' + name + '/' + filename
+
+
+def bundle_helper():
+    # Cold/interrupted-only recovery keeps its original dependency boundary.
+    return sibling('backup_bundle')
+
+
 def validate_plan(plan):
     need(type(plan) is dict and set(plan) == {'version', 'session', 'groups', 'total_bytes'})
     need(type(plan['version']) is int and plan['version'] == 1 and plan['session'] == SESSION)
-    need(type(plan['groups']) is list and 1 <= len(plan['groups']) <= len(COLD) + 1)
+    need(type(plan['groups']) is list and 1 <= len(plan['groups']) <= len(COLD) + 4)
     keys, total = [], 0
     for group in plan['groups']:
         need(type(group) is dict and set(group) == {'kind', 'name', 'identity', 'files'})
         kind, name = group['kind'], group['name']
         need(type(kind) is str and type(name) is str)
-        need((kind == 'cold' and name in COLD) or (kind == 'interrupted' and name == INTERRUPTED))
+        need((kind == 'cold' and name in COLD) or (kind == 'interrupted' and name == INTERRUPTED)
+             or (kind in BUNDLE_KINDS and name == BUNDLE))
         metadata(group['identity'])
         files = group['files']
-        need(type(files) is list and 3 <= len(files) <= 6)
+        minimum = len(BUNDLE_FILES[kind]) if kind in BUNDLE_KINDS else 3
+        maximum = minimum if kind in BUNDLE_KINDS else 6
+        need(type(files) is list and minimum <= len(files) <= maximum)
         names = []
         for row in files:
             need(type(row) is dict and set(row) == {'name', 'size', 'sha256', 'identity'})
@@ -121,13 +156,15 @@ def validate_plan(plan):
         need(len(set(names)) == len(names) and names == names_for(kind, names), 'file_order')
         keys.append((kind, name))
     need(keys == sorted(set(keys)), 'group_order')
+    bundle_kinds = {kind for kind, _ in keys if kind in BUNDLE_KINDS}
+    need(not bundle_kinds or bundle_kinds == set(BUNDLE_KINDS), 'incomplete_bundle_groups')
     need(number(plan['total_bytes'], MAX_TOTAL) and plan['total_bytes'] == total)
     need(len(canonical(plan)) <= MAX_PLAN)
     return plan
 
 
 def file_rows(plan):
-    return [{'path': g['kind'] + '/' + g['name'] + '/' + f['name'],
+    return [{'path': path_for(g['kind'], g['name'], f['name']),
              'size': f['size'], 'sha256': f['sha256']}
             for g in plan['groups'] for f in g['files']]
 
@@ -178,15 +215,27 @@ def verify_bundle(stream, expected_plan):
     length = struct.unpack('>Q', exact(stream, 8))[0]
     need(0 < length <= MAX_PLAN, 'plan_size')
     need(exact(stream, length) == canonical(expected_plan), 'plan_mismatch')
+    helper, root_archive = None, None
+    if any(group['kind'] in BUNDLE_KINDS for group in expected_plan['groups']):
+        try:
+            helper = bundle_helper()
+        except Exception:
+            raise Refused('bundle_helper') from None
     for group in expected_plan['groups']:
+        kind = group['kind']
         manifests, archive = {}, None
         for row in group['files']:
             name, remaining, digestor = row['name'], row['size'], hashlib.sha256()
             check, captured = None, bytearray()
             if name.endswith('.gz'):
-                if group['kind'] == 'cold':
+                if kind in ('cold', 'bundle-deployment'):
                     need(archive is not None and name[:-3] in archive['files'], 'gzip_member')
                     inner = archive['files'][name[:-3]]
+                    need(row['size'] == inner['gzip_size'] and row['sha256'] == inner['gzip_sha256'])
+                    check = GzipCheck(inner['size'], inner['sha256'])
+                elif kind == 'bundle-snapshot':
+                    need(archive is not None and name == 'snapshot.sqlite.gz', 'gzip_member')
+                    inner = archive['file']
                     need(row['size'] == inner['gzip_size'] and row['sha256'] == inner['gzip_sha256'])
                     check = GzipCheck(inner['size'], inner['sha256'])
                 else:
@@ -208,6 +257,24 @@ def verify_bundle(stream, expected_plan):
                 value = strict_json(captured)
                 manifests[name] = value
                 if name == 'archive-manifest.json':
+                    if kind in BUNDLE_KINDS:
+                        try:
+                            if kind == 'bundle':
+                                need(type(value) is dict and 'plan' in value, 'bundle_manifest')
+                                need(helper.inspect_manifest(value, 'bundle', name, value['plan']),
+                                     'bundle_manifest')
+                                root_archive = value
+                            else:
+                                need(root_archive is not None, 'bundle_manifest')
+                                child = kind[len('bundle-'):]
+                                need(helper.inspect_manifest(value, child, name, root_archive['plan']),
+                                     'bundle_manifest')
+                                need(digest(canonical(value)) == root_archive[child + '_archive_sha256'],
+                                     'bundle_manifest')
+                        except Exception:
+                            raise Refused('bundle_manifest') from None
+                        archive = value
+                        continue
                     try:
                         archive = cold.validate_archive_plan(value, COLD[group['name']])
                     except Exception:
@@ -218,6 +285,12 @@ def verify_bundle(stream, expected_plan):
                     need(digest(captured) == archive['source_manifest_sha256'], 'source_manifest_hash')
                     need(value == {n: {k: r[k] for k in ('size', 'sha256')} for n, r in archive['files'].items()},
                          'source_manifest')
+                    if kind == 'bundle-deployment':
+                        try:
+                            need(helper.inspect_manifest(value, 'deployment', name, root_archive['plan']),
+                                 'bundle_manifest')
+                        except Exception:
+                            raise Refused('bundle_manifest') from None
                 elif name == 'snapshot.sqlite.json':
                     need(type(value) is dict and set(value) ==
                          {'source', 'sha256', 'bytes', 'gzip_bytes', 'gzip_level'}, 'interrupted_manifest')
@@ -245,8 +318,10 @@ def restore_bundle(stream, expected_plan, outputroot):
              and stat.S_IMODE(info.st_mode) == 0o700 and not os.listdir(root), 'restore_directory')
         directories, files, links = {'': root}, [], []
         for row in file_rows(expected_plan):
-            kind, group, filename = row['path'].split('/')
-            for path, parent_path, name in ((kind, '', kind), (kind + '/' + group, kind, group)):
+            parts = row['path'].split('/')
+            filename = parts[-1]
+            for index, name in enumerate(parts[:-1]):
+                path, parent_path = '/'.join(parts[:index + 1]), '/'.join(parts[:index])
                 if path not in directories:
                     parent = directories[parent_path]
                     os.mkdir(name, 0o700, dir_fd=parent)
@@ -254,7 +329,7 @@ def restore_bundle(stream, expected_plan, outputroot):
                     stack.callback(os.close, fd)
                     directories[path] = fd
                     links.append((parent, name, fd, os.fstat(fd).st_ino))
-            parent = directories[kind + '/' + group]
+            parent = directories['/'.join(parts[:-1])]
             fd = os.open(filename, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
                          0o600, dir_fd=parent)
             stack.callback(os.close, fd)
