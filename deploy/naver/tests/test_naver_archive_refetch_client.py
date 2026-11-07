@@ -31,12 +31,22 @@ subject = load('naver_archive_refetch_client')
 transport = load('naver_archive_transport')
 legacy = load('naver_archive_receiver_operator')
 control = load('naver_archive_receiver_control')
-PAYLOAD = b'SYNTHETIC_CIPHERTEXT_ONLY\0' * 20000
+PAYLOAD_UNIT = b'SYNTHETIC_CIPHERTEXT_ONLY\0'
+PAYLOAD_REPEATS = 20000
+PAYLOAD = PAYLOAD_UNIT * PAYLOAD_REPEATS
 KEY_CANARY = b'SYNTHETIC_PRIVATE_KEY_NEVER_READ'
 
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+
+
+def payload_writer(exit_code=0):
+    # Generate the same large pipe payload inside the child. Embedding its repr
+    # in -c exceeds Linux's per-argument limit before the child can even start.
+    return ('import os\npayload = ' + repr(PAYLOAD_UNIT) + ' * ' + str(PAYLOAD_REPEATS)
+            + '\nview = memoryview(payload)\nwhile view:\n    view = view[os.write(1, view):]'
+            + '\nraise SystemExit(' + str(exit_code) + ')')
 
 
 class ClientTests(unittest.TestCase):
@@ -92,9 +102,10 @@ class ClientTests(unittest.TestCase):
         self.args.install_sha256 = subject.digest(raw)
 
     def actual_stream(self, code=None, timeout=None):
-        code = code or ('import os; os.write(1, ' + repr(PAYLOAD) + ')')
-        # Send source through stdin of -c is unnecessary; payload is small and
-        # synthetic, and the transport itself still manages real process pipes.
+        code = code or payload_writer()
+        self.assertLess(len(code.encode()), 32768)
+        # Small code argument, unchanged large synthetic payload through real
+        # process pipes managed by the production transport.
         def stream(argv, sent, output, files, **kwargs):
             self.calls.append((argv, kwargs['timeout']))
             return transport.stream_fetch([sys.executable, '-I', '-B', '-c', code], sent,
@@ -195,7 +206,7 @@ class ClientTests(unittest.TestCase):
         self.assert_preserved()
 
     def test_full_bytes_then_nonzero_does_not_publish(self):
-        code = 'import os; os.write(1, ' + repr(PAYLOAD) + '); raise SystemExit(7)'
+        code = payload_writer(exit_code=7)
         result = self.run_client(self.actual_stream(code))
         self.assertEqual(result['status'], 'failed')
         self.assertFalse(Path(self.args.output).exists())
