@@ -9,10 +9,17 @@ DB를 열거나 운영 서비스, 일일 백업의 `local`, `outgoing`, `state.j
 ## 고정 범위
 
 - `/var/backups/metainc/naver-cold-archives/` 안에서
-  `cold_backup_archive.py`의 기존 8개 프로필에 명시된 디렉터리만 허용한다.
+  `cold_backup_archive.py`의 기존 8개 프로필에 명시된 디렉터리와 아래 고정
+  이중 보관본 디렉터리만 허용한다.
   존재하는 모든 허용 디렉터리를 조사하며, 모르는 디렉터리·불완전한 구성은
   전체 작업을 중단한다. 각 폴더의 원본 manifest 2개와 manifest에 대응하는
   `engine.db*.gz`만 포함한다.
+- `54fc-and-20261021-regular-snapshot-gzip6-v1`은 `backup_bundle.py`의
+  고정 이중 보관본이다. 루트 manifest와 `deployment`의 manifest 2개·
+  `engine.db.gz`, `snapshot`의 manifest·`snapshot.sqlite.gz` 총 6개 파일만
+  허용한다. 세 그룹은 함께 있어야 하며 pending·추가 항목·불완전 구성은 거부한다.
+  루트와 자식 manifest의 연결, 각 gzip의 압축 전후 크기·해시를 모두 대조한다.
+  기존 plan의 `unknown_cold_directory`를 폴더 이동이나 허용 검사 제거로 우회하지 않는다.
 - `8c13`의 최종 위치는 위 cold 폴더 안의
   `20261103T143402Z-8c13b0b72a61-v1`이다. 과거 cold 합계와 8c13 크기를
   별도 합산하지 않는다. 새 plan의 실제 파일 목록과 바이트 수로 계산한다.
@@ -28,7 +35,7 @@ DB를 열거나 운영 서비스, 일일 백업의 `local`, `outgoing`, `state.j
 
 | 파일 | 위치·역할 |
 | --- | --- |
-| `naver_archive_common.py`, `cold_backup_archive.py` | source와 Mac의 동일한 검증된 도구 디렉터리, 고정 프로필·형식·검증 |
+| `naver_archive_common.py`, `cold_backup_archive.py`, `backup_bundle.py` | source와 Mac의 동일한 검증된 도구 디렉터리, 고정 프로필·형식·검증 |
 | `naver_archive_source.py` | 운영 서버, 읽기 전용 plan/stream 및 별도 cleanup |
 | `naver_archive_transport.py` | 운영 서버 send, Mac fetch |
 | `preservation/recovery-public.asc`, `preservation/server-b-known-hosts` | transport 옆, 기존 공개키와 B 호스트 키의 고정 SHA 검증 |
@@ -41,6 +48,12 @@ DB를 열거나 운영 서비스, 일일 백업의 `local`, `outgoing`, `state.j
 부모 디렉터리는 root 소유이며 다른 사용자가 쓸 수 없어야 한다. Mac에서도
 동일하게 검토한 소스만 실행한다. 이 PR을 병합한다고 receiver, SSH 키,
 서버 폴더가 설치되거나 전송·삭제가 실행되지는 않는다.
+
+기존 PR364 도구를 설치한 상태라면 새 버전은 **별도 도구 폴더**에 설치한다.
+`backup_bundle.py`를 함께 설치하고 source·common·검증 helper 모두 같은
+최종 커밋의 SHA를 확인한다. 이 helper에서 호출하는 것은 형식 검증 함수뿐이며
+기존 원본 생성·압축·정리 명령을 실행하지 않는다. B receiver와 framing은
+변경되지 않으므로 기존 install을 반복하지 않는다. B 인증 만료도 연장되지 않는다.
 
 ## 실행 전 확인
 
@@ -230,9 +243,10 @@ python3 -I -B /tools/naver_archive_source.py cleanup \
 첫 삭제 전에 고정 journal
 `/var/backups/metainc/naver-archives-20261106-v1.cleanup.jsonl`을 배타 생성한다.
 각 파일 직전 다시 identity·hash를 확인하고 확정 파일 하나씩만 unlink·fsync한다.
-모든 그룹의 payload(`.gz`, `packed.zip.broken`)를 먼저 정리하고 모든 JSON
-manifest는 마지막에 정리한다. wire plan 순서·해시는 유지하며 journal은 실제
-삭제 순서를 기록한다. payload 단계에서 멈추면 manifest가 남는다.
+모든 그룹의 payload(`.gz`, `packed.zip.broken`)를 먼저 정리하고 일반·자식 JSON
+manifest를 정리한 뒤 이중 보관본의 루트 manifest를 가장 마지막에 정리한다.
+wire plan 순서·해시는 유지하며 journal은 실제 삭제 순서를 기록한다.
+payload 단계에서 멈추면 모든 manifest가 남는다. 디렉터리는 제거하지 않는다.
 부모 폴더는 남긴다. `rm -rf`, wildcard, image prune, live DB 작업은 없다.
 
 중간 실패는 일부 파일이 이미 정리됐을 수 있다. journal은 상태별 JSON 한 줄씩

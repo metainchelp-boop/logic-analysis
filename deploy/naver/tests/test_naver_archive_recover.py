@@ -440,11 +440,29 @@ class RecoveryFixture(unittest.TestCase):
         self.assertEqual(sentinel.read_bytes(), b'keep me')
 
     def test_actual_ephemeral_gpg_authenticates_restores_and_rejects_corruption(self):
+        bundle, payloads = self.real_bundle()
+        prefix = 'interrupted/' + self.common.INTERRUPTED + '/'
+        self.actual_gpg_cycle(bundle, {prefix + name: data for name, data in payloads.items()})
+
+    def test_actual_ephemeral_gpg_restores_fixed_nested_bundle_and_rejects_corruption(self):
+        import test_naver_archive_bundle as fixture
+        self.common = fixture.subject
+        self.plan, payloads, raw = fixture.make_fixture(self.common)
+        self.args.plan_sha256 = digest(canonical(self.plan))
+        self.transfer['plan_sha256'] = self.args.plan_sha256
+        self.write(self.args.plan, canonical(self.plan))
+        self.write(self.args.transfer_receipt, canonical(self.transfer))
+        # Synthetic byte count only; the production fixed-size rejection is
+        # independently exercised in the bundle schema tests.
+        with mock.patch.object(self.common, 'bundle_helper', return_value=fixture.B), \
+                mock.patch.object(fixture.B, 'CANDIDATE_BYTES', len(raw['snapshot'])):
+            self.actual_gpg_cycle(fixture.wire(self.plan, payloads, self.common), payloads)
+
+    def actual_gpg_cycle(self, bundle, payloads):
         try:
             binary = subject.gpg_binary()
         except subject.Refused:
             self.skipTest('GPG is not installed in the fixed executable locations')
-        bundle, payloads = self.real_bundle()
         base = [binary, '--no-options', '--homedir', str(self.home), '--batch']
         gpgconf = str(Path(binary).with_name('gpgconf'))
         if Path(gpgconf).is_file():
@@ -472,7 +490,7 @@ class RecoveryFixture(unittest.TestCase):
         with mock.patch.object(subject, 'RECIPIENT', recipient):
             receipt = self.verify(timeout=30)
             self.assertEqual(receipt['status'], 'recovery_verified')
-            folder = Path(self.args.restore_dir) / 'interrupted' / self.common.INTERRUPTED
+            folder = Path(self.args.restore_dir)
             for name, expected in payloads.items():
                 self.assertEqual((folder / name).read_bytes(), expected)
             # Bind the mutated ciphertext's new outer hash to ensure this tests
