@@ -94,6 +94,10 @@ on:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
         default: 'off'
+      staff_errors:
+        description: '🧯 직원 오류 점검 — off(기본) / on. 앱 응답 상태·예외·오류 줄·AI/외부 API 실패·사용량 기록·저장된 분석의 키워드 일치·nginx 오류·화면 응답(읽기 전용 · IP·키워드 미출력).'
+        required: false
+        default: 'off'
 
 jobs:
   diagnose:
@@ -2615,3 +2619,211 @@ jobs:
               | grep -aE '\"(GET|POST) /api/' \
               | awk '{for(i=1;i<=NF;i++) if($i ~ /^\/api\//) {split($i,a,"?"); print a[1]}}' \
               | sort | uniq -c | sort -rn | head -15
+
+      - name: 🧯 직원 오류 점검 — 로직분석·맞춤제안서 (staff_errors=on · 읽기 전용)
+        if: ${{ github.event.inputs.staff_errors == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 300s
+          script: |
+            # ⚠️ 읽기 전용 — 지우기·재시작·설정 변경 없음. IP·키워드·업체명은 찍지 않는다(그래도 런 로그는 읽은 뒤 지운다).
+            sudo -n true 2>/dev/null && SU="sudo -n" || SU=""
+            START=$(docker inspect -f '{{.State.StartedAt}}' logic-analysis)
+            echo "== 0. 컨테이너 기동 $START · 재시작 $(docker inspect -f '{{.RestartCount}}' logic-analysis) =="
+            cat > /tmp/se_a.py <<'PY'
+            import sys, re, collections, datetime
+            KST = datetime.timedelta(hours=9)
+            ts_rx = re.compile(r"^(\d{4}-\d\d-\d\d)T(\d\d):(\d\d)")
+            acc = re.compile(r"\"(GET|POST|PUT|DELETE|PATCH|OPTIONS) (/[^ ?\"]*)[^\"]* HTTP/[\d.]+\" (\d{3})")
+            MASK = [(re.compile(r"https?://\S+"), "(주소)"), (re.compile(r"'[^']{0,160}'"), "'**'"),
+                    (re.compile(r"\"[^\"]{0,160}\""), '"**"'), (re.compile(r"\[[^\]]{0,100}\]"), "[**]"),
+                    (re.compile(r"\([^)]{0,60}\)"), "(**)"), (re.compile(r"[0-9a-f]{12,}"), "<h>"), (re.compile(r"\d+"), "#")]
+            def mask(s):
+                for r, rep in MASK: s = r.sub(rep, s)
+                return s
+            def norm(p):
+                p = re.sub(r"/\d+(?=/|$)", "/#", p)
+                p = re.sub(r"/[A-Za-z0-9_\-]{20,}(?=/|$)", "/<토큰>", p)
+                p = re.sub(r"/[^/]*%[0-9A-Fa-f]{2}[^/]*", "/<글자>", p)
+                return p[:70]
+            tot = collections.Counter(); bad = collections.Counter(); lastbad = {}; daycls = collections.Counter()
+            exc = collections.Counter(); ef = {}; el = {}
+            lv = collections.Counter(); lf = {}; ll = {}
+            died = []
+            in_tb = False; frame = ""; tbt = "?"
+            first = last = None
+            for raw in sys.stdin:
+                m = ts_rx.match(raw)
+                if m:
+                    t = datetime.datetime.strptime(m.group(1) + " " + m.group(2) + ":" + m.group(3), "%Y-%m-%d %H:%M") + KST
+                    tt = t.strftime("%m-%d %H:%M"); ln = raw.split(" ", 1)[1].rstrip("\n") if " " in raw else ""
+                    first = first or tt; last = tt
+                else:
+                    tt = "?"; ln = raw.rstrip("\n")
+                a = acc.search(ln)
+                if a:
+                    key = a.group(1) + " " + norm(a.group(2)); st = int(a.group(3))
+                    tot[key] += 1; daycls[(tt[:5], st // 100)] += 1
+                    if st >= 400:
+                        bad[(key, st)] += 1; lastbad[(key, st)] = tt
+                    continue
+                if "Child process" in ln and "died" in ln:
+                    died.append(tt); continue
+                if ln.startswith("Traceback"):
+                    in_tb = True; frame = ""; tbt = tt; continue
+                if in_tb:
+                    fm = re.match(r'\s+File "/app/([^"]+)", line \d+, in (\S+)', ln)
+                    if fm:
+                        frame = fm.group(1) + ":" + fm.group(2); continue
+                    if ln.startswith(" ") or not ln.strip() or ln.startswith("During handling") or ln.startswith("The above exception"):
+                        continue
+                    k = (mask(ln)[:120], frame or "(앱 밖)")
+                    exc[k] += 1; ef.setdefault(k, tbt); el[k] = tbt
+                    in_tb = False; continue
+                lm = re.match(r"(ERROR|WARNING|CRITICAL):([\w.]+):(.*)", ln) or re.match(r"(ERROR|WARNING|CRITICAL):\s+()(.*)", ln)
+                if lm:
+                    body = lm.group(3).strip()
+                    if "쇼핑 검색 API" in body and "서비스 종료" in body:
+                        k = (lm.group(1), lm.group(2), "(종료된 쇼핑 검색 API — 알려진 것)")
+                    else:
+                        k = (lm.group(1), lm.group(2) or "uvicorn", mask(body)[:100])
+                    lv[k] += 1; lf.setdefault(k, tt); ll[k] = tt
+            print(f"  읽은 기간(KST): {first} ~ {last} · HTTP 요청 {sum(tot.values())}줄")
+            print("  -- 날짜별 응답(2xx / 3xx / 4xx / 5xx) --")
+            for d in sorted({d for d, _ in daycls}):
+                print(f"   {d}: " + " / ".join(str(daycls.get((d, c), 0)) for c in (2, 3, 4, 5)))
+            print("  -- 실패 응답 경로×상태 (건수 · 그 경로 전체 · 마지막 시각) 상위 45 --")
+            for (key, st), n in bad.most_common(45):
+                print(f"   {n:>6}  {st}  {key}  (전체 {tot[key]} · 마지막 {lastbad[(key, st)]})")
+            print("  -- 가장 많이 불린 경로 상위 30 (전체 · 실패) --")
+            for key, n in tot.most_common(30):
+                f = sum(v for (k, s), v in bad.items() if k == key)
+                print(f"   {n:>7}  실패 {f:>5}  {key}")
+            print(f"  -- 워커 죽음(Child process died) {len(died)}번: {died[-12:]} --")
+            print("  -- 예외(Traceback) 종류 (건수 · 처음 · 마지막 · 앱 마지막 자리 · 가린 문구) 상위 30 --")
+            for k, n in exc.most_common(30):
+                print(f"   {n:>5}  {ef[k]} ~ {el[k]}  {k[1]}  {k[0]}")
+            print("  -- ERROR·WARNING 줄 종류 (건수 · 처음 · 마지막) 상위 45 --")
+            for k, n in lv.most_common(45):
+                print(f"   {n:>6}  {lf[k]} ~ {ll[k]}  {k[0]}:{k[1]}: {k[2]}")
+            PY
+            echo "== A. 앱 로그 — 응답 상태·예외·오류 줄 (기동 이후 · 경로만 · 숫자/따옴표/괄호 가림) =="
+            docker logs --timestamps --since "$START" logic-analysis 2>&1 | python3 /tmp/se_a.py || echo "  (못 쟀다)"
+            rm -f /tmp/se_a.py
+            echo "== B. DB 기록(읽기 전용 · 숫자만) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, re, collections, json
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True, timeout=20)
+            def q(sql, a=()):
+                try: return c.execute(sql, a).fetchall()
+                except Exception as e: return f"(못 쟀다: {type(e).__name__})"
+            def show(title, rows):
+                print("  -- " + title + " --")
+                if isinstance(rows, str): print("   " + rows); return
+                if not rows: print("   (0줄)"); return
+                for r in rows: print("   " + " | ".join("" if x is None else str(x) for x in r))
+            show("스토어 분석 하루 사용(daily_usage · 날짜 · 사람 수 · 합계)", q("SELECT usage_date, COUNT(*), SUM(query_count) FROM daily_usage WHERE usage_date >= date('now','localtime','-14 day') GROUP BY usage_date ORDER BY usage_date"))
+            show("플레이스 분석(analyzer_usage · 날짜 · 돌린 수 · 실패 수)", q("SELECT usage_date, analyzer, SUM(runs), SUM(fails) FROM analyzer_usage WHERE usage_date >= date('now','localtime','-14 day') GROUP BY usage_date, analyzer ORDER BY usage_date"))
+            show("AI 호출(api_usage_logs · 날짜 · 경로 · 모델 · 상태 · 건수)", q("SELECT substr(called_at,1,10), endpoint, model, status, COUNT(*) FROM api_usage_logs WHERE called_at >= date('now','localtime','-14 day') GROUP BY 1,2,3,4 ORDER BY 1,2"))
+            r = q("SELECT error_message FROM api_usage_logs WHERE called_at >= date('now','localtime','-14 day') AND status <> 'success'")
+            if isinstance(r, list):
+                cnt = collections.Counter(re.sub(r"\d+", "#", re.sub(r"'[^']{0,120}'|\"[^\"]{0,120}\"", "**", (x[0] or "")))[:110] for x in r)
+                show("AI 호출 실패 문구(가림 · 건수)", [(n, k) for k, n in cnt.most_common(12)])
+            show("분석 결과(client_analyses · 날짜 · 건수 · 사람이 돌림 · 경쟁상품 빈칸 · 광고주분석 빈칸)",
+                 q("SELECT analyzed_date, COUNT(*), SUM(coalesce(created_by,0) > 0), SUM(length(coalesce(shop_products_json,'')) <= 2), SUM(length(coalesce(advertiser_json,'')) <= 2) FROM client_analyses WHERE analyzed_date >= date('now','localtime','-10 day') GROUP BY analyzed_date ORDER BY analyzed_date"))
+            show("보고서(reports · 날짜 · 자동 여부 · 상태 · 건수)", q("SELECT substr(created_at,1,10), is_auto, status, COUNT(*) FROM reports WHERE created_at >= date('now','localtime','-14 day') GROUP BY 1,2,3 ORDER BY 1"))
+            show("SEO 생성(seo_generations · 날짜 · 건수)", q("SELECT substr(created_at,1,10), COUNT(*) FROM seo_generations WHERE created_at >= date('now','localtime','-14 day') GROUP BY 1 ORDER BY 1"))
+            show("소상공인365 상태(sbiz_health · 날짜 · 출처 · 정상 · 실패)", q("SELECT substr(checked_at,1,10), source, SUM(ok), SUM(ok=0) FROM sbiz_health WHERE checked_at >= date('now','localtime','-14 day') GROUP BY 1,2 ORDER BY 1"))
+            show("데이터랩 보관함(datalab_cache · 줄 수 · 최근 저장 KST)", q("SELECT COUNT(*), datetime(MAX(saved_at),'unixepoch','+9 hours') FROM datalab_cache"))
+            # ── B2. 「분석 키워드가 다르다」 — 저장된 결과 안의 키워드가 그 줄의 키워드와 같은가(건수만 · 글자 미출력) ──
+            SKIP = {"related_keywords", "golden_keywords", "keywords", "products", "items", "competitors", "popular", "rising",
+                    "keywordList", "targets", "related", "golden", "results", "rows", "list", "data_list", "top_keywords"}
+            KEYS = {"keyword", "search_keyword", "query", "main_keyword", "mainKeyword", "searchKeyword", "searched_keyword"}
+            def nz(s): return "".join(str(s or "").split()).lower()
+            def walk(o, path="", depth=0, out=None):
+                if out is None: out = []
+                if depth > 3: return out
+                if isinstance(o, dict):
+                    for k, v in o.items():
+                        if k in KEYS and isinstance(v, str) and v.strip():
+                            out.append((path + "." + k, v))
+                        elif isinstance(v, (dict, list)) and k not in SKIP:
+                            walk(v, path + "." + k, depth + 1, out)
+                elif isinstance(o, list) and o:
+                    walk(o[0], path + "[0]", depth + 1, out)
+                return out
+            def cls(a, b):
+                if a == b: return "같음"
+                if nz(a) == nz(b): return "띄어쓰기·대소문자만 다름"
+                if nz(a) in nz(b) or nz(b) in nz(a): return "한쪽이 다른 쪽을 포함"
+                return "다른 키워드"
+            def check(title, sql, cols, who_idx=None):
+                agg = collections.Counter(); rows = 0; noemb = 0
+                try:
+                    for r in c.execute(sql):
+                        rows += 1
+                        kw = r[0] or ""
+                        who = ("사람" if (r[who_idx] or 0) > 0 else "자동") if who_idx is not None else "-"
+                        found = False
+                        for i, name in cols:
+                            try: obj = json.loads(r[i] or "null")
+                            except Exception: continue
+                            for path, v in walk(obj):
+                                found = True
+                                agg[(who, name + path, cls(kw, v))] += 1
+                        if not found: noemb += 1
+                except Exception as e:
+                    print(f"  -- {title} -- (못 쟀다: {type(e).__name__})"); return
+                print(f"  -- {title} — 줄 {rows} · 안에 키워드 칸이 없는 줄 {noemb} --")
+                for (who, path, k), n in sorted(agg.items()):
+                    print(f"   {who:>2} | {path[:60]:<60} | {k} {n}")
+            check("B2-1 분석 결과(최근 7일 · 최신 400줄)",
+                  "SELECT keyword, created_by, analysis_json, volume_json, advertiser_json, related_json FROM client_analyses WHERE analyzed_date >= date('now','localtime','-7 day') ORDER BY id DESC LIMIT 400",
+                  [(2, "analysis"), (3, "volume"), (4, "advertiser"), (5, "related")], who_idx=1)
+            check("B2-2 보고서(최근 30일 · 최신 200줄)",
+                  "SELECT keyword, created_by, report_data FROM reports WHERE created_at >= date('now','localtime','-30 day') ORDER BY id DESC LIMIT 200",
+                  [(2, "report")], who_idx=1)
+            check("B2-3 제안서 인계 보관(sales_bundle · 30분 보관 · 지금 남은 것)",
+                  "SELECT json_extract(payload,'$.keyword'), created_by, payload FROM sales_bundle ORDER BY created_at DESC LIMIT 50",
+                  [(2, "bundle")], who_idx=1)
+            show("제안서 인계 건수(sales_bundle · 지금 남은 줄)", q("SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM sales_bundle"))
+            PY
+            echo "== C. nginx 오류 기록 — 업스트림 포트·사유·날짜·경로 앞부분 (회전분 포함 · IP 미출력) =="
+            $SU sh -c 'for f in /var/log/nginx/*error*.log.2.gz; do [ -f "$f" ] && zcat "$f"; done; cat /var/log/nginx/*error*.log.1 /var/log/nginx/*error*.log 2>/dev/null' | python3 -c '
+            import sys, re, collections
+            rx = re.compile(r"^(\d{4})/(\d\d)/(\d\d) (\d\d):\d\d:\d\d \[(\w+)\] \d+#\d+: (?:\*\d+ )?(.*)")
+            rup = re.compile(r"upstream: \"[a-z]+://[^:/\"]+:(\d+)")
+            rrq = re.compile(r"request: \"(\S+) (\S+)")
+            rsv = re.compile(r"server: (\S+?),")
+            c = collections.Counter(); p = collections.Counter()
+            for ln in sys.stdin:
+                m = rx.match(ln)
+                if not m: continue
+                msg = m.group(6)
+                if "buffered to a temporary file" in msg: continue
+                u = rup.search(ln); port = u.group(1) if u else "-"
+                s = rsv.search(ln); srv = s.group(1) if s else "-"
+                k = ("끊김" if "prematurely" in msg else "거부" if "refused" in msg or "(111" in msg else "시간초과" if "timed out" in msg else "리셋" if "reset" in msg else "없는 파일" if "No such file" in msg or "not found" in msg else "기타")
+                d = m.group(2) + "/" + m.group(3)
+                c[(d, srv, port, k)] += 1
+                q = rrq.search(ln); path = (q.group(2) if q else "-").split("?")[0]
+                path = re.sub(r"/\d+(?=/|$)", "/#", path)
+                p[(srv, port, k, "/".join(path.split("/")[:4])[:50])] += 1
+            for k in sorted(c): print("  ", k, c[k])
+            print("  -- 서버·포트·사유·경로 앞부분 상위 30 --")
+            for k, n in p.most_common(30): print("  ", n, k)
+            ' || echo "  (못 쟀다)"
+            echo "== D. 접속 기록 — 파일별 날짜×상태 · 실패 경로 상위 (최근 2개 파일 · IP 미출력) =="
+            for L in /var/log/nginx/*access*.log; do
+              echo "  [$(basename $L) · $(wc -l < $L)줄]"
+              $SU sh -c "cat '$L.1' '$L' 2>/dev/null" | awk '{split($4,t,":"); d=substr(t[1],2,6); s=$9; n[d" "substr(s,1,1)"xx"]++} END {for (k in n) print "    " k " " n[k]}' | sort
+              $SU sh -c "cat '$L.1' '$L' 2>/dev/null" | awk '{s=$9; if (s>=400 && s!=404) {p=$7; sub(/\?.*/,"",p); gsub(/\/[0-9]+/,"/#",p); split(p,a,"/"); f[s" /"a[2]"/"a[3]"/"a[4]]++}} END {for (k in f) print f[k] " " k}' | sort -rn | head -20 | sed 's/^/    실패(404 제외) /'
+            done
+            echo "== E. 화면·서버 응답 (내부 · 인증 없이) =="
+            for u in / /api/auth/me; do echo "  $(curl -s -o /dev/null -w '%{http_code} %{size_download}B %{time_total}s' "http://127.0.0.1:5050$u")  logic $u"; done
+            for port in 6060 6061; do echo "  $(curl -s -o /dev/null -m 5 -w '%{http_code} %{time_total}s' "http://127.0.0.1:$port/readyz")  전산 BE :$port /readyz"; done
+            for u in http://metainc.co.kr/proposal/index.html http://metainc.co.kr/proposal/v3/index.html http://metainc.co.kr/proposal/v3/app.js; do echo "  $(curl -s -o /dev/null -m 15 -w '%{http_code} %{size_download}B %{time_total}s' -H 'Cache-Control: no-cache' "$u?cb=$(date +%s)")  $u"; done
