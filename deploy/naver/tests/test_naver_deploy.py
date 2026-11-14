@@ -125,6 +125,8 @@ class FakeHost:
         tools = ['docker', 'systemctl', 'curl', 'cp', 'sqlite3', 'du', 'journalctl']
         if shutil.which('flock') is None:
             tools.append('flock')
+        # 배포 스크립트의 python3 를 시험 인터프리터로 고정한다(macOS 의 /usr/bin/python3 xcrun 대역은 fd 3 을 넘기지 않는다).
+        os.symlink(sys.executable, os.path.join(self.bin, 'python3'))
         for tool in tools:
             path = os.path.join(self.bin, tool)
             with open(path, 'w') as handle:

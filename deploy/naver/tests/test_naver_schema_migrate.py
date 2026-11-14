@@ -361,14 +361,18 @@ class HostHelperTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix='naver-host-')
         self.code = py_helper_code()
+        self.code_file = os.path.join(tempfile.mkdtemp(prefix='naver-host-code-'), 'helper.py')
+        with open(self.code_file, 'w') as handle:   # 128KiB 인자 상한을 피해 파일로 실행(배포 스크립트는 fd 3)
+            handle.write(self.code)
 
     def tearDown(self):
         shutil.rmtree(self.root)
+        shutil.rmtree(os.path.dirname(self.code_file))
 
     def py(self, *args, **env):
         environment = {'PATH': '/usr/bin:/bin', 'NAVER_DEPLOY_ROOT': self.root, 'LANG': 'C'}
         environment.update(env)
-        return subprocess.run([sys.executable, '-I', '-B', '-c', self.code] + list(args), env=environment,
+        return subprocess.run([sys.executable, '-I', '-B', self.code_file] + list(args), env=environment,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def make_v2(self, folder, name, pinned, raw=b'raw'):
@@ -543,7 +547,7 @@ class HostHelperTest(unittest.TestCase):
         self.assertEqual(self.py('mig-dropin', 'remove').returncode, 1, 'foreign drop-in is never deleted')
 
     def test_helper_hash_literal_matches_file(self):
-        namespace = {}
+        namespace = {'os': os, 'json': json, 'ROOT': ''}
         text = self.code
         start = text.index('MIGRATIONS = {')
         exec(text[start:text.index("if ROOT and os.environ.get('NAVER_DEPLOY_TEST_MIGRATIONS')")], namespace)

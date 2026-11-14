@@ -2808,7 +2808,8 @@ if __name__ == '__main__':
 PYEOF
 )
 
-py() { python3 -I -B -c "$PY_HELPER" "$@"; }
+# helper 원문은 128KiB(리눅스 인자 하나 상한)를 넘을 수 있어 -c 인자가 아니라 fd 3 으로 넘긴다(표준입력은 그대로).
+py() { python3 -I -B /dev/fd/3 "$@" 3<<<"$PY_HELPER"; }
 
 # docker 는 깨끗한 환경으로 부른다(compose 변수 보간이 ssh 세션 변수에 흔들리지 않게).
 dk() { env -i PATH="$PATH" LANG=C docker "$@"; }
