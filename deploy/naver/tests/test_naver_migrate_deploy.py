@@ -371,8 +371,10 @@ class MigrateDeployTest(unittest.TestCase):
 
     def test_archive_failure_without_policy_room_holds(self):
         plan = self.host.ready()
-        self.host.backup_state(zip_bytes=50 * 1024 ** 4)   # 정책 임계치가 여유를 넘도록(희소 파일)
-        done = self.host.migrate(plan, NAVER_DEPLOY_FAKE_ARCHIVE_FAIL='1')
+        self.host.backup_state(zip_bytes=200 * 1024 ** 2)   # 희소 파일: 정책 임계치 P_pol ≥ 200MiB
+        # 실측 여유 대역: 1GiB 바닥 + 100MiB — G0/G2/G4(작은 DB)는 통과하지만 결과 시점 keep_raw_now 는 false.
+        done = self.host.migrate(plan, NAVER_DEPLOY_FAKE_ARCHIVE_FAIL='1',
+                                 NAVER_DEPLOY_FAKE_FREE_BYTES=str((1 << 30) + 100 * 1024 ** 2))
         self.assertExit(done, 12)
         self.assertEqual(result_of(done)['keep_raw_now'], 'false')
         self.assertTrue(os.path.isfile(self.host.db('engine.db.pre-v22')))
