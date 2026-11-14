@@ -313,3 +313,48 @@ Mac의 별도 순위 agent와 ERP 데이터/캐시는 조회하지 않는다. �
 철거 계획 2단계의 제한 보완은 `systemd.related_units`에 관련 미분류 service/timer 최대 16개의 메타데이터를 `related-unit-N` 별칭으로 추가한다. ASCII 이름/길이/suffix를 검증한 대상만 조회하고 원문 이름·Id·Fragment/drop-in·알 수 없는 의존 이름은 공개하지 않는다. 앱 힌트는 이름 prefix에 근거하며 실제 실행 명령/대상 확인을 뜻하지 않는다. WorkingDirectory는 기존 알려진 경로만 공개하고 추가 파일 조회에 사용하지 않는다. 상한 초과·거부·실패·잘림·identity 불일치를 남기며, 전체 systemd 상태는 관련 미분류 대상이 있으면 계속 incomplete이다. 기존 고정 unit 형식은 유지한다.
 
 `root_cron_spool`은 `/var/spool/cron/crontabs`와 그 `root` 파일의 메타데이터만 확인한다. 부모 구성 요소와 최종 경로의 symlink를 거부하고 absent/permission_denied/stat_failed를 구분한다. 파일 내용·디렉터리 목록은 읽지 않는다. 기존 crontab rc1은 unavailable을 유지하며, 표준 spool 파일이 없다는 사실도 다른 사용자·주기 cron·다른 기동 장치가 없다는 증거가 아니다. 로그의 `root` 마스킹은 원본 그대로 둔다. 설계·범위는 `docs/superpowers/specs/2026-11-01-retirement-preflight-design.md`에 있다. 컨테이너 내부 `/tmp`와 원격 보관·복구는 이 보완에 포함하지 않는다.
+
+## 9. 스키마 이관 (`migrate-*`, 21 → 22 추가형)
+
+설계: 작업 폴더의 `DESIGN-CLAUDE-v3.md`(v3.1, sha256 `2b62dbd9…`)와 v2 의 대체되지 않은 부분. `deploy` 모드는
+스키마가 바뀌면 지금처럼 `SCHEMA_CHANGED` 로 거절한다(우회 입력 없음). 이관은 `naver-deploy.sh` 의 고정 표
+`MIGRATIONS` 에 있는 항목(지금은 `21-22-exhaust-v1`: 377768a → 1d85228, store·exhaust_store·새 표 SQL·helper 해시)만,
+아래 순서와 대표 승인으로만 한다.
+
+| 순서 | mode | 서비스 | 하는 일 |
+|---|---|---|---|
+| 1 | `migrate-prepare` | 무변경 | 서버에서 v22 이미지 두 개를 한 번 빌드하고 정확한 이미지 ID 를 기록한다. 실행 중 판·store.py 해시·원본 묶음 해시·helper 해시를 고정 표와 대조한다. |
+| 2 | `migrate-rehearse` | 무변경 | 준비된 정확 이미지 ID 와 운영과 **같은** `docker run` 옵션으로, run 전용 scratch 폴더만 `/var/lib/naver-engine` 에 붙여(운영 DATA_DIR 은 붙이지 않음, 장치+inode 로 확인) 합성 v21 DB 생성 → 이관·검증·교체 → 옛 엔진 거절 확인 → 되돌림 → 옛 엔진 열림까지 돈다. SQLite 버전·`octet_length` 등 기능을 기록한다. |
+| 3 | `migrate-plan` | 무변경 | 바뀌지 않는 값만 해시한 `plan_sha256` 과 실측(여유·DB·WAL·직전 백업 쌍, 해시에 넣지 않음)을 낸다. |
+| 4 | `migrate-deploy` | 정지 창 | 오늘 OFFSITE_OK·pending 없음·백업 진행 없음·KST 21:30 전·직전 배포 뒤의 새 OFFSITE_OK, 리허설 통과 기록, `plan_sha256` 일치를 확인한 뒤 진행한다. |
+| 사후 | `migrate-continue` / `migrate-rollback` / `migrate-accept` | 대표 승인 | HOLD 된 v22 재기동 / bound pin 의 v21 로 복귀(v22 세대는 묶음 보존) / 확정(pin 해제). |
+
+workflow 입력: `mode`, `commit`, `migration_id`(1~4), `migration_arg`(4 = plan_sha256, 사후 = run id),
+`confirm`(4·사후 = `MIGRATE_NAVER_SCHEMA_21_TO_22_ADDITIVE`). helper 파일은 workflow 와 `MIGRATIONS.helper_sha256`
+두 곳에서 해시로 고정한다(helper 안에는 자기 해시가 없다).
+
+`migrate-deploy` 의 핵심 순서: 복구 기록·활성 표지·상태 ACTIVE·복귀 pin(pending, v21 이미지에 `rollback-<run>` 태그)
+→ **hold 파일 + 두 unit 의 drop-in**(`AssertPathExists=!…/migration-hold`, `AssertPathExists=…/engine.db`; 재부팅·의존
+시작도 막음) → 정지 → helper `chain` 하나(원본 flock 을 한 프로세스가 끝까지 쥠: checkpoint(TRUNCATE) → 사본 →
+사본에만 제품 `open_writer` → 실제 rowid 포함 전수 형 대조(허용 차이: 판 번호 한 줄, 고정된 orphan 회차의 3칸) →
+저널을 남긴 두 rename) → unit 교체 → KST 23:00 전 확인 → **guarded_start**(DB 세대 검증 → 서비스 세대 복원·재확인 →
+start intent → hold 를 마지막에 해제 → 기동 → 헬스) → HEALTHY → gzip 보관(v2 manifest, pinned, 푼 sha 대조) →
+해제 복귀 공간(G4)이 있을 때만 raw 삭제 → COMPLETED(표지는 마지막에 지움).
+
+실패 처리(자동은 입증된 경우만):
+
+| 지점 | 동작 | 종료 |
+|---|---|---|
+| 정지 전 | hold·drop-in·pin 을 거두고 거절 | 10 |
+| 정지 뒤·기동 전 | 잠금 아래 identity 로 되돌림 → guarded_start v21 | 2 |
+| 기동 뒤 헬스 실패 | 정지·잠금·checkpoint·rowid manifest. 새 쓰기 없음이 입증되면 v22 세대를 묶음으로 옮기고 v21 복귀, 아니면(새 쓰기·불명) **정지 보존(HOLD)** — 대표 판단 | 2 / 12 |
+| gzip 보관 실패·상한·시간, G4 불통과 | 그 시점 실측으로 `keep_raw_now`(정책 임계치 `max(S+Z, Z+E, Z+2E+1MiB)` + 1GiB; 미래 백업 보장 아님)를 다시 계산. true 면 경고·raw 보존, false/불명이면 HOLD. 게시된 gz·부분본은 자동 삭제하지 않음 | 0 경고 / 12 |
+| 중단된 실행(재부팅·SSH) | 다음 잠금 모드가 먼저 관측 기록 → 상태별 재진입: COMPLETED/ROLLED_BACK 은 세대 재확인 뒤 표지만 정리, HEALTHY 는 정지 없이 마무리, start intent 뒤는 잠재 기동으로 입증, 그 전은 identity 로 되돌림, 모르면 HOLD | 3 / 12 / 4 |
+
+수동 확인(자동 시험 밖): 실제 systemd 의 Assert drop-in 이 명시·의존·부팅 시작을 막고 `Restart=always` 가 돌지 않는지는
+CI 가 아닌 **VM 전용 throw-away unit/target** 에서만 확인한다(운영 서버의 `default.target` 을 재격리하지 않는다). 첫 운영
+이관 전에는 서버 리허설(2)이 필수이며, 여유가 허용되면 A3 cold copy 로 한 번 더 리허설하길 권한다.
+
+합성 시험: `test_naver_schema_migrate.py`(helper·PY_HELPER 단위), `test_naver_migrate_deploy.py`(가짜 호스트 종단,
+합성 제품 대역). 실제 제품 두 커밋으로 helper 를 도는 `RealProductHelperTest` 는 `NAVER_PRODUCT_V21_DIR`·
+`NAVER_PRODUCT_V22_DIR` 이 있을 때만 돈다(배포 workflow 의 migrate-* test job 이 비공개 로그로 실행).

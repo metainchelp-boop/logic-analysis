@@ -1438,19 +1438,23 @@ class WorkflowConsistencyTest(unittest.TestCase):
     def test_workflow_cleanup_modes(self):
         with open(os.path.normpath(WORKFLOW)) as handle:
             workflow = handle.read()
-        self.assertIn('options: [inspect, deploy, disk-usage, app-inventory, cleanup-plan, cleanup, cleanup-artifacts-plan, cleanup-artifacts]', workflow)
+        self.assertIn('options: [inspect, deploy, disk-usage, app-inventory, cleanup-plan, cleanup, cleanup-artifacts-plan, cleanup-artifacts, '
+                      'migrate-prepare, migrate-rehearse, migrate-plan, migrate-deploy, migrate-continue, migrate-rollback, '
+                      'migrate-accept]', workflow)
         ssh_part = workflow[workflow.index('appleboy/ssh-action'):]
         self.assertIn('disk-usage 2>/dev/null', ssh_part)
         self.assertIn("grep '^NAVER_DEPLOY_DISK_USAGE={'", ssh_part)
         self.assertIn('allowlist_sha256:', workflow)
-        self.assertEqual(workflow.count("grep -Eq '^[0-9a-f]{64}$'"), 2)  # test·ship 두 작업 모두 확인
+        self.assertEqual(workflow.count("\"$ALLOWLIST\" | grep -Eq '^[0-9a-f]{64}$'"), 2)  # test·ship 두 작업 모두 확인
         ssh = workflow[workflow.index('appleboy/ssh-action'):]
         self.assertIn('cleanup "$NSD_ALLOWLIST" 2>/dev/null', ssh)
         self.assertIn('grep "^$prefix={"', ssh)
-        # 제품 deploy key 는 deploy 에서만 쓴다.
+        # 제품 deploy key 는 deploy 와 원본 묶음이 필요한 이관 모드에서만 쓴다.
+        product_modes = "if: contains(fromJSON('[\"deploy\",\"migrate-prepare\",\"migrate-rehearse\",\"migrate-plan\",\"migrate-deploy\"]'), inputs.mode)"
         for block in workflow.split('      - name: ')[1:]:
             if 'NAVER_PRODUCT_DEPLOY_KEY' in block:
-                self.assertIn("if: inputs.mode == 'deploy'", block)
+                self.assertTrue(product_modes in block or "if: startsWith(inputs.mode, 'migrate-') && inputs.migration_id != ''"
+                                in block, block[:200])
         for forbidden in ('system prune', 'volume prune', 'builder prune', 'image prune', 'rmi -f', 'image rm -f'):
             self.assertNotIn(forbidden, workflow)
         with open(SCRIPT) as handle:
