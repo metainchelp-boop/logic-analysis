@@ -40,6 +40,8 @@ def file_sha(path):
 
 
 class MigrateHost(FakeHost):
+    mig_id = MIG_ID
+
     def __init__(self, base):
         super().__init__(base)
         self.v21 = F.make_product(os.path.join(base, 'product-v21'), 21)
@@ -53,26 +55,30 @@ class MigrateHost(FakeHost):
         self.write_entries()
         self.backup_state()
 
+    def entries(self):
+        return {MIG_ID: self.entry}
+
     def write_entries(self):
         with open(self.entries_path, 'w') as handle:
-            json.dump({MIG_ID: self.entry}, handle)
+            json.dump(self.entries(), handle)
 
     def backup_state(self, code='OFFSITE_OK', pending=None, day=None, zip_bytes=1000, cms_bytes=1000):
         folder = self.root + '/var/backups/metainc/naver-engine'
         os.makedirs(folder, exist_ok=True)
         with open(folder + '/state.json', 'w') as handle:
             json.dump({'code': code, 'pending': pending, 'last_offsite_day': day or kst()[:10]}, handle)
-        name = folder + '/naver-20261115T000000Z-' + 'a' * 32 + '.zip'
-        for path, size in ((name, zip_bytes), (name[:-4] + '.cms', cms_bytes)):
+        for sub in ('local', 'outgoing'):
+            os.makedirs(os.path.join(folder, sub), exist_ok=True)
+        stem = 'naver-20261115T000000Z-' + 'a' * 32
+        for path, size in ((folder + '/local/' + stem + '.zip', zip_bytes), (folder + '/outgoing/' + stem + '.cms', cms_bytes)):
             with open(path, 'wb') as handle:
                 handle.truncate(size)
 
     def migrate_tar(self, commit=C1):
         files = source_files(commit, 22)
-        with open(os.path.join(self.v22, 'naver_engine/store.py')) as handle:
-            files['naver_engine/store.py'] = handle.read()
-        with open(os.path.join(self.v22, 'naver_engine/exhaust_store.py')) as handle:
-            files['naver_engine/exhaust_store.py'] = handle.read()
+        for name in sorted(os.listdir(os.path.join(self.v22, 'naver_engine'))):
+            with open(os.path.join(self.v22, 'naver_engine', name)) as handle:
+                files['naver_engine/' + name] = handle.read()
         path = os.path.join(self.base, 'migrate-%s.tar' % commit[:8])
         make_tar(path, files)
         return path
@@ -83,17 +89,17 @@ class MigrateHost(FakeHost):
         return self.run(*args, **values)
 
     def prepare(self, **env):
-        return self.mrun('migrate-prepare', C1, self.migrate_tar(), MIG_ID, **env)
+        return self.mrun('migrate-prepare', C1, self.migrate_tar(), self.mig_id, **env)
 
     def rehearse(self, **env):
-        return self.mrun('migrate-rehearse', C1, self.migrate_tar(), MIG_ID, **env)
+        return self.mrun('migrate-rehearse', C1, self.migrate_tar(), self.mig_id, **env)
 
     def plan(self, **env):
-        done = self.mrun('migrate-plan', C1, self.migrate_tar(), MIG_ID, **env)
+        done = self.mrun('migrate-plan', C1, self.migrate_tar(), self.mig_id, **env)
         return done, result_of(done).get('plan_sha256', '')
 
     def migrate(self, plan, **env):
-        return self.mrun('migrate-deploy', C1, self.migrate_tar(), MIG_ID, plan, **env)
+        return self.mrun('migrate-deploy', C1, self.migrate_tar(), self.mig_id, plan, **env)
 
     def ready(self):
         for step in (self.prepare, self.rehearse):
@@ -139,6 +145,29 @@ def can_walk_processes():
 
 
 CRASH_SKIP = unittest.skipUnless(can_walk_processes(), '조상 프로세스를 볼 수 없는 환경(/proc·ps 없음)')
+
+
+class Migrate2223Host(MigrateHost):
+    """22→23 형(schema_module·purpose): 옛 = 합성 v22, 새 = 합성 v23. 21-22 항목도 표에 함께 둔다(공존)."""
+    mig_id = '22-23-reconcile-v1'
+
+    def __init__(self, base):
+        FakeHost.__init__(self, base)
+        self.v2122_old = F.make_product(os.path.join(base, 'product-21'), 21)
+        self.v21 = F.make_product(os.path.join(base, 'product-v22'), 22)   # 이 host 의 「옛」 세대
+        self.v22 = F.make_product(os.path.join(base, 'product-v23'), 23)   # 이 host 의 「새」 세대
+        self.set(product_by_commit={C0: self.v21, C1: self.v22})
+        for name in ('engine.db', 'engine.db-wal'):
+            os.unlink(self.root + DATA + '/' + name)
+        F.seed_v21(self.root + DATA + '/engine.db', self.v21, flock_off=NO_FLOCK)
+        self.entry2122 = F.entry(self.v2122_old, self.v21, 'e' * 40, 'f' * 40, file_sha(HELPER))
+        self.entry = F.entry_2223(self.v21, self.v22, C0, C1, file_sha(HELPER))
+        self.entries_path = os.path.join(base, 'migrations.json')
+        self.write_entries()
+        self.backup_state()
+
+    def entries(self):
+        return {MIG_ID: self.entry2122, self.mig_id: self.entry}
 
 
 class MigrateDeployTest(unittest.TestCase):
@@ -664,6 +693,78 @@ class CodeOnlyDeployTest(unittest.TestCase):
         self.assertEqual(len(names), 2)
 
 
+class Migrate2223Test(unittest.TestCase):
+    """22→23(schema_module·purpose·requires_released) — 21-22 항목과 같은 표에서."""
+
+    def setUp(self):
+        self.base = tempfile.mkdtemp(prefix='naver-migrate2223-test-')
+        self.host = Migrate2223Host(self.base)
+
+    def tearDown(self):
+        shutil.rmtree(self.base)
+
+    def test_22_23_end_to_end_with_purpose_and_schema(self):
+        plan = self.host.ready()
+        done = self.host.migrate(plan)
+        self.assertEqual(done.returncode, 0, done.stdout.decode()[-4000:])
+        result = result_of(done)
+        self.assertEqual(result['status'], 'MIGRATED')
+        self.assertEqual(self.host.meta_schema(), '23')
+        run = result['migration_run']
+        with open(self.host.root + '/var/backups/metainc/naver-deploy-db/' + run + '/manifest.json') as handle:
+            manifest = json.load(handle)
+        self.assertEqual((manifest['purpose'], manifest['schema'], manifest['source_commit']),
+                         ('pre-migration-22-23', 22, C0))
+        done = self.host.mrun('migrate-rollback', run)
+        self.assertEqual(done.returncode, 2, done.stdout.decode()[-3000:])
+        self.assertEqual(self.host.meta_schema(), '22')
+
+    def test_22_23_refused_until_21_22_accepted(self):
+        pins = self.host.root + STATE + '/pins'
+        os.makedirs(pins)
+        with open(pins + '/20261116T000000Z-' + 'f' * 12 + '.json', 'w') as handle:
+            json.dump({'state': 'bound-gz', 'migration_id': MIG_ID, 'commit': 'e' * 40,
+                       'engine_image': 'sha256:' + '1' * 64, 'relay_image': 'sha256:' + '2' * 64}, handle)
+        done = self.host.prepare()
+        self.assertEqual(done.returncode, 10)
+        self.assertIn('MIGRATION_ORDER', done.stdout.decode())
+        with open(pins + '/20261116T000000Z-' + 'f' * 12 + '.json', 'w') as handle:
+            json.dump({'state': 'released', 'migration_id': MIG_ID, 'commit': 'e' * 40}, handle)
+        self.assertEqual(self.host.prepare().returncode, 0)
+
+    def test_22_23_requires_reconcile_writes_off(self):
+        plan = self.host.ready()
+        self.host.set(extra_switches={'reconcile_writes': True})
+        done = self.host.migrate(plan)
+        self.assertEqual(done.returncode, 10)
+        self.assertIn('CHECK_CONFIG', done.stdout.decode())
+        self.assertEqual(self.host.meta_schema(), '22')
+
+    def test_22_23_refused_when_running_schema_is_21(self):
+        self.host.set(product_by_commit={C0: self.host.v2122_old, C1: self.host.v22})
+        done = self.host.prepare()
+        self.assertEqual(done.returncode, 10)
+        self.assertIn('MIGRATION_', done.stdout.decode())
+
+
+class SwitchAndBackupLayoutTest(unittest.TestCase):
+    def setUp(self):
+        self.base = tempfile.mkdtemp(prefix='naver-switch-test-')
+        self.host = FakeHost(self.base)
+
+    def tearDown(self):
+        shutil.rmtree(self.base)
+
+    def test_new_optional_switch_is_accepted_by_plain_deploy(self):
+        self.host.set(extra_switches={'reconcile_writes': True})
+        done = self.host.deploy(C1)
+        self.assertEqual(done.returncode, 0, done.stdout.decode()[-3000:])
+        self.host.set(extra_switches={'unknown_switch': False})
+        done = self.host.deploy('2' * 40)
+        self.assertEqual(done.returncode, 10)
+        self.assertIn('CHECK_CONFIG', done.stdout.decode())
+
+
 class MigrateWorkflowTest(unittest.TestCase):
     def setUp(self):
         with open(os.path.join(os.path.dirname(os.path.dirname(HERE)), '..', '.github', 'workflows',
@@ -678,7 +779,11 @@ class MigrateWorkflowTest(unittest.TestCase):
         self.assertNotIn('RuntimeMaxSec', ssh)
 
     def test_mutating_migrate_modes_need_confirm_and_args(self):
-        self.assertEqual(self.workflow.count('MIGRATE_NAVER_SCHEMA_21_TO_22_ADDITIVE'), 3)
+        self.assertGreaterEqual(self.workflow.count('MIGRATE_NAVER_SCHEMA_21_TO_22_ADDITIVE'), 3)
+        self.assertGreaterEqual(self.workflow.count('MIGRATE_NAVER_SCHEMA_22_TO_23_ADDITIVE'), 3)
+        self.assertGreaterEqual(self.workflow.count('APPLY_NAVER_RECONCILE_UPLOAD_NGINX'), 3)
+        self.assertIn("options: ['', '21-22-exhaust-v1', '22-23-reconcile-v1']", self.workflow)
+        self.assertIn('nginx-apply) set -- "$@" "$NSD_NGINX_STEP" "$NSD_MIGRATION_ARG" ;;', self.workflow)
         self.assertIn("printf '%s' \"$MIGRATION_ARG\" | grep -Eq '^[0-9a-f]{64}$'", self.workflow)
         self.assertIn('real-product-migrate.log" 2>&1', self.workflow)
 
@@ -706,11 +811,16 @@ class RealProductHelperTest(unittest.TestCase):
             env = {'PATH': '/usr/bin:/bin', 'NAVER_MIGRATE_TEST': '1', 'NAVER_MIGRATE_DIR': data, 'LANG': 'C'}
             if NO_FLOCK:
                 env['NAVER_MIGRATE_TEST_NO_FLOCK'] = '1'
-            pins = real_pins(text)
-            run = '20261115T000000Z-' + '1d852289209e'
+            identifier = os.environ.get('NAVER_MIGRATION_ID') or MIG_ID
+            pins = real_pins(text, identifier)
+            old, new = pins['from_schema'], pins['to_schema']
+            module = pins.get('schema_module') or {'path': 'naver_engine/exhaust_store.py',
+                                                   'import': 'naver_engine.exhaust_store',
+                                                   'sha256': pins['to_exhaust_sha256']}
+            run = '20261115T000000Z-' + pins['to_commit'][:12]
 
             def helper(step, code, args):
-                value = dict(args, mode='test', as_mode='rehearsal', run=run, migration_id=MIG_ID)
+                value = dict(args, mode='test', as_mode='rehearsal', run=run, migration_id=identifier)
                 done = subprocess.run([sys.executable, '-I', '-B', HELPER, step, json.dumps(value)],
                                       env=dict(env, NAVER_MIGRATE_CODE_DIR=code), stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE)
@@ -718,32 +828,32 @@ class RealProductHelperTest(unittest.TestCase):
                 self.assertTrue(out['ok'], (step, out, done.stderr.decode()[-2000:]))
                 return out['result']
             open(os.path.join(data, 'naver-migrate-rehearsal-marker'), 'w').close()
-            helper('seed', v21, {'pins': {'store_sha256': pins['from_store_sha256'], 'schema': 21}})
+            helper('seed', v21, {'pins': {'store_sha256': pins['from_store_sha256'], 'schema': old}})
             before = file_sha(os.path.join(data, 'engine.db'))
             result = helper('chain', v22, {'floor_bytes': 0, 'pins': {
-                'store_sha256': pins['to_store_sha256'], 'exhaust_sha256': pins['to_exhaust_sha256'], 'schema': 22,
-                'from_schema': 21, 'new_tables': pins['new_tables'], 'autoindexes': pins['autoindexes']}})
+                'store_sha256': pins['to_store_sha256'], 'schema_module': module, 'schema': new,
+                'from_schema': old, 'new_tables': pins['new_tables'], 'autoindexes': pins['autoindexes']}})
             self.assertGreaterEqual(result['orphans_closed'], 1)
             with open(os.path.join(data, 'naver-migrate-receipt.json')) as handle:
                 receipt = json.load(handle)
-            helper('v21-refuses', v21, {'pins': {'store_sha256': pins['from_store_sha256'], 'schema': 21},
-                                        'expect_schema': 22})
+            helper('old-refuses', v21, {'pins': {'store_sha256': pins['from_store_sha256'], 'schema': old},
+                                        'expect_schema': new})
             helper('startcheck', v22, {'expect_identity': receipt['work_identity'],
-                                       'expect_sha256': receipt['work_sha256'], 'full': True, 'expect_schema': 22})
+                                       'expect_sha256': receipt['work_sha256'], 'full': True, 'expect_schema': new})
             helper('undo', v22, {'receipt': receipt})
             self.assertEqual(file_sha(os.path.join(data, 'engine.db')), before)
-            helper('v21-opens', v21, {'pins': {'store_sha256': pins['from_store_sha256'], 'schema': 21},
-                                      'expect_schema': 21})
+            helper('old-opens', v21, {'pins': {'store_sha256': pins['from_store_sha256'], 'schema': old},
+                                      'expect_schema': old})
         finally:
             shutil.rmtree(base)
 
 
-def real_pins(text):
+def real_pins(text, identifier=MIG_ID):
     start = text.index('MIGRATIONS = {')
     end = text.index("if ROOT and os.environ.get('NAVER_DEPLOY_TEST_MIGRATIONS')")
     namespace = {}
     exec(text[start:end], namespace)
-    return namespace['MIGRATIONS'][MIG_ID]
+    return namespace['MIGRATIONS'][identifier]
 
 
 if __name__ == '__main__':

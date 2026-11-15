@@ -122,7 +122,7 @@ class FakeHost:
         self.bin = os.path.join(base, 'bin')
         os.makedirs(self.bin)
         shutil.copy(os.path.join(HERE, 'fakehost.py'), self.bin)
-        tools = ['docker', 'systemctl', 'curl', 'cp', 'sqlite3', 'du', 'journalctl']
+        tools = ['docker', 'systemctl', 'curl', 'cp', 'sqlite3', 'du', 'journalctl', 'nginx']
         if shutil.which('flock') is None:
             tools.append('flock')
         # 배포 스크립트의 python3 를 시험 인터프리터로 고정한다(macOS 의 /usr/bin/python3 xcrun 대역은 fd 3 을 넘기지 않는다).
@@ -1442,7 +1442,7 @@ class WorkflowConsistencyTest(unittest.TestCase):
             workflow = handle.read()
         self.assertIn('options: [inspect, deploy, disk-usage, app-inventory, cleanup-plan, cleanup, cleanup-artifacts-plan, cleanup-artifacts, '
                       'migrate-prepare, migrate-rehearse, migrate-plan, migrate-deploy, migrate-continue, migrate-rollback, '
-                      'migrate-accept]', workflow)
+                      'migrate-accept, nginx-plan, nginx-apply]', workflow)
         ssh_part = workflow[workflow.index('appleboy/ssh-action'):]
         self.assertIn('disk-usage 2>/dev/null', ssh_part)
         self.assertIn("grep '^NAVER_DEPLOY_DISK_USAGE={'", ssh_part)
@@ -1452,7 +1452,7 @@ class WorkflowConsistencyTest(unittest.TestCase):
         self.assertIn('cleanup "$NSD_ALLOWLIST" 2>/dev/null', ssh)
         self.assertIn('grep "^$prefix={"', ssh)
         # 제품 deploy key 는 deploy 와 원본 묶음이 필요한 이관 모드에서만 쓴다.
-        product_modes = "if: contains(fromJSON('[\"deploy\",\"migrate-prepare\",\"migrate-rehearse\",\"migrate-plan\",\"migrate-deploy\"]'), inputs.mode)"
+        product_modes = "if: contains(fromJSON('[\"deploy\",\"migrate-prepare\",\"migrate-rehearse\",\"migrate-plan\",\"migrate-deploy\",\"nginx-plan\",\"nginx-apply\"]'), inputs.mode)"
         for block in workflow.split('      - name: ')[1:]:
             if 'NAVER_PRODUCT_DEPLOY_KEY' in block:
                 self.assertTrue(product_modes in block or "if: startsWith(inputs.mode, 'migrate-') && inputs.migration_id != ''"

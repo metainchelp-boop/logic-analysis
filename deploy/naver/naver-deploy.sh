@@ -18,7 +18,10 @@
 #   naver-deploy.sh migrate-prepare | migrate-rehearse | migrate-plan <커밋> <source.tar> <migration_id>
 #   naver-deploy.sh migrate-deploy <커밋> <source.tar> <migration_id> <plan_sha256>
 #   naver-deploy.sh migrate-continue | migrate-rollback | migrate-accept <run id>
-#       고정 표(MIGRATIONS)의 추가형 스키마 이관만(지금은 21-22-exhaust-v1 하나). deploy 의 SCHEMA_CHANGED 거절은 그대로다.
+#   naver-deploy.sh nginx-plan <커밋> <source.tar> <단계> | nginx-apply <커밋> <source.tar> <단계> <plan_sha256>
+#       고정 nginx 단계(지금은 reconcile-upload-v1): 제품 커밋의 두 파일(해시 고정)로 업로드 두 경로만 4MiB. 고정 두 파일만 쓰고
+#       nginx -t·reload 뒤 실제 요청으로 확인, 실패하면 직전 설정으로 되돌린다. 이관과 따로 승인·실행한다.
+#       고정 표(MIGRATIONS)의 추가형 스키마 이관만(21-22-exhaust-v1, 22-23-reconcile-v1). deploy 의 SCHEMA_CHANGED 거절은 그대로다.
 #       이관 모드에서만 DB 를 연다 — 준비된 정확 이미지 안의 고정 helper(naver_schema_migrate.py)가 사본에서만 이관하고
 #       원본과 전수 대조한 뒤 저널을 남긴 두 rename 으로 바꾼다. 재부팅에도 남는 시작 차단(hold + drop-in), guarded_start,
 #       ACTIVE→HEALTHY→COMPLETED 재진입 규칙, 복귀 pin 은 docs/naver-simple-deploy.md 의 「스키마 이관」 절.
@@ -352,6 +355,9 @@ def container_info():
 
 SWITCHES = ('sync', 'links', 'morning', 'alerts', 'metrics', 'inventory', 'execution', 'backup', 'web',
             'issue_alerts')
+# 새 판에만 있는 스위치: check-config 가 내도 된다(비교 문자열에는 넣지 않는다). migrate-* 는 반드시 꺼져 있어야 한다
+# (보고 대조 쓰기, 3단계 12260db~ — 이관 직후 꺼진 채 시작하고 대표가 따로 켠다). 일반 deploy 는 runtime.env 값 그대로.
+OFF_SWITCHES = ('reconcile_writes',)
 ENV_NAME = re.compile(r'[A-Z][A-Z0-9_]{0,63}\Z')
 RESERVED_ENV = {'PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL', 'USER'}
 CHECK_DATA_TMPFS = '/var/lib/naver-engine:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700'
@@ -446,7 +452,7 @@ def shape_diff(old, new):
         fail('CONFIG_SHAPE_CHANGED: ' + ', '.join(sorted(set(problems))))
 
 
-def check_config_run(image, private_log):
+def check_config_run(image, private_log, optional_rule='any'):
     """새 이미지로 check-config 를 운영 data·socket·backup·tunnel mount 없이 돌린다.
     환경 값은 docker 클라이언트 환경으로만 넘기고(-e 이름), 명령줄·로그에 값이 남지 않는다."""
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
@@ -486,7 +492,10 @@ def check_config_run(image, private_log):
     switches = value.get('switches') if isinstance(value, dict) else None
     if (value.get('command') != 'check-config' or value.get('configuration') != 'valid'
             or value.get('storage_opened') is not False or value.get('network_performed') is not False
-            or not isinstance(switches, dict) or set(switches) != set(SWITCHES)
+            or not isinstance(switches, dict) or not set(SWITCHES) <= set(switches)
+            or not set(switches) <= set(SWITCHES) | set(OFF_SWITCHES)
+            or any(type(switches[name]) is not bool for name in OFF_SWITCHES if name in switches)
+            or (optional_rule == 'off' and any(switches[name] is not False for name in OFF_SWITCHES if name in switches))
             or any(type(v) is not bool for v in switches.values())):
         fail('CHECK_CONFIG: 결과가 예상과 다릅니다')
     print(canonical(switches))
@@ -653,7 +662,7 @@ def manifest_v2(value):
             or not all(isinstance(entry[k], str) and SHA_RE.match(entry[k]) for k in ('sha256', 'gz_sha256'))):
         return None
     if (type(value['schema']) is not int or not isinstance(value['source_commit'], str)
-            or not HEX40.match(value['source_commit']) or value['purpose'] != 'pre-migration-21-22'
+            or not HEX40.match(value['source_commit']) or value['schema'] != MANIFEST_PURPOSES.get(value['purpose'])
             or not isinstance(value['run'], str) or not RUN_ID_RE.match(value['run'])):
         return None
     return value
@@ -1280,7 +1289,7 @@ def tree_sha(folder):
 
 
 RESULT_FIELDS = {
-    'mode': r'(inspect|deploy|migrate-(prepare|rehearse|plan|deploy|continue|rollback|accept))', 'status': r'[A-Z_]{1,40}', 'exit_code': r'[0-9]{1,3}', 'reason': r'[A-Z_]{0,40}',
+    'mode': r'(inspect|deploy|migrate-(prepare|rehearse|plan|deploy|continue|rollback|accept)|nginx-(plan|apply))', 'status': r'[A-Z_]{1,40}', 'exit_code': r'[0-9]{1,3}', 'reason': r'[A-Z_]{0,40}',
     'message': None, 'phase': r'[a-z_]{1,24}', 'new_commit': r'[0-9a-f]{40}|', 'previous_commit': r'[0-9a-f]{40}|',
     'new_engine_image': r'sha256:[0-9a-f]{64}|', 'new_relay_image': r'sha256:[0-9a-f]{64}|',
     'previous_engine_image': r'sha256:[0-9a-f]{64}|', 'previous_relay_image': r'sha256:[0-9a-f]{64}|',
@@ -1293,7 +1302,8 @@ RESULT_FIELDS = {
     'migration_run': r'([0-9]{8}T[0-9]{6}Z-[0-9a-f]{12})?', 'migration_state': r'[A-Z_]{0,20}',
     'receipt_sha256': r'([0-9a-f]{64})?', 'orphans_closed': r'[0-9]{0,6}', 'pin_state': r'[a-z-]{0,12}',
     'keep_raw_now': r'(true|false|unknown)?', 'write_decision': r'(no_new_writes|new_writes|unknown)?',
-    'plan_sha256': r'([0-9a-f]{64})?', 'rehearsal': r'(passed|failed)?'}
+    'plan_sha256': r'([0-9a-f]{64})?', 'rehearsal': r'(passed|failed)?', 'nginx_step': r'[0-9a-z-]{0,40}',
+    'nginx_checks': r'[a-z0-9_=,]{0,200}'}
 # 공개 로그로 나가는 유일한 줄. 모든 값은 위 형식만 통과하고, message 는 고정 문구표에서만 고른다.
 MESSAGES = {
     'DEPLOYED': '배포 완료(헬스·60초 유지 통과)', 'DEPLOYED_WITH_WARNINGS': '배포 완료(헬스 통과), 마무리 경고 있음',
@@ -1306,7 +1316,11 @@ MESSAGES = {
     'MIGRATION_RECOVERY_REQUIRED': '모르는 이관 상태. 서비스 정지·hold 유지. 사람 확인 필요',
     'PREPARED': '이관용 이미지 준비 완료(서비스 무변경)', 'REHEARSED': '격리 리허설 통과(서비스 무변경)',
     'REHEARSAL_FAILED': '격리 리허설 실패(서비스 무변경)', 'PLANNED': '이관 계획 계산(서비스 무변경)',
-    'ACCEPTED': '이관 확정: 복귀 묶음 pin 해제', 'CONTINUED': '보류된 v22 세대 재기동·헬스 통과'}
+    'ACCEPTED': '이관 확정: 복귀 묶음 pin 해제', 'CONTINUED': '보류된 v22 세대 재기동·헬스 통과',
+    'NGINX_PLANNED': 'nginx 고정 단계 계획 계산(설정 무변경)', 'NGINX_APPLIED': 'nginx 고정 단계 적용·검증 통과',
+    'NGINX_ALREADY_APPLIED': 'nginx 고정 단계가 이미 적용돼 있음(무변경)',
+    'NGINX_ROLLED_BACK': 'nginx 적용 실패 → 직전 설정 복원·검증 통과',
+    'NGINX_ROLLBACK_FAILED': 'nginx 복원 실패. 사람 확인 필요'}
 
 
 def result_json(*pairs):
@@ -2071,9 +2085,51 @@ MIGRATIONS = {
             'naver_auto_exhaust_attempt': '0455cf850f84b4f0b70defa297f7e2573e332000d6c617d08c5d210bee9bec29'},
         'autoindexes': ['sqlite_autoindex_naver_auto_exhaust_attempt_1', 'sqlite_autoindex_naver_auto_exhaust_head_1',
                         'sqlite_autoindex_naver_auto_exhaust_version_1'],
-        'helper_sha256': '881a163b295dee43a40686e765ffcea4a8793d849332768f5a27c7aa806c5b51'}}
+        'helper_sha256': '89a239a61c5ab997446a0528780f5a4b106e97c641d8412ff82391891c3148a7'},
+    # 22→23(보고 대조 3단계): PR38(9649eae, 스키마 22 코드만)을 일반 deploy 로 먼저 올린 뒤에만. 21-22 run 이 accept(pin released)
+    # 되기 전에는 prepare·deploy 를 거절한다(requires_released). 새 표 SCHEMA 는 reconcile_store 하나에서만 온다.
+    '22-23-reconcile-v1': {
+        'from_schema': 22, 'to_schema': 23,
+        'from_commit': '9649eaec4147623e180d67a85ad9dc3461a8b96f',
+        'to_commit': '12260dbbc946f76d9bf7e2b8562cccc5474ea9a9',
+        'from_store_sha256': '741f4309feb375b7eebac0bc9a20e53263a91aa40fcc203b295beca059bfbd63',
+        'to_store_sha256': 'ac0c54bbcf96627e3a17df3a6a5717b62fb8baf717876cddfda5b7bfdbb0ca08',
+        'schema_module': {'path': 'naver_engine/reconcile_store.py', 'import': 'naver_engine.reconcile_store',
+                          'sha256': 'd04d8a6904fa9d971dac87813f6c8735ad89c4e9ac77f64f9ba45e538e6c85bd'},
+        'purpose': 'pre-migration-22-23',
+        'requires_released': ['21-22-exhaust-v1'],
+        'new_tables': {
+            'naver_auto_recon_close_result': 'ca9099dad006c73061a732f78cf10441fdad5871fefd40a4275c32d8e0d0dfe0',
+            'naver_auto_recon_month': 'dfd16b8d64d34f10db81d4c9176f9b3dc95a1063481a402281b7f5df66a4cdcd',
+            'naver_auto_recon_settlement_event': '7d8d0b265d32ce890a4504e7e0920a5a40ac188355d2db15ca74857951ffa658',
+            'naver_auto_recon_settlement_head': 'd702211d0c696a509acc8851208abb47b065d21c6a05ebfaf2bebd8fede8bb58',
+            'naver_auto_recon_settlement_row': '7365b09956f60fd059eb529f56520344e795e38cc434abbf407f8c468e239205',
+            'naver_auto_recon_settlement_version': 'f713ad26e4dd4773c12f545e6568584f8c6f53a8faa049e1ddca172a8d298521',
+            'naver_auto_recon_staff_entry': '3027c77a42d561791f68725ea840c52af21156c153319c9bcb673c5d1e84c098'},
+        'autoindexes': ['sqlite_autoindex_naver_auto_recon_close_result_1', 'sqlite_autoindex_naver_auto_recon_month_1',
+                        'sqlite_autoindex_naver_auto_recon_settlement_event_1',
+                        'sqlite_autoindex_naver_auto_recon_settlement_head_1',
+                        'sqlite_autoindex_naver_auto_recon_settlement_row_1',
+                        'sqlite_autoindex_naver_auto_recon_settlement_version_1',
+                        'sqlite_autoindex_naver_auto_recon_settlement_version_2',
+                        'sqlite_autoindex_naver_auto_recon_staff_entry_1'],
+        'helper_sha256': '89a239a61c5ab997446a0528780f5a4b106e97c641d8412ff82391891c3148a7'}}
 if ROOT and os.environ.get('NAVER_DEPLOY_TEST_MIGRATIONS'):
     MIGRATIONS = json.loads(read(os.environ['NAVER_DEPLOY_TEST_MIGRATIONS']))   # 가짜 루트 시험 전용
+
+
+def entry_purpose(entry):
+    """보관본 purpose. 21-22 항목은 칸이 없어 호환 규칙(pre-migration-<from>-<to>)으로 같은 값."""
+    return entry.get('purpose') or 'pre-migration-%d-%d' % (entry['from_schema'], entry['to_schema'])
+
+
+def entry_schema_module(entry):
+    """새 표 SCHEMA 모듈 pin. 21-22 항목은 칸이 없어 호환 규칙(exhaust_store)으로 같은 값."""
+    return entry.get('schema_module') or {'path': 'naver_engine/exhaust_store.py', 'import': 'naver_engine.exhaust_store',
+                                          'sha256': entry['to_exhaust_sha256']}
+
+
+MANIFEST_PURPOSES = {entry_purpose(e): e['from_schema'] for e in MIGRATIONS.values()}
 
 STATE_DIR_PATH = '/var/lib/metainc/naver-deploy'
 MIG_DIR = STATE_DIR_PATH + '/migration'
@@ -2390,13 +2446,13 @@ def mig_args(identifier, step, mode, *pairs):
     """helper 인자 JSON. 단계에 맞는 pin 만 고정 표에서 넣는다. key=@file 은 그 JSON 파일 내용."""
     entry = mig_entry(identifier)
     args = {'mode': mode, 'migration_id': identifier}
-    new_pins = {'store_sha256': entry['to_store_sha256'], 'exhaust_sha256': entry['to_exhaust_sha256'],
+    new_pins = {'store_sha256': entry['to_store_sha256'], 'schema_module': entry_schema_module(entry),
                 'schema': entry['to_schema'], 'from_schema': entry['from_schema'],
                 'new_tables': entry['new_tables'], 'autoindexes': entry['autoindexes']}
     old_pins = {'store_sha256': entry['from_store_sha256'], 'schema': entry['from_schema']}
     if step in ('chain', 'probe-new'):
         args['pins'] = new_pins
-    elif step in ('seed', 'v21-refuses', 'v21-opens', 'probe-old'):
+    elif step in ('seed', 'v21-refuses', 'v21-opens', 'old-refuses', 'old-opens', 'probe-old'):
         args['pins'] = old_pins
     for pair in pairs:
         key, _, value = pair.partition('=')
@@ -2416,11 +2472,26 @@ def mig_tar_pins(path, identifier, current, new, schema_current, schema_new):
     if current != entry['from_commit'] or new != entry['to_commit']:
         fail('MIGRATION_COMMIT_PIN: 실행 중/새 커밋이 고정 표와 다릅니다')
     archive, items = members(path)
-    wanted = {'naver_engine/store.py': entry['to_store_sha256'], 'naver_engine/exhaust_store.py': entry['to_exhaust_sha256']}
+    module = entry_schema_module(entry)
+    wanted = {'naver_engine/store.py': entry['to_store_sha256'], module['path']: module['sha256']}
     table = dict(items)
     for name, expected in wanted.items():
         if name not in table or hashlib.sha256(archive.extractfile(table[name]).read()).hexdigest() != expected:
             fail('MIGRATION_SOURCE_PIN: %s 해시가 고정 표와 다릅니다' % name)
+    print('ok')
+
+
+def mig_requires(identifier):
+    """앞선 이관의 복귀 pin 이 released(대표 accept) 여야 다음 이관을 준비한다. pin 을 못 읽으면 거부."""
+    entry = mig_entry(identifier)
+    needed = set(entry.get('requires_released') or ())
+    folder = ROOT + MIG_PINS
+    if needed and os.path.isdir(folder):
+        pinned_rollback()   # 손상 pin 이면 여기서 거부
+        for name in sorted(os.listdir(folder)):
+            value = load_json(os.path.join(folder, name), {}) or {}
+            if value.get('migration_id') in needed and value.get('state') != 'released':
+                fail('MIGRATION_ORDER: 앞선 이관(%s)이 아직 accept 되지 않았습니다' % value.get('migration_id'))
     print('ok')
 
 
@@ -2469,8 +2540,9 @@ def mig_window(cutoff, state_path, after_utc_stamp=''):
     if value.get('code') != 'OFFSITE_OK' or value.get('pending') is not None or value.get('last_offsite_day') != now[:10]:
         fail('WINDOW: 오늘 OFFSITE_OK·pending 없음 조건이 아닙니다')
     folder = os.path.dirname(state_path)
-    if any(re.fullmatch(r'\.building-[a-z0-9_]{8}', name) for name in os.listdir(folder)):
-        fail('WINDOW: 일일 백업이 진행 중입니다')
+    for place in (folder, os.path.join(folder, 'local'), os.path.join(folder, 'outgoing')):
+        if os.path.isdir(place) and any(re.fullmatch(r'\.building-[a-z0-9_]{8}', name) for name in os.listdir(place)):
+            fail('WINDOW: 일일 백업이 진행 중입니다')
     if now[11:16] >= cutoff:
         fail('WINDOW: KST %s 이후입니다' % cutoff)
     if after_utc_stamp:
@@ -2497,12 +2569,17 @@ def size_or_zero(path):
 
 
 def newest_pair(folder):
-    zips = sorted((n for n in os.listdir(folder) if re.fullmatch(r'naver-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{32}\.zip', n)))
+    """일일 백업의 최신 쌍(ZIP 은 local/, 같은 이름의 CMS 는 outgoing/ — 제품 BackupJob 배치). 하나라도 없으면 None."""
+    local, outgoing = os.path.join(folder, 'local'), os.path.join(folder, 'outgoing')
+    if not os.path.isdir(local) or not os.path.isdir(outgoing):
+        return None
+    zips = sorted(n for n in os.listdir(local) if re.fullmatch(r'naver-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{32}\.zip', n))
     if not zips:
         return None
-    z = zips[-1]
-    cms = [n for n in os.listdir(folder) if n.startswith(z[:-4]) and n != z]
-    return os.lstat(os.path.join(folder, z)).st_size, max([os.lstat(os.path.join(folder, n)).st_size for n in cms] or [0])
+    zip_path, cms_path = os.path.join(local, zips[-1]), os.path.join(outgoing, zips[-1][:-4] + '.cms')
+    if not os.path.isfile(cms_path) or os.path.islink(cms_path) or os.path.islink(zip_path):
+        return None
+    return os.lstat(zip_path).st_size, os.lstat(cms_path).st_size
 
 
 def keep_raw_now(data_dir, backups):
@@ -2539,10 +2616,10 @@ def mig_guard(*pairs):
 
 
 # ── gzip 보관(v2 manifest, pinned)·검증·raw 삭제·gz 복원 ──
-def mig_archive(data_dir, db_backups, run, commit, receipt_path):
+def mig_archive(data_dir, db_backups, run, commit, receipt_path, identifier):
     partial = db_backups + '/' + run + '.partial'
     try:
-        archive_inner(data_dir, db_backups, run, commit, receipt_path)
+        archive_inner(data_dir, db_backups, run, commit, receipt_path, identifier)
     except BaseException as error:
         # 어떤 실패든(거부·I/O·중단) 부분본은 자동으로 지우지 않는다(대표 확인 뒤 정리).
         # 일반 partial-prune 이 보지 않는 이름으로 옮겨 둔다.
@@ -2558,7 +2635,8 @@ def mig_archive(data_dir, db_backups, run, commit, receipt_path):
         fail('ARCHIVE_FAILED: %s' % type(error).__name__)
 
 
-def archive_inner(data_dir, db_backups, run, commit, receipt_path):
+def archive_inner(data_dir, db_backups, run, commit, receipt_path, identifier):
+    entry = mig_entry(identifier)
     """engine.db.pre-v22 → naver-deploy-db/<run>.partial/engine.db.gz(gzip6) → 풀어서 sha 대조 → manifest v2(pinned) →
     폴더 이름 바꾸기로 게시. raw 는 여기서 지우지 않는다(G4 뒤 따로). 실패·상한 초과면 부분본을 남기고 거부."""
     import gzip
@@ -2616,7 +2694,9 @@ def archive_inner(data_dir, db_backups, run, commit, receipt_path):
                 total += len(chunk)
         if check_digest.hexdigest() != receipt['pre_sha256'] or total != st.st_size:
             fail('ARCHIVE_VERIFY: 푼 내용이 원본과 다릅니다')
-        manifest = {'version': 2, 'schema': 21, 'source_commit': commit, 'purpose': 'pre-migration-21-22',
+        if commit != entry['from_commit']:
+            fail('ARCHIVE_SOURCE: 보관할 원본 커밋이 이관 항목의 from 과 다릅니다')
+        manifest = {'version': 2, 'schema': entry['from_schema'], 'source_commit': commit, 'purpose': entry_purpose(entry),
                     'pinned': True, 'run': run,
                     'files': {'engine.db': {'size': st.st_size, 'sha256': receipt['pre_sha256'], 'stored': 'gzip',
                                             'gz_size': os.path.getsize(target), 'gz_sha256': file_sha(target)}}}
@@ -2647,14 +2727,18 @@ def mig_unlink_pre(data_dir, receipt_path):
     print('ok')
 
 
-def mig_restore_gz(copy_dir, data_dir, run, receipt_path):
+def mig_restore_gz(copy_dir, data_dir, run, receipt_path, identifier):
     """gz → engine.db.restore.partial(O_EXCL·0600·10001) → 전체 sha·크기 확인 → restored_identity 를 영수증에
     먼저 내구 기록 → canonical 로 게시(rename). canonical·곁 파일이 없어야 한다."""
     import gzip
     receipt = load_json(receipt_path)
     manifest = manifest_v2(load_json(copy_dir + '/manifest.json'))
+    entry = mig_entry(identifier)
     if manifest is None or manifest['run'] != run or manifest['files']['engine.db']['sha256'] != receipt['pre_sha256']:
         fail('RESTORE_SOURCE: 고정 사본 manifest 가 이 run 의 원본이 아닙니다')
+    if (manifest['purpose'] != entry_purpose(entry) or manifest['schema'] != entry['from_schema']
+            or manifest['source_commit'] != entry['from_commit']):
+        fail('RESTORE_SOURCE: 고정 사본이 이 run 의 이관 항목(purpose·schema·source_commit)과 다릅니다')
     if file_sha(copy_dir + '/engine.db.gz') != manifest['files']['engine.db']['gz_sha256']:
         fail('RESTORE_SOURCE: gz 해시가 manifest 와 다릅니다')
     canonical = data_dir + '/engine.db'
@@ -2796,12 +2880,321 @@ MIG_COMMANDS = {
     'mig-status-get': mig_status_get, 'mig-hold': mig_hold, 'mig-dropin': mig_dropin, 'mig-journal': mig_journal,
     'mig-receipt': mig_receipt, 'mig-receipt-get': mig_receipt_get, 'mig-receipt-set': mig_receipt_set,
     'mig-args': mig_args, 'mig-tar-pins': mig_tar_pins, 'mig-store-sha-stdin': mig_store_sha_stdin,
+    'mig-requires': mig_requires,
     'mig-helper-pin': mig_helper_pin, 'mig-window': mig_window, 'mig-keep-raw-now': keep_raw_now,
     'mig-guard': mig_guard, 'mig-archive': mig_archive, 'mig-unlink-pre': mig_unlink_pre,
     'mig-restore-gz': mig_restore_gz, 'mig-plan': mig_plan, 'mig-prepared': mig_prepared,
     'mig-observe': mig_observe, 'mig-rehearsal': mig_rehearsal, 'identity': identity_line,
     'same-device-inode': same_device_inode, 'json-field': json_field, 'ino-of': ino_of,
     'file-sha': lambda path: print(file_sha(path)), 'kst-now': lambda: print(kst_now())}
+
+
+# ── 고정 nginx 단계(nginx-plan / nginx-apply) — 보고 대조 업로드 두 경로만 4MiB ──────────────────────────
+# 제품 커밋의 두 파일(sha 고정)에서만 내용을 가져온다. 바꾸는 파일은 정확히 둘:
+#   ① http {} 의 conf.d 에 새 zone 파일 하나(제품 deploy/naver-engine-nginx-http.conf 그대로)
+#   ② dashboard server {} 가 include 하는 관제 snippet 하나에 정확 일치 location 두 개를 더한다
+#      (제품 deploy/naver-engine-nginx.conf 의 두 블록 그대로, proxy_pass 줄만 그 snippet 의 /api/naver-auto 와 같은 값).
+# 다른 앱 파일·nginx.conf·site 파일은 쓰지 않는다(전후 트리 지문으로 확인). 모르는 배치면 계획 단계에서 거절한다.
+import fnmatch  # noqa: E402 (nginx 단계 전용)
+NGINX_STEPS = {
+    'reconcile-upload-v1': {
+        'product_commit': '12260dbbc946f76d9bf7e2b8562cccc5474ea9a9',
+        'http_conf': {'member': 'deploy/naver-engine-nginx-http.conf',
+                      'sha256': '316f42d2bfb11ff374359d0520d31cf0662210aea75894de5383df417ab26136',
+                      'target': '/etc/nginx/conf.d/naver-reconcile-upload-zone.conf'},
+        'locations': {'member': 'deploy/naver-engine-nginx.conf',
+                      'sha256': '7fe8b87d8b95c4e5f8ca8c87d534eaf00dfb895b20efb63390e49370fb2ddbe3',
+                      'paths': ['/api/naver-auto/reconcile/settlement/preview',
+                                '/api/naver-auto/reconcile/settlement/confirm'],
+                      'blocks_sha256': '1704ac0480f467753b1d46459c511ca91782a22d4cca86221bf489945eaafae5'},
+        'zone': 'naver_reconcile_upload', 'host': 'dashboard.metainc.co.kr',
+        'big_bytes': 4 * 1024 * 1024, 'small_bytes': 64 * 1024}}
+if ROOT and os.environ.get('NAVER_DEPLOY_TEST_NGINX_STEPS'):
+    NGINX_STEPS = json.loads(read(os.environ['NAVER_DEPLOY_TEST_NGINX_STEPS']))   # 가짜 루트 시험 전용
+NGINX_ROOT = '/etc/nginx'
+NGINX_HTTP_INCLUDE = 'include /etc/nginx/conf.d/*.conf;'
+NGINX_PROXY_ALLOWED = (re.compile(r'http://unix:/run/metainc/naver-relay/relay\.sock:\Z'),
+                       re.compile(r'http://naver_relay\Z'))
+NGINX_HEADER = '# naver-deploy nginx-apply %s (제품 %s) — 보고 대조 업로드 두 경로만 4MiB. 손으로 고치지 않는다.\n'
+
+
+def nginx_step(identifier):
+    if identifier not in NGINX_STEPS:
+        fail('NGINX_STEP_UNKNOWN: 고정 표에 없는 nginx 단계입니다')
+    return NGINX_STEPS[identifier]
+
+
+def nginx_dump():
+    done = subprocess.run(['nginx', '-T'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+                          env={'PATH': os.environ.get('PATH', '/usr/sbin:/usr/bin:/sbin:/bin'), 'LANG': 'C'})
+    if done.returncode:
+        fail('NGINX_LAYOUT: nginx -T 실패')
+    sections, path, lines = {}, None, []
+    for line in done.stdout.decode('utf-8', 'replace').splitlines(keepends=True):
+        match = re.fullmatch(r'# configuration file (/[^\x00-\x1f]*):\s*', line.rstrip('\n'))
+        if match:
+            if path is not None:
+                sections[path] = ''.join(lines)
+            path, lines = match.group(1), []
+        elif path is not None:
+            lines.append(line)
+    if path is not None:
+        sections[path] = ''.join(lines)
+    if not sections or any(not p.startswith(NGINX_ROOT + '/') for p in sections):
+        fail('NGINX_LAYOUT: nginx -T 구획을 읽지 못했거나 /etc/nginx 밖 파일이 있습니다')
+    return sections
+
+
+def brace_block(text, start):
+    """text[start:] 의 첫 '{' 와 짝인 '}' 다음 위치. 주석(#)·따옴표 안의 괄호는 세지 않는다."""
+    depth, i, quote = 0, text.index('{', start), None
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == quote:
+                quote = None
+        elif c in ('"', "'"):
+            quote = c
+        elif c == '#':
+            i = text.find('\n', i)
+            if i < 0:
+                break
+            continue
+        elif c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                if end < len(text) and text[end] == '\n':
+                    end += 1
+                return end
+        i += 1
+    fail('NGINX_LAYOUT: 괄호 짝이 맞지 않습니다')
+
+
+def line_start(text, index):
+    return text.rfind('\n', 0, index) + 1
+
+
+def product_blocks(text, step):
+    """제품 locations 파일에서 정확 일치 두 블록(줄 단위 원문)을 순서대로 뽑는다."""
+    out = []
+    for path in step['locations']['paths']:
+        found = [m for m in re.finditer(r'(?m)^location\s*=\s*' + re.escape(path) + r'\s*\{', text)]
+        if len(found) != 1:
+            fail('NGINX_PRODUCT: 제품 파일에 %s 블록이 정확히 하나가 아닙니다' % path)
+        start = found[0].start()
+        out.append(text[start:brace_block(text, start)])
+    return out
+
+
+def nginx_product(tar_path, identifier, commit):
+    step = nginx_step(identifier)
+    if commit != step['product_commit']:
+        fail('NGINX_COMMIT_PIN: 제품 커밋이 고정 표와 다릅니다')
+    archive, items = members(tar_path)
+    table = dict(items)
+    bodies = {}
+    for key in ('http_conf', 'locations'):
+        member = step[key]['member']
+        if member not in table:
+            fail('NGINX_PRODUCT: %s 가 원본 묶음에 없습니다' % member)
+        body = archive.extractfile(table[member]).read()
+        if hashlib.sha256(body).hexdigest() != step[key]['sha256']:
+            fail('NGINX_PRODUCT: %s 해시가 고정 표와 다릅니다' % member)
+        bodies[key] = body.decode('utf-8')
+    blocks = product_blocks(bodies['locations'], step)
+    if hashlib.sha256(''.join(blocks).encode()).hexdigest() != step['locations']['blocks_sha256']:
+        fail('NGINX_PRODUCT: 두 location 블록 해시가 고정 표와 다릅니다')
+    return step, bodies['http_conf'], blocks
+
+
+def resolve_include(argument):
+    return argument if argument.startswith('/') else NGINX_ROOT + '/' + argument
+
+
+def nginx_layout(step, sections):
+    """관제 snippet F(정확히 하나) · 그것을 include 하는 dashboard server 블록(정확히 하나) · http{} 의 conf.d include."""
+    head = re.compile(r'(?m)^[ \t]*location\s+\^~\s+/api/naver-auto\s*\{')
+    candidates = [p for p, text in sections.items() if head.search(text)]
+    if len(candidates) != 1:
+        fail('NGINX_LAYOUT: /api/naver-auto location 을 가진 파일이 정확히 하나가 아닙니다(%d)' % len(candidates))
+    snippet = candidates[0]
+    text = sections[snippet]
+    if snippet.startswith(NGINX_ROOT + '/conf.d/') or re.search(r'(?m)^\s*(server|http)\s*\{', text):
+        fail('NGINX_LAYOUT: 관제 location 파일이 server 안 include snippet 이 아닙니다')
+    if len(head.findall(text)) != 1:
+        fail('NGINX_LAYOUT: /api/naver-auto location 이 두 번 이상입니다')
+    start = head.search(text).start()
+    block = text[start:brace_block(text, start)]
+    proxies = re.findall(r'(?m)^\s*proxy_pass\s+(\S+?)\s*;', block)
+    if len(proxies) != 1 or not any(rule.match(proxies[0]) for rule in NGINX_PROXY_ALLOWED):
+        fail('NGINX_LAYOUT: /api/naver-auto 의 proxy_pass 가 알려진 관제 중계 형식이 아닙니다')
+    including = []
+    for path, body in sections.items():
+        for match in re.finditer(r'(?m)^[ \t]*include\s+(\S+?)\s*;', body):
+            if fnmatch.fnmatch(snippet, resolve_include(match.group(1))):
+                including.append((path, match.start()))
+    if len(including) != 1:
+        fail('NGINX_LAYOUT: 관제 snippet 을 include 하는 곳이 정확히 하나가 아닙니다(%d)' % len(including))
+    site, position = including[0]
+    body = sections[site]
+    inside = False
+    for match in re.finditer(r'(?m)^[ \t]*server\s*\{', body):
+        end = brace_block(body, match.start())
+        if match.start() < position < end:
+            names = re.findall(r'(?m)^\s*server_name\s+([^;]+);', body[match.start():end])
+            inside = any(step['host'] in name.split() for name in names)
+    if not inside:
+        fail('NGINX_LAYOUT: 관제 snippet 이 %s server 블록 안에서 include 되지 않습니다' % step['host'])
+    main = sections.get(NGINX_ROOT + '/nginx.conf', '')
+    http = re.search(r'(?m)^[ \t]*http\s*\{', main)
+    if not http or NGINX_HTTP_INCLUDE not in main[http.start():brace_block(main, http.start())]:
+        fail('NGINX_LAYOUT: nginx.conf 의 http {} 가 /etc/nginx/conf.d/*.conf 를 include 하지 않습니다')
+    return snippet, site, start, proxies[0]
+
+
+def nginx_compute(tar_path, identifier, commit):
+    step, http_conf, blocks = nginx_product(tar_path, identifier, commit)
+    sections = nginx_dump()
+    snippet, site, start, proxy = nginx_layout(step, sections)
+    current = sections[snippet]
+    with open(ROOT + snippet) as handle:
+        if handle.read() != current:
+            fail('NGINX_LAYOUT: nginx -T 원문과 디스크 파일이 다릅니다(적용 안 된 변경)')
+    target = step['http_conf']['target']
+    adapted = [re.sub(r'(?m)^(\s*proxy_pass\s+)\S+?(\s*;)', lambda m: m.group(1) + proxy + m.group(2), b, count=1)
+               for b in blocks]
+    insert = NGINX_HEADER % (identifier, commit[:12]) + ''.join(adapted) + '\n'
+    applied = insert in current
+    if applied:
+        new = current
+    else:
+        if any(re.search(r'(?m)^\s*location\s*=\s*' + re.escape(p) + r'\s*\{', current) for p in step['locations']['paths']):
+            fail('NGINX_LAYOUT: 업로드 location 이 다른 내용으로 이미 있습니다')
+        new = current[:line_start(current, start)] + insert + current[line_start(current, start):]
+    zone_now = sections.get(target)
+    if zone_now is not None and zone_now != http_conf:
+        fail('NGINX_LAYOUT: zone 파일 자리가 다른 내용으로 이미 있습니다')
+    if applied != (zone_now is not None):
+        fail('NGINX_LAYOUT: 두 파일 중 하나만 적용된 상태입니다(사람 확인 필요)')
+    for path, body in sections.items():
+        if path not in (target, snippet) and 'zone=' + step['zone'] in body:
+            fail('NGINX_LAYOUT: zone 이름이 다른 파일에서 이미 쓰입니다')
+    info = os.lstat(ROOT + snippet)
+    stable = {'step': identifier, 'entry': step, 'commit': commit, 'snippet': snippet,
+              'snippet_sha256': hashlib.sha256(current.encode()).hexdigest(),
+              'new_snippet_sha256': hashlib.sha256(new.encode()).hexdigest(), 'site': site,
+              'site_sha256': hashlib.sha256(sections[site].encode()).hexdigest(),
+              'nginx_conf_sha256': hashlib.sha256(sections.get(NGINX_ROOT + '/nginx.conf', '').encode()).hexdigest(),
+              'zone_target': target, 'zone_sha256': hashlib.sha256(http_conf.encode()).hexdigest(),
+              'proxy_pass': proxy, 'already_applied': applied,
+              'tree_except_sha256': nginx_tree_except(snippet, target),
+              'snippet_mode': stat.S_IMODE(info.st_mode), 'snippet_uid': info.st_uid, 'snippet_gid': info.st_gid}
+    digest = hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return digest, stable, current, new, http_conf
+
+
+def nginx_tree_except(*excluded):
+    """/etc/nginx 트리 지문(링크는 대상 경로 문자열, 일반 파일은 내용). 고정 두 파일만 뺀다."""
+    digest = hashlib.sha256()
+    base = ROOT + NGINX_ROOT
+    for folder, children, files in os.walk(base):
+        children.sort()
+        for name in sorted(files + [c for c in children if os.path.islink(os.path.join(folder, c))]):
+            full = os.path.join(folder, name)
+            relative = full[len(ROOT):]
+            if relative in excluded:
+                continue
+            digest.update(relative.encode() + b'\0')
+            if os.path.islink(full):
+                digest.update(b'L' + os.readlink(full).encode())
+            elif os.path.isfile(full):
+                digest.update(hashlib.sha256(read(full, 'rb')).digest())
+    return digest.hexdigest()
+
+
+def nginx_plan(tar_path, identifier, commit, out_dir):
+    digest, stable, current, new, http_conf = nginx_compute(tar_path, identifier, commit)
+    os.makedirs(out_dir, 0o700, exist_ok=True)
+    write_json_atomic(os.path.join(out_dir, 'plan-%s.json' % digest), stable)
+    print(digest, 'applied' if stable['already_applied'] else 'pending')
+
+
+def write_text_atomic(path, body, mode, uid=None, gid=None):
+    temporary = path + '.naver-deploy.tmp'
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, 'w') as handle:
+        handle.write(body)
+        handle.flush()
+        if uid is not None and not ROOT:
+            os.fchown(handle.fileno(), uid, gid)
+        os.fchmod(handle.fileno(), mode)
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    fsync_folder(os.path.dirname(path))
+
+
+def nginx_write(tar_path, identifier, commit, expected, backup_dir):
+    """계획을 다시 계산해 해시가 같을 때만: snippet 원본을 백업하고 zone 파일·새 snippet 을 쓴다."""
+    digest, stable, current, new, http_conf = nginx_compute(tar_path, identifier, commit)
+    if digest != expected:
+        fail('NGINX_PLAN_MISMATCH: 다시 계산한 계획이 승인한 plan_sha256 과 다릅니다')
+    if stable['already_applied']:
+        print('already-applied')
+        return
+    os.makedirs(backup_dir, 0o700, exist_ok=True)
+    write_text_atomic(os.path.join(backup_dir, 'snippet.orig'), current, 0o600)
+    write_json_atomic(os.path.join(backup_dir, 'backup.json'), dict(stable, plan_sha256=digest))
+    target = ROOT + stable['zone_target']
+    write_text_atomic(target, http_conf, 0o644, 0, 0)
+    write_text_atomic(ROOT + stable['snippet'], new, stable['snippet_mode'], stable['snippet_uid'], stable['snippet_gid'])
+    print('written')
+
+
+def nginx_restore(backup_dir):
+    """백업한 snippet 원문을 되돌리고, 이번에 만든 zone 파일(내용이 계획과 같을 때만)을 지운다."""
+    record = load_json(os.path.join(backup_dir, 'backup.json'))
+    original = read(os.path.join(backup_dir, 'snippet.orig'))
+    if hashlib.sha256(original.encode()).hexdigest() != record['snippet_sha256']:
+        fail('NGINX_RESTORE: 백업 원문 해시가 다릅니다')
+    write_text_atomic(ROOT + record['snippet'], original, record['snippet_mode'], record['snippet_uid'],
+                      record['snippet_gid'])
+    target = ROOT + record['zone_target']
+    if os.path.lexists(target):
+        if os.path.islink(target) or hashlib.sha256(read(target, 'rb')).hexdigest() != record['zone_sha256']:
+            fail('NGINX_RESTORE: zone 자리 파일이 이번에 쓴 내용이 아닙니다(지우지 않음)')
+        os.unlink(target)
+        fsync_folder(os.path.dirname(target))
+    print('restored')
+
+
+def nginx_verify_files(backup_dir):
+    """적용 뒤: 두 파일이 계획 내용이고, 그 밖 /etc/nginx 트리 지문이 그대로인지."""
+    record = load_json(os.path.join(backup_dir, 'backup.json'))
+    if hashlib.sha256(read(ROOT + record['snippet'], 'rb')).hexdigest() != record['new_snippet_sha256']:
+        fail('NGINX_VERIFY: snippet 이 계획 내용이 아닙니다')
+    if hashlib.sha256(read(ROOT + record['zone_target'], 'rb')).hexdigest() != record['zone_sha256']:
+        fail('NGINX_VERIFY: zone 파일이 계획 내용이 아닙니다')
+    if nginx_tree_except(record['snippet'], record['zone_target']) != record['tree_except_sha256']:
+        fail('NGINX_VERIFY: 고정 두 파일 밖의 nginx 설정이 바뀌었습니다')
+    print('ok')
+
+
+def nginx_blocks_sha(tar_path, identifier):
+    """(운영·시험 보조) 원본 묶음 locations 파일에서 뽑은 두 블록의 해시. 고정값 확인용, 상태 변경 없음."""
+    step = nginx_step(identifier)
+    archive, items = members(tar_path)
+    body = archive.extractfile(dict(items)[step['locations']['member']]).read().decode('utf-8')
+    print(hashlib.sha256(''.join(product_blocks(body, step)).encode()).hexdigest())
+
+
+NGINX_COMMANDS = {'nginx-plan': nginx_plan, 'nginx-write': nginx_write, 'nginx-restore': nginx_restore,
+                  'nginx-verify-files': nginx_verify_files, 'nginx-blocks-sha': nginx_blocks_sha,
+                  'nginx-field': lambda identifier, key: print(nginx_step(identifier)[key]),
+                  'nginx-paths': lambda identifier: print(' '.join(nginx_step(identifier)['locations']['paths'])),
+                  'nginx-tree': lambda: print(nginx_tree_except())}
 
 
 COMMANDS = {'unit-parse': unit_parse, 'override-check': override_check, 'subst': subst, 'tar-check': tar_check,
@@ -2821,6 +3214,7 @@ COMMANDS = {'unit-parse': unit_parse, 'override-check': override_check, 'subst':
                                                         .extractfile('store.py').read().decode('utf-8'))),
             'randhex': lambda: print(secrets.token_hex(16))}
 COMMANDS.update(MIG_COMMANDS)
+COMMANDS.update(NGINX_COMMANDS)
 if __name__ == '__main__':
     _inject = os.environ.get('NAVER_DEPLOY_FAKE_FAIL_CMD') if ROOT else None
     _only_if = os.environ.get('NAVER_DEPLOY_FAKE_FAIL_IF_EXISTS') if ROOT else None
@@ -2894,7 +3288,8 @@ write_result() {
     ${MIG_RECEIPT_SHA:+"receipt_sha256=$MIG_RECEIPT_SHA"} ${MIG_ORPHANS:+"orphans_closed=$MIG_ORPHANS"} \
     ${MIG_PIN_STATE:+"pin_state=$MIG_PIN_STATE"} ${MIG_KEEP_RAW:+"keep_raw_now=$MIG_KEEP_RAW"} \
     ${MIG_DECISION:+"write_decision=$MIG_DECISION"} ${MIG_PLAN:+"plan_sha256=$MIG_PLAN"} \
-    ${MIG_REHEARSAL:+"rehearsal=$MIG_REHEARSAL"} 2>/dev/null) \
+    ${MIG_REHEARSAL:+"rehearsal=$MIG_REHEARSAL"} ${NGINX_STEP:+"nginx_step=$NGINX_STEP"} \
+    ${NGINX_CHECKS:+"nginx_checks=$NGINX_CHECKS"} 2>/dev/null) \
     || line='{"status":"RESULT_WRITE_FAILED"}'
   printf 'NAVER_DEPLOY_RESULT=%s\n' "$line"
   if [ -n "$RESULT_FILE" ]; then
@@ -2905,7 +3300,7 @@ write_result() {
 on_exit() {
   local rc=$?
   trap - EXIT ERR
-  if [ "$MODE" = deploy ] || [ "${MODE#migrate-}" != "$MODE" ]; then
+  if [ "$MODE" = deploy ] || [ "${MODE#migrate-}" != "$MODE" ] || [ "${MODE#nginx-}" != "$MODE" ]; then
     if [ -z "$RESULT_CODE" ]; then
       RESULT_CODE=$rc
       RESULT_STATUS=${RESULT_STATUS:-EXITED}
@@ -2944,6 +3339,9 @@ fail_deploy() { # CODE detail
   trap - ERR
   set +e
   log "실패 사유($1): $2"
+  if [ "${MODE#nginx-}" != "$MODE" ]; then
+    nginx_fail "$1" "$2"
+  fi
   # 이관 run(또는 이관 재진입 중): 정해진 이관 경로만 쓴다. 기존 restore_previous 를 직접 부르지 않는다.
   if [ "$MIG_ACTIVE" = 1 ] || [ "${MODE#migrate-}" != "$MODE" ]; then
     if [ "$RESTORING" = 1 ]; then
@@ -4240,7 +4638,7 @@ mig_archive_flow() {
   MIG_STAGE=archiving
   set_phase archiving
   pre_size=$(py json-field "$(mig_receipt_field pre_identity)" size)
-  if out=$(py mig-archive "$R$DATA_DIR" "$R$DB_BACKUPS" "$MIG_RUN" "$PREV_COMMIT" "$(mig_receipt_path)" 2>>"$CMD_LOG"); then
+  if out=$(py mig-archive "$R$DATA_DIR" "$R$DB_BACKUPS" "$MIG_RUN" "$PREV_COMMIT" "$(mig_receipt_path)" "$MIG_ID" 2>>"$CMD_LOG"); then
     read -r name gzsha mansha <<EOF
 $out
 EOF
@@ -4391,6 +4789,7 @@ mig_source_checks() { # 스키마 쌍·고정 해시·실행 중 v21 store·help
   dk rm "$cid" >>"$CMD_LOG" 2>&1 || warn TEMP_CONTAINER_LEFT "임시 컨테이너 삭제 실패"
   [ "$info" = ok ] || die MIGRATION_RUNNING_PIN "실행 중 v21 이미지의 store.py 가 고정 표와 다릅니다"
   info=$(py mig-helper-pin "$MIG_HELPER" "$MIG_ID") || die MIGRATION_HELPER_PIN "$info"
+  info=$(py mig-requires "$MIG_ID") || die MIGRATION_ORDER "$info"
 }
 
 mig_release_and_build_checks() { # 준비된 release 폴더·override 확인과 설정 묶음·check-config(빌드 없음)
@@ -4413,7 +4812,7 @@ mig_release_and_build_checks() { # 준비된 release 폴더·override 확인과 
     info=$(py shape-diff "$shape_old" "$shape_new") || die CONFIG_SHAPE_CHANGED "$info"
   done
   compose_args engine "$M_REL_NEW" "$M_COMPANION"
-  new_switches=$(dk "${CARGS[@]}" config --format json 2>>"$CMD_LOG" | py check-config-run "$MIG_NEW_ENGINE" "$CMD_LOG") \
+  new_switches=$(dk "${CARGS[@]}" config --format json 2>>"$CMD_LOG" | py check-config-run "$MIG_NEW_ENGINE" "$CMD_LOG" off) \
     || die CHECK_CONFIG "$new_switches"
   [ "$new_switches" = "$CUR_SWITCHES" ] || die FLAGS_CHANGED "새 판 스위치가 현재와 다릅니다"
 }
@@ -4453,13 +4852,15 @@ EOF
 
 # ── migrate-rehearse: 준비된 정확 이미지로 scratch 에서만 끝까지(운영 DATA_DIR 은 붙이지 않는다) ──
 main_migrate_rehearse() {
-  local scratch data step args rc=0 helper_sha probe_new probe_old
+  local scratch data step args rc=0 helper_sha probe_new probe_old to_schema from_schema receipt
   mig_common_inputs "$@"
   mig_lock
   recover_if_needed
   mig_preflight
   mig_source_checks
   mig_check_prepared
+  to_schema=$(py mig-field "$MIG_ID" to_schema)
+  from_schema=$(py mig-field "$MIG_ID" from_schema)
   MIG_RUN="$M_STAMP-$(printf '%s' "$NEW" | cut -c1-12)"
   scratch="$R$STATE_DIR/rehearse/$MIG_RUN"
   data="$scratch/data"
@@ -4490,18 +4891,18 @@ main_migrate_rehearse() {
     receipt="$data/naver-migrate-receipt.json"
     args=$(py mig-args "$MIG_ID" startcheck rehearsal "run=$MIG_RUN" \
       "expect_identity=json:$(py json-field "$(cat "$receipt")" work_identity)" \
-      "expect_sha256=$(py json-field "$(cat "$receipt")" work_sha256)" full=json:true expect_schema=22)
+      "expect_sha256=$(py json-field "$(cat "$receipt")" work_sha256)" full=json:true "expect_schema=$to_schema")
     mig_helper "$MIG_NEW_ENGINE" "$data" startcheck "$args" || rc=1
   fi
   if [ "$rc" = 0 ]; then
-    args=$(py mig-args "$MIG_ID" v21-refuses rehearsal "run=$MIG_RUN" expect_schema=22)
-    mig_helper "$PREV_ENGINE_IMAGE" "$data" v21-refuses "$args" || rc=1
+    args=$(py mig-args "$MIG_ID" old-refuses rehearsal "run=$MIG_RUN" "expect_schema=$to_schema")
+    mig_helper "$PREV_ENGINE_IMAGE" "$data" old-refuses "$args" || rc=1
   fi
   if [ "$rc" = 0 ]; then
     # 옛 writer 가 남긴 빈 곁 파일을 잠금 아래 정리(startcheck)한 뒤 되돌림을 시험한다.
     args=$(py mig-args "$MIG_ID" startcheck rehearsal "run=$MIG_RUN" \
       "expect_identity=json:$(py json-field "$(cat "$receipt")" work_identity)" \
-      "expect_sha256=$(py json-field "$(cat "$receipt")" work_sha256)" full=json:true expect_schema=22)
+      "expect_sha256=$(py json-field "$(cat "$receipt")" work_sha256)" full=json:true "expect_schema=$to_schema")
     mig_helper "$MIG_NEW_ENGINE" "$data" startcheck "$args" || rc=1
   fi
   if [ "$rc" = 0 ]; then
@@ -4509,8 +4910,8 @@ main_migrate_rehearse() {
     mig_helper "$MIG_NEW_ENGINE" "$data" undo "$args" || rc=1
   fi
   if [ "$rc" = 0 ]; then
-    args=$(py mig-args "$MIG_ID" v21-opens rehearsal "run=$MIG_RUN" expect_schema=21)
-    mig_helper "$PREV_ENGINE_IMAGE" "$data" v21-opens "$args" || rc=1
+    args=$(py mig-args "$MIG_ID" old-opens rehearsal "run=$MIG_RUN" "expect_schema=$from_schema")
+    mig_helper "$PREV_ENGINE_IMAGE" "$data" old-opens "$args" || rc=1
   fi
   [ "$rc" = 0 ] || log "리허설 실패 단계 코드: $(mig_code)"
   rm -rf -- "$scratch"
@@ -4767,7 +5168,7 @@ main_migrate_rollback() {
   else
     copy_dir=$(py json-field "$(cat "$R$STATE_DIR/pins/$MIG_RUN.json")" copy_dir)
     [ -n "$copy_dir" ] || mig_unknown NO_PINNED_COPY
-    py mig-restore-gz "$R$copy_dir" "$R$DATA_DIR" "$MIG_RUN" "$(mig_receipt_path)" >>"$CMD_LOG" 2>&1 || mig_unknown RESTORE_GZ_FAILED
+    py mig-restore-gz "$R$copy_dir" "$R$DATA_DIR" "$MIG_RUN" "$(mig_receipt_path)" "$MIG_ID" >>"$CMD_LOG" 2>&1 || mig_unknown RESTORE_GZ_FAILED
     # raw 가 없던 복귀(F4): 풀어 놓은 v21(기준)과 묶음의 v22(현재)로 값 없이 gap 을 센다. 추가 공간이 들지 않는다.
     mig_gap_between engine.db "$bundle/engine.db"
   fi
@@ -4876,6 +5277,163 @@ mig_recover() {
   mig_auto_rollback INTERRUPTED_BEFORE_START 0 3
 }
 
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# 고정 nginx 단계(nginx-plan / nginx-apply) — 이관과 따로(자체 plan_sha256·승인·되돌림). 보고 대조 업로드 두 경로만 4MiB.
+# 쓰는 파일은 고정 두 개뿐이다(conf.d zone 파일 하나 + 관제 snippet 하나). 그 밖 /etc/nginx 지문이 같아야 한다.
+# ════════════════════════════════════════════════════════════════════════════════════════════
+NGINX_STEP=''
+NGINX_STAGE=''
+NGINX_CHECKS=''
+NGINX_RUN_DIR=''
+NGINX_TREE_BEFORE=''
+NGINX_UPLOAD_TYPE='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+nginx_body() { # bytes → 그 크기의 0 바이트 파일 경로(비공개 run 폴더)
+  local path="$NGINX_RUN_DIR/body-$1"
+  [ -f "$path" ] || head -c "$1" /dev/zero > "$path"
+  printf '%s' "$path"
+}
+
+nginx_probe() { # method path bytes → 상태 코드(실패는 000). 실제 nginx(443)에 같은 호스트 이름으로.
+  local method=$1 path=$2 bytes=$3 code body
+  if [ "$method" = GET ]; then
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 --resolve "$HOST_HEADER:443:127.0.0.1" \
+      "https://$HOST_HEADER$path" 2>/dev/null) || code=000
+  else
+    body=$(nginx_body "$bytes")
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 --resolve "$HOST_HEADER:443:127.0.0.1" \
+      -X POST -H "Content-Type: $NGINX_UPLOAD_TYPE" --data-binary "@$body" "https://$HOST_HEADER$path" 2>/dev/null) || code=000
+  fi
+  case "$code" in [0-9][0-9][0-9]) printf '%s' "$code" ;; *) printf '000' ;; esac
+}
+
+# 지금 설정이 「업로드 경로도 64KB 초과 거절 · 관제 화면 200」인지(적용 전 기준선이자 되돌림 뒤 확인).
+nginx_baseline_ok() {
+  local small over page path
+  small=$(py nginx-field "$NGINX_STEP" small_bytes)
+  over=$((small + 4096))
+  page=$(nginx_probe GET /naver/ 0)
+  NGINX_CHECKS="page=$page"
+  [ "$page" = 200 ] || return 1
+  for path in $(py nginx-paths "$NGINX_STEP"); do
+    code=$(nginx_probe POST "$path" "$over")
+    NGINX_CHECKS="$NGINX_CHECKS,base=$code"
+    [ "$code" = 413 ] || return 1
+  done
+}
+
+# 적용 뒤: 두 업로드 경로는 4MiB 아래를 받고(413·5xx·000 아님) 넘으면 413, 그 밖 관제 경로는 64KB 초과 413.
+nginx_applied_ok() {
+  local small big under above code path
+  small=$(py nginx-field "$NGINX_STEP" small_bytes)
+  big=$(py nginx-field "$NGINX_STEP" big_bytes)
+  under=$((big - 4096)); above=$((big + 4096))
+  NGINX_CHECKS=''
+  for path in $(py nginx-paths "$NGINX_STEP"); do
+    code=$(nginx_probe POST "$path" "$under")
+    NGINX_CHECKS="${NGINX_CHECKS}${NGINX_CHECKS:+,}under=$code"
+    case "$code" in 413|000|5??) return 1 ;; esac
+    code=$(nginx_probe POST "$path" "$above")
+    NGINX_CHECKS="$NGINX_CHECKS,above=$code"
+    [ "$code" = 413 ] || return 1
+  done
+  for path in /api/naver-auto/me /api/naver-auto/reconcile/settlement/preview/x; do
+    code=$(nginx_probe POST "$path" "$((small + 4096))")
+    NGINX_CHECKS="$NGINX_CHECKS,other=$code"
+    [ "$code" = 413 ] || return 1
+  done
+  code=$(nginx_probe GET /naver/ 0)
+  NGINX_CHECKS="$NGINX_CHECKS,page=$code"
+  [ "$code" = 200 ]
+}
+
+nginx_reload() {
+  nginx -t >>"$CMD_LOG" 2>&1 || return 1
+  nginx -s reload >>"$CMD_LOG" 2>&1 || return 1
+  sleep "$POLL"
+}
+
+# 적용 중 실패: 백업 원문 복원 → nginx -t → reload → 기준선·전체 트리 지문 확인.
+nginx_rollback() { # reason
+  trap - ERR
+  set +e
+  log "nginx 되돌림: $1"
+  if py nginx-restore "$NGINX_RUN_DIR" >>"$CMD_LOG" 2>&1 && nginx_reload && nginx_baseline_ok \
+      && [ "$(py nginx-tree)" = "$NGINX_TREE_BEFORE" ]; then
+    finish 2 NGINX_ROLLED_BACK "$1" "직전 nginx 설정 복원·검증 통과"
+  fi
+  finish 4 NGINX_ROLLBACK_FAILED "$1" "nginx 복원 실패. 사람 확인 필요"
+}
+
+nginx_fail() { # code detail — fail_deploy 가 부른다
+  trap - ERR
+  set +e
+  log "nginx 단계 실패($1, 단계 ${NGINX_STAGE:-preflight}): $2"
+  if [ "$NGINX_STAGE" = written ]; then
+    nginx_rollback "$1"
+  fi
+  finish 10 REFUSED "$1" "nginx 설정은 건드리지 않았습니다"
+}
+
+nginx_common() { # commit tar step
+  NEW=$1; M_TAR=$2; NGINX_STEP=$3
+  printf '%s' "$NEW" | grep -Eq '^[0-9a-f]{40}$' || { NEW=''; die BAD_INPUT "커밋은 40자리 소문자 16진수여야 합니다"; }
+  [ -f "$M_TAR" ] || die BAD_INPUT "source.tar 가 없습니다"
+  printf '%s' "$NGINX_STEP" | grep -Eq '^[0-9a-z-]{1,40}$' || die BAD_INPUT "nginx 단계 이름 형식"
+  if [ "$TEST_MODE" = 0 ] && [ "$(id -u)" != 0 ]; then die NOT_ROOT "root 로 실행해야 합니다"; fi
+  command -v nginx >/dev/null || die MISSING_TOOL "nginx 명령이 없습니다"
+  mig_lock
+  if [ -n "$(py mig-pointer get)" ] || [ -n "$(py mig-hold get)" ] || [ "$(py mig-dropin present)" != no ]; then
+    die MIGRATION_ACTIVE "이관 표지가 남아 있어 nginx 단계를 하지 않습니다"
+  fi
+  phase=$(py state-get "$STATE_FILE" phase 2>/dev/null) || phase=''
+  if phase_needs_restore "$phase"; then die DEPLOY_NOT_FINISHED "끝나지 않은 배포가 있습니다"; fi
+}
+
+main_nginx_plan() {
+  local out
+  nginx_common "$@"
+  out=$(py nginx-plan "$M_TAR" "$NGINX_STEP" "$NEW" "$R$STATE_DIR/nginx") || die NGINX_PLAN "$out"
+  MIG_PLAN=${out%% *}
+  PHASE=planned
+  finish 0 NGINX_PLANNED '' "nginx plan_sha256=$MIG_PLAN (${out#* })"
+}
+
+main_nginx_apply() {
+  local plan_in out
+  plan_in=${4:-}
+  nginx_common "$1" "$2" "$3"
+  printf '%s' "$plan_in" | grep -Eq '^[0-9a-f]{64}$' || die BAD_INPUT "plan_sha256 형식"
+  NGINX_RUN_DIR="$R$STATE_DIR/nginx/runs/$M_STAMP"
+  mkdir -p "$NGINX_RUN_DIR"
+  chmod 700 "$R$STATE_DIR/nginx" "$R$STATE_DIR/nginx/runs" "$NGINX_RUN_DIR"
+  PHASE=preflight
+  NGINX_TREE_BEFORE=$(py nginx-tree)
+  out=$(py nginx-plan "$M_TAR" "$NGINX_STEP" "$NEW" "$R$STATE_DIR/nginx") || die NGINX_PLAN "$out"
+  [ "${out%% *}" = "$plan_in" ] || die NGINX_PLAN_MISMATCH "다시 계산한 계획이 승인한 plan_sha256 과 다릅니다"
+  MIG_PLAN=$plan_in
+  if [ "${out#* }" = applied ]; then
+    # 이미 적용된 상태: 바꾸지 않고 지금 동작만 확인한다.
+    nginx_applied_ok || die NGINX_VERIFY "적용된 설정의 동작 확인 실패($NGINX_CHECKS)"
+    finish 0 NGINX_ALREADY_APPLIED '' "이미 적용됨(무변경, $NGINX_CHECKS)"
+  fi
+  nginx_baseline_ok || die NGINX_BASELINE "적용 전 기준선이 예상(업로드 64KB 초과 413·화면 200)과 다릅니다($NGINX_CHECKS)"
+  NGINX_STAGE=writing
+  out=$(py nginx-write "$M_TAR" "$NGINX_STEP" "$NEW" "$plan_in" "$NGINX_RUN_DIR") || die NGINX_PLAN_MISMATCH "$out"
+  MIG_PLAN=$plan_in
+  if [ "$out" = already-applied ]; then
+    finish 0 NGINX_ALREADY_APPLIED '' "이미 적용됨(무변경)"
+  fi
+  NGINX_STAGE=written
+  PHASE=applying
+  nginx_reload || nginx_rollback NGINX_TEST_OR_RELOAD
+  py nginx-verify-files "$NGINX_RUN_DIR" >>"$CMD_LOG" 2>&1 || nginx_rollback NGINX_FILES
+  nginx_applied_ok || nginx_rollback "NGINX_VERIFY"
+  NGINX_STAGE='done'
+  PHASE='done'
+  finish 0 NGINX_APPLIED '' "nginx 고정 단계 적용($NGINX_CHECKS)"
+}
+
 # ── 입구 ────────────────────────────────────────────────────────────────────
 case "$MODE" in
   inspect)
@@ -4907,10 +5465,10 @@ case "$MODE" in
     [ "$#" = 2 ] || { echo "사용: $0 cleanup-artifacts <allowlist_sha256>" >&2; exit 64; }
     main_cleanup_artifacts "$2"
     ;;
-  migrate-prepare|migrate-rehearse|migrate-plan|migrate-deploy|migrate-continue|migrate-rollback|migrate-accept)
+  migrate-prepare|migrate-rehearse|migrate-plan|migrate-deploy|migrate-continue|migrate-rollback|migrate-accept|nginx-plan|nginx-apply)
     shift
     case "$MODE" in
-      migrate-deploy) want=4 ;;
+      migrate-deploy|nginx-apply) want=4 ;;
       migrate-continue|migrate-rollback|migrate-accept) want=1 ;;
       *) want=3 ;;
     esac
@@ -4944,6 +5502,8 @@ case "$MODE" in
       migrate-continue) main_migrate_continue "${M_ARGS[@]}" ;;
       migrate-rollback) main_migrate_rollback "${M_ARGS[@]}" ;;
       migrate-accept) main_migrate_accept "${M_ARGS[@]}" ;;
+      nginx-plan) main_nginx_plan "${M_ARGS[@]}" ;;
+      nginx-apply) main_nginx_apply "${M_ARGS[@]}" ;;
     esac
     ;;
   deploy)
@@ -4971,7 +5531,7 @@ case "$MODE" in
     main_deploy "$D_COMMIT" "$D_TAR"
     ;;
   *)
-    echo "사용: $0 inspect | disk-usage | app-inventory | cleanup-plan | cleanup <allowlist_sha256> | cleanup-artifacts-plan | cleanup-artifacts <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE] | migrate-prepare|migrate-rehearse|migrate-plan <commit> <source.tar> <migration_id> | migrate-deploy <commit> <source.tar> <migration_id> <plan_sha256> | migrate-continue|migrate-rollback|migrate-accept <run>" >&2
+    echo "사용: $0 inspect | disk-usage | app-inventory | cleanup-plan | cleanup <allowlist_sha256> | cleanup-artifacts-plan | cleanup-artifacts <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE] | migrate-prepare|migrate-rehearse|migrate-plan <commit> <source.tar> <migration_id> | migrate-deploy <commit> <source.tar> <migration_id> <plan_sha256> | migrate-continue|migrate-rollback|migrate-accept <run> | nginx-plan <commit> <source.tar> <step> | nginx-apply <commit> <source.tar> <step> <plan_sha256>" >&2
     exit 64
     ;;
 esac
