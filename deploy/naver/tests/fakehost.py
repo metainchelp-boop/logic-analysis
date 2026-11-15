@@ -361,6 +361,9 @@ def docker(args):
         image['tags'].remove(args[1])
         if not image['tags'] and not any(c['image'] == identity for c in state['containers'].values()):
             del state['images'][identity]
+    elif args[:1] == ['ps'] and any(a.startswith('name=') for a in args):
+        if config().get('helper_leftover'):
+            print('leftover0000')
     elif args[:1] == ['ps']:
         projects = [a.split('=', 2)[2] for a in args if a.startswith('label=com.docker.compose.project=')]
         ancestors = [a.split('=', 1)[1] for a in args if a.startswith('ancestor=')]
@@ -383,14 +386,26 @@ def docker(args):
         print(identity)
     elif args[:1] == ['cp']:
         identity, _, path = args[1].partition(':')
-        image = state['images'][state['containers'][identity]['image']]
+        image_id = state['containers'][identity]['image']
+        image = state['images'][image_id]
         body = ('SCHEMA_VERSION = %d   # fake\n' % image['schema']).encode()
+        product = (config().get('product_by_commit') or {}).get(image_commit(state, image_id) or '')
+        if product and path.endswith('/naver_engine/store.py'):
+            with open(os.path.join(product, 'naver_engine/store.py'), 'rb') as handle:
+                body = handle.read()
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode='w') as archive:
             info = tarfile.TarInfo(os.path.basename(path))
             info.size = len(body)
             archive.addfile(info, io.BytesIO(body))
         sys.stdout.buffer.write(buffer.getvalue())
+    elif args[:1] == ['run'] and '/opt/naver-migrate/m.py' in args:
+        run_helper(state, args)
+        return
+    elif args[:1] == ['kill']:
+        pass
+    elif args[:2] == ['rm', '-f']:
+        pass
     elif args[:1] == ['run']:
         # check-config 전용 대역: -e 로 이름만 받은 값을 이 프로세스 환경에서 읽어 제품과 같은 규칙으로 계산한다.
         names = [args[i + 1] for i, a in enumerate(args) if a == '-e']
@@ -412,6 +427,73 @@ def docker(args):
         sys.stderr.write('fake docker: unsupported %s\n' % args)
         sys.exit(1)
     save(state)
+
+
+def run_helper(state, args):
+    """이관 helper 컨테이너 대역: bind 를 가짜 루트 경로로 풀고, 이미지 커밋에 맞는 제품 폴더로 실제 helper 를 돌린다."""
+    import subprocess
+    binds = {}
+    for i, a in enumerate(args):
+        if a == '-v':
+            src, dst = args[i + 1].split(':')[:2]
+            binds[dst] = src
+    image_ref = args[args.index('--entrypoint') + 2]
+    identity = resolve_image(state, image_ref)
+    commit = image_commit(state, identity) if identity else None
+    product = (config().get('product_by_commit') or {}).get(commit or '')
+    if product is None:
+        sys.stderr.write('fake docker: no product for image\n')
+        sys.exit(125)
+    tail = args[args.index('/opt/naver-migrate/m.py') + 1:]
+    step, raw = tail[0], tail[1]
+    value = json.loads(raw)
+    if value.get('mode') in ('production', 'rehearsal'):
+        value['as_mode'], value['mode'] = value['mode'], 'test'
+    fail = (config().get('helper_fail') or {}).get(step)
+    if fail:
+        print(json.dumps({'ok': False, 'step': step, 'code': fail}))
+        sys.exit(3)
+    env = {'PATH': '/usr/bin:/bin', 'NAVER_MIGRATE_TEST': '1', 'NAVER_MIGRATE_DIR': binds['/var/lib/naver-engine'],
+           'NAVER_MIGRATE_CODE_DIR': product, 'LANG': 'C'}
+    if sys.platform == 'darwin':
+        env['NAVER_MIGRATE_TEST_NO_FLOCK'] = '1'
+    crash = config().get('helper_crash_at')
+    if crash and crash.get('step') == step:
+        env['NAVER_MIGRATE_TEST_CRASH_AT'] = crash['at']
+    done = subprocess.run([sys.executable, '-I', '-B', binds['/opt/naver-migrate/m.py'], step, json.dumps(value)],
+                          env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    sys.stdout.write(done.stdout.decode())
+    sys.stderr.write(done.stderr.decode()[-4000:])
+    if done.returncode == 137 and crash and crash.get('kill_main'):
+        kill_deploy_tree()
+    sys.exit(done.returncode)
+
+
+def kill_deploy_tree():
+    """시험 전용: 배포 스크립트 프로세스(조상) 전부를 SIGKILL — 호스트가 중간에 죽은 상황."""
+    import subprocess
+    pid, victims = os.getppid(), []
+    for _ in range(8):
+        if os.path.isdir('/proc/%d' % pid):
+            with open('/proc/%d/stat' % pid) as handle:
+                ppid = handle.read().rsplit(')', 1)[1].split()[1]
+            with open('/proc/%d/cmdline' % pid, 'rb') as handle:
+                command = handle.read().replace(b'\0', b' ').decode('utf-8', 'replace')
+        else:
+            out = subprocess.run(['ps', '-o', 'ppid=,command=', '-p', str(pid)], stdout=subprocess.PIPE).stdout.decode()
+            if not out.strip():
+                break
+            ppid, _, command = out.strip().partition(' ')
+        if 'naver-deploy.sh' in command:
+            victims.append(pid)
+        pid = int(ppid)
+        if pid <= 1:
+            break
+    for victim in reversed(victims):
+        try:
+            os.kill(victim, signal.SIGKILL)
+        except OSError:
+            pass
 
 
 def unit_project(text):
@@ -440,8 +522,10 @@ def systemctl(args):
                   'MainPID': str(unit['pid']), 'UnitFileState': unit.get('enabled', 'enabled'),
                   'NRestarts': str(unit.get('restarts', 0)),
                   'FragmentPath': (UNIT_DIR + '/' + name) if disk is not None else '',
-                  'DropInPaths': unit.get('dropins', ''), 'ExecMainStartTimestamp': '',
-                  'NeedDaemonReload': 'no' if disk is None or unit.get('loaded') == disk else 'yes',
+                  'DropInPaths': ' '.join(unit.get('loaded_dropins') or []) or unit.get('dropins', ''),
+                  'ExecMainStartTimestamp': '',
+                  'NeedDaemonReload': 'no' if (disk is None or unit.get('loaded') == disk)
+                  and (unit.get('loaded_dropins') or []) == dropin_paths(name) else 'yes',
                   'LoadState': 'loaded' if disk is not None else 'not-found'}
         fields = args[args.index('-p') + 1].split(',')
         if '--value' in args:
@@ -459,6 +543,8 @@ def systemctl(args):
             disk = unit_file(name)
             if disk is not None:
                 unit['loaded'] = disk
+            unit['loaded_dropins'] = dropin_paths(name)
+            unit['loaded_asserts'] = dropin_asserts(name)
     elif args[:1] == ['stop']:
         name = args[1]
         unit = units[name]
@@ -473,13 +559,10 @@ def systemctl(args):
         unit.update(active='inactive', pid=0)
     elif args[:1] == ['start']:
         name = args[1]
-        unit = units[name]
-        project, files = unit_project(unit['loaded'])
-        root = config()['root']
-        identity = project_container(state, project) or create_container(state, project, [root + f for f in files])
-        state['seq'] = state.get('seq', 0) + 1
-        state['containers'][identity].update(running=True, pid=1000 + state['seq'], started=tick(state), inspects=0)
-        unit.update(active='active', pid=2000 + state['seq'])
+        if not start_unit(state, name):
+            save(state)
+            sys.stderr.write('Assertion failed on job for %s.\n' % name)
+            sys.exit(1)
     else:
         sys.stderr.write('fake systemctl: unsupported %s\n' % args)
         sys.exit(1)
@@ -487,6 +570,60 @@ def systemctl(args):
     kill = config().get('kill_after')
     if kill and kill == ' '.join(args):
         os.kill(os.getppid(), signal.SIGKILL)
+
+
+def dropin_paths(name):
+    folder = config()['root'] + UNIT_DIR + '/' + name + '.d'
+    if not os.path.isdir(folder):
+        return []
+    return [UNIT_DIR + '/' + name + '.d/' + f for f in sorted(os.listdir(folder)) if f.endswith('.conf')]
+
+
+def dropin_asserts(name):
+    out = []
+    for path in dropin_paths(name):
+        with open(config()['root'] + path) as handle:
+            for line in handle:
+                if line.startswith('AssertPathExists='):
+                    out.append(line.strip().split('=', 1)[1])
+    return out
+
+
+def asserts_ok(unit):
+    root = config()['root']
+    for value in unit.get('loaded_asserts') or []:
+        negate = value.startswith('!')
+        exists = os.path.exists(root + value.lstrip('!'))
+        if exists == negate:
+            return False
+    return True
+
+
+def start_unit(state, name):
+    """systemd 대역: drop-in Assert 가 실패하면 시작 job 이 실패하고 프로세스를 띄우지 않는다(Restart 없음).
+    relay 는 engine 을 Requires 하므로 engine 시작이 실패하면 relay 도 실패한다."""
+    units = state['units']
+    unit = units[name]
+    if name == 'metainc-naver-relay.service' and units['metainc-naver-engine.service']['active'] != 'active':
+        if not start_unit(state, 'metainc-naver-engine.service'):
+            unit['refused'] = unit.get('refused', 0) + 1
+            return False
+    if not asserts_ok(unit):
+        unit['refused'] = unit.get('refused', 0) + 1
+        return False
+    project, files = unit_project(unit['loaded'])
+    root = config()['root']
+    identity = project_container(state, project) or create_container(state, project, [root + f for f in files])
+    state['seq'] = state.get('seq', 0) + 1
+    state['containers'][identity].update(running=True, pid=1000 + state['seq'], started=tick(state), inspects=0)
+    unit.update(active='active', pid=2000 + state['seq'])
+    write = config().get('write_on_start')
+    if write and project == 'naver-engine' and image_commit(state, state['containers'][identity]['image']) == write['commit']:
+        import sqlite3   # 시험 대역: 새 엔진이 기동하자마자 한 줄 쓴 상황
+        conn = sqlite3.connect(write['db'], isolation_level=None)
+        conn.execute("INSERT INTO synth_auto (body) VALUES ('written-after-start')")
+        conn.close()
+    return True
 
 
 def curl(args):

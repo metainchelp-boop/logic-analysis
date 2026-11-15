@@ -15,6 +15,13 @@
 #       계획을 다시 세워 해시가 정확히 같을 때만 그 목록만 지운다(docker image rm 강제 없음, release 폴더 rm -r).
 #   naver-deploy.sh cleanup-artifacts-plan | cleanup-artifacts <allowlist_sha256>
 #       같은 미사용 관제 태그·release만 정리하며 기존 배포 로그는 생성·삭제·chmod 하지 않는다. 별도 scope 해시 사용.
+#   naver-deploy.sh migrate-prepare | migrate-rehearse | migrate-plan <커밋> <source.tar> <migration_id>
+#   naver-deploy.sh migrate-deploy <커밋> <source.tar> <migration_id> <plan_sha256>
+#   naver-deploy.sh migrate-continue | migrate-rollback | migrate-accept <run id>
+#       고정 표(MIGRATIONS)의 추가형 스키마 이관만(지금은 21-22-exhaust-v1 하나). deploy 의 SCHEMA_CHANGED 거절은 그대로다.
+#       이관 모드에서만 DB 를 연다 — 준비된 정확 이미지 안의 고정 helper(naver_schema_migrate.py)가 사본에서만 이관하고
+#       원본과 전수 대조한 뒤 저널을 남긴 두 rename 으로 바꾼다. 재부팅에도 남는 시작 차단(hold + drop-in), guarded_start,
+#       ACTIVE→HEALTHY→COMPLETED 재진입 규칙, 복귀 pin 은 docs/naver-simple-deploy.md 의 「스키마 이관」 절.
 #
 # 지키는 것(docs/naver-simple-deploy.md 와 같은 목록):
 #   - 이미지 두 개를 커밋 태그로 먼저 빌드한 뒤에만 서비스를 멈춘다.
@@ -29,7 +36,7 @@
 #   - check-config 는 운영 data·socket·backup·tunnel mount 없이(네트워크 없음·읽기 전용·10001) 돌린다.
 #   - compose 설정 묶음(서비스 목록·mount·user 10001·restart no 등)이 직전과 같아야 한다.
 #   - 공개 로그로는 고정 형식 결과 한 줄만 나간다. 명령 원문 출력은 서버의 비공개 로그에만 쓴다.
-#   - 제품 SCHEMA_VERSION 이 지금 돌고 있는 판과 다르면 거부한다(우회 입력 없음).
+#   - 제품 SCHEMA_VERSION 이 지금 돌고 있는 판과 다르면 거부한다(우회 입력 없음). 고정 이관 항목은 migrate-* 모드로만.
 #   - 헬스체크: engine /_engine/health 200, relay /naver/ 200, /api/naver-auto/me 401,
 #     그 뒤 60초 동안 unit active + 컨테이너 RestartCount 0 + StartedAt 불변.
 #
@@ -525,9 +532,9 @@ def history_add(path, commit):
 
 
 def prune_list(path, current, previous):
-    """이 장치가 배포한 기록 중 최근 3개·현재·직전을 뺀 나머지 커밋만 정리 대상으로 낸다."""
+    """이 장치가 배포한 기록 중 최근 3개·현재·직전·복귀 pin(released 아님)을 뺀 나머지 커밋만 정리 대상으로 낸다."""
     history = json.loads(read(path)) if os.path.exists(path) else []
-    keep = set(history[-3:]) | {current, previous}
+    keep = set(history[-3:]) | {current, previous} | pinned_rollback()[0]
     for commit in history:
         if commit not in keep and HEX40.match(commit):
             print(commit)
@@ -621,8 +628,51 @@ def open_dir_nofollow(path):
     return fd
 
 
+V2_CHILDREN = {'engine.db.gz', 'manifest.json'}
+V2_KEYS = {'version', 'files', 'schema', 'source_commit', 'purpose', 'pinned', 'run'}
+V2_FILE_KEYS = {'size', 'sha256', 'stored', 'gz_size', 'gz_sha256'}
+RUN_ID_RE = re.compile(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\Z')
+SHA_RE = re.compile(r'[0-9a-f]{64}\Z')
+
+
+def child_allowed(item, partial):
+    return DB_NAME.match(item) or item == 'manifest.json' or (item in ('engine.db.gz', 'engine.db.gz.partial') if partial
+                                                               else item == 'engine.db.gz')
+
+
+def manifest_v2(value):
+    """엄격한 v2 manifest(gzip 사본). 모양이 하나라도 다르면 None — 부르는 쪽이 거부한다."""
+    if type(value) is not dict or set(value) != V2_KEYS or value['version'] != 2 or type(value['pinned']) is not bool:
+        return None
+    files = value['files']
+    if type(files) is not dict or set(files) != {'engine.db'} or type(files['engine.db']) is not dict:
+        return None
+    entry = files['engine.db']
+    if (set(entry) != V2_FILE_KEYS or entry['stored'] != 'gzip' or any(type(entry[k]) is not int or entry[k] < 0
+                                                                        for k in ('size', 'gz_size'))
+            or not all(isinstance(entry[k], str) and SHA_RE.match(entry[k]) for k in ('sha256', 'gz_sha256'))):
+        return None
+    if (type(value['schema']) is not int or not isinstance(value['source_commit'], str)
+            or not HEX40.match(value['source_commit']) or value['purpose'] != 'pre-migration-21-22'
+            or not isinstance(value['run'], str) or not RUN_ID_RE.match(value['run'])):
+        return None
+    return value
+
+
+def read_small_child(fd, name, limit=65536):
+    child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+    try:
+        data = os.read(child, limit + 1)
+    finally:
+        os.close(child)
+    if len(data) > limit:
+        fail('BACKUP_SAFETY: manifest 가 너무 큽니다')
+    return data
+
+
 def backup_entries(root_fd):
-    """사본 폴더 안 우리 이름 규칙의 항목을 모두 검사한다(링크·일반 파일·예상 밖 자식 종류면 거부)."""
+    """사본 폴더 안 우리 이름 규칙의 항목을 모두 검사한다(링크·일반 파일·예상 밖 자식 종류면 거부).
+    gzip 자식이 있는 완성 사본은 엄격한 v2 manifest 여야 한다. 돌려주는 값: 이름 → (dev, ino, pinned)."""
     root = os.fstat(root_fd)
     found = {}
     for name in sorted(os.listdir(root_fd)):
@@ -632,31 +682,46 @@ def backup_entries(root_fd):
         if not stat.S_ISDIR(info.st_mode) or info.st_dev != root.st_dev:
             fail('BACKUP_SAFETY: 사본 항목이 같은 파일시스템의 실제 폴더가 아닙니다 %s' % name)
         fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+        pinned = False
         try:
             opened = os.fstat(fd)
             if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
                 fail('BACKUP_SAFETY: 여는 사이에 사본 폴더가 바뀌었습니다 %s' % name)
-            for item in os.listdir(fd):
+            items = os.listdir(fd)
+            partial = bool(PARTIAL_DIR_NAME.match(name))
+            for item in items:
                 child = os.stat(item, dir_fd=fd, follow_symlinks=False)
-                if not stat.S_ISREG(child.st_mode) or not (DB_NAME.match(item) or item == 'manifest.json'):
+                if not stat.S_ISREG(child.st_mode) or not child_allowed(item, partial):
                     fail('BACKUP_SAFETY: 사본 폴더 %s 에 예상하지 못한 항목이 있습니다' % name)
+            if not partial and 'engine.db.gz' in items:
+                if set(items) != V2_CHILDREN:
+                    fail('BACKUP_SAFETY: gzip 사본 %s 의 자식 구성이 v2 와 다릅니다' % name)
+                try:
+                    value = manifest_v2(json.loads(read_small_child(fd, 'manifest.json')))
+                except ValueError:
+                    value = None
+                if value is None:
+                    fail('BACKUP_SAFETY: gzip 사본 %s 의 manifest 가 엄격한 v2 가 아닙니다' % name)
+                pinned = value['pinned']
         finally:
             os.close(fd)
-        found[name] = (info.st_dev, info.st_ino)
+        found[name] = (info.st_dev, info.st_ino, pinned)
     return found
 
 
 def remove_backup_entry(root_fd, name, identity):
     """root_fd 기준 상대 경로로만 지운다. 링크를 따르지 않고, 정체성이 다르면 아무것도 지우지 않는다."""
+    identity = tuple(identity[:2])
     fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
     try:
         opened = os.fstat(fd)
         if (opened.st_dev, opened.st_ino) != identity:
             fail('BACKUP_SAFETY: 지우기 직전 사본 폴더가 바뀌었습니다 %s' % name)
         items = os.listdir(fd)
+        partial = bool(PARTIAL_DIR_NAME.match(name))
         for item in items:
             child = os.stat(item, dir_fd=fd, follow_symlinks=False)
-            if not stat.S_ISREG(child.st_mode) or not (DB_NAME.match(item) or item == 'manifest.json'):
+            if not stat.S_ISREG(child.st_mode) or not child_allowed(item, partial):
                 fail('BACKUP_SAFETY: 사본 폴더 %s 에 예상하지 못한 항목이 있습니다' % name)
         for item in items:
             os.unlink(item, dir_fd=fd)
@@ -669,12 +734,15 @@ def remove_backup_entry(root_fd, name, identity):
 
 
 def backup_prune(folder, keep):
-    """완성된 사본 중 최신 keep 개만 남긴다. 모든 사본 항목을 먼저 검사하고, 하나라도 이상하면 아무것도 지우지 않는다."""
+    """완성된 사본 중 최신 keep 개와 pin 된(v2 pinned:true) 사본만 남긴다.
+    모든 사본 항목을 먼저 검사하고, 하나라도 이상하면 아무것도 지우지 않는다."""
     root_fd = open_dir_nofollow(folder)
     try:
         entries = backup_entries(root_fd)
         names = sorted(name for name in entries if BACKUP_DIR_NAME.match(name))
         for name in names[:-int(keep)] if len(names) > int(keep) else []:
+            if entries[name][2]:
+                continue
             remove_backup_entry(root_fd, name, entries[name])
             print(name)
     finally:
@@ -688,6 +756,13 @@ def partial_prune(folder):
         entries = backup_entries(root_fd)
         for name in sorted(entries):
             if PARTIAL_DIR_NAME.match(name):
+                fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+                try:
+                    migration_partial = any(item.startswith('engine.db.gz') for item in os.listdir(fd))
+                finally:
+                    os.close(fd)
+                if migration_partial:
+                    continue   # 이관 gzip 부분본: 사람이 검토할 때까지 보존
                 remove_backup_entry(root_fd, name, entries[name])
                 print(name)
     finally:
@@ -886,6 +961,10 @@ def protected_state():
     for kind, text in texts:
         for commit in RELEASE_REF.findall(text):
             reasons_path.setdefault(commit, set()).add(kind)
+    pinned_commits, pinned_images = pinned_rollback()
+    for commit in pinned_commits:
+        commits.setdefault(commit, []).append('rollback-pin')
+    used_images |= pinned_images
     for name in ('state.json', 'current.json'):
         path = ROOT + '/var/lib/metainc/naver-deploy/' + name
         if not os.path.lexists(path):
@@ -1201,7 +1280,7 @@ def tree_sha(folder):
 
 
 RESULT_FIELDS = {
-    'mode': r'(inspect|deploy)', 'status': r'[A-Z_]{1,40}', 'exit_code': r'[0-9]{1,3}', 'reason': r'[A-Z_]{0,40}',
+    'mode': r'(inspect|deploy|migrate-(prepare|rehearse|plan|deploy|continue|rollback|accept))', 'status': r'[A-Z_]{1,40}', 'exit_code': r'[0-9]{1,3}', 'reason': r'[A-Z_]{0,40}',
     'message': None, 'phase': r'[a-z_]{1,24}', 'new_commit': r'[0-9a-f]{40}|', 'previous_commit': r'[0-9a-f]{40}|',
     'new_engine_image': r'sha256:[0-9a-f]{64}|', 'new_relay_image': r'sha256:[0-9a-f]{64}|',
     'previous_engine_image': r'sha256:[0-9a-f]{64}|', 'previous_relay_image': r'sha256:[0-9a-f]{64}|',
@@ -1209,14 +1288,25 @@ RESULT_FIELDS = {
     'downtime_seconds': r'[0-9]{0,6}', 'health_status': r'[a-z_]{0,32}',
     'health_codes': r'(engine=[0-9]{3},page=[0-9]{3},me=[0-9]{3})?', 'schema_current': r'[0-9]{0,6}',
     'schema_new': r'[0-9]{0,6}', 'switches': r'([a-z_]+=(true|false),?){0,12}', 'warnings': r'[A-Z_,]{0,400}',
-    'services_stopped_confirmed': r'(true|false)?', 'database_opened_by_deploy': r'false',
-    'runtime_env_changed_by_deploy': r'false'}
+    'services_stopped_confirmed': r'(true|false)?', 'database_opened_by_deploy': r'(true|false)',
+    'runtime_env_changed_by_deploy': r'false', 'migration_id': r'[0-9a-z-]{0,40}',
+    'migration_run': r'([0-9]{8}T[0-9]{6}Z-[0-9a-f]{12})?', 'migration_state': r'[A-Z_]{0,20}',
+    'receipt_sha256': r'([0-9a-f]{64})?', 'orphans_closed': r'[0-9]{0,6}', 'pin_state': r'[a-z-]{0,12}',
+    'keep_raw_now': r'(true|false|unknown)?', 'write_decision': r'(no_new_writes|new_writes|unknown)?',
+    'plan_sha256': r'([0-9a-f]{64})?', 'rehearsal': r'(passed|failed)?'}
 # 공개 로그로 나가는 유일한 줄. 모든 값은 위 형식만 통과하고, message 는 고정 문구표에서만 고른다.
 MESSAGES = {
     'DEPLOYED': '배포 완료(헬스·60초 유지 통과)', 'DEPLOYED_WITH_WARNINGS': '배포 완료(헬스 통과), 마무리 경고 있음',
     'DEPLOY_FAILED_RESTORED': '새 판 실패 → 직전 판 복원·헬스 통과', 'RECOVERED_INTERRUPTED_RUN':
     '중단된 이전 배포를 직전 판으로 복원함. 다시 실행 필요', 'RESTORE_FAILED': '복원 실패. 두 서비스 정지 시도. 사람 확인 필요',
-    'REFUSED': '시작 전 거부. 서비스는 그대로', 'LOCKED': '다른 관제 배포 실행 중', 'EXITED': '예상하지 못한 종료'}
+    'REFUSED': '시작 전 거부. 서비스는 그대로', 'LOCKED': '다른 관제 배포 실행 중', 'EXITED': '예상하지 못한 종료',
+    'MIGRATED': '스키마 이관 배포 완료(검증·헬스 통과)', 'MIGRATED_WITH_WARNINGS': '스키마 이관 배포 완료, 경고 있음',
+    'MIGRATION_HOLD': '이관 정지 보존(hold). 서비스 정지. 대표 판단 필요',
+    'MIGRATION_ROLLED_BACK': '이관 되돌림: 옛 DB·옛 판 복원·헬스 통과',
+    'MIGRATION_RECOVERY_REQUIRED': '모르는 이관 상태. 서비스 정지·hold 유지. 사람 확인 필요',
+    'PREPARED': '이관용 이미지 준비 완료(서비스 무변경)', 'REHEARSED': '격리 리허설 통과(서비스 무변경)',
+    'REHEARSAL_FAILED': '격리 리허설 실패(서비스 무변경)', 'PLANNED': '이관 계획 계산(서비스 무변경)',
+    'ACCEPTED': '이관 확정: 복귀 묶음 pin 해제', 'CONTINUED': '보류된 v22 세대 재기동·헬스 통과'}
 
 
 def result_json(*pairs):
@@ -1964,6 +2054,756 @@ def inspect():
     print('NAVER_DEPLOY_INSPECT=' + json.dumps(out, ensure_ascii=False, sort_keys=True, separators=(',', ':')))
 
 
+# ── 21→22 추가형 스키마 이관(migrate-*) — DESIGN-CLAUDE-v3.md(v3.1) ───────────────────────────
+# 이 표 밖의 이관은 없다. 입력으로 범위를 넓히지 못한다. helper_sha256 은 naver_schema_migrate.py 의 sha256 이고
+# helper 파일 안에는 자기 해시를 두지 않는다(workflow 도 따로 고정한다).
+MIGRATIONS = {
+    '21-22-exhaust-v1': {
+        'from_schema': 21, 'to_schema': 22,
+        'from_commit': '377768a132614ae8b9ad0318aa4f87019c11a23a',
+        'to_commit': '1d852289209e7f10df71a787934d9fe31c9ffde6',
+        'from_store_sha256': 'f5caa352cc817a126e0c6588e7fd81d64d681391ffbc408eccb16dc265271348',
+        'to_store_sha256': '741f4309feb375b7eebac0bc9a20e53263a91aa40fcc203b295beca059bfbd63',
+        'to_exhaust_sha256': 'e80e2ae844d89918f1240f78bcc107fa7a62e4e64201132be25dc73dd0043c8c',
+        'new_tables': {
+            'naver_auto_exhaust_head': '7e947b8bb92e25b0645308f3cc84383f31c6370c11ed73d691cfd8e81d20fa5f',
+            'naver_auto_exhaust_version': 'dd1241db5550e03c185ad12d782ff40881eb7fd0111daa37ec41357b41c263ad',
+            'naver_auto_exhaust_attempt': '0455cf850f84b4f0b70defa297f7e2573e332000d6c617d08c5d210bee9bec29'},
+        'autoindexes': ['sqlite_autoindex_naver_auto_exhaust_attempt_1', 'sqlite_autoindex_naver_auto_exhaust_head_1',
+                        'sqlite_autoindex_naver_auto_exhaust_version_1'],
+        'helper_sha256': '881a163b295dee43a40686e765ffcea4a8793d849332768f5a27c7aa806c5b51'}}
+if ROOT and os.environ.get('NAVER_DEPLOY_TEST_MIGRATIONS'):
+    MIGRATIONS = json.loads(read(os.environ['NAVER_DEPLOY_TEST_MIGRATIONS']))   # 가짜 루트 시험 전용
+
+STATE_DIR_PATH = '/var/lib/metainc/naver-deploy'
+MIG_DIR = STATE_DIR_PATH + '/migration'
+MIG_POINTER = STATE_DIR_PATH + '/migration-active'
+MIG_HOLD = STATE_DIR_PATH + '/migration-hold'
+MIG_PINS = STATE_DIR_PATH + '/pins'
+DATA_PATH = '/var/lib/metainc/naver-engine'
+DAILY_BACKUPS = '/var/backups/metainc/naver-engine'
+UNIT_PATH = '/etc/systemd/system'
+DROPIN_NAME = '50-naver-migration-hold.conf'
+DROPIN_BODY = ('# naver-deploy migrate-* 임시 시작 차단(재부팅·의존 시작 포함). 정상 완료 때 지운다.\n'
+               '[Unit]\nAssertPathExists=!/var/lib/metainc/naver-deploy/migration-hold\n'
+               'AssertPathExists=/var/lib/metainc/naver-engine/engine.db\n')
+MIG_UNITS = ('metainc-naver-engine.service', 'metainc-naver-relay.service')
+MIB = 1024 * 1024
+FLOOR = 1 << 30
+GZ_CAP_RATIO = 0.35
+ARCHIVE_SECONDS = 30 * 60
+ENGINE_UID = 10001
+MIG_STATES = ('ACTIVE', 'HEALTHY', 'HOLD', 'COMPLETED', 'ROLLED_BACK')
+PIN_STATES = ('pending', 'bound-raw', 'bound-gz', 'released')
+
+
+def mig_entry(identifier):
+    if identifier not in MIGRATIONS:
+        fail('MIGRATION_UNKNOWN: 고정 표에 없는 이관입니다')
+    return MIGRATIONS[identifier]
+
+
+def mig_field(identifier, field):
+    value = mig_entry(identifier)[field]
+    print(json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else value)
+
+
+def write_json_atomic(path, value, mode=0o600, owner=None):
+    temporary = path + '.tmp'
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, 'w') as handle:
+        json.dump(value, handle, sort_keys=True, indent=1)
+        handle.write('\n')
+        handle.flush()
+        if owner is not None and not ROOT:
+            os.fchown(handle.fileno(), owner, owner)
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    fsync_folder(os.path.dirname(path))
+
+
+def fsync_folder(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def load_json(path, default=None):
+    if not os.path.lexists(path):
+        return default
+    if os.path.islink(path):
+        fail('MIGRATION_LAYOUT: 링크인 기록 파일 %s' % path[len(ROOT):])
+    try:
+        return json.loads(read(path))
+    except ValueError:
+        fail('MIGRATION_LAYOUT: 기록을 해석하지 못했습니다 %s' % os.path.basename(path))
+
+
+def run_dir(run):
+    if not RUN_ID_RE.match(run):
+        fail('MIGRATION_INPUT: run id 형식')
+    path = ROOT + MIG_DIR + '/' + run
+    os.makedirs(path, 0o700, exist_ok=True)
+    return path
+
+
+# ── pin(복귀 묶음) ──
+def pinned_rollback():
+    """released 가 아닌 모든 pin 의 (커밋들, 이미지 ID 들). 정리·prune 이 반드시 존중한다.
+    pin 폴더가 없으면(처음) 빈 집합. 폴더가 아니거나·모르는 항목·읽을 수 없는 pin·필수 칸이 빠지거나 형식이 틀리면
+    보호를 조용히 빼지 않고 거부한다(정리 계획·prune 전체가 멈춘다)."""
+    commits, images = set(), set()
+    folder = ROOT + MIG_PINS
+    if not os.path.lexists(folder):
+        return commits, images
+    if os.path.islink(folder) or not os.path.isdir(folder):
+        fail('PIN_LAYOUT: pin 폴더가 실제 폴더가 아닙니다')
+    for name in sorted(os.listdir(folder)):
+        if not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\.json', name):
+            fail('PIN_LAYOUT: pin 폴더에 예상하지 못한 항목 %s' % name)
+        path = os.path.join(folder, name)
+        if os.path.islink(path) or not os.path.isfile(path):
+            fail('PIN_LAYOUT: pin 이 일반 파일이 아닙니다 %s' % name)
+        value = load_json(path, None)
+        if not isinstance(value, dict) or value.get('state') not in PIN_STATES:
+            fail('PIN_LAYOUT: pin 상태 이상 %s' % name)
+        if value['state'] == 'released':
+            continue
+        if not HEX40.match(str(value.get('commit', ''))) or not all(
+                re.fullmatch(r'sha256:[0-9a-f]{64}', str(value.get(key, ''))) for key in ('engine_image', 'relay_image')):
+            fail('PIN_LAYOUT: pin 필수 칸(commit·engine_image·relay_image)이 없거나 형식이 다릅니다 %s' % name)
+        commits.add(value['commit'])
+        images.update((value['engine_image'], value['relay_image']))
+    return commits, images
+
+
+def mig_pin(run, action, *pairs):
+    """pending(M3) → bound-raw(chain 뒤) → bound-gz(gzip 게시·검증 뒤, raw 삭제 전) → released(accept)."""
+    os.makedirs(ROOT + MIG_PINS, 0o700, exist_ok=True)
+    path = ROOT + MIG_PINS + '/' + run + '.json'
+    current = load_json(path, {})
+    fields = dict(pair.partition('=')[::2] for pair in pairs)
+    order = {'create': ('', 'pending'), 'bind-raw': ('pending', 'bound-raw'), 'bind-gz': ('bound-raw', 'bound-gz'),
+             'release': (None, 'released')}
+    if action == 'state':
+        print(current.get('state', ''))
+        return
+    if action == 'check':
+        if current.get('state') not in ('bound-raw', 'bound-gz'):
+            fail('PIN_NOT_BOUND: R7 은 bound 된 복귀 묶음만 씁니다')
+        for key in ('engine_unit_sha256', 'relay_unit_sha256', 'engine_override_sha256', 'relay_override_sha256'):
+            name = {'engine_unit_sha256': 'metainc-naver-engine.service', 'relay_unit_sha256': 'metainc-naver-relay.service',
+                    'engine_override_sha256': 'preview-engine.override.yml',
+                    'relay_override_sha256': 'preview-relay.override.yml'}[key]
+            copy = ROOT + current['run_dir'] + '/' + name
+            if not os.path.isfile(copy) or os.path.islink(copy) or file_sha(copy) != current[key]:
+                fail('PIN_MEMBER_CHANGED: 보관된 v21 사본 %s 이 pin 과 다릅니다' % name)
+        release = ROOT + RELEASES + '/naver-' + current['commit']
+        if not os.path.isdir(release):
+            fail('PIN_MEMBER_CHANGED: v21 release 폴더가 없습니다')
+        print(current['state'])
+        return
+    if action not in order:
+        fail('MIGRATION_INPUT: pin 동작')
+    before, after = order[action]
+    if before is not None and current.get('state', '') != before:
+        fail('PIN_STATE: %s → %s 전이가 아닙니다(현재 %s)' % (before or '없음', after, current.get('state') or '없음'))
+    current.update(fields)
+    current['state'] = after
+    current['run'] = run
+    current.setdefault('history', []).append([after, time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())])
+    write_json_atomic(path, current)
+
+
+# ── 이관 기록: 활성 표지·상태·hold·drop-in·저널 ──
+def mig_pointer(action, run=''):
+    path = ROOT + MIG_POINTER
+    if action == 'get':
+        print(read(path).strip() if os.path.isfile(path) and not os.path.islink(path) else '')
+    elif action == 'set':
+        if os.path.lexists(path) and read(path).strip() != run:
+            fail('MIGRATION_ACTIVE: 다른 이관 run 이 활성입니다')
+        fd = os.open(path + '.tmp', os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as handle:
+            handle.write(run + '\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(path + '.tmp', path)
+        fsync_folder(os.path.dirname(path))
+    elif action == 'clear':
+        if os.path.lexists(path):
+            if read(path).strip() != run:
+                fail('MIGRATION_ACTIVE: 다른 run 의 활성 표지는 지우지 않습니다')
+            os.unlink(path)
+            fsync_folder(os.path.dirname(path))
+    else:
+        fail('MIGRATION_INPUT: pointer 동작')
+
+
+def mig_status(run, *pairs):
+    path = run_dir(run) + '/status.json'
+    for pair in pairs:
+        key, _, value = pair.partition('=')
+        if key == 'state' and value not in MIG_STATES:
+            fail('MIGRATION_INPUT: 상태 이름')
+    state_write(path, *pairs)
+
+
+def mig_status_get(run, key):
+    path = ROOT + MIG_DIR + '/' + run + '/status.json'
+    print((load_json(path, {}) or {}).get(key, ''))
+
+
+def mig_hold(action, run=''):
+    path = ROOT + MIG_HOLD
+    if action == 'get':
+        print(read(path).split()[0] if os.path.isfile(path) and read(path).split() else ('unknown' if os.path.lexists(path) else ''))
+        return
+    if action == 'create':
+        if os.path.lexists(path):
+            existing = read(path).split()
+            if not existing or existing[0] != run:
+                fail('HOLD_OTHER_RUN: 다른 run 의 hold 가 있습니다')
+            return
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as handle:
+            handle.write(run + '\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        fsync_folder(os.path.dirname(path))
+    elif action == 'remove':
+        if not os.path.lexists(path):
+            return
+        existing = read(path).split()
+        if not existing or existing[0] != run:
+            fail('HOLD_OTHER_RUN: 같은 run 의 hold 만 지웁니다')
+        os.unlink(path)
+        fsync_folder(os.path.dirname(path))
+    else:
+        fail('MIGRATION_INPUT: hold 동작')
+
+
+def mig_dropin(action):
+    paths = [ROOT + UNIT_PATH + '/' + unit + '.d/' + DROPIN_NAME for unit in MIG_UNITS]
+    if action == 'present':
+        print('yes' if any(os.path.lexists(p) for p in paths) else 'no')
+    elif action == 'install':
+        for path in paths:
+            os.makedirs(os.path.dirname(path), 0o755, exist_ok=True)
+            fd = os.open(path + '.tmp', os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, 'w') as handle:
+                handle.write(DROPIN_BODY)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(path + '.tmp', path)
+            fsync_folder(os.path.dirname(path))
+    elif action == 'check':
+        for path in paths:
+            if not os.path.isfile(path) or os.path.islink(path) or read(path) != DROPIN_BODY:
+                fail('DROPIN_MISSING: 시작 차단 drop-in 이 없거나 다릅니다')
+    elif action == 'remove':
+        for path in paths:
+            if os.path.lexists(path):
+                if os.path.islink(path) or read(path) != DROPIN_BODY:
+                    fail('DROPIN_FOREIGN: 우리 것이 아닌 drop-in 은 지우지 않습니다')
+                os.unlink(path)
+                folder = os.path.dirname(path)
+                fsync_folder(folder)
+                if not os.listdir(folder):
+                    os.rmdir(folder)
+    else:
+        fail('MIGRATION_INPUT: drop-in 동작')
+
+
+def mig_journal(data_dir, action, *args):
+    path = data_dir + '/naver-migrate-journal.json'
+    value = load_json(path, None)
+    if action == 'last':
+        entries = (value or {}).get('entries') or []
+        print(' '.join([entries[-1]['op'], entries[-1]['phase']]) if entries else '')
+    elif action == 'has':
+        op, phase = args
+        print('yes' if any(e['op'] == op and e['phase'] == phase for e in (value or {}).get('entries') or []) else 'no')
+    elif action == 'append':
+        run, op, phase = args[:3]
+        if value is None:
+            value = {'run': run, 'entries': []}
+        if value.get('run') != run:
+            fail('JOURNAL_OTHER_RUN: 다른 run 의 저널입니다')
+        value['entries'].append({'seq': len(value['entries']) + 1, 'op': op, 'phase': phase, 'by': 'host',
+                                 'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
+        owner = os.lstat(path).st_uid if os.path.exists(path) else ENGINE_UID
+        write_json_atomic(path, value, 0o600, owner=owner)
+    elif action == 'run':
+        print((value or {}).get('run', ''))
+    elif action == 'move':
+        run = args[0]
+        if value is None:
+            return
+        if value.get('run') != run:
+            fail('JOURNAL_OTHER_RUN: 다른 run 의 저널은 옮기지 않습니다')
+        target = run_dir(run) + '/journal.json'
+        if os.stat(os.path.dirname(target)).st_dev == os.stat(data_dir).st_dev:
+            os.rename(path, target)
+        else:
+            write_json_atomic(target, value)
+            if load_json(target) != value:
+                fail('JOURNAL_MOVE: 복사 대조 실패')
+            os.unlink(path)
+        fsync_folder(data_dir)
+        fsync_folder(os.path.dirname(target))
+    else:
+        fail('MIGRATION_INPUT: journal 동작')
+
+
+def mig_receipt(data_dir, run, action='copy'):
+    """helper 가 DATA_DIR 에 남긴 영수증을 run 폴더로 복사(원본은 둔다)하고 sha256 을 낸다."""
+    source = data_dir + '/naver-migrate-receipt.json'
+    target = run_dir(run) + '/receipt.json'
+    if action == 'copy':
+        value = load_json(source)
+        if not isinstance(value, dict) or value.get('run') != run:
+            fail('RECEIPT: 이 run 의 영수증이 아닙니다')
+        write_json_atomic(target, value)
+        if os.path.exists(source):
+            os.unlink(source)
+            fsync_folder(data_dir)
+    print(hashlib.sha256(json.dumps(load_json(target), sort_keys=True).encode()).hexdigest())
+
+
+def mig_receipt_get(run, key):
+    value = load_json(ROOT + MIG_DIR + '/' + run + '/receipt.json', {}) or {}
+    item = value.get(key)
+    print(json.dumps(item, sort_keys=True) if isinstance(item, (dict, list)) else ('' if item is None else item))
+
+
+def mig_receipt_set(run, key, value_json):
+    path = run_dir(run) + '/receipt.json'
+    value = load_json(path, {})
+    value[key] = json.loads(value_json)
+    write_json_atomic(path, value)
+
+
+def mig_args(identifier, step, mode, *pairs):
+    """helper 인자 JSON. 단계에 맞는 pin 만 고정 표에서 넣는다. key=@file 은 그 JSON 파일 내용."""
+    entry = mig_entry(identifier)
+    args = {'mode': mode, 'migration_id': identifier}
+    new_pins = {'store_sha256': entry['to_store_sha256'], 'exhaust_sha256': entry['to_exhaust_sha256'],
+                'schema': entry['to_schema'], 'from_schema': entry['from_schema'],
+                'new_tables': entry['new_tables'], 'autoindexes': entry['autoindexes']}
+    old_pins = {'store_sha256': entry['from_store_sha256'], 'schema': entry['from_schema']}
+    if step in ('chain', 'probe-new'):
+        args['pins'] = new_pins
+    elif step in ('seed', 'v21-refuses', 'v21-opens', 'probe-old'):
+        args['pins'] = old_pins
+    for pair in pairs:
+        key, _, value = pair.partition('=')
+        if value.startswith('@'):
+            args[key] = load_json(value[1:])
+        elif value.startswith('json:'):
+            args[key] = json.loads(value[5:])
+        else:
+            args[key] = value
+    print(json.dumps(args, sort_keys=True, separators=(',', ':')))
+
+
+def mig_tar_pins(path, identifier, current, new, schema_current, schema_new):
+    entry = mig_entry(identifier)
+    if (int(schema_current), int(schema_new)) != (entry['from_schema'], entry['to_schema']):
+        fail('MIGRATION_SCHEMA_PAIR: 스키마 쌍이 고정 표와 다릅니다')
+    if current != entry['from_commit'] or new != entry['to_commit']:
+        fail('MIGRATION_COMMIT_PIN: 실행 중/새 커밋이 고정 표와 다릅니다')
+    archive, items = members(path)
+    wanted = {'naver_engine/store.py': entry['to_store_sha256'], 'naver_engine/exhaust_store.py': entry['to_exhaust_sha256']}
+    table = dict(items)
+    for name, expected in wanted.items():
+        if name not in table or hashlib.sha256(archive.extractfile(table[name]).read()).hexdigest() != expected:
+            fail('MIGRATION_SOURCE_PIN: %s 해시가 고정 표와 다릅니다' % name)
+    print('ok')
+
+
+def mig_store_sha_stdin(identifier):
+    body = tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read())).extractfile('store.py').read()
+    if hashlib.sha256(body).hexdigest() != mig_entry(identifier)['from_store_sha256']:
+        fail('MIGRATION_RUNNING_PIN: 실행 중 이미지의 store.py 가 고정 표의 v21 과 다릅니다')
+    print('ok')
+
+
+def mig_helper_pin(path, identifier):
+    if file_sha(path) != mig_entry(identifier)['helper_sha256']:
+        fail('MIGRATION_HELPER_PIN: helper 해시가 고정 표와 다릅니다')
+    print('ok')
+
+
+def file_sha(path):
+    digest = hashlib.sha256()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        while True:
+            chunk = os.read(fd, MIB)
+            if not chunk:
+                break
+            digest.update(chunk)
+    finally:
+        os.close(fd)
+    return digest.hexdigest()
+
+
+# ── 시각 창·공간 ──
+def kst_now():
+    fake = os.environ.get('NAVER_DEPLOY_FAKE_KST') if ROOT else None
+    if fake:
+        return fake
+    return time.strftime('%Y-%m-%dT%H:%M', time.gmtime(time.time() + 9 * 3600))
+
+
+def mig_window(cutoff, state_path, after_utc_stamp=''):
+    """오늘(KST) OFFSITE_OK·pending 없음·building 없음·시각 < cutoff. after 가 있으면 그 배포 뒤의 OFFSITE_OK 여야 한다."""
+    now = kst_now()
+    try:
+        value = json.loads(read(state_path))
+    except (OSError, ValueError):
+        fail('WINDOW: 백업 상태를 읽지 못했습니다')
+    if value.get('code') != 'OFFSITE_OK' or value.get('pending') is not None or value.get('last_offsite_day') != now[:10]:
+        fail('WINDOW: 오늘 OFFSITE_OK·pending 없음 조건이 아닙니다')
+    folder = os.path.dirname(state_path)
+    if any(re.fullmatch(r'\.building-[a-z0-9_]{8}', name) for name in os.listdir(folder)):
+        fail('WINDOW: 일일 백업이 진행 중입니다')
+    if now[11:16] >= cutoff:
+        fail('WINDOW: KST %s 이후입니다' % cutoff)
+    if after_utc_stamp:
+        after = time.mktime(time.strptime(after_utc_stamp, '%Y%m%dT%H%M%SZ')) - time.timezone
+        if os.stat(state_path).st_mtime <= after:
+            fail('WINDOW: 직전 배포 뒤의 새 OFFSITE_OK 가 아닙니다')
+    print('ok')
+
+
+def free_of(path):
+    fake = os.environ.get('NAVER_DEPLOY_FAKE_FREE_BYTES') if ROOT else None
+    info = os.statvfs(path)
+    return int(fake) if fake else info.f_bavail * info.f_frsize
+
+
+def size_or_zero(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return 0
+    if stat.S_ISDIR(info.st_mode):
+        return sum(size_or_zero(os.path.join(path, n)) for n in os.listdir(path))
+    return info.st_size
+
+
+def newest_pair(folder):
+    zips = sorted((n for n in os.listdir(folder) if re.fullmatch(r'naver-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{32}\.zip', n)))
+    if not zips:
+        return None
+    z = zips[-1]
+    cms = [n for n in os.listdir(folder) if n.startswith(z[:-4]) and n != z]
+    return os.lstat(os.path.join(folder, z)).st_size, max([os.lstat(os.path.join(folder, n)).st_size for n in cms] or [0])
+
+
+def keep_raw_now(data_dir, backups):
+    """P_pol(대표 승인 정책 임계치 — 미래 백업 성공 보장이 아님) = max(S+Z, Z+E, Z+2E+H), S = 지금 DB+WAL.
+    지금의 장치 여유 ≥ 1GiB + P_pol 이면 true. 측정 실패·다른 장치·백업 쌍 없음은 unknown."""
+    try:
+        if os.stat(data_dir).st_dev != os.stat(backups).st_dev:
+            print('unknown')
+            return
+        pair = newest_pair(backups)
+        if pair is None:
+            print('unknown')
+            return
+        z, e = pair
+        s = size_or_zero(data_dir + '/engine.db') + size_or_zero(data_dir + '/engine.db-wal')
+        policy = max(s + z, z + e, z + 2 * e + MIB)
+        print('true' if free_of(data_dir) >= FLOOR + policy else 'false')
+    except OSError:
+        print('unknown')
+
+
+def mig_guard(*pairs):
+    """장치별 실측 여유 ≥ 필요 + 1GiB. 장치끼리 합치지 않는다."""
+    needs = {}
+    for pair in pairs:
+        path, _, amount = pair.rpartition('=')
+        device = os.stat(path).st_dev
+        needs.setdefault(device, [path, 0])[1] += int(amount)
+    for device, (path, need) in needs.items():
+        free = free_of(path)
+        if free < need + FLOOR:
+            fail('SPACE: 필요 %d + 1GiB, 여유 %d' % (need, free))
+    print('ok')
+
+
+# ── gzip 보관(v2 manifest, pinned)·검증·raw 삭제·gz 복원 ──
+def mig_archive(data_dir, db_backups, run, commit, receipt_path):
+    partial = db_backups + '/' + run + '.partial'
+    try:
+        archive_inner(data_dir, db_backups, run, commit, receipt_path)
+    except BaseException as error:
+        # 어떤 실패든(거부·I/O·중단) 부분본은 자동으로 지우지 않는다(대표 확인 뒤 정리).
+        # 일반 partial-prune 이 보지 않는 이름으로 옮겨 둔다.
+        if os.path.isdir(partial) and not os.path.islink(partial):
+            target, number = db_backups + '/' + run + '.archive-failed', 1
+            while os.path.lexists(target):
+                number += 1
+                target = db_backups + '/' + run + '.archive-failed-%d' % number
+            os.rename(partial, target)
+            fsync_folder(db_backups)
+        if isinstance(error, Refuse):
+            raise
+        fail('ARCHIVE_FAILED: %s' % type(error).__name__)
+
+
+def archive_inner(data_dir, db_backups, run, commit, receipt_path):
+    """engine.db.pre-v22 → naver-deploy-db/<run>.partial/engine.db.gz(gzip6) → 풀어서 sha 대조 → manifest v2(pinned) →
+    폴더 이름 바꾸기로 게시. raw 는 여기서 지우지 않는다(G4 뒤 따로). 실패·상한 초과면 부분본을 남기고 거부."""
+    import gzip
+    receipt = load_json(receipt_path)
+    pre = data_dir + '/engine.db.pre-v22'
+    fd = os.open(pre, os.O_RDONLY | os.O_NOFOLLOW)
+    started = time.monotonic()
+    try:
+        st = os.fstat(fd)
+        expect = receipt['pre_identity']
+        if (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) != (expect['dev'], expect['ino'], expect['size'],
+                                                                     expect['mtime_ns']):
+            fail('ARCHIVE_SOURCE: raw 원본 identity 가 영수증과 다릅니다')
+        name = run
+        partial = db_backups + '/' + name + '.partial'
+        final = db_backups + '/' + name
+        if os.path.lexists(final):
+            fail('ARCHIVE_EXISTS: 같은 이름의 사본이 이미 있습니다')
+        os.makedirs(db_backups, 0o700, exist_ok=True)
+        if not os.path.isdir(partial):
+            os.mkdir(partial, 0o700)
+        target = partial + '/engine.db.gz'
+        cap = int(st.st_size * GZ_CAP_RATIO) + MIB
+        if ROOT and os.environ.get('NAVER_DEPLOY_FAKE_ARCHIVE_FAIL'):
+            with open(target, 'wb') as handle:
+                handle.write(b'partial')
+            if os.environ['NAVER_DEPLOY_FAKE_ARCHIVE_FAIL'] == 'oserror':
+                raise OSError(28, 'injected')
+            fail('ARCHIVE_INJECTED: 시험용 보관 실패')
+        raw_digest = hashlib.sha256()
+        out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(out, 'wb') as handle:
+            with gzip.GzipFile(filename='', mode='wb', fileobj=handle, compresslevel=6, mtime=0) as zipped:
+                while True:
+                    chunk = os.read(fd, MIB)
+                    if not chunk:
+                        break
+                    raw_digest.update(chunk)
+                    zipped.write(chunk)
+                    if handle.tell() > cap:
+                        fail('ARCHIVE_CAP: 압축본이 상한을 넘었습니다')
+                    if time.monotonic() - started > ARCHIVE_SECONDS or kst_now()[11:16] >= '23:30':
+                        fail('ARCHIVE_TIMEOUT: 압축 시간 상한 또는 KST 23:30')
+            handle.flush()
+            os.fsync(handle.fileno())
+        if raw_digest.hexdigest() != receipt['pre_sha256']:
+            fail('ARCHIVE_SOURCE: 읽은 원본 sha 가 영수증과 다릅니다')
+        check_digest, total = hashlib.sha256(), 0
+        with gzip.open(target, 'rb') as zipped:
+            while True:
+                chunk = zipped.read(MIB)
+                if not chunk:
+                    break
+                check_digest.update(chunk)
+                total += len(chunk)
+        if check_digest.hexdigest() != receipt['pre_sha256'] or total != st.st_size:
+            fail('ARCHIVE_VERIFY: 푼 내용이 원본과 다릅니다')
+        manifest = {'version': 2, 'schema': 21, 'source_commit': commit, 'purpose': 'pre-migration-21-22',
+                    'pinned': True, 'run': run,
+                    'files': {'engine.db': {'size': st.st_size, 'sha256': receipt['pre_sha256'], 'stored': 'gzip',
+                                            'gz_size': os.path.getsize(target), 'gz_sha256': file_sha(target)}}}
+        if manifest_v2(manifest) is None:
+            fail('ARCHIVE_MANIFEST: v2 형식 오류')
+        write_json_atomic(partial + '/manifest.json', manifest)
+        os.rename(partial, final)
+        fsync_folder(db_backups)
+        print(name, manifest['files']['engine.db']['gz_sha256'],
+              hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest())
+    finally:
+        os.close(fd)
+
+
+def mig_unlink_pre(data_dir, receipt_path):
+    receipt = load_json(receipt_path)
+    pre = data_dir + '/engine.db.pre-v22'
+    st = os.lstat(pre)
+    expect = receipt['pre_identity']
+    if (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) != (expect['dev'], expect['ino'], expect['size'],
+                                                                 expect['mtime_ns']):
+        fail('RAW_IDENTITY: 지울 raw 가 영수증 원본이 아닙니다')
+    for suffix in ('-wal', '-shm', '-journal'):
+        if os.path.lexists(pre + suffix):
+            fail('RAW_SIDECAR: raw 원본 곁 파일이 있습니다')
+    os.unlink(pre)
+    fsync_folder(data_dir)
+    print('ok')
+
+
+def mig_restore_gz(copy_dir, data_dir, run, receipt_path):
+    """gz → engine.db.restore.partial(O_EXCL·0600·10001) → 전체 sha·크기 확인 → restored_identity 를 영수증에
+    먼저 내구 기록 → canonical 로 게시(rename). canonical·곁 파일이 없어야 한다."""
+    import gzip
+    receipt = load_json(receipt_path)
+    manifest = manifest_v2(load_json(copy_dir + '/manifest.json'))
+    if manifest is None or manifest['run'] != run or manifest['files']['engine.db']['sha256'] != receipt['pre_sha256']:
+        fail('RESTORE_SOURCE: 고정 사본 manifest 가 이 run 의 원본이 아닙니다')
+    if file_sha(copy_dir + '/engine.db.gz') != manifest['files']['engine.db']['gz_sha256']:
+        fail('RESTORE_SOURCE: gz 해시가 manifest 와 다릅니다')
+    canonical = data_dir + '/engine.db'
+    if any(os.path.lexists(canonical + s) for s in ('', '-wal', '-shm', '-journal')):
+        fail('RESTORE_TARGET: canonical 또는 곁 파일이 아직 있습니다')
+    partial = data_dir + '/engine.db.restore.partial'
+    out = os.open(partial, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        digest, total = hashlib.sha256(), 0
+        with gzip.open(copy_dir + '/engine.db.gz', 'rb') as zipped:
+            while True:
+                chunk = zipped.read(MIB)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                total += len(chunk)
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(out, view):]
+        os.fsync(out)
+        if not ROOT:
+            os.fchown(out, ENGINE_UID, ENGINE_UID)
+        check = hashlib.sha256()
+        os.lseek(out, 0, os.SEEK_SET)
+        while True:
+            chunk = os.read(out, MIB)
+            if not chunk:
+                break
+            check.update(chunk)
+        if digest.hexdigest() != receipt['pre_sha256'] or check.hexdigest() != receipt['pre_sha256'] \
+                or total != manifest['files']['engine.db']['size']:
+            fail('RESTORE_VERIFY: 풀어 쓴 내용이 원본과 다릅니다')
+        st = os.fstat(out)
+        restored = {'dev': st.st_dev, 'ino': st.st_ino, 'size': st.st_size, 'mtime_ns': st.st_mtime_ns}
+    finally:
+        os.close(out)
+    mig_receipt_set(run, 'restored_identity', json.dumps(restored))
+    os.rename(partial, canonical)
+    fsync_folder(data_dir)
+    print(json.dumps(restored, sort_keys=True))
+
+
+# ── 계획(plan_sha256: 바뀌지 않는 값만 해시) ──
+def mig_plan(identifier, current, new, tar_sha, helper_sha, engine_image, relay_image, prev_engine, prev_relay):
+    entry = mig_entry(identifier)
+    data = sorted(n for n in os.listdir(ROOT + DATA_PATH) if n.startswith('engine.db'))
+    stable = {'migration_id': identifier, 'entry': entry, 'current_commit': current, 'new_commit': new,
+              'source_tar_sha256': tar_sha, 'helper_sha256': helper_sha, 'prepared_engine_image': engine_image,
+              'prepared_relay_image': relay_image, 'previous_engine_image': prev_engine,
+              'previous_relay_image': prev_relay, 'data_dir_names': data,
+              'policy': {'floor_bytes': FLOOR, 'p_pol': 'max(S+Z, Z+E, Z+2E+H), H=1MiB, owner policy threshold, '
+                                                       'not a backup guarantee', 'gz_cap_ratio': GZ_CAP_RATIO}}
+    digest = hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    live = {'free_bytes': free_of(ROOT + DATA_PATH), 'db_bytes': size_or_zero(ROOT + DATA_PATH + '/engine.db'),
+            'wal_bytes': size_or_zero(ROOT + DATA_PATH + '/engine.db-wal')}
+    pair = newest_pair(ROOT + DAILY_BACKUPS) if os.path.isdir(ROOT + DAILY_BACKUPS) else None
+    live['last_backup_pair_bytes'] = list(pair) if pair else None
+    print(digest)
+    print(json.dumps({'plan_sha256': digest, 'stable': stable, 'live_not_hashed': live,
+                      'reference_estimates_not_gates': 'see design §D'}, sort_keys=True, separators=(',', ':')))
+
+
+def mig_prepared(action, new, *pairs):
+    path = ROOT + MIG_DIR + '/prepared-' + new + '.json'
+    if action == 'write':
+        os.makedirs(ROOT + MIG_DIR, 0o700, exist_ok=True)
+        write_json_atomic(path, dict(pair.partition('=')[::2] for pair in pairs))
+    elif action == 'get':
+        value = load_json(path, {}) or {}
+        print(value.get(pairs[0], ''))
+    else:
+        fail('MIGRATION_INPUT: prepared 동작')
+
+
+def mig_observe(run, data_dir, *pairs):
+    """복구 전에 원래 관측을 남긴다(이후 만든 hold 를 근거로 쓰지 않게). 값·비밀은 없다."""
+    folder = run_dir(run)
+    names = sorted(n for n in os.listdir(folder) if re.fullmatch(r'observation-[0-9]+\.json', n))
+    files = {}
+    for name in sorted(os.listdir(data_dir)):
+        if name.startswith('engine.db') or name.startswith('naver-migrate-'):
+            info = os.lstat(os.path.join(data_dir, name))
+            files[name] = {'dev': info.st_dev, 'ino': info.st_ino, 'size': info.st_size, 'mtime_ns': info.st_mtime_ns,
+                           'kind': 'dir' if stat.S_ISDIR(info.st_mode) else 'file'}
+    journal = load_json(data_dir + '/naver-migrate-journal.json', None) or {}
+    hold = ROOT + MIG_HOLD
+    value = {'n': len(names) + 1, 'pointer_present': os.path.lexists(ROOT + MIG_POINTER),
+             'hold_present': os.path.lexists(hold), 'hold_run': read(hold).split()[0] if os.path.isfile(hold) and read(hold).split() else '',
+             'dropins_present': any(os.path.lexists(ROOT + UNIT_PATH + '/' + u + '.d/' + DROPIN_NAME) for u in MIG_UNITS),
+             'status': (load_json(ROOT + MIG_DIR + '/' + run + '/status.json', {}) or {}).get('state', ''),
+             'journal_ops': [[e.get('op'), e.get('phase')] for e in journal.get('entries') or []],
+             'files': files, 'extra': dict(pair.partition('=')[::2] for pair in pairs),
+             'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+    write_json_atomic(folder + '/observation-%d.json' % value['n'], value)
+    print(folder + '/observation-%d.json' % value['n'])
+
+
+def mig_rehearsal(action, *args):
+    path = ROOT + MIG_DIR + '/rehearsal.json'
+    if action == 'write':
+        os.makedirs(ROOT + MIG_DIR, 0o700, exist_ok=True)
+        write_json_atomic(path, dict(pair.partition('=')[::2] for pair in args))
+    elif action == 'check':
+        engine, relay, helper = args
+        value = load_json(path, {}) or {}
+        if (value.get('result') != 'passed' or value.get('engine_image') != engine or value.get('relay_image') != relay
+                or value.get('helper_sha256') != helper):
+            fail('REHEARSAL_MISSING: 이 준비 이미지·helper 로 통과한 리허설 기록이 없습니다')
+        print('ok')
+    else:
+        fail('MIGRATION_INPUT: rehearsal 동작')
+
+
+def identity_line(path):
+    info = os.lstat(path)
+    print(json.dumps({'dev': info.st_dev, 'ino': info.st_ino, 'size': info.st_size, 'mtime_ns': info.st_mtime_ns},
+                     sort_keys=True))
+
+
+def same_device_inode(first, second):
+    a, b = os.stat(first), os.stat(second)
+    print('same' if (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino) else 'different')
+
+
+def json_field(text, *keys):
+    value = json.loads(text)
+    for key in keys:
+        value = value.get(key) if isinstance(value, dict) else None
+    print(json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else ('' if value is None else value))
+
+
+def ino_of(text):
+    value = json.loads(text)
+    print('%s:%s' % (value['dev'], value['ino']))
+
+
+MIG_COMMANDS = {
+    'mig-field': mig_field, 'mig-pin': mig_pin, 'mig-pointer': mig_pointer, 'mig-status': mig_status,
+    'mig-status-get': mig_status_get, 'mig-hold': mig_hold, 'mig-dropin': mig_dropin, 'mig-journal': mig_journal,
+    'mig-receipt': mig_receipt, 'mig-receipt-get': mig_receipt_get, 'mig-receipt-set': mig_receipt_set,
+    'mig-args': mig_args, 'mig-tar-pins': mig_tar_pins, 'mig-store-sha-stdin': mig_store_sha_stdin,
+    'mig-helper-pin': mig_helper_pin, 'mig-window': mig_window, 'mig-keep-raw-now': keep_raw_now,
+    'mig-guard': mig_guard, 'mig-archive': mig_archive, 'mig-unlink-pre': mig_unlink_pre,
+    'mig-restore-gz': mig_restore_gz, 'mig-plan': mig_plan, 'mig-prepared': mig_prepared,
+    'mig-observe': mig_observe, 'mig-rehearsal': mig_rehearsal, 'identity': identity_line,
+    'same-device-inode': same_device_inode, 'json-field': json_field, 'ino-of': ino_of,
+    'file-sha': lambda path: print(file_sha(path)), 'kst-now': lambda: print(kst_now())}
+
+
 COMMANDS = {'unit-parse': unit_parse, 'override-check': override_check, 'subst': subst, 'tar-check': tar_check,
             'tar-extract': tar_extract, 'tree-compare': tree_compare, 'image-info': image_info,
             'container-info': container_info, 'state-write': state_write,
@@ -1980,7 +2820,13 @@ COMMANDS = {'unit-parse': unit_parse, 'override-check': override_check, 'subst':
             'schema-tar-stdin': lambda: print(schema_of(tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read()))
                                                         .extractfile('store.py').read().decode('utf-8'))),
             'randhex': lambda: print(secrets.token_hex(16))}
+COMMANDS.update(MIG_COMMANDS)
 if __name__ == '__main__':
+    _inject = os.environ.get('NAVER_DEPLOY_FAKE_FAIL_CMD') if ROOT else None
+    _only_if = os.environ.get('NAVER_DEPLOY_FAKE_FAIL_IF_EXISTS') if ROOT else None
+    if (_inject and all(token in sys.argv[1:] for token in _inject.split())
+            and (not _only_if or os.path.lexists(ROOT + _only_if))):
+        sys.exit(37)   # 가짜 루트 시험 전용: 이 helper 명령의 실패를 주입
     try:
         COMMANDS[sys.argv[1]](*sys.argv[2:])
     except Refuse as error:
@@ -1990,7 +2836,8 @@ if __name__ == '__main__':
 PYEOF
 )
 
-py() { python3 -I -B -c "$PY_HELPER" "$@"; }
+# helper 원문은 128KiB(리눅스 인자 하나 상한)를 넘을 수 있어 -c 인자가 아니라 fd 3 으로 넘긴다(표준입력은 그대로).
+py() { python3 -I -B /dev/fd/3 "$@" 3<<<"$PY_HELPER"; }
 
 # docker 는 깨끗한 환경으로 부른다(compose 변수 보간이 ssh 세션 변수에 흔들리지 않게).
 dk() { env -i PATH="$PATH" LANG=C docker "$@"; }
@@ -2042,7 +2889,12 @@ write_result() {
     "db_backup=$DB_BACKUP" "downtime_seconds=$DOWNTIME" "health_status=$HEALTH_STATUS" \
     "health_codes=$HEALTH_CODES" "schema_current=$SCHEMA_CUR" "schema_new=$SCHEMA_NEW" \
     "switches=$CUR_SWITCHES" "warnings=$WARNINGS" "services_stopped_confirmed=$STOPPED_CONFIRMED" \
-    "database_opened_by_deploy=false" "runtime_env_changed_by_deploy=false" 2>/dev/null) \
+    "database_opened_by_deploy=$DB_OPENED" "runtime_env_changed_by_deploy=false" \
+    ${MIG_ID:+"migration_id=$MIG_ID"} ${MIG_RUN:+"migration_run=$MIG_RUN"} ${MIG_STATE:+"migration_state=$MIG_STATE"} \
+    ${MIG_RECEIPT_SHA:+"receipt_sha256=$MIG_RECEIPT_SHA"} ${MIG_ORPHANS:+"orphans_closed=$MIG_ORPHANS"} \
+    ${MIG_PIN_STATE:+"pin_state=$MIG_PIN_STATE"} ${MIG_KEEP_RAW:+"keep_raw_now=$MIG_KEEP_RAW"} \
+    ${MIG_DECISION:+"write_decision=$MIG_DECISION"} ${MIG_PLAN:+"plan_sha256=$MIG_PLAN"} \
+    ${MIG_REHEARSAL:+"rehearsal=$MIG_REHEARSAL"} 2>/dev/null) \
     || line='{"status":"RESULT_WRITE_FAILED"}'
   printf 'NAVER_DEPLOY_RESULT=%s\n' "$line"
   if [ -n "$RESULT_FILE" ]; then
@@ -2053,7 +2905,7 @@ write_result() {
 on_exit() {
   local rc=$?
   trap - EXIT ERR
-  if [ "$MODE" = deploy ]; then
+  if [ "$MODE" = deploy ] || [ "${MODE#migrate-}" != "$MODE" ]; then
     if [ -z "$RESULT_CODE" ]; then
       RESULT_CODE=$rc
       RESULT_STATUS=${RESULT_STATUS:-EXITED}
@@ -2092,6 +2944,13 @@ fail_deploy() { # CODE detail
   trap - ERR
   set +e
   log "실패 사유($1): $2"
+  # 이관 run(또는 이관 재진입 중): 정해진 이관 경로만 쓴다. 기존 restore_previous 를 직접 부르지 않는다.
+  if [ "$MIG_ACTIVE" = 1 ] || [ "${MODE#migrate-}" != "$MODE" ]; then
+    if [ "$RESTORING" = 1 ]; then
+      mig_unknown "$1"
+    fi
+    mig_fail "$1" "$2"
+  fi
   if [ "$RESTORING" = 1 ]; then
     finish 4 RESTORE_FAILED "$1" "$2"
   fi
@@ -2428,6 +3287,8 @@ restore_previous() {
 # 이전 실행이 서비스를 멈춘 뒤 끝나지 못했으면(SSH 끊김·재부팅·강제 종료) 먼저 직전 판으로 복원한다.
 recover_if_needed() {
   local phase
+  # 이관 표지(활성 표지·hold·drop-in)가 하나라도 있으면 이관 재진입 규칙(B.3)만 쓴다. 기존 복원보다 먼저.
+  mig_recover
   [ -f "$STATE_FILE" ] || return 0
   phase=$(py state-get "$STATE_FILE" phase)
   if phase_needs_restore "$phase"; then
@@ -2469,6 +3330,10 @@ main_cleanup() {
   chmod 700 "$R$STATE_DIR" "$R$STATE_DIR/logs"
   exec 9>>"$R$STATE_DIR/lock"
   flock -n 9 || cleanup_refuse LOCKED 11
+  if [ -n "$(py mig-pointer get 2>/dev/null)" ] || [ -n "$(py mig-hold get 2>/dev/null)" ] \
+      || [ "$(py mig-dropin present 2>/dev/null)" != no ]; then
+    cleanup_refuse REFUSED_MIGRATION_ACTIVE 10
+  fi
   phase=$(py state-get "$STATE_FILE" phase 2>/dev/null) || phase=''
   if phase_needs_restore "$phase"; then
     cleanup_refuse REFUSED_DEPLOY_NOT_FINISHED 10
@@ -2495,6 +3360,10 @@ main_cleanup_artifacts() {
   [ -d "$R$STATE_DIR" ] && [ ! -L "$R$STATE_DIR" ] || artifacts_refuse REFUSED_LAYOUT 10
   exec 9>>"$R$STATE_DIR/lock"
   flock -n 9 || artifacts_refuse LOCKED 11
+  if [ -n "$(py mig-pointer get 2>/dev/null)" ] || [ -n "$(py mig-hold get 2>/dev/null)" ] \
+      || [ "$(py mig-dropin present 2>/dev/null)" != no ]; then
+    artifacts_refuse REFUSED_MIGRATION_ACTIVE 10
+  fi
   phase=$(py state-get "$STATE_FILE" phase 2>/dev/null) || phase=''
   if phase_needs_restore "$phase"; then
     artifacts_refuse REFUSED_DEPLOY_NOT_FINISHED 10
@@ -2824,6 +3693,1189 @@ EOF
   finish 0 DEPLOYED '' "$cur → $NEW 배포 완료($HEALTH_CODES, 정지~헬스 준비 ${DOWNTIME:-?}초)"
 }
 
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# 21→22 추가형 스키마 이관(migrate-*) — DESIGN-CLAUDE-v3.md(v3.1, 2b62dbd9) + v2 의 대체되지 않은 부분.
+# deploy 모드의 SCHEMA_CHANGED 거절은 그대로다. 이관은 고정 표(MIGRATIONS)의 한 항목만, 준비된 정확 이미지 ID 로만 한다.
+# ════════════════════════════════════════════════════════════════════════════════════════════
+MIG_HELPER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/naver_schema_migrate.py"
+BACKUP_STATE=/var/backups/metainc/naver-engine/state.json
+DAILY_BACKUPS=/var/backups/metainc/naver-engine
+MIG_ID=''
+MIG_RUN=''
+MIG_STAGE=''
+MIG_ACTIVE=0
+MIG_STATE=''
+MIG_OUT=''
+MIG_RECEIPT_SHA=''
+MIG_ORPHANS=''
+MIG_PIN_STATE=''
+MIG_KEEP_RAW=''
+MIG_DECISION=''
+MIG_PLAN=''
+MIG_REHEARSAL=''
+MIG_NEW_ENGINE=''
+MIG_NEW_RELAY=''
+MIG_ALLOW_HOLD=0
+MIG_HELPER_STAGED=''
+DB_OPENED=false
+
+mig_dir() { printf '%s' "$R$STATE_DIR/migration/$MIG_RUN"; }
+mig_receipt_path() { printf '%s/receipt.json' "$(mig_dir)"; }
+
+# helper 단계 하나 = docker run 하나. 끝나면 같은 이름 컨테이너가 남지 않았음을 확인한다(목록 실패도 실패).
+mig_reap() { # name
+  local out
+  out=$(dk ps -aq --filter "name=^$1\$" 2>>"$CMD_LOG") || return 1
+  if [ -n "$out" ]; then
+    dk kill "$1" >>"$CMD_LOG" 2>&1 || true
+    dk rm -f "$1" >>"$CMD_LOG" 2>&1 || true
+    out=$(dk ps -aq --filter "name=^$1\$" 2>>"$CMD_LOG") || return 1
+    [ -z "$out" ] || return 1
+  fi
+  return 0
+}
+
+mig_stage_helper() { # 컨테이너 사용자(10001)가 읽을 수 있는 고정 사본(0644, root 소유)을 만들고 해시를 다시 대조한다
+  local sum target
+  sum=$(py file-sha "$MIG_HELPER")
+  [ "$sum" = "$(py mig-field "$MIG_ID" helper_sha256)" ] || return 1
+  mkdir -p "$R$STATE_DIR/migration"
+  target="$R$STATE_DIR/migration/helper-$(printf '%s' "$sum" | cut -c1-16).py"
+  if [ ! -f "$target" ] || [ "$(py file-sha "$target")" != "$sum" ]; then
+    cp "$MIG_HELPER" "$target.tmp"
+    chmod 644 "$target.tmp"
+    mv -f "$target.tmp" "$target"
+  fi
+  [ "$(py file-sha "$target")" = "$sum" ] || return 1
+  MIG_HELPER_STAGED=$target
+}
+
+mig_helper() { # image bind_source step json → MIG_OUT(한 줄 JSON), 종료 코드
+  local image=$1 source=$2 step=$3 args=$4 name rc=0
+  if [ -z "${MIG_HELPER_STAGED:-}" ]; then
+    mig_stage_helper || { MIG_OUT='{"ok":false,"code":"HELPER_STAGE"}'; return 91; }
+  fi
+  name="naver-migrate-$step-$(py randhex | cut -c1-12)"
+  DB_OPENED=true
+  MIG_OUT=$(dk run --rm --name "$name" --network none --read-only --user 10001:10001 --cap-drop ALL \
+    --security-opt no-new-privileges:true --pids-limit 64 \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777 \
+    -v "$source:/var/lib/naver-engine" -v "$MIG_HELPER_STAGED:/opt/naver-migrate/m.py:ro" \
+    --entrypoint python3 "$image" -I -B /opt/naver-migrate/m.py "$step" "$args" 2>>"$CMD_LOG" | tail -n 1) || rc=$?
+  printf '[helper %s] rc=%s %s\n' "$step" "$rc" "$MIG_OUT" >> "$CMD_LOG"
+  if ! mig_reap "$name"; then
+    # 종료를 확인하지 못한 helper 가 남아 있을 수 있다 — 어떤 DB helper·rename·기동도 더 하지 않는다.
+    log "helper 컨테이너가 남았거나 목록을 못 읽었습니다: $name"
+    if [ "$MODE" = migrate-rehearse ]; then
+      MIG_REHEARSAL=failed
+      finish 10 REHEARSAL_FAILED HELPER_EXIT_UNCONFIRMED "리허설 helper 종료 확인 불명(scratch 보존, 운영 무변경)"
+    fi
+    mig_hold_stopped HELPER_EXIT_UNCONFIRMED
+  fi
+  if [ "$rc" = 0 ] && [ "$(py json-field "$MIG_OUT" ok 2>/dev/null)" = True ]; then
+    return 0
+  fi
+  [ "$rc" = 0 ] && rc=3
+  return "$rc"
+}
+
+mig_code() { py json-field "$MIG_OUT" code 2>/dev/null || printf 'UNPARSED'; }
+mig_result() { py json-field "$MIG_OUT" result "$@"; }
+
+image_schema() { # image → 라벨 또는 이미지 안 store.py
+  local info id user src label cid schema
+  info=$(dk image inspect "$1" 2>>"$CMD_LOG" | py image-info) || return 1
+  read -r id user src label <<EOF
+$info
+EOF
+  : "$id$user$src"
+  if printf '%s' "$label" | grep -Eq '^[0-9]+$'; then
+    printf '%s' "$label"
+    return 0
+  fi
+  cid=$(dk create --network none "$1" 2>>"$CMD_LOG") || return 1
+  schema=$(dk cp "$cid:/opt/naver-engine/naver_engine/store.py" - 2>>"$CMD_LOG" | py schema-tar-stdin) || schema=''
+  dk rm "$cid" >>"$CMD_LOG" 2>&1 || true
+  [ -n "$schema" ] || return 1
+  printf '%s' "$schema"
+}
+
+mig_unit_dropins_ok() { # 두 unit 이 우리 drop-in 을 실제로 싣고 있는지(daemon-reload 반영 포함)
+  local unit
+  py mig-dropin check || return 1
+  for unit in "$ENGINE_UNIT" "$RELAY_UNIT"; do
+    case " $(unit_prop "$unit" DropInPaths) " in
+      *"/$unit.d/50-naver-migration-hold.conf "*) ;;
+      *) return 1 ;;
+    esac
+    [ "$(unit_prop "$unit" NeedDaemonReload)" = no ] || return 1
+  done
+}
+
+mig_install_hold() {
+  py mig-hold create "$MIG_RUN"
+  py mig-dropin install
+  systemctl daemon-reload 2>>"$CMD_LOG"
+  mig_unit_dropins_ok || die HOLD_INSTALL "시작 차단 drop-in 이 반영되지 않았습니다"
+  log "시작 차단: hold + drop-in(재부팅·의존 시작 포함)"
+}
+
+mig_remove_dropins() {
+  local unit
+  py mig-dropin remove || return 1
+  systemctl daemon-reload 2>>"$CMD_LOG" || return 1
+  for unit in "$ENGINE_UNIT" "$RELAY_UNIT"; do
+    [ -z "$(unit_prop "$unit" DropInPaths)" ] || return 1
+  done
+}
+
+mig_stop_both() {
+  local ok=0
+  stop_and_wait "$RELAY_UNIT" naver-relay || ok=1
+  stop_and_wait "$ENGINE_UNIT" naver-engine || ok=1
+  return "$ok"
+}
+
+# 정지 보존 종료: hold 를 먼저(이미 있으면 그대로) → 정지 확인 → 상태 HOLD. 이후는 대표 판단(continue/rollback).
+# 모든 HOLD 종료의 시작 차단(B.1): hold 파일 + 두 unit drop-in 을 (다시) 깔고 daemon-reload 뒤 실제 적용을 확인한다.
+# 확인할 수 없으면 0 이 아닌 값을 돌려준다(부르는 쪽이 정지는 그대로 하고 복구 필요로 보고한다).
+mig_block_starts() {
+  local hold
+  py mig-hold create "${MIG_RUN:-unknown}" >>"$CMD_LOG" 2>&1 || true
+  hold=$(py mig-hold get 2>/dev/null) || return 1
+  [ -n "$hold" ] || return 1
+  py mig-dropin install >>"$CMD_LOG" 2>&1 || return 1
+  systemctl daemon-reload 2>>"$CMD_LOG" || return 1
+  mig_unit_dropins_ok || return 1
+}
+
+mig_hold_stopped() { # reason
+  trap - ERR
+  set +e
+  if ! mig_block_starts; then
+    log "시작 차단(hold·drop-in)을 확인하지 못했습니다"
+    mig_stop_both
+    STOPPED_CONFIRMED=$( stopped_confirmed "$ENGINE_UNIT" naver-engine && stopped_confirmed "$RELAY_UNIT" naver-relay \
+      && echo true || echo false )
+    [ -n "$MIG_RUN" ] && py mig-status "$MIG_RUN" state=HOLD "reason=$1_START_BLOCK_UNVERIFIED" >>"$CMD_LOG" 2>&1
+    MIG_STATE=HOLD
+    PHASE=migration_hold
+    finish 4 MIGRATION_RECOVERY_REQUIRED "${1}_START_BLOCK_UNVERIFIED" "시작 차단 확인 불가. 정지 확인=$STOPPED_CONFIRMED"
+  fi
+  mig_stop_both
+  STOPPED_CONFIRMED=$( stopped_confirmed "$ENGINE_UNIT" naver-engine && stopped_confirmed "$RELAY_UNIT" naver-relay \
+    && echo true || echo false )
+  py mig-status "$MIG_RUN" state=HOLD "reason=$1" >>"$CMD_LOG" 2>&1
+  MIG_STATE=HOLD
+  [ "$HAVE_STATE" = 1 ] && py state-write "$STATE_FILE" "phase=migration_hold" >>"$CMD_LOG" 2>&1
+  PHASE=migration_hold
+  finish 12 MIGRATION_HOLD "$1" "정지 보존(hold). 정지 확인=$STOPPED_CONFIRMED"
+}
+
+mig_unknown() { # reason — 모르는 상태: 아무것도 옮기거나 지우지 않는다
+  trap - ERR
+  set +e
+  mig_block_starts || log "시작 차단(hold·drop-in)을 확인하지 못했습니다"
+  mig_stop_both
+  STOPPED_CONFIRMED=$( stopped_confirmed "$ENGINE_UNIT" naver-engine && stopped_confirmed "$RELAY_UNIT" naver-relay \
+    && echo true || echo false )
+  [ -n "$MIG_RUN" ] && py mig-status "$MIG_RUN" state=HOLD "reason=$1" >>"$CMD_LOG" 2>&1
+  MIG_STATE=HOLD
+  PHASE=migration_hold
+  finish 4 MIGRATION_RECOVERY_REQUIRED "$1" "모르는 이관 상태. 정지 확인=$STOPPED_CONFIRMED"
+}
+
+# 복귀 pin 에서 v21 세대 값을 읽는다(진행 중 run 이든 R7 이든 같은 곳).
+mig_load_pin() {
+  local pin="$R$STATE_DIR/pins/$MIG_RUN.json" body
+  [ -f "$pin" ] || return 1
+  body=$(cat "$pin")
+  PREV_COMMIT=$(py json-field "$body" commit)
+  PREV_ENGINE_IMAGE=$(py json-field "$body" engine_image)
+  PREV_RELAY_IMAGE=$(py json-field "$body" relay_image)
+  P_RUN_DIR=$(py json-field "$body" run_dir)
+  P_COMPANION=$(py json-field "$body" companion)
+  P_SWITCHES=$(py json-field "$body" switches)
+  P_NEW_COMMIT=$(py json-field "$body" new_commit)
+  MIG_NEW_ENGINE=$(py json-field "$body" new_engine_image)
+  MIG_NEW_RELAY=$(py json-field "$body" new_relay_image)
+  [ -n "$MIG_ID" ] || MIG_ID=$(py json-field "$body" migration_id)
+  [ -n "$PREV_COMMIT" ] && [ -n "$PREV_ENGINE_IMAGE" ] && [ -n "$PREV_RELAY_IMAGE" ] && [ -n "$P_RUN_DIR" ]
+}
+
+# guarded_start §A 3단계: 돌릴 세대의 unit·override·이미지·컨테이너를 되살리고 실제 적용값을 다시 읽는다.
+mig_service_generation() { # gen(v21|v22)
+  local gen=$1 name unit image commit release saved expected mounts schema
+  if [ "$gen" = v21 ]; then commit=$PREV_COMMIT; else commit=$P_NEW_COMMIT; fi
+  release="$RELEASES/naver-$commit"
+  for name in engine relay; do
+    unit="metainc-naver-$name.service"
+    if [ "$gen" = v21 ]; then saved="$R$P_RUN_DIR/$unit"; else saved="$R$P_RUN_DIR/new-$unit"; fi
+    [ -f "$saved" ] || return 1
+    if [ "$(py sha "$saved")" != "$(py sha "$R$UNIT_DIR/$unit")" ]; then
+      write_file_atomic "$saved" "$R$UNIT_DIR/$unit" 644 || return 1
+    fi
+    if [ "$gen" = v21 ]; then
+      saved="$R$P_RUN_DIR/preview-$name.override.yml"
+      if [ ! -f "$R$release/preview-$name.override.yml" ] || [ "$(py sha "$saved")" != "$(py sha "$R$release/preview-$name.override.yml")" ]; then
+        write_file_atomic "$saved" "$R$release/preview-$name.override.yml" 600 || return 1
+      fi
+      if [ "$name" = engine ]; then image=$PREV_ENGINE_IMAGE; else image=$PREV_RELAY_IMAGE; fi
+    else
+      if [ "$name" = engine ]; then image=$MIG_NEW_ENGINE; else image=$MIG_NEW_RELAY; fi
+    fi
+    dk image inspect "$image" >/dev/null 2>>"$CMD_LOG" || return 1
+    dk tag "$image" "metainc/naver-$name:$commit" >>"$CMD_LOG" 2>&1 || return 1
+  done
+  systemctl daemon-reload 2>>"$CMD_LOG" || return 1
+  for name in engine relay; do
+    compose_args "$name" "$release" "$P_COMPANION"
+    dk "${CARGS[@]}" up --no-start --no-build --force-recreate >>"$CMD_LOG" 2>&1 || return 1
+  done
+  for name in engine relay; do
+    if [ "$gen" = v21 ]; then
+      if [ "$name" = engine ]; then image=$PREV_ENGINE_IMAGE; else image=$PREV_RELAY_IMAGE; fi
+    else
+      if [ "$name" = engine ]; then image=$MIG_NEW_ENGINE; else image=$MIG_NEW_RELAY; fi
+    fi
+    mounts=$(cat "$R$P_RUN_DIR/mounts-$name.json" 2>/dev/null) || return 1
+    read_container "naver-$name" || return 1
+    [ "$C_IMAGE" = "$image" ] && [ "$C_RUNNING" = false ] && [ "$C_MOUNTS" = "$mounts" ] || return 1
+    if [ "$name" = engine ]; then
+      [ "$C_SWITCHES" = "$P_SWITCHES" ] || return 1
+    fi
+    [ "$(unit_prop "metainc-naver-$name.service" NeedDaemonReload)" = no ] || return 1
+  done
+  schema=$(image_schema "$( [ "$gen" = v21 ] && echo "$PREV_ENGINE_IMAGE" || echo "$MIG_NEW_ENGINE" )") || return 1
+  expected=$( [ "$gen" = v21 ] && py mig-field "$MIG_ID" from_schema || py mig-field "$MIG_ID" to_schema )
+  [ "$schema" = "$expected" ] || return 1
+  info=$(py unit-parse "$R$UNIT_DIR/$ENGINE_UNIT" engine) || return 1
+  [ "${info% *}" = "$commit" ] || return 1
+  mig_unit_dropins_ok || return 1
+}
+
+# guarded_start(§A): hold 유지·정지 확인 → DB 세대 검증(잠금) → 서비스 세대 복원·재확인 → start intent → hold 마지막 해제 → 기동.
+# 이관 전용 단계 기록: state.json 쓰기와 다시 읽은 값까지 확인한다(공통 set_phase 는 실패를 가린다 — 바꾸지 않는다).
+mig_set_phase() { # phase
+  PHASE=$1
+  py state-write "$STATE_FILE" "phase=$1" || return 1
+  [ "$(py state-get "$STATE_FILE" phase)" = "$1" ] || return 1
+  log "단계: $1"
+}
+
+guarded_start() { # gen expect_identity_json expect_sha256(빈 값 가능) full(true|false)
+  local gen=$1 identity=$2 sha=$3 full=$4 schema image args held
+  py mig-hold create "$MIG_RUN" || return 1
+  mig_stop_both || return 1
+  stopped_confirmed "$ENGINE_UNIT" naver-engine && stopped_confirmed "$RELAY_UNIT" naver-relay || return 1
+  if [ "$gen" = v21 ]; then
+    schema=$(py mig-field "$MIG_ID" from_schema); image=$PREV_ENGINE_IMAGE
+  else
+    schema=$(py mig-field "$MIG_ID" to_schema); image=$MIG_NEW_ENGINE
+  fi
+  args=$(py mig-args "$MIG_ID" startcheck production "run=$MIG_RUN" "expect_identity=json:$identity" \
+    "expect_sha256=$sha" "full=json:$full" "expect_schema=$schema")
+  mig_helper "$image" "$R$DATA_DIR" startcheck "$args" || { log "startcheck 거부: $(mig_code)"; return 1; }
+  mig_service_generation "$gen" || { log "서비스 세대 복원·확인 실패($gen)"; return 1; }
+  # 이 함수는 `|| rc=$?` 문맥에서 불려 errexit 가 꺼져 있다 — 안전 전이의 필수 명령을 모두 직접 확인한다.
+  py mig-journal "$R$DATA_DIR" append "$MIG_RUN" "start-$gen" intent \
+    || { log "start intent 기록 실패 — 기동하지 않습니다"; return 3; }
+  mig_set_phase starting || { log "상태 기록 실패·불명 — 기동하지 않습니다"; return 3; }
+  MIG_STAGE=started
+  if ! py mig-hold remove "$MIG_RUN" || ! held=$(py mig-hold get) || [ -n "$held" ]; then
+    log "hold 해제 실패·불명 — 기동하지 않습니다"
+    py mig-hold create "$MIG_RUN" >>"$CMD_LOG" 2>&1 || true
+    return 3
+  fi
+  log "hold 해제(마지막) → 기동: $gen"
+  systemctl start "$ENGINE_UNIT" 2>>"$CMD_LOG" || true
+  systemctl start "$RELAY_UNIT" 2>>"$CMD_LOG" || true
+  mig_set_phase verifying || { py mig-hold create "$MIG_RUN" || true; return 2; }
+  if [ "$gen" = v21 ]; then
+    health_check "$PREV_ENGINE_IMAGE" "$PREV_RELAY_IMAGE" || { py mig-hold create "$MIG_RUN" || true; return 2; }
+  else
+    health_check "$MIG_NEW_ENGINE" "$MIG_NEW_RELAY" || { py mig-hold create "$MIG_RUN" || true; return 2; }
+  fi
+  if journalctl -u "$ENGINE_UNIT" --since "-$((HOLD_SECONDS + READY_TIMEOUT + 30))s" --no-pager 2>/dev/null \
+      | grep -Eq 'Traceback|StoreError|database disk image is malformed'; then
+    py mig-hold create "$MIG_RUN" || true
+    return 2
+  fi
+  py mig-journal "$R$DATA_DIR" append "$MIG_RUN" "start-$gen" "done" || { py mig-hold create "$MIG_RUN" || true; return 2; }
+  return 0
+}
+
+mig_receipt_field() { py mig-receipt-get "$MIG_RUN" "$1"; }
+
+# 새 쓰기 입증(v2 §4): 정지·잠금·checkpoint·rowid manifest. 결정: no_new_writes | new_writes | unknown
+# 제품을 불러오지 않는 단계(prove·gap·bundle·restore-rename·undo)는 pin 된 v21 이미지로 돌린다(뒤 배포가 v22 태그를 정리해도 R7 가능).
+mig_prove() {
+  local args
+  args=$(py mig-args "$MIG_ID" prove production "run=$MIG_RUN" "receipt=@$(mig_receipt_path)")
+  if mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" prove "$args"; then
+    MIG_DECISION=$(mig_result decision)
+  else
+    MIG_DECISION=unknown
+  fi
+  log "새 쓰기 판정: $MIG_DECISION"
+}
+
+# 엔진이 한 번도 열지 않았음이 입증된 상태(저널이 intent:start 전 + hold 유지)만 되돌린다.
+mig_undo_unstarted() {
+  local args receipt=''
+  if [ -f "$(mig_receipt_path)" ]; then receipt="receipt=@$(mig_receipt_path)"; fi
+  if [ -z "$receipt" ] && [ -f "$R$DATA_DIR/naver-migrate-receipt.json" ]; then
+    receipt="receipt=@$R$DATA_DIR/naver-migrate-receipt.json"
+  fi
+  args=$(py mig-args "$MIG_ID" undo production "run=$MIG_RUN" ${receipt:+"$receipt"})
+  mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" undo "$args"
+}
+
+mig_expected_v21() { # → identity JSON, sha, full
+  local restored
+  restored=$(mig_receipt_field restored_identity)
+  if [ -n "$restored" ]; then
+    printf '%s\n%s\nfalse\n' "$restored" "$(mig_receipt_field pre_sha256)"
+  elif [ -n "$(mig_receipt_field pre_identity)" ]; then
+    printf '%s\n%s\ntrue\n' "$(mig_receipt_field pre_identity)" "$(mig_receipt_field pre_sha256)"
+  else
+    printf '\n\nfalse\n'
+  fi
+}
+
+mig_start_v21() { # 옛 세대로 guarded_start. identity 가 없으면(영수증 전 중단) 현재 canonical 을 잠금 아래 그대로 쓴다.
+  local lines identity sha full rc=0
+  lines=$(mig_expected_v21)
+  identity=$(printf '%s\n' "$lines" | sed -n 1p)
+  sha=$(printf '%s\n' "$lines" | sed -n 2p)
+  full=$(printf '%s\n' "$lines" | sed -n 3p)
+  if [ -z "$identity" ]; then
+    identity=$(py identity "$R$DATA_DIR/engine.db") || return 1
+    full=false
+  fi
+  guarded_start v21 "$identity" "$sha" "$full" || rc=$?
+  return "$rc"
+}
+
+# B.2: 종결(COMPLETED|ROLLED_BACK) 정리. 순서가 계약이다. 표지는 마지막에 지운다.
+mig_complete() { # state — errexit 가 꺼진 문맥에서도 불리므로 단계마다 직접 확인한다. 실패면 표지를 남긴다.
+  local state=$1 hold
+  py mig-status "$MIG_RUN" "state=$state" || mig_completion_failed STATUS_WRITE
+  MIG_STATE=$state
+  hold=$(py mig-hold get) || mig_completion_failed HOLD_READ
+  if [ -n "$hold" ]; then
+    [ "$hold" = "$MIG_RUN" ] || mig_unknown HOLD_OTHER_RUN
+    mig_terminal_generation_ok "$state" || mig_hold_stopped TERMINAL_GENERATION_MISMATCH
+    py mig-hold remove "$MIG_RUN" || mig_completion_failed HOLD_REMOVE
+  fi
+  py mig-journal "$R$DATA_DIR" move "$MIG_RUN" || mig_completion_failed JOURNAL_MOVE
+  mig_remove_dropins || mig_hold_stopped DROPIN_REMOVE_FAILED
+  mig_record_generation "$state" || mig_completion_failed GENERATION_RECORD
+  py state-write "$STATE_FILE" "migration_id=" "migration_completed=$MIG_RUN" "phase=done" \
+    || mig_completion_failed STATE_WRITE
+  py mig-pointer clear "$MIG_RUN" || mig_completion_failed POINTER_CLEAR
+  MIG_ACTIVE=0
+  log "이관 종결 기록: $state (표지 해제)"
+}
+
+# 종결 정리 실패: 서비스는 그대로 두고(종결 세대가 이미 확인·기동됨) 활성 표지를 남겨 다음 잠금 모드가 이어서 정리한다.
+mig_completion_failed() { # step
+  trap - ERR
+  set +e
+  finish 4 MIGRATION_RECOVERY_REQUIRED "COMPLETION_$1" "종결 정리 실패($1). 활성 표지 유지 — 다음 실행이 정리를 이어 갑니다"
+}
+
+# 종결 세대 재확인(B.3 rule 3, B.2 3a): 기대 이미지로 두 서비스가 돌고, canonical inode 가 기대 identity.
+mig_terminal_generation_ok() { # state
+  local identity engine relay current
+  if [ "$1" = COMPLETED ]; then
+    identity=$(mig_receipt_field work_identity); engine=$MIG_NEW_ENGINE; relay=$MIG_NEW_RELAY
+  else
+    identity=$(mig_receipt_field restored_identity)
+    [ -n "$identity" ] || identity=$(mig_receipt_field pre_identity)
+    engine=$PREV_ENGINE_IMAGE; relay=$PREV_RELAY_IMAGE
+  fi
+  [ -n "$identity" ] || return 1
+  current=$(py identity "$R$DATA_DIR/engine.db" 2>/dev/null) || return 1
+  [ "$(py ino-of "$current")" = "$(py ino-of "$identity")" ] || return 1
+  if [ "$1" = COMPLETED ]; then mig_units_match v22 || return 1; else mig_units_match v21 || return 1; fi
+  read_container naver-engine && [ "$C_IMAGE" = "$engine" ] && [ "$C_RUNNING" = true ] || return 1
+  read_container naver-relay && [ "$C_IMAGE" = "$relay" ] && [ "$C_RUNNING" = true ] || return 1
+}
+
+# 기대 세대의 unit 원문·적용 상태와 컨테이너 이미지·mount·스위치(F5). 서비스 상태는 바꾸지 않는다.
+mig_units_match() { # gen
+  local name unit saved image mounts commit info state pid
+  if [ "$1" = v21 ]; then commit=$PREV_COMMIT; else commit=$P_NEW_COMMIT; fi
+  for name in engine relay; do
+    unit="metainc-naver-$name.service"
+    if [ "$1" = v21 ]; then saved="$R$P_RUN_DIR/$unit"; else saved="$R$P_RUN_DIR/new-$unit"; fi
+    [ -f "$saved" ] && [ "$(py sha "$saved")" = "$(py sha "$R$UNIT_DIR/$unit")" ] || return 1
+    [ "$(unit_prop "$unit" NeedDaemonReload)" = no ] || return 1
+    # 실행 상태도 세대 계약이다: unit active·MainPID 있음(조회 실패도 불일치 → 부르는 쪽이 HOLD).
+    state=$(unit_prop "$unit" ActiveState) || return 1
+    pid=$(unit_prop "$unit" MainPID) || return 1
+    [ "$state" = active ] && [ -n "$pid" ] && [ "$pid" != 0 ] || return 1
+    info=$(py unit-parse "$R$UNIT_DIR/$unit" "$name") || return 1
+    [ "${info% *}" = "$commit" ] || return 1
+    if [ "$1" = v21 ]; then
+      if [ "$name" = engine ]; then image=$PREV_ENGINE_IMAGE; else image=$PREV_RELAY_IMAGE; fi
+    else
+      if [ "$name" = engine ]; then image=$MIG_NEW_ENGINE; else image=$MIG_NEW_RELAY; fi
+    fi
+    mounts=$(cat "$R$P_RUN_DIR/mounts-$name.json" 2>/dev/null) || return 1
+    read_container "naver-$name" || return 1
+    [ "$C_IMAGE" = "$image" ] && [ "$C_MOUNTS" = "$mounts" ] || return 1
+    if [ "$name" = engine ]; then [ "$C_SWITCHES" = "$P_SWITCHES" ] || return 1; fi
+  done
+}
+
+# B.2 종결의 세대 기록(F3): current/history 를 종결 세대에 맞춰 멱등하게 쓴다(표지 해제 전).
+mig_record_generation() { # state
+  local stamp_now
+  stamp_now=$(date -u +%Y%m%dT%H%M%SZ)
+  if [ "$1" = COMPLETED ]; then
+    py state-write "$R$STATE_DIR/current.json" "commit=$P_NEW_COMMIT" "engine_image=$MIG_NEW_ENGINE" \
+      "relay_image=$MIG_NEW_RELAY" "schema=$(py mig-field "$MIG_ID" to_schema)" "switches=$P_SWITCHES" \
+      "deployed_at=$stamp_now" "previous_commit=$PREV_COMMIT" "migration_run=$MIG_RUN" || return 1
+    py history-add "$R$STATE_DIR/history.json" "$PREV_COMMIT" || return 1
+    py history-add "$R$STATE_DIR/history.json" "$P_NEW_COMMIT" || return 1
+  else
+    py state-write "$R$STATE_DIR/current.json" "commit=$PREV_COMMIT" "engine_image=$PREV_ENGINE_IMAGE" \
+      "relay_image=$PREV_RELAY_IMAGE" "schema=$(py mig-field "$MIG_ID" from_schema)" "switches=$P_SWITCHES" \
+      "deployed_at=$stamp_now" "previous_commit=$P_NEW_COMMIT" "migration_run=$MIG_RUN" || return 1
+    py history-add "$R$STATE_DIR/history.json" "$PREV_COMMIT" || return 1
+  fi
+}
+
+# 자동 복귀(입증된 경우만) → v21 guarded_start → ROLLED_BACK. 실패면 hold.
+mig_auto_rollback() { # reason started(0|1) [exit code]
+  local reason=$1 started=$2 code=${3:-2} rc=0 stamp_now args
+  trap - ERR
+  set +e
+  RESTORING=1
+  py mig-hold create "$MIG_RUN" >>"$CMD_LOG" 2>&1
+  mig_stop_both || mig_unknown STOP_NOT_CONFIRMED
+  mig_load_pin || mig_unknown PIN_MISSING
+  if [ "$started" = 1 ]; then
+    mig_prove
+    if [ "$MIG_DECISION" != no_new_writes ]; then
+      mig_gap_report
+      mig_hold_stopped "${reason}_WRITES_${MIG_DECISION}"
+    fi
+    stamp_now=$(date -u +%Y%m%dT%H%M%SZ)
+    args=$(py mig-args "$MIG_ID" bundle production "run=$MIG_RUN" "stamp=$stamp_now" "receipt=@$(mig_receipt_path)")
+    mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" bundle "$args" || mig_unknown "BUNDLE_$(mig_code)"
+    args=$(py mig-args "$MIG_ID" restore-rename production "run=$MIG_RUN" "receipt=@$(mig_receipt_path)")
+    mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" restore-rename "$args" || mig_unknown "RESTORE_$(mig_code)"
+  else
+    mig_undo_unstarted || mig_unknown "UNDO_$(mig_code)"
+  fi
+  if ! py mig-window 23:00 "$R$BACKUP_STATE" >>"$CMD_LOG" 2>&1; then
+    mig_hold_stopped WINDOW_PASSED_BEFORE_V21_START
+  fi
+  mig_start_v21 || rc=$?
+  if [ "$rc" != 0 ]; then
+    mig_hold_stopped V21_START_FAILED
+  fi
+  mig_complete ROLLED_BACK
+  RESTORING=0
+  finish "$code" MIGRATION_ROLLED_BACK "$reason" "옛 DB·옛 판으로 되돌림(헬스 통과)"
+}
+
+mig_gap_between() { # baseline current — 개수만. 실패하면 GAP_UNKNOWN 경고(복귀 결정은 이미 대표가 내렸다)
+  local args
+  args=$(py mig-args "$MIG_ID" gap production "run=$MIG_RUN" "baseline=$1" "current=$2")
+  if mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" gap "$args"; then
+    py json-field "$MIG_OUT" result > "$(mig_dir)/gap-$(date -u +%Y%m%dT%H%M%SZ).json"
+    log "gap(개수만): 바뀐 표 $(mig_result tables_with_changes)"
+  else
+    warn GAP_UNKNOWN "gap 을 세지 못했습니다($(mig_code))"
+  fi
+}
+
+mig_gap_report() {
+  local args
+  if [ -f "$R$DATA_DIR/engine.db.pre-v22" ]; then
+    args=$(py mig-args "$MIG_ID" gap production "run=$MIG_RUN" baseline=engine.db.pre-v22 current=engine.db)
+    if mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" gap "$args"; then
+      py json-field "$MIG_OUT" result > "$(mig_dir)/gap-$(date -u +%Y%m%dT%H%M%SZ).json"
+      log "gap(개수만): 바뀐 표 $(mig_result tables_with_changes)"
+    fi
+  fi
+}
+
+# 이관 진행 중 실패(die): 단계별로 정한 경로만 쓴다(fail_deploy 가 부른다).
+mig_fail() { # code detail
+  trap - ERR
+  set +e
+  log "이관 실패($1, 단계 $MIG_STAGE): $2"
+  case "$MIG_STAGE" in
+    ''|preflight)
+      finish 10 REFUSED "$1" "서비스는 건드리지 않았습니다" ;;
+    recorded|hold)
+      py mig-dropin remove >>"$CMD_LOG" 2>&1
+      systemctl daemon-reload 2>>"$CMD_LOG"
+      py mig-hold remove "$MIG_RUN" >>"$CMD_LOG" 2>&1
+      py mig-pin "$MIG_RUN" release >>"$CMD_LOG" 2>&1
+      py mig-status "$MIG_RUN" state=ROLLED_BACK "reason=$1" >>"$CMD_LOG" 2>&1
+      py state-write "$STATE_FILE" "migration_id=" "phase=aborted_before_stop" >>"$CMD_LOG" 2>&1
+      py mig-pointer clear "$MIG_RUN" >>"$CMD_LOG" 2>&1
+      finish 10 REFUSED "$1" "정지 전 거부. 서비스는 그대로" ;;
+    stopped|chain|swapped)
+      mig_auto_rollback "$1" 0 ;;
+    started)
+      mig_auto_rollback "$1" 1 ;;
+    healthy|archiving|completing)
+      warn "$1" "이관 마무리 중 실패: $2"
+      mig_hold_stopped "$1" ;;
+    *)
+      mig_unknown "$1" ;;
+  esac
+}
+
+# 보관(M12·§D): gz 게시 → pin bound-gz → G4 면 raw 삭제. 결과 시점마다 keep_raw_now 를 새로 잰다.
+mig_archive_flow() {
+  local out name gzsha mansha pre_size krn
+  MIG_STAGE=archiving
+  set_phase archiving
+  pre_size=$(py json-field "$(mig_receipt_field pre_identity)" size)
+  if out=$(py mig-archive "$R$DATA_DIR" "$R$DB_BACKUPS" "$MIG_RUN" "$PREV_COMMIT" "$(mig_receipt_path)" 2>>"$CMD_LOG"); then
+    read -r name gzsha mansha <<EOF
+$out
+EOF
+    py mig-pin "$MIG_RUN" bind-gz "copy_dir=$DB_BACKUPS/$name" "gz_sha256=$gzsha" "manifest_sha256=$mansha"
+    MIG_PIN_STATE=bound-gz
+    DB_BACKUP="$DB_BACKUPS/$name"
+    if py mig-guard "$R$DATA_DIR=$pre_size" >>"$CMD_LOG" 2>&1; then
+      py mig-journal "$R$DATA_DIR" append "$MIG_RUN" unlink_pre intent
+      py mig-unlink-pre "$R$DATA_DIR" "$(mig_receipt_path)" >>"$CMD_LOG"
+      py mig-journal "$R$DATA_DIR" append "$MIG_RUN" unlink_pre "done"
+      info=$(py backup-prune "$R$DB_BACKUPS" 1) || warn BACKUP_PRUNE_FAILED "직전 사본 정리 실패"
+      [ -z "${info:-}" ] || log "pin 안 된 직전 사본 정리: $info"
+      MIG_KEEP_RAW=$(py mig-keep-raw-now "$R$DATA_DIR" "$R$DAILY_BACKUPS")
+      return 0
+    fi
+    krn=$(py mig-keep-raw-now "$R$DATA_DIR" "$R$DAILY_BACKUPS")
+    MIG_KEEP_RAW=$krn
+    if [ "$krn" = true ]; then
+      warn RAW_KEPT_FOR_ROLLBACK_SPACE "해제 복귀 공간(G4)이 없어 raw 와 gz 를 함께 둡니다"
+      return 0
+    fi
+    mig_hold_stopped "G4_FALSE_KEEP_RAW_$krn"
+  fi
+  krn=$(py mig-keep-raw-now "$R$DATA_DIR" "$R$DAILY_BACKUPS")
+  MIG_KEEP_RAW=$krn
+  if [ "$krn" = true ]; then
+    warn ARCHIVE_PENDING "gzip 보관 실패. raw 원본을 그대로 둡니다(부분본은 대표 확인 뒤 정리)"
+    return 0
+  fi
+  mig_hold_stopped "ARCHIVE_FAILED_KEEP_RAW_$krn"
+}
+
+# continue·재개 공통: pin 상태에 맞춰 보관을 마무리한다. bound-raw 면 gzip 부터, bound-gz 인데 raw 가 남았으면
+# G4(해제 복귀 공간)부터 다시 재고 지금 실측 keep_raw_now 로 경고/HOLD 를 정한다.
+mig_finish_archive() {
+  local state pre_size krn
+  [ -f "$R$DATA_DIR/engine.db.pre-v22" ] || return 0
+  state=$(py mig-pin "$MIG_RUN" state) || mig_hold_stopped PIN_READ
+  if [ "$state" = bound-raw ]; then
+    mig_archive_flow
+    return 0
+  fi
+  pre_size=$(py json-field "$(mig_receipt_field pre_identity)" size)
+  if py mig-guard "$R$DATA_DIR=$pre_size" >>"$CMD_LOG" 2>&1; then
+    py mig-journal "$R$DATA_DIR" append "$MIG_RUN" unlink_pre intent || mig_hold_stopped JOURNAL_WRITE
+    py mig-unlink-pre "$R$DATA_DIR" "$(mig_receipt_path)" >>"$CMD_LOG" || mig_hold_stopped RAW_IDENTITY
+    py mig-journal "$R$DATA_DIR" append "$MIG_RUN" unlink_pre "done" || mig_hold_stopped JOURNAL_WRITE
+    return 0
+  fi
+  krn=$(py mig-keep-raw-now "$R$DATA_DIR" "$R$DAILY_BACKUPS")
+  MIG_KEEP_RAW=$krn
+  [ "$krn" = true ] || mig_hold_stopped "G4_FALSE_KEEP_RAW_$krn"
+  warn RAW_KEPT_FOR_ROLLBACK_SPACE "해제 복귀 공간(G4)이 없어 raw 와 gz 를 함께 둡니다"
+}
+
+# 준비된 이미지 확인: prepare 가 만든 정확 ID, 라벨 source=NEW·schema=to.
+mig_check_prepared() {
+  local name id user src label to
+  MIG_NEW_ENGINE=$(py mig-prepared get "$NEW" engine_image)
+  MIG_NEW_RELAY=$(py mig-prepared get "$NEW" relay_image)
+  [ -n "$MIG_NEW_ENGINE" ] && [ -n "$MIG_NEW_RELAY" ] || die NOT_PREPARED "migrate-prepare 기록이 없습니다"
+  to=$(py mig-field "$MIG_ID" to_schema)
+  for name in engine relay; do
+    if [ "$name" = engine ]; then id=$MIG_NEW_ENGINE; else id=$MIG_NEW_RELAY; fi
+    info=$(dk image inspect "$id" 2>>"$CMD_LOG" | py image-info) || die NOT_PREPARED "준비 이미지가 없습니다: $name"
+    read -r _ user src label <<EOF
+$info
+EOF
+    [ "$src" = "$NEW" ] && [ "$user" = 10001:10001 ] && [ "$label" = "$to" ] \
+      || die NOT_PREPARED "준비 이미지 라벨이 다릅니다: $name"
+  done
+  NEW_ENGINE_IMAGE=$MIG_NEW_ENGINE
+  NEW_RELAY_IMAGE=$MIG_NEW_RELAY
+}
+
+# deploy 1단계와 같은 현재 배치 확인(값은 전역에). deploy 모드 코드는 손대지 않고 같은 규칙을 다시 쓴다.
+mig_preflight() {
+  local unit name info id user src label
+  PHASE=preflight
+  for unit in "$ENGINE_UNIT" "$RELAY_UNIT"; do
+    [ -f "$R$UNIT_DIR/$unit" ] || die LAYOUT "$UNIT_DIR/$unit 이 없습니다"
+    [ -z "$(unit_prop "$unit" DropInPaths)" ] || die LAYOUT "$unit 에 drop-in 이 있습니다(예상하지 못한 배치)"
+    [ "$(unit_prop "$unit" FragmentPath)" = "$UNIT_DIR/$unit" ] || die LAYOUT "$unit FragmentPath 가 $UNIT_DIR 가 아닙니다"
+    [ "$(unit_prop "$unit" ActiveState)" = active ] || die NOT_ACTIVE "$unit 이 active 가 아닙니다"
+    [ "$(unit_prop "$unit" UnitFileState)" = enabled ] || die LAYOUT "$unit 이 enabled 가 아닙니다"
+  done
+  for unit in docker.service "$TUNNEL_UNIT"; do
+    [ "$(unit_prop "$unit" ActiveState)" = active ] || die NOT_ACTIVE "$unit 이 active 가 아닙니다"
+  done
+  info=$(py unit-parse "$R$UNIT_DIR/$ENGINE_UNIT" engine) || die LAYOUT "$info"
+  M_CUR=${info% *}; M_COMPANION=${info#* }
+  info=$(py unit-parse "$R$UNIT_DIR/$RELAY_UNIT" relay) || die LAYOUT "$info"
+  [ "${info% *}" = "$M_CUR" ] || die LAYOUT "engine·relay unit 이 다른 판을 가리킵니다"
+  PREV_COMMIT=$M_CUR
+  for name in engine relay; do
+    info=$(py override-check "$R$RELEASES/naver-$M_CUR/preview-$name.override.yml" "$name" "$M_CUR") || die LAYOUT "$info"
+    info=$(dk image inspect "metainc/naver-$name:$M_CUR" 2>>"$CMD_LOG" | py image-info) || die LAYOUT "현재 이미지 정보 없음"
+    read -r id user src label <<EOF
+$info
+EOF
+    : "$label"
+    [ "$src" = "$M_CUR" ] && [ "$user" = 10001:10001 ] || die LAYOUT "현재 $name 이미지 라벨/사용자 이상"
+    read_container "naver-$name" || die LAYOUT "naver-$name 컨테이너를 정확히 하나 찾지 못했습니다"
+    [ "$C_RUNNING" = true ] && [ "$C_IMAGE" = "$id" ] || die NOT_ACTIVE "naver-$name 컨테이너 상태 이상"
+    [ "$C_USER" = 10001:10001 ] || die LAYOUT "naver-$name 컨테이너 사용자 이상"
+    if [ "$name" = engine ]; then
+      PREV_ENGINE_IMAGE=$id; PREV_ENGINE_MOUNTS=$C_MOUNTS; CUR_SWITCHES=$C_SWITCHES
+      case ",$CUR_SWITCHES," in *,execution=false,*) ;; *) die EXECUTION_ENABLED "execution 스위치가 false 가 아닙니다" ;; esac
+    else
+      PREV_RELAY_IMAGE=$id; PREV_RELAY_MOUNTS=$C_MOUNTS
+    fi
+  done
+}
+
+mig_lock() {
+  mkdir -p "$R$STATE_DIR/runs" "$R$STATE_DIR/logs"
+  chmod 700 "$R$STATE_DIR" "$R$STATE_DIR/logs"
+  exec 9>>"$R$STATE_DIR/lock"
+  if ! flock -n 9; then
+    RESULT_CODE=11; RESULT_STATUS=LOCKED; RESULT_REASON=LOCKED
+    log "결과: LOCKED — 다른 naver-deploy 가 실행 중입니다"
+    exit 11
+  fi
+  M_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+  CMD_LOG="$R$STATE_DIR/logs/commands-$M_STAMP.log"
+  : > "$CMD_LOG"
+  py prune-logs "$R$STATE_DIR/logs" 10
+}
+
+mig_common_inputs() { # commit tar id
+  NEW=$1; M_TAR=$2; MIG_ID=$3
+  printf '%s' "$NEW" | grep -Eq '^[0-9a-f]{40}$' || { NEW=''; die BAD_INPUT "커밋은 40자리 소문자 16진수여야 합니다"; }
+  [ -f "$M_TAR" ] || die BAD_INPUT "source.tar 가 없습니다"
+  printf '%s' "$MIG_ID" | grep -Eq '^[0-9a-z-]{1,40}$' || die BAD_INPUT "migration id 형식"
+  py mig-field "$MIG_ID" to_schema >/dev/null || die MIGRATION_UNKNOWN "고정 표에 없는 이관입니다"
+  [ -f "$MIG_HELPER" ] || die BAD_INPUT "helper 파일이 없습니다"
+  if [ "$TEST_MODE" = 0 ] && [ "$(id -u)" != 0 ]; then die NOT_ROOT "root 로 실행해야 합니다"; fi
+}
+
+mig_source_checks() { # 스키마 쌍·고정 해시·실행 중 v21 store·helper
+  local cid
+  SCHEMA_NEW=$(py tar-check "$M_TAR") || { info=$SCHEMA_NEW; SCHEMA_NEW=''; die ARCHIVE "$info"; }
+  SCHEMA_CUR=$(image_schema "$PREV_ENGINE_IMAGE") || die SCHEMA_UNKNOWN "실행 중 이미지의 SCHEMA_VERSION 을 읽지 못했습니다"
+  [ "$SCHEMA_NEW" != "$SCHEMA_CUR" ] || die MIGRATION_NOT_NEEDED "스키마가 같습니다"
+  info=$(py mig-tar-pins "$M_TAR" "$MIG_ID" "$M_CUR" "$NEW" "$SCHEMA_CUR" "$SCHEMA_NEW") || die MIGRATION_REFUSED "$info"
+  cid=$(dk create --network none "$PREV_ENGINE_IMAGE" 2>>"$CMD_LOG") || die LAYOUT "실행 중 이미지 store.py 를 읽지 못했습니다"
+  info=$(dk cp "$cid:/opt/naver-engine/naver_engine/store.py" - 2>>"$CMD_LOG" | py mig-store-sha-stdin "$MIG_ID") || info=FAIL
+  dk rm "$cid" >>"$CMD_LOG" 2>&1 || warn TEMP_CONTAINER_LEFT "임시 컨테이너 삭제 실패"
+  [ "$info" = ok ] || die MIGRATION_RUNNING_PIN "실행 중 v21 이미지의 store.py 가 고정 표와 다릅니다"
+  info=$(py mig-helper-pin "$MIG_HELPER" "$MIG_ID") || die MIGRATION_HELPER_PIN "$info"
+}
+
+mig_release_and_build_checks() { # 준비된 release 폴더·override 확인과 설정 묶음·check-config(빌드 없음)
+  local name override shape_old shape_new new_switches
+  M_REL_NEW="$RELEASES/naver-$NEW"
+  info=$(py tree-compare "$M_TAR" "$R$M_REL_NEW") || die RELEASE_DIR_DIFFERS "$info"
+  for name in engine relay; do
+    override="$R$M_REL_NEW/preview-$name.override.yml"
+    py subst "$R$M_RUN_DIR/preview-$name.override.yml" "$R$M_RUN_DIR/new-preview-$name.override.yml" "$M_CUR" "$NEW" 1
+    if [ -e "$override" ]; then
+      [ "$(py sha "$override")" = "$(py sha "$R$M_RUN_DIR/new-preview-$name.override.yml")" ] \
+        || die RELEASE_DIR_DIFFERS "$override 가 현재 override 에서 커밋만 바꾼 내용과 다릅니다"
+    else
+      write_file_atomic "$R$M_RUN_DIR/new-preview-$name.override.yml" "$override" 600
+    fi
+    dk tag "$( [ "$name" = engine ] && echo "$MIG_NEW_ENGINE" || echo "$MIG_NEW_RELAY" )" "metainc/naver-$name:$NEW" >>"$CMD_LOG" 2>&1 \
+      || die NOT_PREPARED "준비 이미지 태그 실패"
+    shape_old=$(compose_shape "$name" "$RELEASES/naver-$M_CUR" "$M_COMPANION") || die COMPOSE_CONFIG "현재 $name compose 설정"
+    shape_new=$(compose_shape "$name" "$M_REL_NEW" "$M_COMPANION") || die COMPOSE_CONFIG "새 $name compose 설정"
+    info=$(py shape-diff "$shape_old" "$shape_new") || die CONFIG_SHAPE_CHANGED "$info"
+  done
+  compose_args engine "$M_REL_NEW" "$M_COMPANION"
+  new_switches=$(dk "${CARGS[@]}" config --format json 2>>"$CMD_LOG" | py check-config-run "$MIG_NEW_ENGINE" "$CMD_LOG") \
+    || die CHECK_CONFIG "$new_switches"
+  [ "$new_switches" = "$CUR_SWITCHES" ] || die FLAGS_CHANGED "새 판 스위치가 현재와 다릅니다"
+}
+
+# ── migrate-prepare: 서버에서 v22 이미지를 한 번 빌드하고 정확 ID 를 기록한다(서비스 무변경) ──
+main_migrate_prepare() {
+  local name id user src label rel_new
+  mig_common_inputs "$@"
+  mig_lock
+  recover_if_needed
+  mig_preflight
+  mig_source_checks
+  rel_new="$RELEASES/naver-$NEW"
+  if [ -e "$R$rel_new" ]; then
+    info=$(py tree-compare "$M_TAR" "$R$rel_new") || die RELEASE_DIR_DIFFERS "$info"
+  else
+    py tar-extract "$M_TAR" "$R$rel_new"
+  fi
+  PHASE=building
+  for name in engine relay; do
+    dk build --quiet --label "metainc.naver.preview.source=$NEW" --label "metainc.naver.schema=$SCHEMA_NEW" \
+      -t "metainc/naver-$name:$NEW" -f "$R$rel_new/Dockerfile.naver-$name" "$R$rel_new" >>"$CMD_LOG" 2>&1 \
+      || die BUILD_FAILED "metainc/naver-$name:$NEW 빌드 실패"
+    info=$(dk image inspect "metainc/naver-$name:$NEW" 2>>"$CMD_LOG" | py image-info) || die BUILD_FAILED "새 이미지 정보 없음"
+    read -r id user src label <<EOF
+$info
+EOF
+    [ "$src" = "$NEW" ] && [ "$user" = 10001:10001 ] && [ "$label" = "$SCHEMA_NEW" ] || die BUILD_FAILED "새 이미지 라벨 이상"
+    if [ "$name" = engine ]; then MIG_NEW_ENGINE=$id; else MIG_NEW_RELAY=$id; fi
+  done
+  py mig-prepared write "$NEW" "engine_image=$MIG_NEW_ENGINE" "relay_image=$MIG_NEW_RELAY" "previous_commit=$M_CUR" \
+    "previous_engine_image=$PREV_ENGINE_IMAGE" "previous_relay_image=$PREV_RELAY_IMAGE" "prepared_at=$M_STAMP"
+  NEW_ENGINE_IMAGE=$MIG_NEW_ENGINE; NEW_RELAY_IMAGE=$MIG_NEW_RELAY; PREV_COMMIT=$M_CUR
+  PHASE=prepared
+  finish 0 PREPARED '' "이미지 준비: engine $MIG_NEW_ENGINE relay $MIG_NEW_RELAY (서비스 무변경)"
+}
+
+# ── migrate-rehearse: 준비된 정확 이미지로 scratch 에서만 끝까지(운영 DATA_DIR 은 붙이지 않는다) ──
+main_migrate_rehearse() {
+  local scratch data step args rc=0 helper_sha probe_new probe_old
+  mig_common_inputs "$@"
+  mig_lock
+  recover_if_needed
+  mig_preflight
+  mig_source_checks
+  mig_check_prepared
+  MIG_RUN="$M_STAMP-$(printf '%s' "$NEW" | cut -c1-12)"
+  scratch="$R$STATE_DIR/rehearse/$MIG_RUN"
+  data="$scratch/data"
+  mkdir -p "$data"
+  chmod 700 "$scratch" "$data"
+  [ "$TEST_MODE" = 1 ] || chown 10001:10001 "$data"
+  [ "$(py same-device-inode "$data" "$R$DATA_DIR")" = different ] || die REHEARSAL_LAYOUT "scratch 가 운영 DATA_DIR 와 같습니다"
+  : > "$data/naver-migrate-rehearsal-marker"
+  [ "$TEST_MODE" = 1 ] || chown 10001:10001 "$data/naver-migrate-rehearsal-marker"
+  helper_sha=$(py file-sha "$MIG_HELPER")
+  PHASE=rehearsing
+  args=$(py mig-args "$MIG_ID" probe-old rehearsal)
+  mig_helper "$PREV_ENGINE_IMAGE" "$data" probe "$args" || rc=1
+  probe_old=$(mig_result sqlite_version 2>/dev/null || true)
+  args=$(py mig-args "$MIG_ID" probe-new rehearsal)
+  mig_helper "$MIG_NEW_ENGINE" "$data" probe "$args" || rc=1
+  probe_new=$(mig_result sqlite_version 2>/dev/null || true)
+  [ "$(mig_result features octet_length 2>/dev/null)" = True ] || rc=1
+  if [ "$rc" = 0 ]; then
+    args=$(py mig-args "$MIG_ID" seed rehearsal "run=$MIG_RUN")
+    mig_helper "$PREV_ENGINE_IMAGE" "$data" seed "$args" || rc=1
+  fi
+  if [ "$rc" = 0 ]; then
+    args=$(py mig-args "$MIG_ID" chain rehearsal "run=$MIG_RUN" floor_bytes=1073741824)
+    mig_helper "$MIG_NEW_ENGINE" "$data" chain "$args" || rc=1
+  fi
+  if [ "$rc" = 0 ]; then
+    receipt="$data/naver-migrate-receipt.json"
+    args=$(py mig-args "$MIG_ID" startcheck rehearsal "run=$MIG_RUN" \
+      "expect_identity=json:$(py json-field "$(cat "$receipt")" work_identity)" \
+      "expect_sha256=$(py json-field "$(cat "$receipt")" work_sha256)" full=json:true expect_schema=22)
+    mig_helper "$MIG_NEW_ENGINE" "$data" startcheck "$args" || rc=1
+  fi
+  if [ "$rc" = 0 ]; then
+    args=$(py mig-args "$MIG_ID" v21-refuses rehearsal "run=$MIG_RUN" expect_schema=22)
+    mig_helper "$PREV_ENGINE_IMAGE" "$data" v21-refuses "$args" || rc=1
+  fi
+  if [ "$rc" = 0 ]; then
+    # 옛 writer 가 남긴 빈 곁 파일을 잠금 아래 정리(startcheck)한 뒤 되돌림을 시험한다.
+    args=$(py mig-args "$MIG_ID" startcheck rehearsal "run=$MIG_RUN" \
+      "expect_identity=json:$(py json-field "$(cat "$receipt")" work_identity)" \
+      "expect_sha256=$(py json-field "$(cat "$receipt")" work_sha256)" full=json:true expect_schema=22)
+    mig_helper "$MIG_NEW_ENGINE" "$data" startcheck "$args" || rc=1
+  fi
+  if [ "$rc" = 0 ]; then
+    args=$(py mig-args "$MIG_ID" undo rehearsal "run=$MIG_RUN" "receipt=@$receipt")
+    mig_helper "$MIG_NEW_ENGINE" "$data" undo "$args" || rc=1
+  fi
+  if [ "$rc" = 0 ]; then
+    args=$(py mig-args "$MIG_ID" v21-opens rehearsal "run=$MIG_RUN" expect_schema=21)
+    mig_helper "$PREV_ENGINE_IMAGE" "$data" v21-opens "$args" || rc=1
+  fi
+  [ "$rc" = 0 ] || log "리허설 실패 단계 코드: $(mig_code)"
+  rm -rf -- "$scratch"
+  MIG_REHEARSAL=$( [ "$rc" = 0 ] && echo passed || echo failed )
+  py mig-rehearsal write "result=$MIG_REHEARSAL" "engine_image=$MIG_NEW_ENGINE" "relay_image=$MIG_NEW_RELAY" \
+    "previous_engine_image=$PREV_ENGINE_IMAGE" "helper_sha256=$helper_sha" "run=$MIG_RUN" \
+    "sqlite_new=$probe_new" "sqlite_old=$probe_old" "bind=scratch" "at=$M_STAMP"
+  PREV_COMMIT=$M_CUR
+  if [ "$rc" = 0 ]; then finish 0 REHEARSED '' "격리 리허설 통과(운영 DB 미사용)"; fi
+  finish 10 REHEARSAL_FAILED REHEARSAL "격리 리허설 실패(운영 DB 미사용)"
+}
+
+mig_plan_now() {
+  local tar_sha helper_sha
+  tar_sha=$(py sha "$M_TAR")
+  helper_sha=$(py file-sha "$MIG_HELPER")
+  py mig-plan "$MIG_ID" "$M_CUR" "$NEW" "$tar_sha" "$helper_sha" "$MIG_NEW_ENGINE" "$MIG_NEW_RELAY" \
+    "$PREV_ENGINE_IMAGE" "$PREV_RELAY_IMAGE"
+}
+
+# ── migrate-plan: 읽기 전용 계획(plan_sha256) ──
+main_migrate_plan() {
+  local out
+  mig_common_inputs "$@"
+  mig_lock
+  if [ -n "$(py mig-pointer get)" ] || [ -n "$(py mig-hold get)" ] || [ "$(py mig-dropin present)" != no ]; then
+    die MIGRATION_ACTIVE "이관 표지가 남아 있습니다(읽기 전용 계획은 복구하지 않습니다)"
+  fi
+  mig_preflight
+  mig_source_checks
+  mig_check_prepared
+  out=$(mig_plan_now) || die PLAN "$out"
+  MIG_PLAN=$(printf '%s\n' "$out" | sed -n 1p)
+  printf '%s\n' "$out" | sed -n 2p > "$R$STATE_DIR/migration/plan-$MIG_PLAN.json"
+  PREV_COMMIT=$M_CUR
+  finish 0 PLANNED '' "plan_sha256=$MIG_PLAN"
+}
+
+# ── migrate-deploy ──
+main_migrate_deploy() {
+  local plan_in size files f name unit sum_runtime sum_tmpfiles sum_tunnel sum_nginx tar_size krn deployed_at rc
+  plan_in=${4:-}
+  mig_common_inputs "$1" "$2" "$3"
+  printf '%s' "$plan_in" | grep -Eq '^[0-9a-f]{64}$' || die BAD_INPUT "plan_sha256 형식"
+  mig_lock
+  recover_if_needed
+  MIG_STAGE=preflight
+  mig_preflight
+  mig_source_checks
+  mig_check_prepared
+  py mig-rehearsal check "$MIG_NEW_ENGINE" "$MIG_NEW_RELAY" "$(py file-sha "$MIG_HELPER")" >/dev/null \
+    || die REHEARSAL_MISSING "이 준비 이미지로 통과한 격리 리허설이 없습니다"
+  deployed_at=$(py state-get "$R$STATE_DIR/current.json" deployed_at 2>/dev/null || true)
+  info=$(py mig-window 21:30 "$R$BACKUP_STATE" "$deployed_at") || die WINDOW "$info"
+  info=$(py db-files "$R$DATA_DIR") || die DB_FILES "$info"
+  size=${info%% *}
+  for f in naver-migrate-journal.json naver-migrate-receipt.json; do
+    [ ! -e "$R$DATA_DIR/$f" ] || die LEFTOVERS "이전 이관 기록이 DATA_DIR 에 남아 있습니다"
+  done
+  MIG_PLAN=$(mig_plan_now | sed -n 1p)
+  [ "$MIG_PLAN" = "$plan_in" ] || die PLAN_MISMATCH "계획이 승인한 plan_sha256 과 다릅니다"
+  tar_size=$(wc -c < "$M_TAR" | tr -d ' ')
+  info=$(py mig-guard "$R$DATA_DIR=$((size + tar_size))") || die SPACE_G0 "$info"
+
+  # ── M3 기록: run·활성 표지·상태 ACTIVE·pin pending(멈추기 전) ──
+  MIG_RUN="$M_STAMP-$(printf '%s' "$NEW" | cut -c1-12)"
+  M_RUN_DIR="$STATE_DIR/runs/$M_STAMP-$(printf '%s' "$NEW" | cut -c1-12)"
+  mkdir "$R$M_RUN_DIR"
+  for name in engine relay; do
+    cp "$R$UNIT_DIR/metainc-naver-$name.service" "$R$M_RUN_DIR/metainc-naver-$name.service"
+    cp "$R$RELEASES/naver-$M_CUR/preview-$name.override.yml" "$R$M_RUN_DIR/preview-$name.override.yml"
+  done
+  printf '%s\n' "$PREV_ENGINE_MOUNTS" > "$R$M_RUN_DIR/mounts-engine.json"
+  printf '%s\n' "$PREV_RELAY_MOUNTS" > "$R$M_RUN_DIR/mounts-relay.json"
+  cat "$CMD_LOG" > "$R$M_RUN_DIR/commands.log"
+  rm -f "$CMD_LOG"
+  CMD_LOG="$R$M_RUN_DIR/commands.log"
+  rm -f "$STATE_FILE"
+  HAVE_STATE=1
+  MIG_ACTIVE=1
+  MIG_STAGE=recorded
+  py state-write "$STATE_FILE" "phase=preparing" "new_commit=$NEW" "prev_commit=$M_CUR" \
+    "prev_engine_image=$PREV_ENGINE_IMAGE" "prev_relay_image=$PREV_RELAY_IMAGE" "run_dir=$M_RUN_DIR" \
+    "companion=$M_COMPANION" "schema=$SCHEMA_NEW" "switches=$CUR_SWITCHES" "started_at=$M_STAMP" \
+    "migration_id=$MIG_ID" "migration_run=$MIG_RUN" "new_engine_image=$MIG_NEW_ENGINE" "new_relay_image=$MIG_NEW_RELAY"
+  for name in engine relay; do
+    dk tag "$( [ "$name" = engine ] && echo "$PREV_ENGINE_IMAGE" || echo "$PREV_RELAY_IMAGE" )" \
+      "metainc/naver-$name:rollback-$(printf '%s' "$MIG_RUN" | cut -c18-29)" >>"$CMD_LOG" 2>&1 || die PIN "복귀 태그 실패"
+  done
+  py mig-pin "$MIG_RUN" create "commit=$M_CUR" "new_commit=$NEW" "engine_image=$PREV_ENGINE_IMAGE" \
+    "relay_image=$PREV_RELAY_IMAGE" "new_engine_image=$MIG_NEW_ENGINE" "new_relay_image=$MIG_NEW_RELAY" \
+    "run_dir=$M_RUN_DIR" "companion=$M_COMPANION" "switches=$CUR_SWITCHES" "migration_id=$MIG_ID" \
+    "engine_unit_sha256=$(py sha "$R$M_RUN_DIR/metainc-naver-engine.service")" \
+    "relay_unit_sha256=$(py sha "$R$M_RUN_DIR/metainc-naver-relay.service")" \
+    "engine_override_sha256=$(py sha "$R$M_RUN_DIR/preview-engine.override.yml")" \
+    "relay_override_sha256=$(py sha "$R$M_RUN_DIR/preview-relay.override.yml")" \
+    "release_tree_sha256=$(py tree-sha "$R$RELEASES/naver-$M_CUR")"
+  MIG_PIN_STATE=pending
+  # 활성 표지는 pin 뒤에(복구가 pin 으로 v21 세대를 찾는다). 표지 → 상태 ACTIVE 순.
+  py mig-pointer set "$MIG_RUN"
+  py mig-status "$MIG_RUN" state=ACTIVE "migration_id=$MIG_ID" "plan_sha256=$MIG_PLAN"
+  MIG_STATE=ACTIVE
+  P_RUN_DIR=$M_RUN_DIR; P_COMPANION=$M_COMPANION; P_SWITCHES=$CUR_SWITCHES; P_NEW_COMMIT=$NEW
+  mig_release_and_build_checks
+  sum_runtime=$(py sha "$R$RUNTIME_ENV" 2>/dev/null || echo absent)
+  sum_tmpfiles=$(py sha "$R$TMPFILES_CONF")
+  sum_tunnel=$(py sha "$R$UNIT_DIR/$TUNNEL_UNIT" 2>/dev/null || echo absent)
+  sum_nginx=$(py tree-sha "$R$NGINX_DIR")
+  set_phase prepared
+
+  # ── M3a 시작 차단 → M4 정지 ──
+  MIG_STAGE=hold
+  mig_install_hold
+  MIG_STAGE=stopped
+  set_phase stopping
+  STOP_STARTED=$SECONDS
+  stop_and_wait "$RELAY_UNIT" naver-relay || die STOP_FAILED "relay 정지 확인 실패"
+  stop_and_wait "$ENGINE_UNIT" naver-engine || die STOP_FAILED "engine 정지 확인 실패"
+
+  # ── M5-M8 chain: 한 프로세스가 원본 잠금을 쥐고 사본 이관·검증·교체 ──
+  set_phase db_copying
+  MIG_STAGE=chain
+  args=$(py mig-args "$MIG_ID" chain production "run=$MIG_RUN" floor_bytes=1073741824)
+  mig_helper "$MIG_NEW_ENGINE" "$R$DATA_DIR" chain "$args" || die "CHAIN_$(mig_code)" "chain 실패"
+  MIG_RECEIPT_SHA=$(py mig-receipt "$R$DATA_DIR" "$MIG_RUN" copy)
+  [ "$MIG_RECEIPT_SHA" = "$(mig_result receipt_sha256)" ] || die RECEIPT "영수증 해시가 helper 결과와 다릅니다"
+  MIG_ORPHANS=$(mig_result orphans_closed)
+  MIG_STAGE=swapped
+  py mig-status "$MIG_RUN" "receipt_sha256=$MIG_RECEIPT_SHA"
+  py mig-pin "$MIG_RUN" bind-raw "receipt_sha256=$MIG_RECEIPT_SHA" "pre_identity=$(mig_receipt_field pre_identity)" \
+    "pre_sha256=$(mig_receipt_field pre_sha256)" "raw_path=$DATA_DIR/engine.db.pre-v22"
+  MIG_PIN_STATE=bound-raw
+  info=$(py mig-guard "$R$DATA_DIR=0") || die SPACE_G2 "$info"
+  log "chain 완료: 검증·교체(orphan 회차 $MIG_ORPHANS 건 닫힘)"
+
+  # ── M9 unit 교체·컨테이너 생성(시작 안 함) ──
+  set_phase switching
+  py subst "$R$M_RUN_DIR/$ENGINE_UNIT" "$R$M_RUN_DIR/new-$ENGINE_UNIT" "$M_CUR" "$NEW" 6
+  py subst "$R$M_RUN_DIR/$RELAY_UNIT" "$R$M_RUN_DIR/new-$RELAY_UNIT" "$M_CUR" "$NEW" 4
+  write_file_atomic "$R$M_RUN_DIR/new-$ENGINE_UNIT" "$R$UNIT_DIR/$ENGINE_UNIT" 644
+  write_file_atomic "$R$M_RUN_DIR/new-$RELAY_UNIT" "$R$UNIT_DIR/$RELAY_UNIT" 644
+
+  # ── M10 시각 창 → guarded_start v22 ──
+  if ! py mig-window 23:00 "$R$BACKUP_STATE" >>"$CMD_LOG" 2>&1; then
+    mig_hold_stopped WINDOW_PASSED_BEFORE_START
+  fi
+  MIG_KEEP_RAW=$(py mig-keep-raw-now "$R$DATA_DIR" "$R$DAILY_BACKUPS")
+  log "keep_raw_now(기동 전, 정보용): $MIG_KEEP_RAW"
+  rc=0
+  guarded_start v22 "$(mig_receipt_field work_identity)" "$(mig_receipt_field work_sha256)" true || rc=$?
+  if [ "$rc" = 1 ]; then
+    die START_CHECK "guarded_start v22 사전 확인 실패"
+  elif [ "$rc" = 3 ]; then
+    # start intent 기록·hold 해제 전이 실패·불명: 어떤 기동도 하지 않고 정지 보존(대표 판단).
+    mig_hold_stopped START_TRANSITION_FAILED
+  elif [ "$rc" != 0 ]; then
+    die HEALTH "v22 헬스 실패($HEALTH_STATUS $HEALTH_CODES)"
+  fi
+  py mig-journal "$R$DATA_DIR" append "$MIG_RUN" health "done"
+  py mig-status "$MIG_RUN" state=HEALTHY
+  MIG_STATE=HEALTHY
+  MIG_STAGE=healthy
+
+  # ── M12 보관 → M13 종결 ──
+  mig_archive_flow
+  MIG_STAGE=completing
+  [ "$(py sha "$R$RUNTIME_ENV" 2>/dev/null || echo absent)" = "$sum_runtime" ] || warn RUNTIME_ENV_CHANGED "runtime.env 변경 감지"
+  [ "$(py sha "$R$TMPFILES_CONF")" = "$sum_tmpfiles" ] || warn TMPFILES_CHANGED "tmpfiles 변경 감지"
+  [ "$(py sha "$R$UNIT_DIR/$TUNNEL_UNIT" 2>/dev/null || echo absent)" = "$sum_tunnel" ] || warn TUNNEL_UNIT_CHANGED "터널 unit 변경 감지"
+  [ "$(py tree-sha "$R$NGINX_DIR")" = "$sum_nginx" ] || warn NGINX_CHANGED "nginx 변경 감지"
+  mig_complete COMPLETED
+  PHASE='done'
+  if [ -n "$WARNINGS" ]; then
+    finish 0 MIGRATED_WITH_WARNINGS "$WARNINGS" "$M_CUR → $NEW 이관 배포 완료(경고 있음)"
+  fi
+  finish 0 MIGRATED '' "$M_CUR → $NEW 이관 배포 완료"
+}
+
+mig_owner_run() { # run → pointer·pin 로드(continue/rollback/accept 공통)
+  MIG_RUN=$1
+  printf '%s' "$MIG_RUN" | grep -Eq '^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$' || die BAD_INPUT "run id 형식"
+  MIG_ID=$(py mig-status-get "$MIG_RUN" migration_id)
+  [ -n "$MIG_ID" ] || die MIGRATION_UNKNOWN "이 run 의 이관 기록이 없습니다"
+  MIG_STATE=$(py mig-status-get "$MIG_RUN" state)
+  mig_load_pin || die PIN_MISSING "복귀 pin 이 없습니다"
+  NEW=$P_NEW_COMMIT
+  STATE_FILE="$R$STATE_DIR/state.json"
+}
+
+# ── migrate-continue: HOLD 된 v22 세대를 대표 판단으로 다시 기동 ──
+main_migrate_continue() {
+  local rc=0 identity
+  mig_lock
+  MIG_ALLOW_HOLD=1
+  recover_if_needed
+  mig_owner_run "$1"
+  [ "$MIG_STATE" = HOLD ] || die NOT_HELD "HOLD 상태가 아닙니다($MIG_STATE)"
+  [ "$(py mig-pointer get)" = "$MIG_RUN" ] || die NOT_ACTIVE_RUN "활성 run 이 아닙니다"
+  MIG_ACTIVE=1; HAVE_STATE=1
+  M_RUN_DIR=$P_RUN_DIR
+  CMD_LOG="$R$P_RUN_DIR/commands.log"
+  MIG_STAGE=started
+  py mig-status "$MIG_RUN" state=ACTIVE
+  info=$(py mig-window 23:00 "$R$BACKUP_STATE") || mig_hold_stopped "WINDOW_$info"
+  mig_stop_both || mig_unknown STOP_NOT_CONFIRMED
+  mig_prove
+  [ "$MIG_DECISION" != unknown ] || mig_hold_stopped CONTINUE_PROVE_UNKNOWN
+  identity=$(py identity "$R$DATA_DIR/engine.db") || mig_unknown CANONICAL_MISSING
+  [ "$(py ino-of "$identity")" = "$(py ino-of "$(mig_receipt_field work_identity)")" ] || mig_unknown NOT_V22_GENERATION
+  guarded_start v22 "$identity" '' false || rc=$?
+  [ "$rc" = 0 ] || mig_hold_stopped CONTINUE_START_FAILED
+  py mig-journal "$R$DATA_DIR" append "$MIG_RUN" health "done"
+  py mig-status "$MIG_RUN" state=HEALTHY
+  MIG_STAGE=healthy
+  mig_finish_archive
+  mig_complete COMPLETED
+  finish 0 CONTINUED '' "v22 세대 재기동·헬스 통과"
+}
+
+# ── migrate-rollback(R7): bound pin 의 v21 세대로 되돌림. v22 세대는 묶음으로 보존 ──
+main_migrate_rollback() {
+  local rc=0 stamp_now copy_dir pre_size args bundle
+  mig_lock
+  MIG_ALLOW_HOLD=1
+  recover_if_needed
+  mig_owner_run "$1"
+  py mig-pin "$MIG_RUN" check >/dev/null || die PIN_NOT_BOUND "R7 은 bound 된 복귀 묶음만 씁니다"
+  case "$MIG_STATE" in HOLD|HEALTHY|COMPLETED) ;; *) die NOT_ROLLBACKABLE "되돌릴 수 있는 상태가 아닙니다($MIG_STATE)" ;; esac
+  for name in engine relay; do
+    dk image inspect "$( [ "$name" = engine ] && echo "$PREV_ENGINE_IMAGE" || echo "$PREV_RELAY_IMAGE" )" >/dev/null 2>&1 \
+      || die PIN_MEMBER_CHANGED "pin 된 v21 이미지가 없습니다"
+  done
+  if [ -f "$R$DATA_DIR/engine.db.pre-v22" ]; then pre_size=0; else pre_size=$(py json-field "$(mig_receipt_field pre_identity)" size); fi
+  info=$(py mig-guard "$R$DATA_DIR=$pre_size") || die SPACE_G5 "$info"
+  info=$(py mig-window 23:00 "$R$BACKUP_STATE") || die WINDOW "$info"
+  MIG_ACTIVE=1; HAVE_STATE=1
+  CMD_LOG="$R$P_RUN_DIR/commands.log"
+  py mig-pointer set "$MIG_RUN"
+  py mig-status "$MIG_RUN" state=HOLD reason=ROLLBACK_IN_PROGRESS
+  py mig-hold create "$MIG_RUN"
+  py mig-dropin install
+  systemctl daemon-reload 2>>"$CMD_LOG"
+  mig_unit_dropins_ok || mig_unknown HOLD_INSTALL
+  mig_stop_both || mig_unknown STOP_NOT_CONFIRMED
+  mig_prove
+  mig_gap_report
+  stamp_now=$(date -u +%Y%m%dT%H%M%SZ)
+  args=$(py mig-args "$MIG_ID" bundle production "run=$MIG_RUN" "stamp=$stamp_now" "receipt=@$(mig_receipt_path)")
+  mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" bundle "$args" || mig_unknown "BUNDLE_$(mig_code)"
+  bundle=$(mig_result bundle)
+  if [ -f "$R$DATA_DIR/engine.db.pre-v22" ]; then
+    args=$(py mig-args "$MIG_ID" restore-rename production "run=$MIG_RUN" "receipt=@$(mig_receipt_path)")
+    mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" restore-rename "$args" || mig_unknown "RESTORE_$(mig_code)"
+  else
+    copy_dir=$(py json-field "$(cat "$R$STATE_DIR/pins/$MIG_RUN.json")" copy_dir)
+    [ -n "$copy_dir" ] || mig_unknown NO_PINNED_COPY
+    py mig-restore-gz "$R$copy_dir" "$R$DATA_DIR" "$MIG_RUN" "$(mig_receipt_path)" >>"$CMD_LOG" 2>&1 || mig_unknown RESTORE_GZ_FAILED
+    # raw 가 없던 복귀(F4): 풀어 놓은 v21(기준)과 묶음의 v22(현재)로 값 없이 gap 을 센다. 추가 공간이 들지 않는다.
+    mig_gap_between engine.db "$bundle/engine.db"
+  fi
+  MIG_STAGE=rollback
+  mig_start_v21 || rc=$?
+  [ "$rc" = 0 ] || mig_hold_stopped V21_START_FAILED
+  mig_complete ROLLED_BACK
+  finish 2 MIGRATION_ROLLED_BACK OWNER_ROLLBACK "대표 승인 복귀: 옛 DB·옛 판(v22 세대는 묶음 보존)"
+}
+
+# ── migrate-accept: 대표 확정 → 복귀 묶음 pin 해제(raw 가 남았으면 지운다) ──
+main_migrate_accept() {
+  local copy_dir manifest
+  mig_lock
+  recover_if_needed
+  mig_owner_run "$1"
+  [ "$MIG_STATE" = COMPLETED ] || die NOT_COMPLETED "COMPLETED 상태가 아닙니다($MIG_STATE)"
+  [ -z "$(py mig-pointer get)" ] || die MIGRATION_ACTIVE "활성 이관이 있습니다"
+  if [ -f "$R$DATA_DIR/engine.db.pre-v22" ]; then
+    py mig-unlink-pre "$R$DATA_DIR" "$(mig_receipt_path)" >>"$CMD_LOG" || die RAW_IDENTITY "raw 원본 확인 실패"
+  fi
+  copy_dir=$(py json-field "$(cat "$R$STATE_DIR/pins/$MIG_RUN.json")" copy_dir)
+  if [ -n "$copy_dir" ] && [ -f "$R$copy_dir/manifest.json" ]; then
+    manifest=$(cat "$R$copy_dir/manifest.json")
+    printf '%s' "$manifest" | python3 -I -B -c 'import json,sys; v=json.load(sys.stdin); v["pinned"]=False; print(json.dumps(v,sort_keys=True,indent=1))' \
+      > "$R$copy_dir/manifest.json.tmp"
+    mv -f "$R$copy_dir/manifest.json.tmp" "$R$copy_dir/manifest.json"
+  fi
+  for name in engine relay; do
+    dk image rm "metainc/naver-$name:rollback-$(printf '%s' "$MIG_RUN" | cut -c18-29)" >>"$CMD_LOG" 2>&1 \
+      || warn ROLLBACK_TAG_LEFT "복귀 태그 정리 실패"
+  done
+  py mig-pin "$MIG_RUN" release
+  MIG_PIN_STATE=released
+  finish 0 ACCEPTED '' "이관 확정: 복귀 묶음 pin 해제"
+}
+
+# ── B.3 재진입: 모든 잠금 모드에서 가장 먼저(관측 → 그다음 hold) ──
+mig_recover() {
+  local pointer hold dropins status run started healthy obs current
+  pointer=$(py mig-pointer get)
+  hold=$(py mig-hold get)
+  dropins=$(py mig-dropin present)
+  if [ -z "$pointer" ] && [ -z "$hold" ] && [ "$dropins" = no ]; then
+    return 0
+  fi
+  run=$pointer
+  [ -n "$run" ] || run=$hold
+  if [ -z "$run" ] || [ "$run" = unknown ]; then
+    MIG_RUN=''
+    mig_unknown MIGRATION_MARKERS_WITHOUT_RUN
+  fi
+  MIG_RUN=$run
+  MIG_ID=$(py mig-status-get "$MIG_RUN" migration_id)
+  status=$(py mig-status-get "$MIG_RUN" state)
+  MIG_STATE=$status
+  mig_load_pin || mig_unknown PIN_MISSING
+  CMD_LOG="$R$P_RUN_DIR/commands.log"
+  HAVE_STATE=1; MIG_ACTIVE=1
+  case "$status" in
+    COMPLETED|ROLLED_BACK)
+      # rule 3: 종결 세대 재확인 → 3a~7 정리만. 정지·DB 동작·hold 생성 없음.
+      mig_terminal_generation_ok "$status" || mig_hold_stopped TERMINAL_GENERATION_MISMATCH
+      mig_complete "$status"
+      log "종결된 이관($status)의 남은 표지만 정리했습니다"
+      return 0 ;;
+  esac
+  # HOLD 는 과거 health 기록보다 먼저 본다(F1): 대표 모드(continue/rollback)가 그대로 이어받는다.
+  if [ "$status" = HOLD ]; then
+    if [ "$MIG_ALLOW_HOLD" = 1 ]; then return 0; fi
+    finish 12 MIGRATION_HOLD HELD "HOLD 상태입니다. migrate-continue 또는 migrate-rollback 이 필요합니다"
+  fi
+  healthy=$(py mig-journal "$R$DATA_DIR" has health "done" 2>/dev/null || echo no)
+  if [ "$status" = HEALTHY ] || [ "$healthy" = yes ]; then
+    # rule 4: hold 를 만들지 않고 M12/M13 재개. v22 가 기대 이미지로 돌고 canonical 이 v22 inode 여야 한다.
+    obs=$(py mig-observe "$MIG_RUN" "$R$DATA_DIR" rule=4)
+    : "$obs"
+    [ -z "$hold" ] || [ "$hold" = "$MIG_RUN" ] || mig_unknown HOLD_OTHER_RUN
+    current=$(py identity "$R$DATA_DIR/engine.db" 2>/dev/null) || mig_hold_stopped CANONICAL_MISSING
+    [ "$(py ino-of "$current")" = "$(py ino-of "$(mig_receipt_field work_identity)")" ] || mig_hold_stopped NOT_V22_GENERATION
+    read_container naver-engine && [ "$C_IMAGE" = "$MIG_NEW_ENGINE" ] && [ "$C_RUNNING" = true ] || mig_hold_stopped V22_NOT_RUNNING
+    read_container naver-relay && [ "$C_IMAGE" = "$MIG_NEW_RELAY" ] && [ "$C_RUNNING" = true ] || mig_hold_stopped V22_NOT_RUNNING
+    mig_units_match v22 || mig_hold_stopped V22_UNIT_GENERATION_MISMATCH
+    py mig-status "$MIG_RUN" state=HEALTHY
+    MIG_STAGE=healthy
+    mig_finish_archive
+    mig_complete COMPLETED
+    finish 3 RECOVERED_INTERRUPTED_RUN MIGRATION_RESUMED "이관 마무리 재개·완료(엔진 정지 없음)"
+  fi
+  # rule 2: 원래 관측을 먼저 내구 기록 → 그다음에만 hold 생성
+  obs=$(py mig-observe "$MIG_RUN" "$R$DATA_DIR" "hold_observed=${hold:-absent}" "dropins_observed=$dropins")
+  log "관측 기록: $obs"
+  started=no
+  if py mig-journal "$R$DATA_DIR" has start-v22 intent 2>/dev/null | grep -q yes \
+      || py mig-journal "$R$DATA_DIR" has start-v21 intent 2>/dev/null | grep -q yes; then
+    started=yes
+  fi
+  py mig-hold create "$MIG_RUN" || mig_unknown HOLD_OTHER_RUN
+  py mig-dropin install
+  systemctl daemon-reload 2>>"$CMD_LOG" || true
+  if [ "$started" = yes ]; then
+    MIG_STAGE=started
+    mig_auto_rollback INTERRUPTED_AFTER_START 1 3
+  fi
+  MIG_STAGE=chain
+  mig_auto_rollback INTERRUPTED_BEFORE_START 0 3
+}
+
 # ── 입구 ────────────────────────────────────────────────────────────────────
 case "$MODE" in
   inspect)
@@ -2855,6 +4907,45 @@ case "$MODE" in
     [ "$#" = 2 ] || { echo "사용: $0 cleanup-artifacts <allowlist_sha256>" >&2; exit 64; }
     main_cleanup_artifacts "$2"
     ;;
+  migrate-prepare|migrate-rehearse|migrate-plan|migrate-deploy|migrate-continue|migrate-rollback|migrate-accept)
+    shift
+    case "$MODE" in
+      migrate-deploy) want=4 ;;
+      migrate-continue|migrate-rollback|migrate-accept) want=1 ;;
+      *) want=3 ;;
+    esac
+    [ "$#" -ge "$want" ] || { echo "사용: $0 $MODE <인자 $want 개> [--log FILE] [--result FILE]" >&2; exit 64; }
+    M_ARGS=()
+    while [ "${#M_ARGS[@]}" -lt "$want" ]; do M_ARGS+=("$1"); shift; done
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --log) LOG_FILE=$2; shift 2 ;;
+        --result) RESULT_FILE=$2; shift 2 ;;
+        *) echo "알 수 없는 인자: $1" >&2; exit 64 ;;
+      esac
+    done
+    if [ -n "$LOG_FILE" ]; then
+      exec >>"$LOG_FILE" 2>&1
+    fi
+    trap on_exit EXIT
+    trap 'on_error $? $LINENO' ERR
+    trap 'on_signal TERM' TERM
+    trap 'on_signal INT' INT
+    trap '' HUP
+    log "naver-deploy $MODE 시작"
+    for f in docker systemctl curl python3 flock; do
+      command -v "$f" >/dev/null || die MISSING_TOOL "$f 명령이 없습니다"
+    done
+    case "$MODE" in
+      migrate-prepare) main_migrate_prepare "${M_ARGS[@]}" ;;
+      migrate-rehearse) main_migrate_rehearse "${M_ARGS[@]}" ;;
+      migrate-plan) main_migrate_plan "${M_ARGS[@]}" ;;
+      migrate-deploy) main_migrate_deploy "${M_ARGS[@]}" ;;
+      migrate-continue) main_migrate_continue "${M_ARGS[@]}" ;;
+      migrate-rollback) main_migrate_rollback "${M_ARGS[@]}" ;;
+      migrate-accept) main_migrate_accept "${M_ARGS[@]}" ;;
+    esac
+    ;;
   deploy)
     shift
     [ "$#" -ge 2 ] || { echo "사용: $0 deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2; exit 64; }
@@ -2880,7 +4971,7 @@ case "$MODE" in
     main_deploy "$D_COMMIT" "$D_TAR"
     ;;
   *)
-    echo "사용: $0 inspect | disk-usage | app-inventory | cleanup-plan | cleanup <allowlist_sha256> | cleanup-artifacts-plan | cleanup-artifacts <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE]" >&2
+    echo "사용: $0 inspect | disk-usage | app-inventory | cleanup-plan | cleanup <allowlist_sha256> | cleanup-artifacts-plan | cleanup-artifacts <allowlist_sha256> | deploy <commit> <source.tar> [--log FILE] [--result FILE] | migrate-prepare|migrate-rehearse|migrate-plan <commit> <source.tar> <migration_id> | migrate-deploy <commit> <source.tar> <migration_id> <plan_sha256> | migrate-continue|migrate-rollback|migrate-accept <run>" >&2
     exit 64
     ;;
 esac
