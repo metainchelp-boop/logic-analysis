@@ -756,6 +756,13 @@ def partial_prune(folder):
         entries = backup_entries(root_fd)
         for name in sorted(entries):
             if PARTIAL_DIR_NAME.match(name):
+                fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+                try:
+                    migration_partial = any(item.startswith('engine.db.gz') for item in os.listdir(fd))
+                finally:
+                    os.close(fd)
+                if migration_partial:
+                    continue   # 이관 gzip 부분본: 사람이 검토할 때까지 보존
                 remove_backup_entry(root_fd, name, entries[name])
                 print(name)
     finally:
@@ -2144,24 +2151,31 @@ def run_dir(run):
 
 # ── pin(복귀 묶음) ──
 def pinned_rollback():
-    """released 가 아닌 모든 pin 의 (커밋들, 이미지 ID 들). 정리·prune 이 반드시 존중한다. 못 읽으면 거부."""
+    """released 가 아닌 모든 pin 의 (커밋들, 이미지 ID 들). 정리·prune 이 반드시 존중한다.
+    pin 폴더가 없으면(처음) 빈 집합. 폴더가 아니거나·모르는 항목·읽을 수 없는 pin·필수 칸이 빠지거나 형식이 틀리면
+    보호를 조용히 빼지 않고 거부한다(정리 계획·prune 전체가 멈춘다)."""
     commits, images = set(), set()
     folder = ROOT + MIG_PINS
-    if not os.path.isdir(folder):
+    if not os.path.lexists(folder):
         return commits, images
+    if os.path.islink(folder) or not os.path.isdir(folder):
+        fail('PIN_LAYOUT: pin 폴더가 실제 폴더가 아닙니다')
     for name in sorted(os.listdir(folder)):
-        if not name.endswith('.json'):
-            continue
-        value = load_json(os.path.join(folder, name), {})
-        if value.get('state') not in PIN_STATES:
-            fail('MIGRATION_LAYOUT: pin 상태 이상 %s' % name)
+        if not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\.json', name):
+            fail('PIN_LAYOUT: pin 폴더에 예상하지 못한 항목 %s' % name)
+        path = os.path.join(folder, name)
+        if os.path.islink(path) or not os.path.isfile(path):
+            fail('PIN_LAYOUT: pin 이 일반 파일이 아닙니다 %s' % name)
+        value = load_json(path, None)
+        if not isinstance(value, dict) or value.get('state') not in PIN_STATES:
+            fail('PIN_LAYOUT: pin 상태 이상 %s' % name)
         if value['state'] == 'released':
             continue
-        if HEX40.match(str(value.get('commit', ''))):
-            commits.add(value['commit'])
-        for key in ('engine_image', 'relay_image'):
-            if re.fullmatch(r'sha256:[0-9a-f]{64}', str(value.get(key, ''))):
-                images.add(value[key])
+        if not HEX40.match(str(value.get('commit', ''))) or not all(
+                re.fullmatch(r'sha256:[0-9a-f]{64}', str(value.get(key, ''))) for key in ('engine_image', 'relay_image')):
+            fail('PIN_LAYOUT: pin 필수 칸(commit·engine_image·relay_image)이 없거나 형식이 다릅니다 %s' % name)
+        commits.add(value['commit'])
+        images.update((value['engine_image'], value['relay_image']))
     return commits, images
 
 
@@ -2529,12 +2543,19 @@ def mig_archive(data_dir, db_backups, run, commit, receipt_path):
     partial = db_backups + '/' + run + '.partial'
     try:
         archive_inner(data_dir, db_backups, run, commit, receipt_path)
-    except Refuse:
-        # 부분본은 자동으로 지우지 않는다(대표 확인 뒤 정리). 일반 partial-prune 이 보지 않는 이름으로 옮겨 둔다.
+    except BaseException as error:
+        # 어떤 실패든(거부·I/O·중단) 부분본은 자동으로 지우지 않는다(대표 확인 뒤 정리).
+        # 일반 partial-prune 이 보지 않는 이름으로 옮겨 둔다.
         if os.path.isdir(partial) and not os.path.islink(partial):
-            os.rename(partial, db_backups + '/' + run + '.archive-failed')
+            target, number = db_backups + '/' + run + '.archive-failed', 1
+            while os.path.lexists(target):
+                number += 1
+                target = db_backups + '/' + run + '.archive-failed-%d' % number
+            os.rename(partial, target)
             fsync_folder(db_backups)
-        raise
+        if isinstance(error, Refuse):
+            raise
+        fail('ARCHIVE_FAILED: %s' % type(error).__name__)
 
 
 def archive_inner(data_dir, db_backups, run, commit, receipt_path):
@@ -2564,6 +2585,8 @@ def archive_inner(data_dir, db_backups, run, commit, receipt_path):
         if ROOT and os.environ.get('NAVER_DEPLOY_FAKE_ARCHIVE_FAIL'):
             with open(target, 'wb') as handle:
                 handle.write(b'partial')
+            if os.environ['NAVER_DEPLOY_FAKE_ARCHIVE_FAIL'] == 'oserror':
+                raise OSError(28, 'injected')
             fail('ARCHIVE_INJECTED: 시험용 보관 실패')
         raw_digest = hashlib.sha256()
         out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
@@ -2799,6 +2822,9 @@ COMMANDS = {'unit-parse': unit_parse, 'override-check': override_check, 'subst':
             'randhex': lambda: print(secrets.token_hex(16))}
 COMMANDS.update(MIG_COMMANDS)
 if __name__ == '__main__':
+    _inject = os.environ.get('NAVER_DEPLOY_FAKE_FAIL_CMD') if ROOT else None
+    if _inject and all(token in sys.argv[1:] for token in _inject.split()):
+        sys.exit(37)   # 가짜 루트 시험 전용: 이 helper 명령의 실패를 주입
     try:
         COMMANDS[sys.argv[1]](*sys.argv[2:])
     except Refuse as error:
@@ -3736,8 +3762,13 @@ mig_helper() { # image bind_source step json → MIG_OUT(한 줄 JSON), 종료 �
     --entrypoint python3 "$image" -I -B /opt/naver-migrate/m.py "$step" "$args" 2>>"$CMD_LOG" | tail -n 1) || rc=$?
   printf '[helper %s] rc=%s %s\n' "$step" "$rc" "$MIG_OUT" >> "$CMD_LOG"
   if ! mig_reap "$name"; then
+    # 종료를 확인하지 못한 helper 가 남아 있을 수 있다 — 어떤 DB helper·rename·기동도 더 하지 않는다.
     log "helper 컨테이너가 남았거나 목록을 못 읽었습니다: $name"
-    return 90
+    if [ "$MODE" = migrate-rehearse ]; then
+      MIG_REHEARSAL=failed
+      finish 10 REHEARSAL_FAILED HELPER_EXIT_UNCONFIRMED "리허설 helper 종료 확인 불명(scratch 보존, 운영 무변경)"
+    fi
+    mig_hold_stopped HELPER_EXIT_UNCONFIRMED
   fi
   if [ "$rc" = 0 ] && [ "$(py json-field "$MIG_OUT" ok 2>/dev/null)" = True ]; then
     return 0
@@ -3915,14 +3946,20 @@ guarded_start() { # gen expect_identity_json expect_sha256(빈 값 가능) full(
     "expect_sha256=$sha" "full=json:$full" "expect_schema=$schema")
   mig_helper "$image" "$R$DATA_DIR" startcheck "$args" || { log "startcheck 거부: $(mig_code)"; return 1; }
   mig_service_generation "$gen" || { log "서비스 세대 복원·확인 실패($gen)"; return 1; }
-  py mig-journal "$R$DATA_DIR" append "$MIG_RUN" "start-$gen" intent
-  set_phase starting
+  # 이 함수는 `|| rc=$?` 문맥에서 불려 errexit 가 꺼져 있다 — 안전 전이의 필수 명령을 모두 직접 확인한다.
+  py mig-journal "$R$DATA_DIR" append "$MIG_RUN" "start-$gen" intent \
+    || { log "start intent 기록 실패 — 기동하지 않습니다"; return 3; }
+  set_phase starting || { log "상태 기록 실패 — 기동하지 않습니다"; return 3; }
   MIG_STAGE=started
-  py mig-hold remove "$MIG_RUN"
+  if ! py mig-hold remove "$MIG_RUN" || [ -n "$(py mig-hold get)" ]; then
+    log "hold 해제 실패·불명 — 기동하지 않습니다"
+    py mig-hold create "$MIG_RUN" >>"$CMD_LOG" 2>&1 || true
+    return 3
+  fi
   log "hold 해제(마지막) → 기동: $gen"
   systemctl start "$ENGINE_UNIT" 2>>"$CMD_LOG" || true
   systemctl start "$RELAY_UNIT" 2>>"$CMD_LOG" || true
-  set_phase verifying
+  set_phase verifying || { py mig-hold create "$MIG_RUN" || true; return 2; }
   if [ "$gen" = v21 ]; then
     health_check "$PREV_ENGINE_IMAGE" "$PREV_RELAY_IMAGE" || { py mig-hold create "$MIG_RUN" || true; return 2; }
   else
@@ -3933,7 +3970,7 @@ guarded_start() { # gen expect_identity_json expect_sha256(빈 값 가능) full(
     py mig-hold create "$MIG_RUN" || true
     return 2
   fi
-  py mig-journal "$R$DATA_DIR" append "$MIG_RUN" "start-$gen" "done"
+  py mig-journal "$R$DATA_DIR" append "$MIG_RUN" "start-$gen" "done" || { py mig-hold create "$MIG_RUN" || true; return 2; }
   return 0
 }
 
@@ -3990,22 +4027,31 @@ mig_start_v21() { # 옛 세대로 guarded_start. identity 가 없으면(영수�
 }
 
 # B.2: 종결(COMPLETED|ROLLED_BACK) 정리. 순서가 계약이다. 표지는 마지막에 지운다.
-mig_complete() { # state
+mig_complete() { # state — errexit 가 꺼진 문맥에서도 불리므로 단계마다 직접 확인한다. 실패면 표지를 남긴다.
   local state=$1 hold
-  py mig-status "$MIG_RUN" "state=$state"
+  py mig-status "$MIG_RUN" "state=$state" || mig_completion_failed STATUS_WRITE
   MIG_STATE=$state
-  hold=$(py mig-hold get)
+  hold=$(py mig-hold get) || mig_completion_failed HOLD_READ
   if [ -n "$hold" ]; then
     [ "$hold" = "$MIG_RUN" ] || mig_unknown HOLD_OTHER_RUN
     mig_terminal_generation_ok "$state" || mig_hold_stopped TERMINAL_GENERATION_MISMATCH
-    py mig-hold remove "$MIG_RUN"
+    py mig-hold remove "$MIG_RUN" || mig_completion_failed HOLD_REMOVE
   fi
-  py mig-journal "$R$DATA_DIR" move "$MIG_RUN"
+  py mig-journal "$R$DATA_DIR" move "$MIG_RUN" || mig_completion_failed JOURNAL_MOVE
   mig_remove_dropins || mig_hold_stopped DROPIN_REMOVE_FAILED
-  py state-write "$STATE_FILE" "migration_id=" "migration_completed=$MIG_RUN" "phase=done"
-  py mig-pointer clear "$MIG_RUN"
+  mig_record_generation "$state" || mig_completion_failed GENERATION_RECORD
+  py state-write "$STATE_FILE" "migration_id=" "migration_completed=$MIG_RUN" "phase=done" \
+    || mig_completion_failed STATE_WRITE
+  py mig-pointer clear "$MIG_RUN" || mig_completion_failed POINTER_CLEAR
   MIG_ACTIVE=0
   log "이관 종결 기록: $state (표지 해제)"
+}
+
+# 종결 정리 실패: 서비스는 그대로 두고(종결 세대가 이미 확인·기동됨) 활성 표지를 남겨 다음 잠금 모드가 이어서 정리한다.
+mig_completion_failed() { # step
+  trap - ERR
+  set +e
+  finish 4 MIGRATION_RECOVERY_REQUIRED "COMPLETION_$1" "종결 정리 실패($1). 활성 표지 유지 — 다음 실행이 정리를 이어 갑니다"
 }
 
 # 종결 세대 재확인(B.3 rule 3, B.2 3a): 기대 이미지로 두 서비스가 돌고, canonical inode 가 기대 identity.
@@ -4021,8 +4067,50 @@ mig_terminal_generation_ok() { # state
   [ -n "$identity" ] || return 1
   current=$(py identity "$R$DATA_DIR/engine.db" 2>/dev/null) || return 1
   [ "$(py ino-of "$current")" = "$(py ino-of "$identity")" ] || return 1
+  if [ "$1" = COMPLETED ]; then mig_units_match v22 || return 1; else mig_units_match v21 || return 1; fi
   read_container naver-engine && [ "$C_IMAGE" = "$engine" ] && [ "$C_RUNNING" = true ] || return 1
   read_container naver-relay && [ "$C_IMAGE" = "$relay" ] && [ "$C_RUNNING" = true ] || return 1
+}
+
+# 기대 세대의 unit 원문·적용 상태와 컨테이너 이미지·mount·스위치(F5). 서비스 상태는 바꾸지 않는다.
+mig_units_match() { # gen
+  local name unit saved image mounts commit info
+  if [ "$1" = v21 ]; then commit=$PREV_COMMIT; else commit=$P_NEW_COMMIT; fi
+  for name in engine relay; do
+    unit="metainc-naver-$name.service"
+    if [ "$1" = v21 ]; then saved="$R$P_RUN_DIR/$unit"; else saved="$R$P_RUN_DIR/new-$unit"; fi
+    [ -f "$saved" ] && [ "$(py sha "$saved")" = "$(py sha "$R$UNIT_DIR/$unit")" ] || return 1
+    [ "$(unit_prop "$unit" NeedDaemonReload)" = no ] || return 1
+    info=$(py unit-parse "$R$UNIT_DIR/$unit" "$name") || return 1
+    [ "${info% *}" = "$commit" ] || return 1
+    if [ "$1" = v21 ]; then
+      if [ "$name" = engine ]; then image=$PREV_ENGINE_IMAGE; else image=$PREV_RELAY_IMAGE; fi
+    else
+      if [ "$name" = engine ]; then image=$MIG_NEW_ENGINE; else image=$MIG_NEW_RELAY; fi
+    fi
+    mounts=$(cat "$R$P_RUN_DIR/mounts-$name.json" 2>/dev/null) || return 1
+    read_container "naver-$name" || return 1
+    [ "$C_IMAGE" = "$image" ] && [ "$C_MOUNTS" = "$mounts" ] || return 1
+    if [ "$name" = engine ]; then [ "$C_SWITCHES" = "$P_SWITCHES" ] || return 1; fi
+  done
+}
+
+# B.2 종결의 세대 기록(F3): current/history 를 종결 세대에 맞춰 멱등하게 쓴다(표지 해제 전).
+mig_record_generation() { # state
+  local stamp_now
+  stamp_now=$(date -u +%Y%m%dT%H%M%SZ)
+  if [ "$1" = COMPLETED ]; then
+    py state-write "$R$STATE_DIR/current.json" "commit=$P_NEW_COMMIT" "engine_image=$MIG_NEW_ENGINE" \
+      "relay_image=$MIG_NEW_RELAY" "schema=$(py mig-field "$MIG_ID" to_schema)" "switches=$P_SWITCHES" \
+      "deployed_at=$stamp_now" "previous_commit=$PREV_COMMIT" "migration_run=$MIG_RUN" || return 1
+    py history-add "$R$STATE_DIR/history.json" "$PREV_COMMIT" || return 1
+    py history-add "$R$STATE_DIR/history.json" "$P_NEW_COMMIT" || return 1
+  else
+    py state-write "$R$STATE_DIR/current.json" "commit=$PREV_COMMIT" "engine_image=$PREV_ENGINE_IMAGE" \
+      "relay_image=$PREV_RELAY_IMAGE" "schema=$(py mig-field "$MIG_ID" from_schema)" "switches=$P_SWITCHES" \
+      "deployed_at=$stamp_now" "previous_commit=$P_NEW_COMMIT" "migration_run=$MIG_RUN" || return 1
+    py history-add "$R$STATE_DIR/history.json" "$PREV_COMMIT" || return 1
+  fi
 }
 
 # 자동 복귀(입증된 경우만) → v21 guarded_start → ROLLED_BACK. 실패면 hold.
@@ -4058,6 +4146,17 @@ mig_auto_rollback() { # reason started(0|1) [exit code]
   mig_complete ROLLED_BACK
   RESTORING=0
   finish "$code" MIGRATION_ROLLED_BACK "$reason" "옛 DB·옛 판으로 되돌림(헬스 통과)"
+}
+
+mig_gap_between() { # baseline current — 개수만. 실패하면 GAP_UNKNOWN 경고(복귀 결정은 이미 대표가 내렸다)
+  local args
+  args=$(py mig-args "$MIG_ID" gap production "run=$MIG_RUN" "baseline=$1" "current=$2")
+  if mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" gap "$args"; then
+    py json-field "$MIG_OUT" result > "$(mig_dir)/gap-$(date -u +%Y%m%dT%H%M%SZ).json"
+    log "gap(개수만): 바뀐 표 $(mig_result tables_with_changes)"
+  else
+    warn GAP_UNKNOWN "gap 을 세지 못했습니다($(mig_code))"
+  fi
 }
 
 mig_gap_report() {
@@ -4137,6 +4236,29 @@ EOF
     return 0
   fi
   mig_hold_stopped "ARCHIVE_FAILED_KEEP_RAW_$krn"
+}
+
+# continue·재개 공통: pin 상태에 맞춰 보관을 마무리한다. bound-raw 면 gzip 부터, bound-gz 인데 raw 가 남았으면
+# G4(해제 복귀 공간)부터 다시 재고 지금 실측 keep_raw_now 로 경고/HOLD 를 정한다.
+mig_finish_archive() {
+  local state pre_size krn
+  [ -f "$R$DATA_DIR/engine.db.pre-v22" ] || return 0
+  state=$(py mig-pin "$MIG_RUN" state) || mig_hold_stopped PIN_READ
+  if [ "$state" = bound-raw ]; then
+    mig_archive_flow
+    return 0
+  fi
+  pre_size=$(py json-field "$(mig_receipt_field pre_identity)" size)
+  if py mig-guard "$R$DATA_DIR=$pre_size" >>"$CMD_LOG" 2>&1; then
+    py mig-journal "$R$DATA_DIR" append "$MIG_RUN" unlink_pre intent || mig_hold_stopped JOURNAL_WRITE
+    py mig-unlink-pre "$R$DATA_DIR" "$(mig_receipt_path)" >>"$CMD_LOG" || mig_hold_stopped RAW_IDENTITY
+    py mig-journal "$R$DATA_DIR" append "$MIG_RUN" unlink_pre "done" || mig_hold_stopped JOURNAL_WRITE
+    return 0
+  fi
+  krn=$(py mig-keep-raw-now "$R$DATA_DIR" "$R$DAILY_BACKUPS")
+  MIG_KEEP_RAW=$krn
+  [ "$krn" = true ] || mig_hold_stopped "G4_FALSE_KEEP_RAW_$krn"
+  warn RAW_KEPT_FOR_ROLLBACK_SPACE "해제 복귀 공간(G4)이 없어 raw 와 gz 를 함께 둡니다"
 }
 
 # 준비된 이미지 확인: prepare 가 만든 정확 ID, 라벨 source=NEW·schema=to.
@@ -4506,6 +4628,9 @@ main_migrate_deploy() {
   guarded_start v22 "$(mig_receipt_field work_identity)" "$(mig_receipt_field work_sha256)" true || rc=$?
   if [ "$rc" = 1 ]; then
     die START_CHECK "guarded_start v22 사전 확인 실패"
+  elif [ "$rc" = 3 ]; then
+    # start intent 기록·hold 해제 전이 실패·불명: 어떤 기동도 하지 않고 정지 보존(대표 판단).
+    mig_hold_stopped START_TRANSITION_FAILED
   elif [ "$rc" != 0 ]; then
     die HEALTH "v22 헬스 실패($HEALTH_STATUS $HEALTH_CODES)"
   fi
@@ -4523,11 +4648,6 @@ main_migrate_deploy() {
   [ "$(py tree-sha "$R$NGINX_DIR")" = "$sum_nginx" ] || warn NGINX_CHANGED "nginx 변경 감지"
   mig_complete COMPLETED
   PHASE='done'
-  py state-write "$R$STATE_DIR/current.json" "commit=$NEW" "engine_image=$MIG_NEW_ENGINE" \
-    "relay_image=$MIG_NEW_RELAY" "schema=$SCHEMA_NEW" "switches=$CUR_SWITCHES" "deployed_at=$M_STAMP" \
-    "previous_commit=$M_CUR" "migration_run=$MIG_RUN"
-  py history-add "$R$STATE_DIR/history.json" "$M_CUR"
-  py history-add "$R$STATE_DIR/history.json" "$NEW"
   if [ -n "$WARNINGS" ]; then
     finish 0 MIGRATED_WITH_WARNINGS "$WARNINGS" "$M_CUR → $NEW 이관 배포 완료(경고 있음)"
   fi
@@ -4570,17 +4690,14 @@ main_migrate_continue() {
   py mig-journal "$R$DATA_DIR" append "$MIG_RUN" health "done"
   py mig-status "$MIG_RUN" state=HEALTHY
   MIG_STAGE=healthy
-  if [ -f "$R$DATA_DIR/engine.db.pre-v22" ]; then
-    PREV_COMMIT=$(py json-field "$(cat "$R$STATE_DIR/pins/$MIG_RUN.json")" commit)
-    mig_archive_flow
-  fi
+  mig_finish_archive
   mig_complete COMPLETED
   finish 0 CONTINUED '' "v22 세대 재기동·헬스 통과"
 }
 
 # ── migrate-rollback(R7): bound pin 의 v21 세대로 되돌림. v22 세대는 묶음으로 보존 ──
 main_migrate_rollback() {
-  local rc=0 stamp_now copy_dir pre_size args
+  local rc=0 stamp_now copy_dir pre_size args bundle
   mig_lock
   MIG_ALLOW_HOLD=1
   recover_if_needed
@@ -4608,6 +4725,7 @@ main_migrate_rollback() {
   stamp_now=$(date -u +%Y%m%dT%H%M%SZ)
   args=$(py mig-args "$MIG_ID" bundle production "run=$MIG_RUN" "stamp=$stamp_now" "receipt=@$(mig_receipt_path)")
   mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" bundle "$args" || mig_unknown "BUNDLE_$(mig_code)"
+  bundle=$(mig_result bundle)
   if [ -f "$R$DATA_DIR/engine.db.pre-v22" ]; then
     args=$(py mig-args "$MIG_ID" restore-rename production "run=$MIG_RUN" "receipt=@$(mig_receipt_path)")
     mig_helper "$PREV_ENGINE_IMAGE" "$R$DATA_DIR" restore-rename "$args" || mig_unknown "RESTORE_$(mig_code)"
@@ -4615,6 +4733,8 @@ main_migrate_rollback() {
     copy_dir=$(py json-field "$(cat "$R$STATE_DIR/pins/$MIG_RUN.json")" copy_dir)
     [ -n "$copy_dir" ] || mig_unknown NO_PINNED_COPY
     py mig-restore-gz "$R$copy_dir" "$R$DATA_DIR" "$MIG_RUN" "$(mig_receipt_path)" >>"$CMD_LOG" 2>&1 || mig_unknown RESTORE_GZ_FAILED
+    # raw 가 없던 복귀(F4): 풀어 놓은 v21(기준)과 묶음의 v22(현재)로 값 없이 gap 을 센다. 추가 공간이 들지 않는다.
+    mig_gap_between engine.db "$bundle/engine.db"
   fi
   MIG_STAGE=rollback
   mig_start_v21 || rc=$?
@@ -4680,6 +4800,11 @@ mig_recover() {
       log "종결된 이관($status)의 남은 표지만 정리했습니다"
       return 0 ;;
   esac
+  # HOLD 는 과거 health 기록보다 먼저 본다(F1): 대표 모드(continue/rollback)가 그대로 이어받는다.
+  if [ "$status" = HOLD ]; then
+    if [ "$MIG_ALLOW_HOLD" = 1 ]; then return 0; fi
+    finish 12 MIGRATION_HOLD HELD "HOLD 상태입니다. migrate-continue 또는 migrate-rollback 이 필요합니다"
+  fi
   healthy=$(py mig-journal "$R$DATA_DIR" has health "done" 2>/dev/null || echo no)
   if [ "$status" = HEALTHY ] || [ "$healthy" = yes ]; then
     # rule 4: hold 를 만들지 않고 M12/M13 재개. v22 가 기대 이미지로 돌고 canonical 이 v22 inode 여야 한다.
@@ -4690,17 +4815,12 @@ mig_recover() {
     [ "$(py ino-of "$current")" = "$(py ino-of "$(mig_receipt_field work_identity)")" ] || mig_hold_stopped NOT_V22_GENERATION
     read_container naver-engine && [ "$C_IMAGE" = "$MIG_NEW_ENGINE" ] && [ "$C_RUNNING" = true ] || mig_hold_stopped V22_NOT_RUNNING
     read_container naver-relay && [ "$C_IMAGE" = "$MIG_NEW_RELAY" ] && [ "$C_RUNNING" = true ] || mig_hold_stopped V22_NOT_RUNNING
+    mig_units_match v22 || mig_hold_stopped V22_UNIT_GENERATION_MISMATCH
     py mig-status "$MIG_RUN" state=HEALTHY
     MIG_STAGE=healthy
-    if [ -f "$R$DATA_DIR/engine.db.pre-v22" ] && [ "$(py mig-pin "$MIG_RUN" state)" = bound-raw ]; then
-      mig_archive_flow
-    fi
+    mig_finish_archive
     mig_complete COMPLETED
     finish 3 RECOVERED_INTERRUPTED_RUN MIGRATION_RESUMED "이관 마무리 재개·완료(엔진 정지 없음)"
-  fi
-  if [ "$status" = HOLD ]; then
-    if [ "$MIG_ALLOW_HOLD" = 1 ]; then return 0; fi
-    finish 12 MIGRATION_HOLD HELD "HOLD 상태입니다. migrate-continue 또는 migrate-rollback 이 필요합니다"
   fi
   # rule 2: 원래 관측을 먼저 내구 기록 → 그다음에만 hold 생성
   obs=$(py mig-observe "$MIG_RUN" "$R$DATA_DIR" "hold_observed=${hold:-absent}" "dropins_observed=$dropins")

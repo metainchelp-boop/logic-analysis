@@ -422,6 +422,101 @@ class MigrateDeployTest(unittest.TestCase):
         self.assertEqual(self.host.status(run)['state'], 'COMPLETED')
         self.assertEqual(self.host.markers(), {'pointer': False, 'hold': False, 'dropins': False})
 
+    # ── PR367 검토 반례 ──
+    def engine_starts_after_first_stop(self):
+        calls = self.host.calls()
+        stop = self.index(calls, ['systemctl', 'stop', 'metainc-naver-engine.service'])
+        return [c for c in calls[stop:] if c[:3] == ['systemctl', 'start', 'metainc-naver-engine.service']]
+
+    def test_start_intent_failure_never_starts(self):   # T3
+        plan = self.host.ready()
+        self.host.clear_calls()
+        done = self.host.migrate(plan, NAVER_DEPLOY_FAKE_FAIL_CMD='mig-journal start-v22 intent')
+        self.assertExit(done, 12)
+        self.assertEqual(self.engine_starts_after_first_stop(), [])
+        self.assertTrue(self.host.markers()['hold'])
+
+    def test_hold_release_failure_never_starts(self):   # T3
+        plan = self.host.ready()
+        self.host.clear_calls()
+        done = self.host.migrate(plan, NAVER_DEPLOY_FAKE_FAIL_CMD='mig-hold remove')
+        self.assertExit(done, 12)
+        self.assertEqual(self.engine_starts_after_first_stop(), [])
+        self.assertTrue(self.host.markers()['hold'])
+
+    def archive_hold(self):
+        plan = self.host.ready()
+        self.host.backup_state(zip_bytes=200 * 1024 ** 2)
+        tight = str((1 << 30) + 100 * 1024 ** 2)
+        done = self.host.migrate(plan, NAVER_DEPLOY_FAKE_ARCHIVE_FAIL='1', NAVER_DEPLOY_FAKE_FREE_BYTES=tight)
+        self.assertExit(done, 12)
+        return result_of(done)['migration_run']
+
+    def test_owner_continue_after_archive_hold(self):   # F1
+        run = self.archive_hold()
+        self.host.backup_state()
+        done = self.host.mrun('migrate-continue', run)
+        self.assertExit(done, 0)
+        self.assertEqual(self.host.status(run)['state'], 'COMPLETED')
+        self.assertEqual(self.host.markers(), {'pointer': False, 'hold': False, 'dropins': False})
+
+    def test_owner_rollback_after_archive_hold(self):   # F1
+        run = self.archive_hold()
+        self.host.backup_state()
+        done = self.host.mrun('migrate-rollback', run)
+        self.assertExit(done, 2)
+        self.assertEqual(self.host.meta_schema(), '21')
+        self.assert_old_running()
+
+    def test_unconfirmed_helper_exit_holds_without_further_db_steps(self):   # F2
+        plan = self.host.ready()
+        self.host.clear_calls()
+        self.host.set(helper_leftover=True)
+        done = self.host.migrate(plan)
+        self.assertExit(done, 12)
+        self.assertIn('HELPER_EXIT_UNCONFIRMED', self.out(done))
+        helpers = [c for c in self.host.calls() if c[:2] == ['docker', 'run'] and '/opt/naver-migrate/m.py' in c]
+        self.assertEqual([c[c.index('/opt/naver-migrate/m.py') + 1] for c in helpers], ['chain'])
+        self.assertEqual(self.engine_starts_after_first_stop(), [])
+
+    def current(self):
+        with open(self.host.root + STATE + '/current.json') as handle:
+            return json.load(handle)
+
+    def test_current_and_history_follow_terminal_generation(self):   # F3 + F4
+        plan = self.host.ready()
+        done = self.host.migrate(plan)
+        self.assertExit(done, 0)
+        run = result_of(done)['migration_run']
+        self.assertEqual((self.current()['commit'], self.current()['schema']), (C1, '22'))
+        done = self.host.mrun('migrate-rollback', run)
+        self.assertExit(done, 2)
+        self.assertEqual((self.current()['commit'], self.current()['schema']), (C0, '21'))
+        with open(self.host.root + STATE + '/history.json') as handle:
+            self.assertEqual(json.load(handle)[-1], C0)
+        folder = self.host.root + STATE + '/migration/' + run
+        gaps = [n for n in os.listdir(folder) if n.startswith('gap-')]
+        self.assertEqual(len(gaps), 1, 'gzip rollback (raw already deleted) still records gap counts')
+
+    def test_terminal_recheck_includes_unit_generation(self):   # F5
+        plan = self.host.ready()
+        done = self.host.migrate(plan)
+        self.assertExit(done, 0)
+        run = result_of(done)['migration_run']
+        with open(self.host.root + STATE + '/migration-active', 'w') as handle:   # 표지 해제 직전 중단 대역
+            handle.write(run + '\n')
+        units = self.host.root + '/etc/systemd/system/metainc-naver-engine.service'
+        with open(self.host.root + STATE + '/runs/' + run + '/metainc-naver-engine.service') as handle:
+            old_unit = handle.read()
+        with open(units, 'w') as handle:
+            handle.write(old_unit)
+        self.host.systemctl('daemon-reload')
+        done = self.host.run('deploy', C1, self.host.migrate_tar(),
+                             NAVER_DEPLOY_TEST_MIGRATIONS=self.host.entries_path, NAVER_DEPLOY_FAKE_KST=kst())
+        self.assertExit(done, 12)
+        self.assertIn('TERMINAL_GENERATION_MISMATCH', self.out(done))
+        self.assertTrue(self.host.markers()['pointer'], 'marker kept, nothing cleaned')
+
     def test_cleanup_refused_while_migration_active(self):
         plan = self.host.ready()
         self.host.set(health_fail=[C1], write_on_start={'commit': C1, 'db': self.host.db()})

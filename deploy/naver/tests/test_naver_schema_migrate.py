@@ -425,9 +425,34 @@ class HostHelperTest(unittest.TestCase):
         with open(history, 'w') as handle:
             json.dump(commits, handle)
         with open(self.root + '/var/lib/metainc/naver-deploy/pins/' + RUN + '.json', 'w') as handle:
-            json.dump({'state': 'bound-gz', 'commit': '1' * 40, 'engine_image': 'sha256:' + 'e' * 64}, handle)
+            json.dump({'state': 'bound-gz', 'commit': '1' * 40, 'engine_image': 'sha256:' + 'e' * 64,
+                       'relay_image': 'sha256:' + 'f' * 64}, handle)
         done = self.py('prune-list', history, '6' * 40, '5' * 40)
         self.assertEqual(done.stdout.decode().split(), ['2' * 40, '3' * 40], 'pinned 1 is kept')
+
+    def test_damaged_pin_refuses_instead_of_dropping_protection(self):   # PR367 T1
+        pins = self.root + '/var/lib/metainc/naver-deploy/pins'
+        history = os.path.join(self.root, 'history.json')
+        with open(history, 'w') as handle:
+            json.dump([c * 40 for c in '123456'], handle)
+        os.makedirs(os.path.dirname(pins))
+        open(pins, 'w').close()                                   # pin 폴더가 일반 파일
+        done = self.py('prune-list', history, '6' * 40, '5' * 40)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('PIN_LAYOUT', done.stdout.decode())
+        os.unlink(pins)
+        os.makedirs(pins)
+        for broken in ({'state': 'bound-gz', 'commit': '1' * 40, 'engine_image': 'sha256:' + 'e' * 64},
+                       {'state': 'bound-gz', 'commit': 'zz', 'engine_image': 'sha256:' + 'e' * 64,
+                        'relay_image': 'sha256:' + 'f' * 64}, {'state': 'odd'}):
+            with open(pins + '/' + RUN + '.json', 'w') as handle:
+                json.dump(broken, handle)
+            done = self.py('prune-list', history, '6' * 40, '5' * 40)
+            self.assertEqual(done.returncode, 1, broken)
+            self.assertNotIn('1' * 40, done.stdout.decode().split())
+        os.unlink(pins + '/' + RUN + '.json')
+        open(pins + '/stray.txt', 'w').close()
+        self.assertEqual(self.py('prune-list', history, '6' * 40, '5' * 40).returncode, 1)
 
     def test_keep_raw_now_counterexample_recomputed(self):
         # Codex V2-G3 반례 수치(합성): 기동 전 통과 → 부분 gz 가 남은 결과 시점 불통과(1GiB 바닥은 통과).
@@ -498,6 +523,28 @@ class HostHelperTest(unittest.TestCase):
         prune = self.py('partial-prune', backups)
         self.assertEqual(prune.returncode, 0)
         self.assertTrue(os.path.isdir(backups + '/' + RUN + '.archive-failed'), 'plain partial-prune ignores it')
+
+    def test_archive_oserror_partial_is_protected_from_common_prune(self):   # PR367 T2
+        data, receipt_path, _ = self.archive_fixture()
+        backups = self.root + '/var/backups/metainc/naver-deploy-db'
+        done = self.py('mig-archive', data, backups, RUN, 'a' * 40, receipt_path,
+                       NAVER_DEPLOY_FAKE_ARCHIVE_FAIL='oserror')
+        self.assertEqual(done.returncode, 1)
+        self.assertFalse(os.path.lexists(backups + '/' + RUN + '.partial'))
+        self.assertTrue(os.path.isdir(backups + '/' + RUN + '.archive-failed'))
+        done = self.py('mig-archive', data, backups, RUN, 'a' * 40, receipt_path,
+                       NAVER_DEPLOY_FAKE_ARCHIVE_FAIL='oserror')
+        self.assertTrue(os.path.isdir(backups + '/' + RUN + '.archive-failed-2'), 'second failure kept too')
+        # 이름이 .partial 인 채 남은 이관 gzip 부분본(예: 정전)도 공통 partial-prune 이 지우지 않는다.
+        stray = backups + '/20261115T030303Z-' + 'd' * 12 + '.partial'
+        os.makedirs(stray)
+        open(stray + '/engine.db.gz', 'wb').close()
+        legacy = backups + '/20261115T040404Z-' + 'e' * 12 + '.partial'
+        os.makedirs(legacy)
+        open(legacy + '/engine.db', 'wb').close()
+        self.assertEqual(self.py('partial-prune', backups).returncode, 0)
+        self.assertTrue(os.path.isdir(stray))
+        self.assertFalse(os.path.lexists(legacy))
 
     def test_archive_refuses_changed_raw(self):
         data, receipt_path, _ = self.archive_fixture()
