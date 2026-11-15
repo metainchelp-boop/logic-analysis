@@ -15,6 +15,8 @@ import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if os.environ.get('NAVER_MIGRATE_TESTS_SEPARATE') == '1':
+    raise unittest.SkipTest('migrate-tests 작업이 따로 돌린다(naver-tools-check.yml)')
 sys.path.insert(0, HERE)
 import migrate_fixtures as F  # noqa: E402
 from test_naver_deploy import (C0, C1, COMPANION, RELEASES, FakeHost, result_of, source_files,  # noqa: E402
@@ -443,6 +445,40 @@ class MigrateDeployTest(unittest.TestCase):
         self.assertExit(done, 12)
         self.assertEqual(self.engine_starts_after_first_stop(), [])
         self.assertTrue(self.host.markers()['hold'])
+
+    def test_phase_write_failure_never_starts(self):   # PR367 8132 T3
+        plan = self.host.ready()
+        self.host.clear_calls()
+        done = self.host.migrate(plan, NAVER_DEPLOY_FAKE_FAIL_CMD='state-write phase=starting')
+        self.assertExit(done, 12)
+        self.assertEqual(self.engine_starts_after_first_stop(), [])
+        self.assertTrue(self.host.markers()['hold'] and self.host.markers()['pointer'])
+
+    def test_hold_get_failure_after_remove_never_starts(self):   # PR367 8132 P3
+        plan = self.host.ready()
+        self.host.clear_calls()
+        done = self.host.migrate(plan, NAVER_DEPLOY_FAKE_FAIL_CMD='mig-hold get',
+                                 NAVER_DEPLOY_FAKE_FAIL_IF_EXISTS=DATA + '/naver-migrate-journal.json')
+        self.assertExit(done, 12)
+        self.assertEqual(self.engine_starts_after_first_stop(), [])
+        self.assertTrue(self.host.markers()['hold'])
+
+    def test_terminal_recheck_requires_running_units(self):   # PR367 8132 F5
+        plan = self.host.ready()
+        done = self.host.migrate(plan)
+        self.assertExit(done, 0)
+        run = result_of(done)['migration_run']
+        with open(self.host.root + STATE + '/migration-active', 'w') as handle:
+            handle.write(run + '\n')
+        state = self.host.load_state()
+        state['units']['metainc-naver-engine.service'].update(active='inactive', pid=0)   # 컨테이너는 running 그대로
+        self.host.state = state
+        self.host.save_state()
+        done = self.host.run('deploy', C1, self.host.migrate_tar(),
+                             NAVER_DEPLOY_TEST_MIGRATIONS=self.host.entries_path, NAVER_DEPLOY_FAKE_KST=kst())
+        self.assertExit(done, 12)
+        self.assertIn('TERMINAL_GENERATION_MISMATCH', self.out(done))
+        self.assertTrue(self.host.markers()['pointer'], 'markers preserved')
 
     def archive_hold(self):
         plan = self.host.ready()

@@ -17,6 +17,8 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if os.environ.get('NAVER_MIGRATE_TESTS_SEPARATE') == '1':
+    raise unittest.SkipTest('migrate-tests 작업이 따로 돌린다(naver-tools-check.yml)')
 sys.path.insert(0, HERE)
 import migrate_fixtures as F  # noqa: E402
 

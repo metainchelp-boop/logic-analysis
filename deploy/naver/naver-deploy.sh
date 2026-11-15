@@ -2823,7 +2823,9 @@ COMMANDS = {'unit-parse': unit_parse, 'override-check': override_check, 'subst':
 COMMANDS.update(MIG_COMMANDS)
 if __name__ == '__main__':
     _inject = os.environ.get('NAVER_DEPLOY_FAKE_FAIL_CMD') if ROOT else None
-    if _inject and all(token in sys.argv[1:] for token in _inject.split()):
+    _only_if = os.environ.get('NAVER_DEPLOY_FAKE_FAIL_IF_EXISTS') if ROOT else None
+    if (_inject and all(token in sys.argv[1:] for token in _inject.split())
+            and (not _only_if or os.path.lexists(ROOT + _only_if))):
         sys.exit(37)   # 가짜 루트 시험 전용: 이 helper 명령의 실패를 주입
     try:
         COMMANDS[sys.argv[1]](*sys.argv[2:])
@@ -3932,8 +3934,16 @@ mig_service_generation() { # gen(v21|v22)
 }
 
 # guarded_start(§A): hold 유지·정지 확인 → DB 세대 검증(잠금) → 서비스 세대 복원·재확인 → start intent → hold 마지막 해제 → 기동.
+# 이관 전용 단계 기록: state.json 쓰기와 다시 읽은 값까지 확인한다(공통 set_phase 는 실패를 가린다 — 바꾸지 않는다).
+mig_set_phase() { # phase
+  PHASE=$1
+  py state-write "$STATE_FILE" "phase=$1" || return 1
+  [ "$(py state-get "$STATE_FILE" phase)" = "$1" ] || return 1
+  log "단계: $1"
+}
+
 guarded_start() { # gen expect_identity_json expect_sha256(빈 값 가능) full(true|false)
-  local gen=$1 identity=$2 sha=$3 full=$4 schema image args
+  local gen=$1 identity=$2 sha=$3 full=$4 schema image args held
   py mig-hold create "$MIG_RUN" || return 1
   mig_stop_both || return 1
   stopped_confirmed "$ENGINE_UNIT" naver-engine && stopped_confirmed "$RELAY_UNIT" naver-relay || return 1
@@ -3949,9 +3959,9 @@ guarded_start() { # gen expect_identity_json expect_sha256(빈 값 가능) full(
   # 이 함수는 `|| rc=$?` 문맥에서 불려 errexit 가 꺼져 있다 — 안전 전이의 필수 명령을 모두 직접 확인한다.
   py mig-journal "$R$DATA_DIR" append "$MIG_RUN" "start-$gen" intent \
     || { log "start intent 기록 실패 — 기동하지 않습니다"; return 3; }
-  set_phase starting || { log "상태 기록 실패 — 기동하지 않습니다"; return 3; }
+  mig_set_phase starting || { log "상태 기록 실패·불명 — 기동하지 않습니다"; return 3; }
   MIG_STAGE=started
-  if ! py mig-hold remove "$MIG_RUN" || [ -n "$(py mig-hold get)" ]; then
+  if ! py mig-hold remove "$MIG_RUN" || ! held=$(py mig-hold get) || [ -n "$held" ]; then
     log "hold 해제 실패·불명 — 기동하지 않습니다"
     py mig-hold create "$MIG_RUN" >>"$CMD_LOG" 2>&1 || true
     return 3
@@ -3959,7 +3969,7 @@ guarded_start() { # gen expect_identity_json expect_sha256(빈 값 가능) full(
   log "hold 해제(마지막) → 기동: $gen"
   systemctl start "$ENGINE_UNIT" 2>>"$CMD_LOG" || true
   systemctl start "$RELAY_UNIT" 2>>"$CMD_LOG" || true
-  set_phase verifying || { py mig-hold create "$MIG_RUN" || true; return 2; }
+  mig_set_phase verifying || { py mig-hold create "$MIG_RUN" || true; return 2; }
   if [ "$gen" = v21 ]; then
     health_check "$PREV_ENGINE_IMAGE" "$PREV_RELAY_IMAGE" || { py mig-hold create "$MIG_RUN" || true; return 2; }
   else
@@ -4074,13 +4084,17 @@ mig_terminal_generation_ok() { # state
 
 # 기대 세대의 unit 원문·적용 상태와 컨테이너 이미지·mount·스위치(F5). 서비스 상태는 바꾸지 않는다.
 mig_units_match() { # gen
-  local name unit saved image mounts commit info
+  local name unit saved image mounts commit info state pid
   if [ "$1" = v21 ]; then commit=$PREV_COMMIT; else commit=$P_NEW_COMMIT; fi
   for name in engine relay; do
     unit="metainc-naver-$name.service"
     if [ "$1" = v21 ]; then saved="$R$P_RUN_DIR/$unit"; else saved="$R$P_RUN_DIR/new-$unit"; fi
     [ -f "$saved" ] && [ "$(py sha "$saved")" = "$(py sha "$R$UNIT_DIR/$unit")" ] || return 1
     [ "$(unit_prop "$unit" NeedDaemonReload)" = no ] || return 1
+    # 실행 상태도 세대 계약이다: unit active·MainPID 있음(조회 실패도 불일치 → 부르는 쪽이 HOLD).
+    state=$(unit_prop "$unit" ActiveState) || return 1
+    pid=$(unit_prop "$unit" MainPID) || return 1
+    [ "$state" = active ] && [ -n "$pid" ] && [ "$pid" != 0 ] || return 1
     info=$(py unit-parse "$R$UNIT_DIR/$unit" "$name") || return 1
     [ "${info% *}" = "$commit" ] || return 1
     if [ "$1" = v21 ]; then
