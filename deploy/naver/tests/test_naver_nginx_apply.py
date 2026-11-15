@@ -204,8 +204,7 @@ class RealNginxDumpTest(unittest.TestCase):
                                     '    include /etc/nginx/snippets/site.conf;\n}\n'),
                      'conf.d/zone.conf': HTTP_CONF,
                      'snippets/site.conf': 'server {\n    listen 8080;\n    server_name dashboard.metainc.co.kr;\n'
-                                           '    location = /x { return 200 "ok"; }\n}',   # 끝 LF 없는 파일도
-                     'mime.types': 'types {}\n'}
+                                           '    location = /x { return 200 "ok"; }\n}'}   # 끝 LF 없는 파일도
             for name, body in files.items():
                 path = os.path.join(base, name)
                 os.makedirs(os.path.dirname(path), exist_ok=True)
