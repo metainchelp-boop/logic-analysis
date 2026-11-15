@@ -653,9 +653,8 @@ def nginx(args):
             sys.exit(1)
         order = sorted(files, key=lambda p: (p != '/etc/nginx/nginx.conf', p))
         for path in order:
-            sys.stdout.write('# configuration file %s:\n%s' % (path, files[path]))
-            if not files[path].endswith('\n'):
-                sys.stdout.write('\n')
+            # 실제 nginx -T 와 같은 모양: 구획 머리 + 원문 + LF 하나(원문 끝 LF 와 별개로 언제나).
+            sys.stdout.write('# configuration file %s:\n%s\n' % (path, files[path]))
         return
     if args[:1] == ['-t']:
         uses = any('limit_conn naver_reconcile_upload' in body for body in files.values())

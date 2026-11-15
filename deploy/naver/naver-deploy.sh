@@ -2485,13 +2485,31 @@ def mig_requires(identifier):
     """앞선 이관의 복귀 pin 이 released(대표 accept) 여야 다음 이관을 준비한다. pin 을 못 읽으면 거부."""
     entry = mig_entry(identifier)
     needed = set(entry.get('requires_released') or ())
+    if not needed:
+        print('ok')
+        return
     folder = ROOT + MIG_PINS
-    if needed and os.path.isdir(folder):
-        pinned_rollback()   # 손상 pin 이면 여기서 거부
-        for name in sorted(os.listdir(folder)):
-            value = load_json(os.path.join(folder, name), {}) or {}
-            if value.get('migration_id') in needed and value.get('state') != 'released':
-                fail('MIGRATION_ORDER: 앞선 이관(%s)이 아직 accept 되지 않았습니다' % value.get('migration_id'))
+    if not os.path.isdir(folder) or os.path.islink(folder):
+        fail('MIGRATION_ORDER: 앞선 이관의 accept 근거(pin)가 없습니다')
+    pinned_rollback()   # 손상 pin 이면 여기서 거부
+    evidence = set()
+    for name in sorted(os.listdir(folder)):
+        value = load_json(os.path.join(folder, name), {}) or {}
+        required = value.get('migration_id')
+        if required not in needed:
+            continue
+        if value.get('state') != 'released':
+            fail('MIGRATION_ORDER: 앞선 이관(%s)이 아직 accept 되지 않았습니다' % required)
+        # 적극적 근거: 같은 run 의 상태 COMPLETED 와 그 이관 항목의 영수증.
+        run = name[:-5]
+        status = load_json(ROOT + MIG_DIR + '/' + run + '/status.json', {}) or {}
+        receipt = load_json(ROOT + MIG_DIR + '/' + run + '/receipt.json', {}) or {}
+        if (value.get('run') == run and status.get('state') == 'COMPLETED' and status.get('migration_id') == required
+                and receipt.get('run') == run and receipt.get('migration_id') == required):
+            evidence.add(required)
+    missing = sorted(needed - evidence)
+    if missing:
+        fail('MIGRATION_ORDER: 앞선 이관(%s)의 COMPLETED·accept 근거가 없습니다' % ','.join(missing))
     print('ok')
 
 
@@ -2577,9 +2595,16 @@ def newest_pair(folder):
     if not zips:
         return None
     zip_path, cms_path = os.path.join(local, zips[-1]), os.path.join(outgoing, zips[-1][:-4] + '.cms')
-    if not os.path.isfile(cms_path) or os.path.islink(cms_path) or os.path.islink(zip_path):
-        return None
-    return os.lstat(zip_path).st_size, os.lstat(cms_path).st_size
+    sizes = []
+    for path in (zip_path, cms_path):
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(info.st_mode):   # 디렉터리·링크·특수 파일은 백업 쌍이 아니다 → unknown
+            return None
+        sizes.append(info.st_size)
+    return tuple(sizes)
 
 
 def keep_raw_now(data_dir, backups):
@@ -2929,20 +2954,33 @@ def nginx_dump():
                           env={'PATH': os.environ.get('PATH', '/usr/sbin:/usr/bin:/sbin:/bin'), 'LANG': 'C'})
     if done.returncode:
         fail('NGINX_LAYOUT: nginx -T 실패')
+    return parse_nginx_dump(done.stdout.decode('utf-8', 'replace'))
+
+
+def parse_nginx_dump(text):
+    """nginx -T 표준출력: 파일마다 '# configuration file <경로>:\n' + 원문 + LF 하나(nginx 가 붙이는 구분).
+    구획 끝의 그 LF 하나만 떼어 원문 그대로를 돌려준다(그 밖의 공백은 건드리지 않는다)."""
     sections, path, lines = {}, None, []
-    for line in done.stdout.decode('utf-8', 'replace').splitlines(keepends=True):
+    for line in text.splitlines(keepends=True):
         match = re.fullmatch(r'# configuration file (/[^\x00-\x1f]*):\s*', line.rstrip('\n'))
         if match:
             if path is not None:
-                sections[path] = ''.join(lines)
+                sections[path] = dump_body(lines)
             path, lines = match.group(1), []
         elif path is not None:
             lines.append(line)
     if path is not None:
-        sections[path] = ''.join(lines)
+        sections[path] = dump_body(lines)
     if not sections or any(not p.startswith(NGINX_ROOT + '/') for p in sections):
         fail('NGINX_LAYOUT: nginx -T 구획을 읽지 못했거나 /etc/nginx 밖 파일이 있습니다')
     return sections
+
+
+def dump_body(lines):
+    body = ''.join(lines)
+    if not body.endswith('\n'):
+        fail('NGINX_LAYOUT: nginx -T 구획이 구분 LF 로 끝나지 않습니다')
+    return body[:-1]
 
 
 def brace_block(text, start):
@@ -3159,14 +3197,18 @@ def nginx_restore(backup_dir):
     original = read(os.path.join(backup_dir, 'snippet.orig'))
     if hashlib.sha256(original.encode()).hexdigest() != record['snippet_sha256']:
         fail('NGINX_RESTORE: 백업 원문 해시가 다릅니다')
-    write_text_atomic(ROOT + record['snippet'], original, record['snippet_mode'], record['snippet_uid'],
-                      record['snippet_gid'])
+    # zone 을 먼저 거둔다(snippet 쓰기가 실패한 부분 게시에서도 zone 이 남지 않게). 이번에 쓴 내용일 때만.
     target = ROOT + record['zone_target']
     if os.path.lexists(target):
         if os.path.islink(target) or hashlib.sha256(read(target, 'rb')).hexdigest() != record['zone_sha256']:
             fail('NGINX_RESTORE: zone 자리 파일이 이번에 쓴 내용이 아닙니다(지우지 않음)')
         os.unlink(target)
         fsync_folder(os.path.dirname(target))
+    snippet = ROOT + record['snippet']
+    if hashlib.sha256(read(snippet, 'rb')).hexdigest() != record['snippet_sha256']:
+        write_text_atomic(snippet, original, record['snippet_mode'], record['snippet_uid'], record['snippet_gid'])
+    if (hashlib.sha256(read(snippet, 'rb')).hexdigest() != record['snippet_sha256'] or os.path.lexists(target)):
+        fail('NGINX_RESTORE: 복원 뒤 두 파일이 원래 상태가 아닙니다')
     print('restored')
 
 
@@ -5369,7 +5411,8 @@ nginx_fail() { # code detail — fail_deploy 가 부른다
   trap - ERR
   set +e
   log "nginx 단계 실패($1, 단계 ${NGINX_STAGE:-preflight}): $2"
-  if [ "$NGINX_STAGE" = written ]; then
+  # 쓰기 중(writing)이라도 백업 기록이 있으면 무언가 게시됐을 수 있다 → 두 파일을 원래대로 되돌리고 다시 확인한다.
+  if [ "$NGINX_STAGE" = written ] || { [ "$NGINX_STAGE" = writing ] && [ -f "$NGINX_RUN_DIR/backup.json" ]; }; then
     nginx_rollback "$1"
   fi
   finish 10 REFUSED "$1" "nginx 설정은 건드리지 않았습니다"

@@ -165,9 +165,27 @@ class Migrate2223Host(MigrateHost):
         self.entries_path = os.path.join(base, 'migrations.json')
         self.write_entries()
         self.backup_state()
+        self.accepted_2122()
 
     def entries(self):
         return {MIG_ID: self.entry2122, self.mig_id: self.entry}
+
+    PREVIOUS_RUN = '20261116T000000Z-' + 'f' * 12
+
+    def accepted_2122(self, state='released', status='COMPLETED', receipt_id=MIG_ID, pin_id=MIG_ID):
+        """21-22 run 의 accept 근거: released pin + 같은 run 의 COMPLETED 상태 + 그 이관의 영수증."""
+        run = self.PREVIOUS_RUN
+        pins = self.root + STATE + '/pins'
+        folder = self.root + STATE + '/migration/' + run
+        os.makedirs(pins, exist_ok=True)
+        os.makedirs(folder, exist_ok=True)
+        with open(pins + '/' + run + '.json', 'w') as handle:
+            json.dump({'state': state, 'migration_id': pin_id, 'run': run, 'commit': 'e' * 40,
+                       'engine_image': 'sha256:' + '1' * 64, 'relay_image': 'sha256:' + '2' * 64}, handle)
+        with open(folder + '/status.json', 'w') as handle:
+            json.dump({'state': status, 'migration_id': MIG_ID}, handle)
+        with open(folder + '/receipt.json', 'w') as handle:
+            json.dump({'run': run, 'migration_id': receipt_id}, handle)
 
 
 class MigrateDeployTest(unittest.TestCase):
@@ -721,15 +739,18 @@ class Migrate2223Test(unittest.TestCase):
 
     def test_22_23_refused_until_21_22_accepted(self):
         pins = self.host.root + STATE + '/pins'
-        os.makedirs(pins)
-        with open(pins + '/20261116T000000Z-' + 'f' * 12 + '.json', 'w') as handle:
-            json.dump({'state': 'bound-gz', 'migration_id': MIG_ID, 'commit': 'e' * 40,
-                       'engine_image': 'sha256:' + '1' * 64, 'relay_image': 'sha256:' + '2' * 64}, handle)
-        done = self.host.prepare()
-        self.assertEqual(done.returncode, 10)
-        self.assertIn('MIGRATION_ORDER', done.stdout.decode())
-        with open(pins + '/20261116T000000Z-' + 'f' * 12 + '.json', 'w') as handle:
-            json.dump({'state': 'released', 'migration_id': MIG_ID, 'commit': 'e' * 40}, handle)
+        cases = [dict(state='bound-gz'), dict(status='HOLD'), dict(receipt_id='other'), dict(pin_id='other-id')]
+        for case in cases:
+            self.host.accepted_2122(**case)
+            done = self.host.prepare()
+            self.assertEqual(done.returncode, 10, case)
+            self.assertIn('MIGRATION_ORDER', done.stdout.decode(), case)
+        for name in os.listdir(pins):                        # 빈 pins 폴더
+            os.unlink(os.path.join(pins, name))
+        self.assertIn('MIGRATION_ORDER', self.host.prepare().stdout.decode())
+        os.rmdir(pins)                                       # pins 폴더 없음
+        self.assertIn('MIGRATION_ORDER', self.host.prepare().stdout.decode())
+        self.host.accepted_2122()                            # 적극적 근거가 있을 때만 통과
         self.assertEqual(self.host.prepare().returncode, 0)
 
     def test_22_23_requires_reconcile_writes_off(self):

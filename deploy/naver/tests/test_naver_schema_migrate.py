@@ -479,6 +479,35 @@ class HostHelperTest(unittest.TestCase):
         done = self.py('mig-keep-raw-now', data, backups, NAVER_DEPLOY_FAKE_FREE_BYTES=str(10 ** 12))
         self.assertEqual(done.stdout.decode().strip(), 'true')
 
+    def test_backup_pair_requires_regular_files(self):   # PR368 F2
+        data = self.root + '/var/lib/metainc/naver-engine'
+        backups = self.root + '/var/backups/metainc/naver-engine'
+        os.makedirs(data)
+        open(data + '/engine.db', 'wb').close()
+        stem = 'naver-20261115T000000Z-' + 'a' * 32
+        os.makedirs(backups + '/local/' + stem + '.zip')         # ZIP 이름의 폴더
+        os.makedirs(backups + '/outgoing')
+        open(backups + '/outgoing/' + stem + '.cms', 'wb').close()
+        done = self.py('mig-keep-raw-now', data, backups, NAVER_DEPLOY_FAKE_FREE_BYTES=str(10 ** 12))
+        self.assertEqual(done.stdout.decode().strip(), 'unknown')
+        os.rmdir(backups + '/local/' + stem + '.zip')
+        os.symlink(backups + '/outgoing/' + stem + '.cms', backups + '/local/' + stem + '.zip')   # 링크
+        done = self.py('mig-keep-raw-now', data, backups, NAVER_DEPLOY_FAKE_FREE_BYTES=str(10 ** 12))
+        self.assertEqual(done.stdout.decode().strip(), 'unknown')
+
+    def test_nginx_dump_parser_matches_real_format(self):   # PR368 F3
+        # 실제 nginx -T(고정 nginx 이미지) 표준출력 모양: 파일마다 머리 + 원문 + LF 하나. 원문 끝 LF 와 별개.
+        files = {'/etc/nginx/nginx.conf': 'pid /tmp/nginx.pid;\nerror_log stderr;\nevents {}\nhttp {\n'
+                                          '    include /etc/nginx/snippets/*.conf;\n}\n',
+                 '/etc/nginx/snippets/test.conf': 'server {\n    listen 8080;\n}\n',
+                 '/etc/nginx/snippets/no-final-lf.conf': 'location = /x { return 200; }'}
+        dump = ''.join('# configuration file %s:\n%s\n' % (path, body) for path, body in files.items())
+        namespace = {'__name__': 'naver_deploy_helper'}
+        exec(self.code, namespace)
+        self.assertEqual(namespace['parse_nginx_dump'](dump), files)
+        with self.assertRaises(namespace['Refuse']):
+            namespace['parse_nginx_dump']('# configuration file /etc/nginx/a.conf:\nbody')   # 구분 LF 없음
+
     def test_window_sees_building_in_local_or_outgoing(self):
         backups = self.root + '/var/backups/metainc/naver-engine'
         os.makedirs(backups + '/outgoing/.building-abcdefgh')

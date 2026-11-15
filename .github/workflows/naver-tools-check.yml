@@ -31,6 +31,8 @@ jobs:
         env:
           NAVER_REQUIRE_DOCKER_CLI: '1'
           NAVER_MIGRATE_TESTS_SEPARATE: '1'
+          # 실제 nginx -T 출력 형식 회귀(고정 digest, 네트워크 없는 컨테이너에서 설정만 읽는다).
+          NAVER_REAL_NGINX_IMAGE: 'nginx@sha256:552e7481ca93ffccd046aa658dbbed22caefbc09c66fa7cd247cbb90b8a5c609'
         run: |
           set -euo pipefail
           shellcheck -S warning deploy/naver/naver-deploy.sh deploy/naver/make-source-archive.sh deploy/naver/product-tests.sh

@@ -151,6 +151,17 @@ class NginxApplyTest(unittest.TestCase):
         self.assertEqual(done.returncode, 4)
         self.assertEqual(self.files(), before)
 
+    def test_partial_publish_restores_both_files(self):   # PR368 S1
+        plan = self.plan()
+        before = self.files()
+        tree = self.host.root + SNIPPET + '.naver-deploy.tmp'
+        os.makedirs(tree)                                    # zone 은 게시되고 snippet 쓰기만 실패하게
+        done = self.run_mode('nginx-apply', C1, self.tar, STEP, plan)
+        self.assertEqual(done.returncode, 2, done.stdout.decode()[-3000:])
+        self.assertEqual(result_of(done)['status'], 'NGINX_ROLLED_BACK')
+        self.assertEqual(self.files(), before)
+        self.assertFalse(os.path.exists(self.host.root + ZONE))
+
     def test_unknown_layout_and_pins_refused(self):
         self.host.file(SNIPPET, SNIPPET_BODY.replace('location ^~ /api/naver-auto', 'location /api/naver-auto'))
         done = self.run_mode('nginx-plan', C1, self.tar, STEP)
@@ -175,6 +186,46 @@ class NginxApplyTest(unittest.TestCase):
         done = self.run_mode('nginx-apply', C1, self.tar, STEP, plan)
         self.assertEqual(done.returncode, 10)
         self.assertEqual(self.files()[SNIPPET], before[SNIPPET])
+
+
+@unittest.skipUnless(os.environ.get('NAVER_REAL_NGINX_IMAGE') and shutil.which('docker'),
+                     '실제 nginx 이미지(고정 digest)와 docker 가 있을 때만(합성 검증 CI 가 켠다)')
+class RealNginxDumpTest(unittest.TestCase):
+    """실제 nginx 바이너리의 -T 출력 형식(구획 머리 + 원문 + LF 하나)을 배포 스크립트 parser 가 바이트 그대로 되살린다."""
+
+    def test_parser_round_trips_real_nginx_dump(self):
+        import subprocess
+        base = tempfile.mkdtemp(prefix='naver-real-nginx-')
+        try:
+            files = {'nginx.conf': ('pid /tmp/nginx.pid;\nerror_log stderr;\nevents {}\nhttp {\n    access_log off;\n'
+                                    '    client_body_temp_path /tmp/client_temp;\n    proxy_temp_path /tmp/proxy_temp;\n'
+                                    '    fastcgi_temp_path /tmp/fastcgi_temp;\n    uwsgi_temp_path /tmp/uwsgi_temp;\n'
+                                    '    scgi_temp_path /tmp/scgi_temp;\n    include /etc/nginx/conf.d/*.conf;\n'
+                                    '    include /etc/nginx/snippets/site.conf;\n}\n'),
+                     'conf.d/zone.conf': HTTP_CONF,
+                     'snippets/site.conf': 'server {\n    listen 8080;\n    server_name dashboard.metainc.co.kr;\n'
+                                           '    location = /x { return 200 "ok"; }\n}',   # 끝 LF 없는 파일도
+                     'mime.types': 'types {}\n'}
+            for name, body in files.items():
+                path = os.path.join(base, name)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, 'w') as handle:
+                    handle.write(body)
+            done = subprocess.run(['docker', 'run', '--rm', '--network', 'none', '-v', base + ':/etc/nginx:ro',
+                                   '--entrypoint', 'nginx', os.environ['NAVER_REAL_NGINX_IMAGE'], '-T'],
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, timeout=300)
+            self.assertEqual(done.returncode, 0, done.stderr.decode()[-2000:])
+            with open(os.path.join(os.path.dirname(HERE), 'naver-deploy.sh')) as handle:
+                text = handle.read()
+            code = text[text.index("PY_HELPER=$(cat <<'PYEOF'\n") + len("PY_HELPER=$(cat <<'PYEOF'\n"):text.index('\nPYEOF\n)')]
+            namespace = {'__name__': 'naver_deploy_helper'}
+            exec(code, namespace)
+            sections = namespace['parse_nginx_dump'](done.stdout.decode())
+            for name, body in files.items():
+                self.assertEqual(sections['/etc/nginx/' + name], body, name)
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
 
 
 def subprocess_run(host, *args):
