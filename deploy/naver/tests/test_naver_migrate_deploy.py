@@ -459,7 +459,9 @@ class MigrateDeployTest(unittest.TestCase):
         self.host.clear_calls()
         done = self.host.migrate(plan, NAVER_DEPLOY_FAKE_FAIL_CMD='mig-hold get',
                                  NAVER_DEPLOY_FAKE_FAIL_IF_EXISTS=DATA + '/naver-migrate-journal.json')
-        self.assertExit(done, 12)
+        # hold 조회가 계속 실패하면 HOLD 의 시작 차단도 확인할 수 없다 → 복구 필요(4)로 끝나고 기동은 없다.
+        self.assertExit(done, 4)
+        self.assertIn('START_BLOCK_UNVERIFIED', self.out(done))
         self.assertEqual(self.engine_starts_after_first_stop(), [])
         self.assertTrue(self.host.markers()['hold'])
 
@@ -479,6 +481,30 @@ class MigrateDeployTest(unittest.TestCase):
         self.assertExit(done, 12)
         self.assertIn('TERMINAL_GENERATION_MISMATCH', self.out(done))
         self.assertTrue(self.host.markers()['pointer'], 'markers preserved')
+        # HOLD 종료는 drop-in 까지 다시 깔아 시작을 실제로 막는다(B.1).
+        self.assertEqual(self.host.markers(), {'pointer': True, 'hold': True, 'dropins': True})
+        for unit in ('metainc-naver-engine.service', 'metainc-naver-relay.service'):
+            self.assertNotEqual(self.host.systemctl('start', unit).returncode, 0, unit)
+        units = self.host.load_state()['units']
+        self.assertEqual(units['metainc-naver-engine.service']['active'], 'inactive')
+        self.assertEqual(units['metainc-naver-relay.service']['active'], 'inactive')
+
+    def test_hold_unverifiable_start_block_reports_recovery_required(self):
+        plan = self.host.ready()
+        done = self.host.migrate(plan)
+        self.assertExit(done, 0)
+        run = result_of(done)['migration_run']
+        with open(self.host.root + STATE + '/migration-active', 'w') as handle:
+            handle.write(run + '\n')
+        state = self.host.load_state()
+        state['units']['metainc-naver-engine.service'].update(active='inactive', pid=0)
+        self.host.state = state
+        self.host.save_state()
+        done = self.host.run('deploy', C1, self.host.migrate_tar(), NAVER_DEPLOY_FAKE_FAIL_CMD='mig-dropin install',
+                             NAVER_DEPLOY_TEST_MIGRATIONS=self.host.entries_path, NAVER_DEPLOY_FAKE_KST=kst())
+        self.assertExit(done, 4)
+        self.assertIn('START_BLOCK_UNVERIFIED', self.out(done))
+        self.assertEqual(self.host.load_state()['units']['metainc-naver-relay.service']['active'], 'inactive')
 
     def archive_hold(self):
         plan = self.host.ready()

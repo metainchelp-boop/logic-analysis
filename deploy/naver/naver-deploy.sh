@@ -3837,10 +3837,31 @@ mig_stop_both() {
 }
 
 # 정지 보존 종료: hold 를 먼저(이미 있으면 그대로) → 정지 확인 → 상태 HOLD. 이후는 대표 판단(continue/rollback).
+# 모든 HOLD 종료의 시작 차단(B.1): hold 파일 + 두 unit drop-in 을 (다시) 깔고 daemon-reload 뒤 실제 적용을 확인한다.
+# 확인할 수 없으면 0 이 아닌 값을 돌려준다(부르는 쪽이 정지는 그대로 하고 복구 필요로 보고한다).
+mig_block_starts() {
+  local hold
+  py mig-hold create "${MIG_RUN:-unknown}" >>"$CMD_LOG" 2>&1 || true
+  hold=$(py mig-hold get 2>/dev/null) || return 1
+  [ -n "$hold" ] || return 1
+  py mig-dropin install >>"$CMD_LOG" 2>&1 || return 1
+  systemctl daemon-reload 2>>"$CMD_LOG" || return 1
+  mig_unit_dropins_ok || return 1
+}
+
 mig_hold_stopped() { # reason
   trap - ERR
   set +e
-  py mig-hold create "$MIG_RUN" >>"$CMD_LOG" 2>&1
+  if ! mig_block_starts; then
+    log "시작 차단(hold·drop-in)을 확인하지 못했습니다"
+    mig_stop_both
+    STOPPED_CONFIRMED=$( stopped_confirmed "$ENGINE_UNIT" naver-engine && stopped_confirmed "$RELAY_UNIT" naver-relay \
+      && echo true || echo false )
+    [ -n "$MIG_RUN" ] && py mig-status "$MIG_RUN" state=HOLD "reason=$1_START_BLOCK_UNVERIFIED" >>"$CMD_LOG" 2>&1
+    MIG_STATE=HOLD
+    PHASE=migration_hold
+    finish 4 MIGRATION_RECOVERY_REQUIRED "${1}_START_BLOCK_UNVERIFIED" "시작 차단 확인 불가. 정지 확인=$STOPPED_CONFIRMED"
+  fi
   mig_stop_both
   STOPPED_CONFIRMED=$( stopped_confirmed "$ENGINE_UNIT" naver-engine && stopped_confirmed "$RELAY_UNIT" naver-relay \
     && echo true || echo false )
@@ -3854,7 +3875,7 @@ mig_hold_stopped() { # reason
 mig_unknown() { # reason — 모르는 상태: 아무것도 옮기거나 지우지 않는다
   trap - ERR
   set +e
-  [ -n "$MIG_RUN" ] && py mig-hold create "$MIG_RUN" >>"$CMD_LOG" 2>&1
+  mig_block_starts || log "시작 차단(hold·drop-in)을 확인하지 못했습니다"
   mig_stop_both
   STOPPED_CONFIRMED=$( stopped_confirmed "$ENGINE_UNIT" naver-engine && stopped_confirmed "$RELAY_UNIT" naver-relay \
     && echo true || echo false )
