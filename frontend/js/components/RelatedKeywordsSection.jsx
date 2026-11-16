@@ -41,9 +41,10 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword,
     var relatedVisible = (tab === 'related' && !showAll) ? relatedList.slice(0, SHOW_LIMIT) : relatedList;
     /* 상품명 후보: 연관도 상위 5개 (분석 키워드 자체 제외) */
     var nameCandidates = base ? relatedList.filter(function(k) { return isRel(k) && norm(k.keyword) !== base; }).slice(0, 5) : [];
-    if (fit && fit.targets) {
-        /* 판정이 있으면 상품명 후보 = 서버가 고른 공략 키워드(이 상품을 찾는 말 · 경쟁 높음 제외 · 검색량순) */
-        nameCandidates = fit.targets.slice(0, 5).map(function(t) { return { keyword: t.keyword, totalVolume: t.total }; });
+    if (fit && (fit.nameCandidates || fit.targets)) {
+        /* 판정이 있으면 상품명 후보 = 서버가 고른 공략 키워드(이 상품을 찾는 말 · 경쟁 높음 제외 · 검색량순).
+           nameCandidates 는 그중 시즌어(며칠 뒤 지나감)·정보 탐색어를 뺀 것 — 옛 서버엔 없으니 targets 로 받는다. */
+        nameCandidates = (fit.nameCandidates || fit.targets).slice(0, 5).map(function(t) { return { keyword: t.keyword, totalVolume: t.total }; });
     }
 
     const displayList = tab === 'golden' ? goldenList : relatedVisible;

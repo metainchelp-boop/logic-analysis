@@ -30,7 +30,7 @@ import unicodedata
 from datetime import date, datetime
 
 #: 판정 규칙이 바뀌면 올린다(묶음에 함께 저장 — 어느 규칙으로 걸렀는지 나중에 안다).
-GATE_VERSION = 1
+GATE_VERSION = 2   # 2: 같은 종류의 다른 상품(other_variety) · 시즌어는 상품명 처방에서 뺌(2026-11-16)
 
 REASONS = {
     "modifier_only": "수식어만 남음",
@@ -40,6 +40,7 @@ REASONS = {
     "season_passed": "시즌이 지났거나 너무 멂",
     "competitor_brand": "타사 스토어·브랜드명",
     "other_form": "다른 형태의 상품",
+    "other_variety": "같은 종류의 다른 상품",
     "info_intent": "정보 탐색어(체험단·블로그용)",
 }
 
@@ -286,6 +287,40 @@ def is_other_form(candidate, product: dict) -> bool:
     return False
 
 
+def _context(product: dict) -> str:
+    return nospace(" ".join([product.get("name") or "", str(product.get("category") or ""),
+                             product.get("categoryLeaf") or "", product.get("store") or ""] + _tags(product)))
+
+
+def is_other_variety(candidate, product: dict, keyword: str, cores) -> bool:
+    """같은 종류의 다른 상품 — 메인 키워드보다 짧은 핵심 명사('초콜릿')만 공유하고, 그 앞뒤에 붙은 말이
+    우리 상품명·태그·카테고리 어디에도 없을 때. 예) 파베초콜릿 상품에 '화이트초콜릿'·'말차생초콜릿',
+    무뼈닭발 상품에 '국물닭발'·'튤립닭발'.
+    ⛔ 블랙리스트가 아니다 — 붙은 말이 상품 쪽에 있으면 통과한다('생초콜릿'의 '생', 판매자 태그 '다크초콜릿'의 '다크').
+       범용 수식어('수제')·시즌어('수능')·정보 탐색어('만들기')는 떼고 본다.
+       메인 키워드를 통째로 품은 말('플레인베이글'·'파베초콜릿선물')은 이 판정을 받지 않는다(부록 B 그대로)."""
+    main = strip_modifiers(keyword) or nospace(keyword)
+    c = strip_modifiers(candidate)
+    if not main or not c or main in c:
+        return False
+    for w, _ in SEASON_WORDS:
+        c = c.replace(w, "")
+    for w in sorted(INFO_INTENT_WORDS, key=len, reverse=True):
+        c = c.replace(w, "")
+    hit = max((x for x in (cores or []) if x and x != main and x in c), key=len, default="")
+    if not hit:
+        return False
+    ctx = _context(product)
+    i = c.find(hit)
+    pieces = [c[:i], c[i + len(hit):]]
+    return any(pc and pc not in ctx for pc in pieces)
+
+
+def name_worthy(candidate) -> bool:
+    """「상품명에 넣을 말」로 처방해도 되는가 — 시즌어는 며칠 뒤 지나가므로 상품명에는 넣지 않는다(광고·공략 키워드로는 쓴다)."""
+    return season_word(candidate) is None and not is_info_intent(candidate)
+
+
 # ───────────────────────── 한 상품의 판정기 ─────────────────────────
 
 class Gate:
@@ -318,6 +353,8 @@ class Gate:
             return "competitor_brand"
         if is_other_form(kw, self.product):
             return "other_form"
+        if is_other_variety(kw, self.product, self.keyword, self.cores):
+            return "other_variety"
         return None
 
     def ok(self, kw) -> bool:

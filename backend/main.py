@@ -3734,6 +3734,9 @@ def keywords_fit(req: KeywordFitRequest, current_user: dict = Depends(get_curren
         return {"success": True, "data": {
             "passed": [r["keyword"] for r in rows],
             "targets": [{"keyword": r["keyword"], "total": r["total"], "comp": r["comp"]} for r in targets],
+            # 「상품명에 넣을 후보」 — 공략 키워드 중 시즌어·정보 탐색어를 뺀 것(시즌어는 며칠 뒤 지나간다)
+            "nameCandidates": [{"keyword": r["keyword"], "total": r["total"]} for r in targets
+                               if _kf.name_worthy(r["keyword"])],
             "golden": [r["keyword"] for r in rows if r.get("golden")],
             "excluded": excluded[:80],
             "reasons": _kf.REASONS,

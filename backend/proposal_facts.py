@@ -509,7 +509,9 @@ def build(bundle, now=None):
     targets = pick_targets(rows, main["keyword"])
     groups = group_keywords(rows, targets, main["keyword"])
     head = name_keyword_head(product["name"])
-    targets_missing = [r["keyword"] for r in targets[:2] if nospace(r["keyword"]) not in nospace(head)]
+    # 상품명 처방 — 시즌어('수능초콜릿')는 며칠 뒤 지나가므로 상품명에 넣으라고 하지 않는다(공략·광고 키워드로는 남긴다).
+    targets_missing = [r["keyword"] for r in targets[:2] if keyword_fit.name_worthy(r["keyword"])
+                       and nospace(r["keyword"]) not in nospace(head)]
 
     rel = _d(b.get("related"))
     golden = [r for r in rows if r["golden"]]

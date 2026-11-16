@@ -129,7 +129,26 @@ p, x = g.split([{"keyword": "초콜릿만들기", "total": 10}, {"keyword": "파
 ok(p and p[0].get("infoIntent") and not x, "정보 탐색어 = 통과 + infoIntent 표시")
 ok(not any(r["keyword"] == "파베초콜릿" for r in p + x), "메인 키워드 자신은 어느 쪽에도 없음")
 ok(set(kf.REASONS) == {"modifier_only", "no_core", "low_overlap", "noise", "season_passed", "competitor_brand",
-                       "other_form", "info_intent"}, "사유 코드 8개")
+                       "other_form", "other_variety", "info_intent"}, "사유 코드 9개(판본 2: other_variety 가산)")
+
+# 같은 종류의 다른 상품(판본 2) — 짧은 핵심 명사만 공유하고 붙은 말이 상품 쪽에 없으면 탈락
+ok(g.reason("화이트초콜릿") == "other_variety", "화이트초콜릿 = 같은 종류의 다른 상품")
+ok(g.reason("말차생초콜릿") == "other_variety", "말차생초콜릿 = 다른 맛")
+ok(g.reason("생초콜릿") is None and g.reason("수제초콜릿") is None, "붙은 말이 상품명에 있으면 통과(생·수제)")
+ok(g.reason("수능초콜릿") is None, "시즌어는 떼고 본다")
+ok(g.reason("초콜릿선물") is None and g.reason("파베초콜릿선물") is None, "범용 수식어·메인 키워드 포함은 통과")
+gt = kf.Gate({"name": "뉴질랜드 생초콜릿 수제초콜릿 파베초콜릿", "tags": ["화이트초콜릿"]}, "파베초콜릿", TODAY)
+ok(gt.reason("화이트초콜릿") is None, "판매자 태그에 있으면 통과 — 블랙리스트 아님")
+gb = kf.Gate(bagel, "베이글", TODAY)
+ok(gb.reason("플레인베이글") is None, "메인 키워드를 품은 말은 이 판정을 받지 않음(부록 B 플레인베이글)")
+gd = kf.Gate(chicken, "무뼈닭발", TODAY)
+ok(gd.reason("국물닭발") == "other_variety" and gd.reason("튤립닭발") == "other_variety", "닭발 — 국물·튤립 = 다른 상품")
+ok(gd.reason("숯불닭발") is None and gd.reason("매운닭발") is None, "닭발 — 숯불(상품명)·매운(수식어) 통과")
+ok(gd.reason("무뼈족발") in ("no_core", "low_overlap", "other_variety"), "무뼈족발 탈락")
+
+# 상품명 처방 — 시즌어·정보 탐색어는 넣지 않는다
+ok(not kf.name_worthy("수능초콜릿") and not kf.name_worthy("파베초콜릿만들기") and kf.name_worthy("수제초콜릿"),
+   "name_worthy — 시즌어·정보 탐색어 제외")
 ok(g.describe()["date"] == "2026-11-13" and g.describe()["version"] == kf.GATE_VERSION, "판정 정보")
 
 # ───────────── ③ 원종당 — 제안서 재료 ─────────────
@@ -176,6 +195,8 @@ vols = {r["keyword"]: r["total"] for r in kw["targets"]}
 ok(tg == sorted(tg, key=lambda k: -vols[k]), "검색량순")
 ok(tg.index("수제초콜릿") < tg.index("생초콜릿"), "수제초콜릿(8,860) → 생초콜릿(7,200)")
 ok("생초콜릿" not in kw["targetsMissingInName"], "상품명에 이미 있는 생초콜릿은 처방 안 함")
+ok("수능초콜릿" not in kw["targetsMissingInName"], "시즌어는 상품명 처방 안 함(공략에는 남음)")
+ok("화이트초콜릿" not in tg, "화이트초콜릿 공략 아님")
 ok(not any("빼빼로" in m for m in kw["targetsMissingInName"]), "상품명 처방에 빼빼로 없음")
 allg = [x["keyword"] for grp in kw["groups"].values() for x in grp]
 ok(not any("빼빼로" in w for w in allg), f"groups 어디에도 빼빼로 없음: {allg}")
@@ -186,6 +207,7 @@ ex = {x["keyword"]: x["reason"] for x in kw["excluded"]}
 ok(ex.get("빼빼로") == "no_core" and ex.get("수제빼빼로") == "no_core" and ex.get("동결건조딸기") == "no_core", f"탈락 사유: {ex}")
 ok(ex.get("발렌타인데이") == "no_core", "발렌타인데이 — 핵심 명사 없음(판정은 관련도부터)")
 ok(ex.get("파베초콜릿만들기") == "info_intent", "정보 탐색어는 사유 info_intent 로도 남김(공략 제외)")
+ok(ex.get("화이트초콜릿") == "other_variety", "화이트초콜릿 사유 = 같은 종류의 다른 상품")
 ok(kw["gate"]["date"] == "2026-11-13" and kw["gate"]["hasTags"] is True, "판정 정보 저장")
 ok(f["product"].get("tags", [])[:2] == ["다크초콜릿", "밀크초콜릿"], "판매자 태그를 product 에 실음")
 ok(f["version"] >= 2, "사실값 판본 올림")
@@ -216,10 +238,11 @@ ok(all(not v for v in f5["keywords"]["groups"].values()), "groups 도 비움")
 
 # pool(검색량 상위 300) — 상위 50 밖의 관련 키워드도 판정 대상
 b = json.loads(json.dumps(WONJONG))
-b["related"]["pool"] = [rk("생초콜릿만드는곳아님", 5), rk("말차생초콜릿", 1500)]
+b["related"]["pool"] = [rk("말차생초콜릿", 1500), rk("밀크초콜릿", 1400)]
 f6 = pf.build(b, now=NOW)
-ok("말차생초콜릿" in [t["keyword"] for t in f6["keywords"]["targets"]] or
-   "말차생초콜릿" in [x["keyword"] for g_ in f6["keywords"]["groups"].values() for x in g_], "pool 의 관련 키워드도 쓴다")
+ok("밀크초콜릿" in [t["keyword"] for t in f6["keywords"]["targets"]] or
+   "밀크초콜릿" in [x["keyword"] for g_ in f6["keywords"]["groups"].values() for x in g_], "pool 의 관련 키워드도 쓴다(판매자 태그 밀크초콜릿)")
+ok({x["keyword"]: x["reason"] for x in f6["keywords"]["excluded"]}.get("말차생초콜릿") == "other_variety", "pool 의 다른 맛은 탈락")
 
 # ───────────── ④ 닭발 — 정보 탐색어 · 타사 브랜드 ─────────────
 DAKBAL = {
