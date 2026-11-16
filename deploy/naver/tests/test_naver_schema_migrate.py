@@ -391,7 +391,9 @@ class HostHelperTest(unittest.TestCase):
         shutil.rmtree(os.path.dirname(self.code_file))
 
     def py(self, *args, **env):
-        environment = {'PATH': '/usr/bin:/bin', 'NAVER_DEPLOY_ROOT': self.root, 'LANG': 'C'}
+        # 보관·창 시간 가드가 실제 시각(23:30 KST 이후 ARCHIVE_TIMEOUT)에 따라 갈리지 않도록 낮 시각을 기본으로 둔다.
+        environment = {'PATH': '/usr/bin:/bin', 'NAVER_DEPLOY_ROOT': self.root, 'LANG': 'C',
+                       'NAVER_DEPLOY_FAKE_KST': '2026-11-16T12:00'}
         environment.update(env)
         return subprocess.run([sys.executable, '-I', '-B', self.code_file] + list(args), env=environment,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
