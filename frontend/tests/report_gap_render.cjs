@@ -84,7 +84,7 @@ function scenario(noMarket) {
   await page.waitForFunction(() => !!window.AnalysisResults && !!window.ReportCapture);
 
   for (const noMarket of [true, false]) {
-    exposureMeasured = noMarket ? 0 : 3;
+    exposureMeasured = noMarket ? 0 : 1;
     const tag = noMarket ? '[자료 없음] ' : '[자료 있음] ';
     const props = JSON.parse(JSON.stringify(scenario(noMarket)));
     await page.evaluate((p) => {
@@ -107,7 +107,13 @@ function scenario(noMarket) {
       try { h = window.ReportCapture.buildHtml({ title: '시험' }); } finally { if (outer) parent.insertBefore(outer, next); }
       return h;
     });
-    const exp = html.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    // 전달본은 사람이 보는 그대로(숨긴 요소 제외) 읽는다 — 문자열만 보면 display:none 인 줄도 「있다」로 세진다
+    const p2 = await browser.newPage();
+    await p2.route('**/*', r => r.request().url().startsWith('data:') ? r.continue() : r.fulfill({ status: 404, body: '' }));
+    await p2.setContent(html, { waitUntil: 'load' });
+    const exp = (await p2.evaluate(() => document.body.innerText)).replace(/\s+/g, ' ');
+    const expHtml = html;
+    await p2.close();
     if (noMarket) {
       check(tag + '화면 안내 띠(이유 포함)', txt.includes('쇼핑 시장 자료 없음') && txt.includes('2026-11-05') && txt.includes('고장이 아닙니다'));
       check(tag + '검수 줄 「상품 검색 · 수집 쉬는 중」', txt.includes('상품 검색 · 수집 쉬는 중') && !txt.includes('✗ 상품 검색'));
@@ -134,6 +140,7 @@ function scenario(noMarket) {
       check(tag + '노출 순위 실측 표시', txt.includes('200위 밖 키워드') && !txt.includes('키워드별 순위 · 못 잼'));
       check(tag + '전달본에 맨 위 한 줄 없음', !exp.includes('중심으로 작성했습니다'));
       check(tag + '전달본에 「등록 상품수」 있음', exp.includes('등록 상품수'));
+      check(tag + '일부만 잰 노출 순위 — 「못 잰 키워드」 따로', txt.includes('못 잰 키워드') && txt.includes('못 잼 2개') && txt.includes('200위 밖 1개'));
     }
   }
   check('페이지 오류 0', errs.length === 0, errs.join(' | ').slice(0, 300));

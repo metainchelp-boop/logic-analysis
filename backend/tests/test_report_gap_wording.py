@@ -150,7 +150,10 @@ check("내보내기 · export-only 를 보이게 함", ".export-only" in rc and 
 check("내보내기 · 빈 장 빼기(dropEmptyChapters) 가 목차보다 먼저", "function dropEmptyChapters" in rc
       and rc.index("dropEmptyChapters(clone)") < rc.index("insertToc(clone);", rc.index("function buildHtml")))
 an = read(FE / "analysis.jsx")
-check("분석 · 「성공 · 빈 목록」 상품 검색은 다시 묻지 않음(off)", "'off'" in an and "_shopOff" in an)
+check("분석 · 「성공 · 빈 목록」 상품 검색은 다시 묻지 않음(off)",
+      "var shopOff = !ok.shop && _shopOff(results[2]);" in an
+      and "(!ok.shop && !shopOff)" in an
+      and "_auditItems['상품 검색'] = ok.shop ? 'ok' : (shopOff ? 'off'" in an)
 check("분석 · 연관 키워드 lookup_ok=false 는 실패로 봄", "lookup_ok === false" in an)
 
 socket.socket.connect = _real_connect
