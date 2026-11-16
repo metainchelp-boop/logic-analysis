@@ -974,6 +974,28 @@ window.ReportFacts = function () {
     } catch (eT) {}
   }
 
+  /* 빈 장 빼기 (2026-11-16) — 장 제목(.report-divider)과 다음 장 제목 사이에 남은 내용이 없으면
+   * 제목도 뺀다. 자료가 없어 칸이 모두 빠진 장이 제목만 남아 광고주에게 가고, 목차에도 실리던 것.
+   * 장에 내용이 있으면 아무것도 바꾸지 않는다(insertToc 보다 먼저 돈다). */
+  function dropEmptyChapters(clone) {
+    try {
+      var divs = clone.querySelectorAll('.report-divider');
+      for (var i = 0; i < divs.length; i++) {
+        var d = divs[i];
+        var n = d.nextElementSibling,
+          has = false;
+        while (n && !(n.classList && n.classList.contains('report-divider'))) {
+          if ((n.textContent || '').trim() || n.querySelector && n.querySelector('img,canvas,svg,table')) {
+            has = true;
+            break;
+          }
+          n = n.nextElementSibling;
+        }
+        if (!has && d.parentNode) d.parentNode.removeChild(d);
+      }
+    } catch (eD) {}
+  }
+
   /* 직원용/인터랙티브 요소 제거 + 입력값 평문화 + 반응형 클래스 부여 + 원격 이미지 안전화 */
   function cleanup(clone) {
     REMOVE_SELECTORS.forEach(function (sel) {
@@ -986,6 +1008,12 @@ window.ReportFacts = function () {
     clone.querySelectorAll('button, .btn').forEach(function (b) {
       b.remove();
     });
+    /* 광고주 전달본에만 싣는 줄(.export-only — 화면에서는 인라인 display:none) 을 보이게 한다 */
+    clone.querySelectorAll('.export-only').forEach(function (el) {
+      el.style.display = '';
+      el.classList.remove('export-only');
+    });
+    dropEmptyChapters(clone);
     clone.querySelectorAll('input, select, textarea').forEach(function (inp) {
       var span = document.createElement('span');
       span.textContent = inp.value || '';
@@ -1580,7 +1608,8 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
     if (volumeData) sections.volume = volumeData;
     if (analysisData.marketRevenue) sections.market = analysisData.marketRevenue;
     if (analysisData.competitionIndex) sections.competition = analysisData.competitionIndex;
-    if (relatedData) sections.related = relatedData;
+    /* 검색광고 조회가 실패한 연관 키워드(lookup_ok=false)는 「0개」가 아니므로 AI 에 넘기지 않는다(2026-11-16) */
+    if (relatedData && relatedData.lookup_ok !== false) sections.related = relatedData;
     if (analysisData.keywordTrend) sections.trend = analysisData.keywordTrend;
     if (analysisData.goldenKeyword) sections.golden = analysisData.goldenKeyword;
     if (analysisData.competitorTable) sections.competitor = analysisData.competitorTable;
@@ -1609,6 +1638,8 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
       top5AvgReviews: _top5Reviews,
       isDefender: _myRank != null && _myRank <= 10 || _myReviews != null && _myReviews >= 100
     };
+    /* 쇼핑 1페이지 자료 없음 — 서버가 AI 에 「경쟁·가격을 지어내거나 0으로 단정하지 말 것」을 일러 둔다 */
+    if (analysisData.marketMissing) sections.marketMissing = true;
     return sections;
   };
   var doFetch = function () {
@@ -2930,8 +2961,11 @@ window.RankTrackingSection = function RankTrackingSection({
       }
     }, '이 결과는 1회성 조회입니다. 지속적인 순위 추적은 관리자에게 상품 등록을 요청하세요.'));
   };
+
+  /* 하나도 재지 못한 분석(쇼핑 목록 없음) — 「✅ 실측」 대신 「못 잼」, 광고주 전달본에서는 칸째 뺀다(대표 결정 ①ⓐ) */
+  var _allUnmeasured = !!(exposureResult && !exposureLoading && exposureResult.total_keywords > 0 && exposureResult.measured_count === 0);
   return /*#__PURE__*/React.createElement("div", {
-    className: "section",
+    className: 'section' + (_allUnmeasured ? ' no-export' : ''),
     id: "sec-rank"
   }, /*#__PURE__*/React.createElement("div", {
     className: "container"
@@ -2951,7 +2985,9 @@ window.RankTrackingSection = function RankTrackingSection({
     className: "rt-h3"
   }, /*#__PURE__*/React.createElement("span", {
     className: "rt-hic"
-  }, "📍"), "키워드별 노출 순위", /*#__PURE__*/React.createElement("span", {
+  }, "📍"), "키워드별 노출 순위", _allUnmeasured ? /*#__PURE__*/React.createElement("span", {
+    className: "badge b-n"
+  }, "못 잼") : /*#__PURE__*/React.createElement("span", {
     className: "badge b-ok"
   }, "✅ 실측")), /*#__PURE__*/React.createElement("div", {
     className: "rt-desc"
@@ -2997,13 +3033,48 @@ window.RankTrackingSection = function RankTrackingSection({
     }
   }, "상품명에서 키워드를 추출하여 각각 순위를 조회하고 있습니다")), exposureResult && !exposureLoading && function () {
     // R6: 노출률·노출/400위밖 리스트는 '내 상품 키워드'(source!=='related')만 — 무관 연관어 제외
+    // 2026-11-16 — measured === false 는 그 키워드 쇼핑 목록이 없어 「못 잰」 것(200위 밖과 다르다).
+    //   옛 서버 응답(measured 칸 없음)은 종전대로 잰 것으로 본다.
+    var _measured = function (r) {
+      return r.measured !== false;
+    };
     var exposed = exposureResult.results.filter(function (r) {
       return r.rank != null && r.source !== 'related';
     });
     var unexposed = exposureResult.results.filter(function (r) {
-      return r.rank == null && r.source !== 'related';
+      return r.rank == null && r.source !== 'related' && _measured(r);
     });
-    var exposureRate = exposureResult.total_keywords > 0 ? Math.round(exposureResult.exposed_count / exposureResult.total_keywords * 100) : 0;
+    var unmeasured = exposureResult.results.filter(function (r) {
+      return r.rank == null && r.source !== 'related' && !_measured(r);
+    });
+    var measuredTotal = exposureResult.measured_count != null ? exposureResult.measured_count : exposureResult.total_keywords;
+    if (exposureResult.total_keywords > 0 && measuredTotal === 0) {
+      // 하나도 재지 못함 — 「노출률 0%」·「200위 밖」 대신 「못 잼」. 광고주 전달본에는 싣지 않는다.
+      return /*#__PURE__*/React.createElement("div", {
+        className: "fade-in no-export",
+        style: {
+          marginTop: 16,
+          background: '#f8fafc',
+          border: '1px dashed #cbd5e1',
+          borderRadius: 12,
+          padding: '14px 16px'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 13.5,
+          fontWeight: 800,
+          color: '#334155'
+        }
+      }, "키워드별 순위 · 못 잼"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 12.5,
+          color: '#64748b',
+          marginTop: 4,
+          lineHeight: 1.6
+        }
+      }, "쇼핑 순위 수집을 쉬는 중이라 키워드별 순위를 재지 못했습니다. 「200위 밖」이 아니라 모르는 상태입니다."));
+    }
+    var exposureRate = measuredTotal > 0 ? Math.round(exposureResult.exposed_count / measuredTotal * 100) : 0;
     return /*#__PURE__*/React.createElement("div", {
       className: "fade-in",
       style: {
@@ -3020,7 +3091,9 @@ window.RankTrackingSection = function RankTrackingSection({
       className: "ps ps-g"
     }, "노출 ", exposureResult.exposed_count, "개"), /*#__PURE__*/React.createElement("span", {
       className: "ps ps-r"
-    }, "200위 밖 ", unexposed.length, "개"), /*#__PURE__*/React.createElement("span", {
+    }, "200위 밖 ", unexposed.length, "개"), unmeasured.length > 0 && /*#__PURE__*/React.createElement("span", {
+      className: "ps ps-n"
+    }, "못 잼 ", unmeasured.length, "개"), /*#__PURE__*/React.createElement("span", {
       className: "ps ps-n"
     }, "전체 ", exposureResult.total_keywords, "개")), /*#__PURE__*/React.createElement("div", {
       className: "grid3",
@@ -3155,12 +3228,44 @@ window.RankTrackingSection = function RankTrackingSection({
         key: idx,
         className: "kwchip off"
       }, r.keyword);
-    }), unexposed.length === 0 && /*#__PURE__*/React.createElement("div", {
+    }), unexposed.length === 0 && unmeasured.length === 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
         color: '#94a3b8'
       }
-    }, "모든 키워드에 노출 중입니다"))), function () {
+    }, "모든 키워드에 노출 중입니다"), unexposed.length === 0 && unmeasured.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: '#94a3b8'
+      }
+    }, "없음")), unmeasured.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 800,
+        color: '#64748b',
+        margin: '16px 0 8px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", null, "●"), " 못 잰 키워드"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 8
+      }
+    }, unmeasured.map(function (r, idx) {
+      return /*#__PURE__*/React.createElement("span", {
+        key: idx,
+        className: "kwchip off"
+      }, r.keyword);
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#94a3b8',
+        marginTop: 6
+      }
+    }, "쇼핑 목록이 없어 재지 못한 키워드입니다. 노출률 계산에서 뺐습니다."))), function () {
       var tp = (products || []).find(function (p) {
         return p.product_url === searchedProductUrl;
       });
@@ -10348,6 +10453,40 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
     return item && item.name && item.score !== undefined;
   });
 
+  // 검색광고 조회가 실패한 경우(2026-11-16) — 「0개 ✅ 실측」과 다르다. 직원 화면에만 알리고 전달본에서는 칸째 뺀다.
+  if (valid.length === 0 && props && props.lookupFailed) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "card no-export"
+    }, /*#__PURE__*/React.createElement("h3", {
+      className: "rt-h3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "rt-hic"
+    }, "👑"), "골든 키워드 ", /*#__PURE__*/React.createElement("span", {
+      className: "badge b-n"
+    }, "불러오지 못함")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: '18px 20px',
+        textAlign: 'center',
+        background: '#f8fafc',
+        borderRadius: 12,
+        border: '1px dashed #cbd5e1'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13.5,
+        fontWeight: 700,
+        color: '#475569',
+        marginBottom: 4
+      }
+    }, "네이버 검색광고 조회가 실패해 골든 키워드를 찾지 못했습니다"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: '#94a3b8',
+        lineHeight: 1.7
+      }
+    }, "「골든 키워드가 없다」는 뜻이 아닙니다. 잠시 뒤 다시 분석하면 채워질 수 있습니다.")));
+  }
+
   // 0건: 숨기지 않고 대안을 안내 (빈 표/‘없음’이 부정적으로 보이는 문제 개선)
   if (valid.length === 0) {
     return /*#__PURE__*/React.createElement("div", {
@@ -10579,6 +10718,10 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
     compLevel,
     note
   } = props.data;
+  /* 2026-11-16 — 쇼핑 1페이지 자료가 없을 때(수집 쉼 · 11/5~) 가짜 값 대신 「자료 없음」.
+     marketMissing: 경쟁 상품 0개 / relatedLookupFailed: 검색광고 조회 실패(0개와 다름). */
+  var marketMissing = !!props.marketMissing;
+  var relatedLookupFailed = !!props.data.relatedLookupFailed;
   // ★ totalVolume/productCount 는 App.jsx에서 이미 fmt() 적용된 문자열 → 그대로 출력(이중 포맷 NaN 방지)
 
   /* ===== 히어로 데이터 파생 (전부 기존 분석 데이터 재사용 — 신규 호출 없음) ===== */
@@ -10625,12 +10768,12 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
     opts = opts || {};
     var missing = opts.forceMissing != null ? opts.forceMissing : isMissing(value);
     return /*#__PURE__*/React.createElement("div", {
-      className: "kpi"
+      className: 'kpi' + (opts.cls ? ' ' + opts.cls : '')
     }, /*#__PURE__*/React.createElement("div", {
       className: "k"
     }, label, " ", missing ? /*#__PURE__*/React.createElement("span", {
       className: "badge b-n"
-    }, "집계 없음") : /*#__PURE__*/React.createElement("span", {
+    }, opts.missingLabel || '집계 없음') : /*#__PURE__*/React.createElement("span", {
       className: "badge b-ok"
     }, "✅")), /*#__PURE__*/React.createElement("div", {
       className: "v",
@@ -10644,7 +10787,28 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
     className: "section fade-in"
   }, /*#__PURE__*/React.createElement("div", {
     className: "container"
-  }, showHero && /*#__PURE__*/React.createElement("div", {
+  }, marketMissing && !showHero && /*#__PURE__*/React.createElement("div", {
+    className: "card no-export",
+    style: {
+      background: '#f8fafc',
+      border: '1px dashed #cbd5e1',
+      padding: '14px 18px',
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 800,
+      color: '#334155'
+    }
+  }, "종합 진입 점수 · 계산 불가"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#64748b',
+      marginTop: 4,
+      lineHeight: 1.6
+    }
+  }, "종합 점수와 「긴급」 과제는 경쟁 상품 자료로 계산합니다. 자료가 없어 이번에는 내지 않았습니다.")), showHero && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       background: 'linear-gradient(135deg, #3b82f6, #7c3aed)',
@@ -10779,7 +10943,14 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
     className: "rt-hic"
   }, "🎯"), "종합 요약"), /*#__PURE__*/React.createElement("div", {
     className: "grid4"
-  }, Kpi('월간 검색량', totalVolume, '회/월'), Kpi('등록 상품수', productCount, '개'), /*#__PURE__*/React.createElement("div", {
+  }, Kpi('월간 검색량', totalVolume, '회/월'), marketMissing ? Kpi('등록 상품수', productCount, '개', {
+    forceMissing: true,
+    missingLabel: '자료 없음',
+    cls: 'no-export'
+  }) : Kpi('등록 상품수', productCount, '개'), relatedLookupFailed ? Kpi('골든 키워드', goldenCount, '개', {
+    forceMissing: true,
+    missingLabel: '불러오지 못함'
+  }) : /*#__PURE__*/React.createElement("div", {
     className: "kpi"
   }, /*#__PURE__*/React.createElement("div", {
     className: "k"
@@ -10790,7 +10961,12 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
     style: {
       color: Number(goldenCount) === 0 ? '#f59e0b' : undefined
     }
-  }, goldenCount, /*#__PURE__*/React.createElement("small", null, Number(goldenCount) === 0 ? '개 — 롱테일 권장' : '개 발견'))), Kpi('경쟁강도', compLevel, '', {
+  }, goldenCount, /*#__PURE__*/React.createElement("small", null, Number(goldenCount) === 0 ? '개 — 롱테일 권장' : '개 발견'))), marketMissing ? Kpi('경쟁강도', compLevel, '', {
+    fontSize: '22px',
+    forceMissing: true,
+    missingLabel: '자료 없음',
+    cls: 'no-export'
+  }) : Kpi('경쟁강도', compLevel, '', {
     fontSize: '22px'
   })), note && /*#__PURE__*/React.createElement("div", {
     className: "note"
@@ -12964,6 +13140,9 @@ window.EntryStrategySection = function EntryStrategySection(props) {
   var strategy = advertiserData && advertiserData.entry_strategy || {};
   var strategies = strategy.strategies || [];
   var overallScore = strategy.overall_score || 0;
+  /* 2026-11-16 — 서버가 쇼핑 1페이지 자료 없이 만든 보고서(수집 쉼 · 11/5~)면 market_data_available=false.
+     점수는 null(계산 불가) · 순위는 못 잰 것 · 경쟁 비교는 만들지 않는다(대표 결정 ①ⓐ ②ⓐ). 옛 서버 응답은 종전대로. */
+  var noMarket = !!(advertiserData && advertiserData.market_data_available === false);
 
   // strategicData fallback
   var stData = strategicData || {};
@@ -13072,9 +13251,12 @@ window.EntryStrategySection = function EntryStrategySection(props) {
 
   /* 경쟁 파트만 요청됐는데 보여줄 경쟁 데이터가 없으면 빈 카드 방지 */
   if (part === 'competition' && !advertiserData && !mainBrands) return null;
+
+  /* 자료가 없으면 경쟁 파트는 직원 화면에만(광고주 전달본에서는 칸째 뺀다) */
+  var _sectionCls = 'section fade-in' + (noMarket && part === 'competition' ? ' no-export' : '');
   return React.createElement('div', {
     id: part === 'competition' ? 'sec-strategy-comp' : 'sec-strategy',
-    className: 'section fade-in'
+    className: _sectionCls
   }, React.createElement('div', {
     className: 'container'
   }, React.createElement('div', {
@@ -13130,9 +13312,9 @@ window.EntryStrategySection = function EntryStrategySection(props) {
       fontWeight: 700,
       fontSize: 15,
       marginBottom: 4,
-      color: productInfo.product_name ? '#0f172a' : '#b45309'
+      color: productInfo.product_name ? '#0f172a' : noMarket ? '#475569' : '#b45309'
     }
-  }, productInfo.product_name || '상품 정보를 불러오지 못했습니다'), productInfo.product_name ? React.createElement('div', {
+  }, productInfo.product_name || (noMarket ? '상품 정보 · 자료 없음' : '상품 정보를 불러오지 못했습니다')), productInfo.product_name ? React.createElement('div', {
     style: {
       fontSize: 13,
       color: '#64748b'
@@ -13141,7 +13323,14 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     style: {
       marginRight: 12
     }
-  }, '판매처: ' + productInfo.store_name), productInfo.price > 0 && React.createElement('span', null, '가격: ' + fmt(productInfo.price) + '원')) : React.createElement('div', {
+  }, '판매처: ' + productInfo.store_name), productInfo.price > 0 && React.createElement('span', null, '가격: ' + fmt(productInfo.price) + '원')) : noMarket ? React.createElement('div', {
+    style: {
+      fontSize: 12.5,
+      color: '#64748b',
+      lineHeight: 1.6,
+      marginTop: 2
+    }
+  }, '쇼핑 순위 수집을 쉬는 동안(2026-11-05~) 쇼핑 목록에서 상품 정보를 찾을 수 없습니다. 고장이 아닙니다.') : React.createElement('div', {
     style: {
       fontSize: 12.5,
       color: '#78350f',
@@ -13176,16 +13365,37 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     style: {
       fontSize: 18,
       fontWeight: 800,
-      color: ranking.current_rank ? '#0f172a' : '#ef4444'
+      color: ranking.current_rank ? '#0f172a' : noMarket ? '#94a3b8' : '#ef4444'
     }
-  }, ranking.current_rank ? ranking.current_rank + '위' : '미노출'), React.createElement('div', {
+  }, ranking.current_rank ? ranking.current_rank + '위' : noMarket ? '—' : '미노출'), React.createElement('div', {
     style: {
       fontSize: 11,
       color: '#94a3b8',
       fontWeight: 600
     }
-  }, '현재 순위')), /* 종합 점수 - conic gradient circle */
-  React.createElement('div', {
+  }, !ranking.current_rank && noMarket ? '현재 순위 · 못 잼' : '현재 순위')), /* 종합 점수 - conic gradient circle (자료가 없으면 「계산 불가」) */
+  noMarket && React.createElement('div', {
+    style: {
+      textAlign: 'center',
+      padding: '10px 18px',
+      background: '#f8fafc',
+      borderRadius: 12,
+      minWidth: 80,
+      border: '1px solid #e2e8f0'
+    }
+  }, React.createElement('div', {
+    style: {
+      fontSize: 18,
+      fontWeight: 800,
+      color: '#94a3b8'
+    }
+  }, '—'), React.createElement('div', {
+    style: {
+      fontSize: 11,
+      color: '#94a3b8',
+      fontWeight: 600
+    }
+  }, '종합 점수 · 계산 불가')), !noMarket && React.createElement('div', {
     style: {
       textAlign: 'center',
       padding: '10px 18px',
@@ -13225,7 +13435,23 @@ window.EntryStrategySection = function EntryStrategySection(props) {
       fontWeight: 600
     }
   }, scoreLabel)))), /* === 종합 진입 점수 + KPI (시안 .grid2 + .kpi) === */
-  showStrat && advertiserData && React.createElement('div', {
+  showStrat && advertiserData && noMarket && React.createElement('div', {
+    className: 'no-export',
+    style: {
+      background: '#f8fafc',
+      border: '1px dashed #cbd5e1',
+      borderRadius: 12,
+      padding: '12px 16px',
+      marginBottom: 12,
+      fontSize: 12.5,
+      color: '#64748b',
+      lineHeight: 1.6
+    }
+  }, React.createElement('b', {
+    style: {
+      color: '#334155'
+    }
+  }, '종합 진입 점수 · 계산 불가'), ' — 점수와 평균가 · 키워드 포함률은 경쟁 상품 자료로 계산합니다. 자료가 없어 이번에는 내지 않았습니다. 아래 전략은 내 상품 정보 기준입니다.'), showStrat && advertiserData && !noMarket && React.createElement('div', {
     className: 'grid2',
     style: {
       alignItems: 'center',
@@ -13272,7 +13498,17 @@ window.EntryStrategySection = function EntryStrategySection(props) {
       fontSize: 18
     }
   }, (compStats.keyword_in_name_ratio != null ? compStats.keyword_in_name_ratio : '-') + '%'))))), /* === 경쟁사 상위 10개 비교표 === */
-  showComp && React.createElement('div', {
+  showComp && noMarket && React.createElement('div', {
+    style: {
+      background: '#f8fafc',
+      border: '1px dashed #cbd5e1',
+      borderRadius: 12,
+      padding: '12px 16px',
+      fontSize: 12.5,
+      color: '#64748b',
+      lineHeight: 1.6
+    }
+  }, '경쟁 상품 목록이 없어 상위 10개 비교표와 격차 분석을 만들지 않았습니다.'), showComp && !noMarket && React.createElement('div', {
     style: {
       marginBottom: 28
     }
@@ -29432,6 +29668,38 @@ window.AnalysisResults = function AnalysisResults(props) {
   /* 실제 이름을 못 구하면 최후에만 슬러그(빈 표지보다는 낫다) */
   var _storeName = _realStoreName || _urlSlug || '';
   var _displayCompany = companyName || _storeName;
+
+  /* ===== 쇼핑 1페이지 자료가 없을 때(쇼핑 순위 수집 쉼 · 2026-11-05~) — 대표 결정 「보고서 문구 — ①ⓐ ②ⓐ ③ⓐ」 =====
+     ① 광고주 전달본: 빈 칸·빈 장은 빼고 맨 위에 한 줄(.export-only)  ② 점수는 「계산 불가」
+     ③ 직원 화면: 이유까지 적은 안내 띠와 장마다 「이번 분석에서 빠진 칸」 한 줄(.no-export).
+     자료가 있으면 아래 갈래는 전부 꺼져 지금 화면과 똑같다. */
+  var marketMissing = !!(analysisData && analysisData.marketMissing);
+  var relatedLookupFailed = !!(relatedData && relatedData.lookup_ok === false);
+  var volumeMissing = !(volumeData && volumeData.length > 0);
+  var _staffNote = function (text) {
+    return React.createElement('div', {
+      className: 'section no-export'
+    }, React.createElement('div', {
+      className: 'container'
+    }, React.createElement('div', {
+      style: {
+        background: '#f8fafc',
+        border: '1px dashed #cbd5e1',
+        borderRadius: 10,
+        padding: '9px 14px',
+        fontSize: 12.5,
+        color: '#64748b',
+        lineHeight: 1.6
+      }
+    }, text)));
+  };
+  var _missingLine = function (names) {
+    return _staffNote(React.createElement(React.Fragment, null, React.createElement('b', {
+      style: {
+        color: '#475569'
+      }
+    }, '이번 분석에서 빠진 칸: '), names.join(' · '), ' — 쇼핑 시장 자료 없음'));
+  };
   return React.createElement('div', {
     className: 'report-shell'
   }, /* 좌측 고정 목차 (와이드 화면 전용) — 분석 결과(섹션 2개 이상)가 있을 때만 표시 */
@@ -29548,7 +29816,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     searchResult: relatedData
   }), /* [검수] 데이터 검수 상태 배너 — 항목별 실데이터 확보 현황(✓ 확보 · ↻ 재조회 중 · ✗ 실패) */
   auditStatus && auditStatus.items && auditStatus.items.length > 0 && React.createElement('div', {
-    className: 'section fade-in'
+    className: 'section fade-in no-export'
   }, React.createElement('div', {
     className: 'container'
   }, React.createElement('div', {
@@ -29568,8 +29836,9 @@ window.AnalysisResults = function AnalysisResults(props) {
       color: '#334155'
     }
   }, auditStatus.phase === 'auditing' ? '🔍 데이터 검수 중…' : '🔍 데이터 검수'), auditStatus.items.map(function (it, i) {
-    var color = it.st === 'ok' ? '#059669' : it.st === 'retry' ? '#d97706' : it.st === 'wait' ? '#94a3b8' : '#dc2626';
-    var mark = it.st === 'ok' ? '✓' : it.st === 'retry' ? '↻' : it.st === 'wait' ? '…' : '✗';
+    /* off = 「성공 · 빈 목록」(쇼핑 수집 쉼) — 실패가 아니라 회색 「—」 */
+    var color = it.st === 'ok' ? '#059669' : it.st === 'retry' ? '#d97706' : it.st === 'wait' || it.st === 'off' ? '#94a3b8' : '#dc2626';
+    var mark = it.st === 'ok' ? '✓' : it.st === 'retry' ? '↻' : it.st === 'wait' ? '…' : it.st === 'off' ? '—' : '✗';
     return React.createElement('span', {
       key: i,
       style: {
@@ -29577,7 +29846,7 @@ window.AnalysisResults = function AnalysisResults(props) {
         whiteSpace: 'nowrap',
         fontWeight: 600
       }
-    }, mark + ' ' + it.name);
+    }, mark + ' ' + it.name + (it.st === 'off' ? ' · 수집 쉬는 중' : ''));
   })))), /* [DATALAB] 로딩 인디케이터 */
   analysisData && !datalabData && datalabLoading && React.createElement('div', {
     className: 'section fade-in',
@@ -29633,7 +29902,40 @@ window.AnalysisResults = function AnalysisResults(props) {
     }
   }, '검색량·경쟁강도·시장규모를 종합 분석하고 있습니다. 약 5~10초 소요됩니다.')))), /* ==================== 보고서 6단계 흐름 (v6.0 — 광고주 발송용 재배치) ==================== */
 
-  /* ========== 1. 종합 요약 ========== */
+  /* [자료 없음] 직원 화면 안내 띠 — 결정 ③ⓐ 이유까지 */
+  marketMissing && React.createElement('div', {
+    className: 'section fade-in no-export'
+  }, React.createElement('div', {
+    className: 'container'
+  }, React.createElement('div', {
+    style: {
+      background: '#f1f5f9',
+      border: '1px solid #cbd5e1',
+      borderRadius: 10,
+      padding: '11px 15px',
+      fontSize: 13,
+      color: '#334155',
+      lineHeight: 1.65
+    }
+  }, React.createElement('b', null, '🛒 쇼핑 시장 자료 없음'), ' — 쇼핑 순위 수집을 쉬는 동안(2026-11-05~) 경쟁 상품·가격·카테고리·순위 칸은 비어 있습니다. 검색량·연관 키워드·데이터랩·광고 경쟁 칸은 이 일과 상관없습니다. ', React.createElement('b', null, '고장이 아닙니다.')))), /* [자료 없음] 광고주 전달본 맨 위 한 줄 — 결정 ①ⓐ (화면에서는 숨김 · 내보내기에서만 보임) */
+  marketMissing && React.createElement('div', {
+    className: 'section export-only',
+    style: {
+      display: 'none'
+    }
+  }, React.createElement('div', {
+    className: 'container'
+  }, React.createElement('div', {
+    style: {
+      background: '#f8fafc',
+      border: '1px solid #e2e8f0',
+      borderRadius: 10,
+      padding: '11px 15px',
+      fontSize: 13,
+      color: '#334155',
+      lineHeight: 1.65
+    }
+  }, '이번 보고서는 검색 수요 · 키워드 · 광고 경쟁 자료를 중심으로 작성했습니다. 경쟁 상품 · 가격 비교는 이번 보고서에 담지 않았습니다.'))), /* ========== 1. 종합 요약 ========== */
   analysisData && React.createElement(window.SectionDivider, {
     label: '1. 종합 요약',
     icon: '📋',
@@ -29645,6 +29947,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     id: 'sec-summary'
   }, React.createElement(SummaryCardsSection, {
     data: analysisData.summaryCards,
+    marketMissing: marketMissing,
     /* 히어로 요약용 — 전부 기존 데이터 재사용(없으면 히어로만 생략) */
     keyword: searchedKeyword,
     advertiserReport: advertiserReport,
@@ -29664,8 +29967,8 @@ window.AnalysisResults = function AnalysisResults(props) {
     label: '2. 시장 · 수요 진단',
     icon: '📊',
     color: '#0ea5e9',
-    sub: '검색량 · 트렌드 · 시즌 · 인구 · 요일 · 성장 · 시장규모'
-  }), /* 키워드 검색량 */
+    sub: marketMissing ? '검색량 · 트렌드 · 시즌 · 인구 · 요일 · 성장' : '검색량 · 트렌드 · 시즌 · 인구 · 요일 · 성장 · 시장규모'
+  }), marketMissing && _missingLine(['시장 규모 & 매출 추정']), /* 키워드 검색량 */
   volumeData && React.createElement(window.SectionErrorBoundary, {
     name: '키워드 검색량'
   }, React.createElement(KeywordVolumeSection, {
@@ -29683,7 +29986,8 @@ window.AnalysisResults = function AnalysisResults(props) {
       fontSize: 13,
       lineHeight: 1.6
     }
-  }, '⏳ ' + datalabData.quotaNotice), /* [DATALAB] 12개월 검색량 트렌드 (꺾은선) */
+  }, '⏳ ' + datalabData.quotaNotice), /* [DATALAB] 업종을 못 읽어 「생활/건강」 기준으로 센 경우 — 직원 화면에만 그 사실을 적는다 */
+  datalabData && datalabData.categoryDefaulted && _staffNote('📊 업종을 읽지 못해 데이터랩 성별·연령·트렌드·요일은 「생활/건강」 기준으로 셌습니다. 다른 업종이면 숫자가 다를 수 있습니다.'), /* [DATALAB] 12개월 검색량 트렌드 (꺾은선) */
   datalabData && datalabData.trend && React.createElement(window.SectionErrorBoundary, {
     name: '검색량 트렌드'
   }, React.createElement(window.DatalabTrendSection, {
@@ -29733,8 +30037,8 @@ window.AnalysisResults = function AnalysisResults(props) {
     label: '3. 경쟁 진단',
     icon: '⚔️',
     color: '#ef4444',
-    sub: '경쟁강도 · 광고경쟁 · 경쟁사 · 카테고리'
-  }), /* 키워드 경쟁강도 */
+    sub: marketMissing ? '광고경쟁 · 예상 CPC' : '경쟁강도 · 광고경쟁 · 경쟁사 · 카테고리'
+  }), marketMissing && _missingLine(['경쟁강도', '경쟁사 비교표', '카테고리 등록 분석']), /* 키워드 경쟁강도 */
   analysisData && analysisData.competitionIndex && React.createElement(window.SectionErrorBoundary, {
     name: '경쟁강도'
   }, React.createElement('div', {
@@ -29747,12 +30051,13 @@ window.AnalysisResults = function AnalysisResults(props) {
   }, React.createElement(AdvertiserInfoCard, {
     data: analysisData.advertiserInfo
   })), /* 예상 CPC · 권장 입찰가 (추정) */
-  analysisData && volumeData && volumeData.length && React.createElement(window.SectionErrorBoundary, {
+  /* ⚠️ 종전 조건 `volumeData.length &&` 는 빈 배열이면 숫자 0 을 돌려 화면·전달본에 「0」 한 글자가 찍혔다(2026-11-16 고침) */
+  analysisData && !volumeMissing && React.createElement(window.SectionErrorBoundary, {
     name: '예상 CPC'
   }, React.createElement(window.CpcBidEstimateSection, {
     volumeData: volumeData,
     keyword: searchedKeyword
-  })), /* 경쟁사 비교표 (상위 80개) */
+  })), analysisData && volumeMissing && _staffNote('⚔️ 검색량을 불러오지 못해 예상 CPC를 계산하지 못했습니다. 잠시 뒤 다시 분석하세요.'), /* 경쟁사 비교표 (상위 80개) */
   analysisData && analysisData.competitorTable && React.createElement(window.SectionErrorBoundary, {
     name: '경쟁사 비교표'
   }, React.createElement(window.CompetitorTableSection, {
@@ -29778,8 +30083,8 @@ window.AnalysisResults = function AnalysisResults(props) {
     label: '4. 내 상품 현황',
     icon: '🛒',
     color: '#059669',
-    sub: '노출순위 · 판매추정 · 리뷰 · SEO 4종'
-  }),
+    sub: marketMissing ? '노출순위 · SEO 진단 · 상세페이지 분석' : '노출순위 · 판매추정 · 리뷰 · SEO 4종'
+  }), marketMissing && _missingLine(['판매량 추정', '순위 상승 시 예상 성과', '리뷰 & 찜 분석', 'SEO 상세', '상세페이지 품질 진단']),
   /* 키워드별 노출 순위 — analysisOnly 모드(노출 분석·1회성 조회만, 보고서 구성 요소).
      추적 상품 목록·등록 관리만 📊 키워드 순위 탭으로 분리(2026-08-04, 직원 신고로
      노출 분석 블록은 복구 — 탭 분리 대상은 '추적 현황 열람'이지 분석 결과가 아님). */
@@ -29875,9 +30180,9 @@ window.AnalysisResults = function AnalysisResults(props) {
     label: '5. 기회 발굴',
     icon: '💎',
     color: '#7c3aed',
-    sub: '연관키워드 · 골든키워드 · 상품명 최적화'
-  }), /* 연관 키워드 */
-  relatedData && React.createElement(window.SectionErrorBoundary, {
+    sub: marketMissing ? '연관키워드 · 골든키워드' : '연관키워드 · 골든키워드 · 상품명 최적화'
+  }), marketMissing && _missingLine(['상품명 키워드 분석', '상품명 SEO 최적화 제안']), /* 연관 키워드 — 검색광고 조회 실패면 「총 0개 ✅ 실측」 대신 직원 화면에 실패를 적는다(전달본에서는 뺀다) */
+  relatedData && relatedLookupFailed && _staffNote('🔗 연관 키워드 · 불러오지 못함 — 네이버 검색광고 조회가 실패했습니다. 「연관 키워드가 없다」는 뜻이 아닙니다. 잠시 뒤 다시 분석하세요.'), relatedData && !relatedLookupFailed && React.createElement(window.SectionErrorBoundary, {
     name: '연관 키워드'
   }, React.createElement(RelatedKeywordsSection, {
     data: relatedData,
@@ -29888,14 +30193,18 @@ window.AnalysisResults = function AnalysisResults(props) {
   }, React.createElement('div', {
     id: 'sec-golden'
   }, React.createElement(GoldenKeywordCard, {
-    data: analysisData.goldenKeyword
+    data: analysisData.goldenKeyword,
+    lookupFailed: relatedLookupFailed
   }))), /* 상품명 키워드 분석 (키워드&태그 통합) */
   searchedProductUrl && React.createElement(window.SectionErrorBoundary, {
     name: '상품명 분석'
+  }, /* 경쟁 상품명이 없으면 이 칸은 비어 있다 — 직원이 손으로 붙여 넣어 쓸 수 있게 화면에는 두고, 전달본에서는 뺀다 */
+  React.createElement('div', {
+    className: marketMissing ? 'no-export' : undefined
   }, React.createElement(ProductNameSection, {
     keyword: searchedKeyword,
     shopProducts: shopProducts
-  })), /* 상품명 SEO 최적화 제안 */
+  }))), /* 상품명 SEO 최적화 제안 */
   analysisData && analysisData.productNameOpt && React.createElement(window.SectionErrorBoundary, {
     name: '상품명 최적화'
   }, React.createElement(window.ProductNameOptSection, {
@@ -34473,12 +34782,21 @@ window.createDoSearch = function (deps) {
         });
       } catch (e) {}
     };
+    /* 상품 검색이 「성공 · 빈 목록」이면 쇼핑 수집을 쉬는 중(2026-11-05~) — 서버에 모은 자료만 주므로
+       다시 물어도 채워지지 않는다. 빨간 실패로 그리지 않고 다시 묻지도 않는다(2026-11-16).
+       연관 키워드는 서버가 lookup_ok=false(검색광고 조회 실패)를 주면 「성공 · 0개」와 갈라 실패로 본다. */
+    var _shopOff = function (r) {
+      return !!(r && r.success && r.data && (r.data.products || []).length === 0);
+    };
+    var _relOk = function (r) {
+      return !!(r && r.success && !(r.data && r.data.lookup_ok === false));
+    };
     var _fetchTriple = function (prev) {
       prev = prev || [null, null, null];
       var ok = {
         vol: !!(prev[0] && prev[0].success && prev[0].data && prev[0].data[0]),
-        rel: !!(prev[1] && prev[1].success),
-        shop: !!(prev[2] && prev[2].success && prev[2].data && (prev[2].data.products || []).length > 0)
+        rel: _relOk(prev[1]),
+        shop: !!(prev[2] && prev[2].success && prev[2].data && (prev[2].data.products || []).length > 0) || _shopOff(prev[2])
       };
       // 성공한 항목은 재호출하지 않고 그대로 유지 — 실패분만 다시 받는다
       return Promise.all([ok.vol ? Promise.resolve(prev[0]) : api.post('/keyword/volume', [keyword]).catch(function () {
@@ -34711,8 +35029,12 @@ window.createDoSearch = function (deps) {
         totalVolume: fmt(totalVol),
         productCount: fmt(productCount),
         goldenCount: rd ? (rd.golden_keywords || []).length : 0,
-        compLevel: analysis.competitionIndex ? analysis.competitionIndex.compLabel : '-'
+        compLevel: analysis.competitionIndex ? analysis.competitionIndex.compLabel : '-',
+        /* 검색광고 조회 실패 — 「골든 0개 ✅」와 갈라 「불러오지 못함」(2026-11-16) */
+        relatedLookupFailed: !!(rd && rd.lookup_ok === false)
       };
+      /* 쇼핑 1페이지 자료 없음(수집 쉼 · 11/5~) — 화면은 가짜 0 대신 「자료 없음」, 전달본은 빈 칸을 뺀다 */
+      analysis.marketMissing = prods.length === 0;
 
       // 7. 카테고리 분석 (대>중>소 계층 경로)
       if (prods.length > 0) {
@@ -35390,6 +35712,10 @@ window.createDoSearch = function (deps) {
           }).then(function (dlRes) {
             if (searchIdRef.current !== currentSearchId) return;
             var d = dlRes && dlRes.success && dlRes.data || null;
+            /* 업종(카테고리)을 못 읽으면 서버가 「생활/건강」 기준으로 센다 — 그 사실을 화면에 적으려고 표시(2026-11-16) */
+            if (d && !cat1) d = Object.assign({}, d, {
+              categoryDefaulted: true
+            });
             if (d) setDatalabData(d);
             var missing = [];
             _dlExpected.forEach(function (n) {
@@ -35439,13 +35765,14 @@ window.createDoSearch = function (deps) {
       if (searchIdRef.current !== currentSearchId) return;
       var ok = {
         vol: !!(results[0] && results[0].success && results[0].data && results[0].data[0]),
-        rel: !!(results[1] && results[1].success),
+        rel: _relOk(results[1]),
         shop: !!(results[2] && results[2].success && results[2].data && (results[2].data.products || []).length > 0)
       };
-      var retrying = (!ok.vol || !ok.rel || !ok.shop) && round < 2;
+      var shopOff = !ok.shop && _shopOff(results[2]);
+      var retrying = (!ok.vol || !ok.rel || !ok.shop && !shopOff) && round < 2;
       _auditItems['검색량'] = ok.vol ? 'ok' : retrying ? 'retry' : 'fail';
       _auditItems['연관 키워드'] = ok.rel ? 'ok' : retrying ? 'retry' : 'fail';
-      _auditItems['상품 검색'] = ok.shop ? 'ok' : retrying ? 'retry' : 'fail';
+      _auditItems['상품 검색'] = ok.shop ? 'ok' : shopOff ? 'off' : retrying ? 'retry' : 'fail';
       _pushAudit(retrying ? 'auditing' : 'collected');
       if (retrying) {
         if (round === 0) {

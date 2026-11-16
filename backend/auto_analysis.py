@@ -417,15 +417,31 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
 
     # 종합 요약
     sc = analysis.get('summaryCards', {})
+    # 값이 없는 칸(0 · '-' · 빈 값)은 광고주에게 가는 이 보고서에서 뺀다(2026-11-16 · 대표 「보고서 문구 — ①ⓐ」).
+    # 쇼핑 시장 자료(상품 수)가 없으면 맨 위에 한 줄만 남긴다. 자료가 있으면 종전과 같다.
+    def _has(v):
+        return str(v if v is not None else '').strip() not in ('', '0', '-')
+    no_market = bool(sc) and not _has(sc.get('productCount'))
+    if no_market:
+        sections_html.append('''
+        <div class="section" style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a">
+            이번 보고서는 <b>검색 수요 · 키워드 · 광고 경쟁</b> 자료를 중심으로 작성했습니다.
+            경쟁 상품 · 가격 비교는 이번 보고서에 담지 않았습니다.
+        </div>''')
     if sc:
+        cards = []
+        if _has(sc.get('totalVolume')):
+            cards.append(f'<div class="stat-card blue"><div class="label">월간 검색량</div><div class="value">{sc.get("totalVolume")}</div></div>')
+        if not no_market:
+            cards.append(f'<div class="stat-card green"><div class="label">상품 수</div><div class="value">{sc.get("productCount","-")}</div></div>')
+            if _has(sc.get('compLevel')):
+                cards.append(f'<div class="stat-card purple"><div class="label">경쟁강도</div><div class="value">{sc.get("compLevel")}</div></div>')
+        cards.append(f'<div class="stat-card orange"><div class="label">골든키워드</div><div class="value">{sc.get("goldenCount",0)}개</div></div>')
         sections_html.append(f'''
         <div class="section">
             <h2>📊 종합 요약</h2>
             <div class="card-row">
-                <div class="stat-card blue"><div class="label">월간 검색량</div><div class="value">{sc.get('totalVolume','-')}</div></div>
-                <div class="stat-card green"><div class="label">상품 수</div><div class="value">{sc.get('productCount','-')}</div></div>
-                <div class="stat-card purple"><div class="label">경쟁강도</div><div class="value">{sc.get('compLevel','-')}</div></div>
-                <div class="stat-card orange"><div class="label">골든키워드</div><div class="value">{sc.get('goldenCount',0)}개</div></div>
+                {"".join(cards)}
             </div>
         </div>''')
 
@@ -547,7 +563,8 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
 
     # 키워드 태그
     kt = analysis.get('keywordTags', {})
-    if kt:
+    if kt and kt.get('topKeywords'):
+        # 연관 키워드가 0개면(조회 실패 포함) 「(0개) ✅ 실측」 빈 칸을 내지 않는다(2026-11-16)
         kw_items = ''.join(
             f'<span class="tag {"golden" if k.get("isGolden") else ""}">{k["keyword"]} ({k["volume"]})</span>'
             for k in kt.get('topKeywords', [])

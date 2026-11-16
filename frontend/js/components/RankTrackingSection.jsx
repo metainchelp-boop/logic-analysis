@@ -396,13 +396,17 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
         );
     };
 
+    /* 하나도 재지 못한 분석(쇼핑 목록 없음) — 「✅ 실측」 대신 「못 잼」, 광고주 전달본에서는 칸째 뺀다(대표 결정 ①ⓐ) */
+    var _allUnmeasured = !!(exposureResult && !exposureLoading && exposureResult.total_keywords > 0 && exposureResult.measured_count === 0);
     return (
-        <div className="section" id="sec-rank">
+        <div className={'section' + (_allUnmeasured ? ' no-export' : '')} id="sec-rank">
             <div className="container">
                 <div className="card" style={{ padding: '20px 22px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                     <div>
-                        <h3 className="rt-h3"><span className="rt-hic">📍</span>키워드별 노출 순위<span className="badge b-ok">✅ 실측</span></h3>
+                        <h3 className="rt-h3"><span className="rt-hic">📍</span>키워드별 노출 순위{_allUnmeasured
+                            ? <span className="badge b-n">못 잼</span>
+                            : <span className="badge b-ok">✅ 실측</span>}</h3>
                         <div className="rt-desc">상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 200개 상품)</div>
                     </div>
                     {analysisOnly && onOpenRankTab && <button className="btn btn-primary btn-sm" onClick={() => {
@@ -434,16 +438,33 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 )}
                 {exposureResult && !exposureLoading && (function() {
                     // R6: 노출률·노출/400위밖 리스트는 '내 상품 키워드'(source!=='related')만 — 무관 연관어 제외
+                    // 2026-11-16 — measured === false 는 그 키워드 쇼핑 목록이 없어 「못 잰」 것(200위 밖과 다르다).
+                    //   옛 서버 응답(measured 칸 없음)은 종전대로 잰 것으로 본다.
+                    var _measured = function(r) { return r.measured !== false; };
                     var exposed = exposureResult.results.filter(function(r) { return r.rank != null && r.source !== 'related'; });
-                    var unexposed = exposureResult.results.filter(function(r) { return r.rank == null && r.source !== 'related'; });
-                    var exposureRate = exposureResult.total_keywords > 0
-                        ? Math.round((exposureResult.exposed_count / exposureResult.total_keywords) * 100)
+                    var unexposed = exposureResult.results.filter(function(r) { return r.rank == null && r.source !== 'related' && _measured(r); });
+                    var unmeasured = exposureResult.results.filter(function(r) { return r.rank == null && r.source !== 'related' && !_measured(r); });
+                    var measuredTotal = exposureResult.measured_count != null ? exposureResult.measured_count : exposureResult.total_keywords;
+                    if (exposureResult.total_keywords > 0 && measuredTotal === 0) {
+                        // 하나도 재지 못함 — 「노출률 0%」·「200위 밖」 대신 「못 잼」. 광고주 전달본에는 싣지 않는다.
+                        return (
+                        <div className="fade-in no-export" style={{ marginTop: 16, background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 12, padding: '14px 16px' }}>
+                            <div style={{ fontSize: 13.5, fontWeight: 800, color: '#334155' }}>키워드별 순위 · 못 잼</div>
+                            <div style={{ fontSize: 12.5, color: '#64748b', marginTop: 4, lineHeight: 1.6 }}>
+                                쇼핑 순위 수집을 쉬는 중이라 키워드별 순위를 재지 못했습니다. 「200위 밖」이 아니라 모르는 상태입니다.
+                            </div>
+                        </div>
+                        );
+                    }
+                    var exposureRate = measuredTotal > 0
+                        ? Math.round((exposureResult.exposed_count / measuredTotal) * 100)
                         : 0;
                     return (
                     <div className="fade-in" style={{ marginTop: 16 }}>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
                             <span className="ps ps-g">노출 {exposureResult.exposed_count}개</span>
                             <span className="ps ps-r">200위 밖 {unexposed.length}개</span>
+                            {unmeasured.length > 0 && <span className="ps ps-n">못 잼 {unmeasured.length}개</span>}
                             <span className="ps ps-n">전체 {exposureResult.total_keywords}개</span>
                         </div>
 
@@ -512,10 +533,29 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                         <span key={idx} className="kwchip off">{r.keyword}</span>
                                     );
                                 })}
-                                {unexposed.length === 0 && (
+                                {unexposed.length === 0 && unmeasured.length === 0 && (
                                     <div style={{ fontSize: 12, color: '#94a3b8' }}>모든 키워드에 노출 중입니다</div>
                                 )}
+                                {unexposed.length === 0 && unmeasured.length > 0 && (
+                                    <div style={{ fontSize: 12, color: '#94a3b8' }}>없음</div>
+                                )}
                             </div>
+
+                            {unmeasured.length > 0 && (
+                                <div>
+                                    <div style={{ fontSize: 13, fontWeight: 800, color: '#64748b', margin: '16px 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span>●</span> 못 잰 키워드
+                                    </div>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                        {unmeasured.map(function(r, idx) {
+                                            return (
+                                                <span key={idx} className="kwchip off">{r.keyword}</span>
+                                            );
+                                        })}
+                                    </div>
+                                    <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 6 }}>쇼핑 목록이 없어 재지 못한 키워드입니다. 노출률 계산에서 뺐습니다.</div>
+                                </div>
+                            )}
                         </div>
 
                         {/* 30일 순위 추이 차트 (추적 등록된 상품이면 실데이터, 아니면 안내) */}

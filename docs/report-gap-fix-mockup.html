@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>보고서 빈칸 문구 시안</title>
+<style>
+  /* 실제 화면(frontend/css/report-theme.css)의 토큰·클래스를 옮겼다 — 밝은 테마 고정(산출물 규칙) */
+  :root {
+    color-scheme: light;
+    --rt-ink:#0f172a; --rt-sub:#64748b; --rt-line:#e8edf3; --rt-bg:#f1f5f9;
+    --rt-ok:#16a34a; --rt-okbg:#dcfce7;
+    --blue:#3b82f6; --blue-ink:#1d4ed8; --blue-bg:#eff6ff;
+    --nbg:#eef2f7; --n:#64748b;
+    --warnbg:#fffbeb; --warnline:#fde68a;
+    --badbg:#fef2f2; --badline:#fecaca; --bad:#b91c1c;
+    --card:#ffffff;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--rt-bg); color:var(--rt-ink);
+         font-family:'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+         font-size:14px; line-height:1.6; }
+  .wrap { max-width:1040px; margin:0 auto; padding:24px 16px 64px; display:flex; flex-direction:column; gap:20px; }
+  h1 { font-size:24px; font-weight:900; margin:8px 0 0; letter-spacing:-.5px; text-wrap:balance; }
+  h2 { font-size:17px; font-weight:900; margin:0 0 10px; letter-spacing:-.3px; }
+  .stamp { display:inline-block; font-size:12px; font-weight:700; color:var(--blue-ink); background:var(--blue-bg); border-radius:999px; padding:3px 10px; }
+  .lede { color:var(--rt-sub); margin:6px 0 0; max-width:70ch; }
+  .panel { background:var(--card); border:1px solid var(--rt-line); border-radius:18px; padding:20px 22px; box-shadow:0 4px 18px rgba(15,23,42,.05); }
+
+  /* 문제 목록 */
+  .kinds { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:12px; margin-top:12px; }
+  .kind { border:1px solid var(--rt-line); border-radius:14px; padding:14px 16px; background:#f8fafc; }
+  .kind h3 { margin:0 0 6px; font-size:14px; font-weight:800; display:flex; gap:8px; align-items:center; }
+  .kind .cnt { font-size:11px; font-weight:800; color:#fff; background:#475569; border-radius:999px; padding:1px 8px; }
+  .kind ul { margin:0; padding-left:18px; font-size:13px; }
+  .kind li { margin:3px 0; }
+  .q { font-weight:700; color:var(--bad); }
+  .facts { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px; }
+  .fact { border:1px solid var(--rt-line); border-radius:12px; padding:10px 14px; background:#fff; min-width:200px; flex:1; }
+  .fact .k { font-size:12px; color:var(--rt-sub); font-weight:700; }
+  .fact .v { font-size:20px; font-weight:900; letter-spacing:-.5px; font-variant-numeric:tabular-nums; }
+  .fact .s { font-size:12px; color:var(--rt-sub); }
+
+  /* 상태 바꿔 보기 */
+  .seg { display:flex; gap:6px; flex-wrap:wrap; background:#e2e8f0; padding:4px; border-radius:12px; width:fit-content; max-width:100%; }
+  .seg button { font:inherit; font-size:13px; font-weight:700; border:0; background:transparent; color:#334155; padding:8px 14px; border-radius:9px; cursor:pointer; }
+  .seg button[aria-selected="true"] { background:#fff; color:var(--blue-ink); box-shadow:0 1px 3px rgba(15,23,42,.12); }
+  .seg button:focus-visible, .opt:focus-visible, .copy:focus-visible { outline:3px solid #93c5fd; outline-offset:2px; }
+  .state-note { font-size:12.5px; color:var(--rt-sub); margin:10px 0 0; }
+
+  /* 실제 보고서 모양 */
+  .report { display:flex; flex-direction:column; gap:12px; margin-top:14px; }
+  .card { background:#fff; border:1px solid var(--rt-line); border-radius:18px; box-shadow:0 4px 18px rgba(15,23,42,.05); padding:16px 18px; }
+  .rt-h3 { margin:0 0 4px; font-size:15px; font-weight:800; display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .rt-hic { width:30px; height:30px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#eef2ff,#e0e7ff); font-size:15px; }
+  .divider { display:flex; align-items:center; gap:10px; font-weight:900; font-size:15px; color:#1e3a8a; margin-top:6px; }
+  .divider small { font-weight:600; font-size:12px; color:var(--rt-sub); }
+  .divider::after { content:""; flex:1; height:1px; background:#cbd5e1; }
+  .omit { font-size:12.5px; color:#475569; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:10px; padding:8px 12px; }
+  .badge { font-size:11px; font-weight:800; padding:3px 9px; border-radius:999px; display:inline-block; }
+  .b-ok { background:var(--rt-okbg); color:var(--rt-ok); }
+  .b-n { background:var(--nbg); color:var(--n); }
+  .new { outline:2px dashed #93c5fd; outline-offset:3px; border-radius:8px; }
+  .grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:10px; }
+  .kpi { background:linear-gradient(135deg,#f8fafc,#f1f5f9); border:1px solid #e8edf3; border-radius:14px; padding:12px 13px; min-width:0; }
+  .kpi .k { font-size:12px; color:var(--rt-sub); font-weight:700; margin-bottom:4px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .kpi .v { font-size:20px; font-weight:900; letter-spacing:-.6px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .kpi .v small { font-size:12px; font-weight:700; color:var(--rt-sub); margin-left:2px; }
+  .kpi .v.none { font-size:15px; color:var(--n); letter-spacing:0; }
+  .kpi .h { font-size:11.5px; color:var(--rt-sub); margin-top:3px; line-height:1.45; }
+  .head-row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  .thumb { width:52px; height:52px; border-radius:12px; background:#e2e8f0; flex:0 0 auto; }
+  .pname { font-weight:700; font-size:14.5px; }
+  .pmeta { font-size:12.5px; color:var(--rt-sub); }
+  .pill-box { text-align:center; padding:8px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; min-width:92px; }
+  .pill-box .big { font-size:17px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .pill-box .lab { font-size:11px; color:#94a3b8; font-weight:600; }
+  .note { font-size:12.5px; border-radius:9px; padding:9px 11px; line-height:1.55; }
+  .note.bad { background:var(--badbg); border:1px solid var(--badline); color:#7f1d1d; }
+  .note.info { background:var(--blue-bg); border:1px solid #bfdbfe; color:#1e3a8a; }
+  .note.none { background:#f8fafc; border:1px dashed #cbd5e1; color:#475569; }
+  .note.warn { background:var(--warnbg); border:1px solid var(--warnline); color:#78350f; }
+  .audit { display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:9px 13px; font-size:12.5px; }
+  .audit b { color:#334155; }
+  .audit span { white-space:nowrap; font-weight:600; }
+  ul.lines { margin:6px 0 0; padding-left:18px; font-size:13px; }
+  ul.lines li { margin:3px 0; }
+  .tbl-wrap { overflow-x:auto; border:1px solid #eef2f7; border-radius:10px; margin-top:8px; }
+  table { border-collapse:collapse; width:100%; min-width:520px; font-size:12.5px; }
+  th { color:var(--rt-sub); font-size:11.5px; font-weight:800; text-align:left; padding:8px 11px; border-bottom:2px solid #e2e8f0; }
+  td { padding:8px 11px; border-bottom:1px solid #eef2f7; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .chip { font-size:12px; border-radius:999px; padding:3px 10px; background:#f1f5f9; color:#475569; border:1px solid #e2e8f0; }
+  .chip.bad { background:#fef2f2; color:#b91c1c; border-color:#fecaca; }
+  .stray { font-size:20px; font-weight:900; color:#0f172a; padding:0 4px; }
+
+  /* 결정 */
+  .dec { border:1px solid var(--rt-line); border-radius:14px; padding:14px 16px; margin-top:10px; }
+  .dec h3 { margin:0 0 4px; font-size:14.5px; font-weight:800; }
+  .dec .why { font-size:12.5px; color:var(--rt-sub); margin:0 0 8px; }
+  .opts { display:flex; flex-direction:column; gap:6px; }
+  .opt { text-align:left; font:inherit; font-size:13px; border:1px solid #e2e8f0; background:#fff; border-radius:10px; padding:9px 12px; cursor:pointer; color:var(--rt-ink); }
+  .opt[aria-pressed="true"] { border-color:var(--blue); background:var(--blue-bg); }
+  .opt .rec { font-size:11px; font-weight:800; color:#fff; background:var(--blue); border-radius:999px; padding:1px 7px; margin-left:6px; }
+  .answer { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:14px; background:#0f172a; color:#fff; border-radius:12px; padding:12px 14px; }
+  .answer code { font-family:inherit; font-size:15px; font-weight:800; }
+  .copy { font:inherit; font-size:12.5px; font-weight:700; border:0; border-radius:8px; padding:6px 12px; background:var(--blue); color:#fff; cursor:pointer; margin-left:auto; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .two ul { margin:6px 0 0; padding-left:18px; }
+  .two li { margin:3px 0; }
+  .log { font-size:12.5px; color:var(--rt-sub); }
+  .log li { margin:2px 0; }
+  [hidden] { display:none !important; }
+  @media (max-width:760px) {
+    .grid4 { grid-template-columns:repeat(2,1fr); }
+    .two { grid-template-columns:1fr; }
+    .panel, .card { padding:15px 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <span class="stamp">업데이트 2026-11-16 · v2 · 대표 결정 3건 대기</span>
+    <h1>로직분석 보고서 빈칸 문구 고침 — 시안</h1>
+    <p class="lede">쇼핑 순위 수집을 끈 뒤(2026-11-05~) 보고서의 시장·경쟁 칸이 <b>가짜 값으로 나오거나, 실패를 성공처럼 보이거나, 소리 없이 사라집니다.</b> 이번 고침은 <b>문구와 표시만</b> 바꿉니다 — 숫자를 새로 모으지 않고, 네이버에 요청도 더 보내지 않습니다. 상품명·판매처·가격은 모두 <b>예시 값</b>입니다.</p>
+  </header>
+
+  <!-- 1. 지금 무엇이 틀리게 나오나 -->
+  <section class="panel" aria-labelledby="what">
+    <h2 id="what">지금 무엇이 틀리게 나오나 — 코드와 서버 기록으로 확인</h2>
+    <div class="facts">
+      <div class="fact"><div class="k">11/5 뒤 자동 분석</div><div class="v">9,189건</div><div class="s">전부 경쟁 상품 칸이 비어 있음</div></div>
+      <div class="fact"><div class="k">「상품 정보 조회 실패」 서버 기록</div><div class="v">6,313줄</div><div class="s">11/10~11/16 · 평균가 산출 불가 4,277줄</div></div>
+      <div class="fact"><div class="k">광고주에게도 그대로 가나</div><div class="v">예</div><div class="s">내보내기·08:30 자동 보고서·공개 주소·월요일 주간 보고서가 화면을 그대로 복사</div></div>
+    </div>
+    <div class="kinds">
+      <div class="kind">
+        <h3>① 자료가 없는데 숫자처럼 나옴 <span class="cnt">8곳</span></h3>
+        <ul>
+          <li>종합 진입 점수 <span class="q">50 · 보통</span> — 자료 없이 붙는 시작값</li>
+          <li>현재 순위 <span class="q">미노출</span> — 못 잰 것을 「노출 안 됨」으로 적음</li>
+          <li>가격 문장 <span class="q">1페이지 평균가는 0원</span> · <span class="q">가격대 0~0원</span> · <span class="q">TOP10 평균가 0원</span></li>
+          <li>키워드 포함률 <span class="q">0%</span> · 카테고리 <span class="q">'-' (점유율 0%)</span></li>
+          <li>순위 문장 <span class="q">검색 결과에 노출되지 않고 있습니다</span></li>
+          <li>노출 순위 <span class="q">노출률 0%</span> · 키워드마다 <span class="q">200위 밖</span></li>
+          <li>경쟁사 상위 10개 칸 <span class="q">-</span> · <span class="q">-회</span></li>
+          <li>08:30 자동 보고서 <span class="q">상품 수 0</span> · <span class="q">경쟁강도 -</span></li>
+        </ul>
+      </div>
+      <div class="kind">
+        <h3>② 실패인데 성공처럼 나옴 <span class="cnt">3곳</span></h3>
+        <ul>
+          <li>골든 키워드 <span class="q">발견되지 않았습니다 ✅ 실측</span> — 검색광고 조회가 실패해도 같은 문장</li>
+          <li>연관 키워드 <span class="q">총 0개 ✅ 실측</span> · 검수 줄 <span class="q">✓ 연관 키워드</span></li>
+          <li>검색량 조회 실패 때 「검색량을 가져오지 못했습니다」 안내가 <b>안 뜸</b>(서버가 「성공·빈 목록」으로 답함)</li>
+        </ul>
+      </div>
+      <div class="kind">
+        <h3>③ 소리 없이 사라지는 칸 <span class="cnt">9곳</span></h3>
+        <ul>
+          <li>시장 규모 · 경쟁강도 · 경쟁사 비교표 · 카테고리 등록 분석</li>
+          <li>판매량 추정 · 순위 상승 시 예상 성과 · 리뷰 &amp; 찜 분석</li>
+          <li>SEO 상세 · 상세페이지 품질 진단</li>
+          <li>목차와 장 제목(「노출순위 · 판매추정 · 리뷰 · SEO 4종」)은 <b>그대로 남아</b> 빠진 것이 티가 남</li>
+        </ul>
+      </div>
+      <div class="kind">
+        <h3>④ 오류처럼 보이거나 잘못 셈 <span class="cnt">4곳</span></h3>
+        <ul>
+          <li>검수 줄 <span class="q">✗ 상품 검색</span>(빨강)이 <b>매번</b> 뜨고, 다시 묻느라 7.5초를 기다림</li>
+          <li>검색량 조회 실패 때 「예상 CPC」 자리에 <span class="q">0</span> 한 글자가 찍힘(코드 결함 · 내보내기에도 나감)</li>
+          <li>업종을 못 읽어 데이터랩 성별·연령·트렌드·요일을 <b>「생활/건강」 기준</b>으로 셈 — 표시 없음</li>
+          <li>표지 「광고주 / 스토어」에 주소 속 영문 아이디가 나올 수 있음</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. 화면 비교 -->
+  <section class="panel" aria-labelledby="cmp">
+    <h2 id="cmp">화면 비교 — 눌러서 바꿔 보기</h2>
+    <div class="seg" role="tablist" aria-label="보고서 상태">
+      <button role="tab" aria-selected="true" aria-controls="st-now" id="t-now">지금</button>
+      <button role="tab" aria-selected="false" aria-controls="st-staff" id="t-staff">바뀐 뒤 · 직원 분석 화면</button>
+      <button role="tab" aria-selected="false" aria-controls="st-adv" id="t-adv">바뀐 뒤 · 광고주에게 가는 보고서</button>
+    </div>
+
+    <!-- 지금 -->
+    <div id="st-now" role="tabpanel" aria-labelledby="t-now">
+      <p class="state-note">지금 화면을 그대로 옮긴 모양입니다(검색량 조회까지 실패한 날 기준). 빨간 상자는 틀린 말·오해를 부르는 곳입니다.</p>
+      <div class="report">
+        <div class="audit"><b>🔍 데이터 검수</b><span style="color:#dc2626">✗ 검색량</span><span style="color:#059669">✓ 연관 키워드</span><span style="color:#dc2626">✗ 상품 검색</span></div>
+
+        <div class="divider">1. 종합 요약 <small>광고주가 가장 먼저 보는 핵심 지표</small></div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🎯</span>핵심 결론</h3>
+          <div class="pmeta" style="margin-top:4px">「김부각」 — 핵심 항목 보완 시 순위 상승 여지가 있습니다.</div>
+          <div class="head-row">
+            <div class="pill-box"><div class="big" style="color:#d97706">50 /100</div><div class="lab">종합 진입 점수 · 보통</div></div>
+            <ul class="lines" style="flex:1;min-width:200px">
+              <li>상품명 SEO 최적화 <b>긴급</b></li>
+              <li>경쟁 환경 &amp; 차별화 방향 <b>긴급</b></li>
+            </ul>
+          </div>
+          <div class="grid4">
+            <div class="kpi"><div class="k">월간 검색량</div><div class="v none">집계 없음</div></div>
+            <div class="kpi"><div class="k">등록 상품수</div><div class="v none">집계 없음</div></div>
+            <div class="kpi"><div class="k">골든 키워드 <span class="badge b-ok">✅</span></div><div class="v">0<small>개</small></div><div class="h">롱테일 권장</div></div>
+            <div class="kpi"><div class="k">경쟁강도</div><div class="v none">집계 없음</div></div>
+          </div>
+          <div class="note bad" style="margin-top:10px">❌ 「50」은 자료 없이 붙는 <b>시작값</b>이고, 아래 「긴급」 과제도 그 시작값으로 고른 것입니다. 골든 키워드 「0개 ✅」는 조회가 <b>실패해도</b> 같은 모양입니다.</div>
+        </div>
+
+        <div class="divider">3. 경쟁 진단 <small>경쟁강도 · 광고경쟁 · 경쟁사 · 카테고리</small></div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">⚔️</span>예상 CPC · 권장 입찰가</h3>
+          <div><span class="stray">0</span></div>
+          <div class="note bad">❌ 검색량 조회가 실패한 날은 이 자리에 숫자 <b>「0」 한 글자</b>만 찍힙니다(코드 결함) — 내보내기에도 그대로 나갑니다.</div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🏆</span>경쟁사 비교 · 격차 분석</h3>
+          <div class="head-row">
+            <div class="thumb" aria-hidden="true"></div>
+            <div style="flex:1;min-width:200px">
+              <div class="pname" style="color:#b45309">상품 정보를 불러오지 못했습니다</div>
+              <div class="pmeta">네이버가 쇼핑 검색 API 를 종료해(2026-07-31) 아직 수집되지 않은 키워드는 상품 정보를 가져올 수 없습니다.</div>
+            </div>
+            <div class="pill-box"><div class="big" style="color:#ef4444">미노출</div><div class="lab">현재 순위</div></div>
+            <div class="pill-box"><div class="big" style="color:#d97706">50</div><div class="lab">보통</div></div>
+          </div>
+          <div class="grid4">
+            <div class="kpi"><div class="k">1P 평균가</div><div class="v">-</div></div>
+            <div class="kpi"><div class="k">가격 범위</div><div class="v">-</div></div>
+            <div class="kpi"><div class="k">월간 검색량</div><div class="v">-<small>회</small></div></div>
+            <div class="kpi"><div class="k">키워드 포함률</div><div class="v">-</div></div>
+          </div>
+          <div class="note bad" style="margin-top:10px">❌ 「미노출」은 틀린 말입니다 — 순위를 <b>못 잰 것</b>입니다. 아래 경쟁사 상위 10개 표는 머리줄만 있고 비어 있습니다. 경쟁강도·경쟁사 비교표·카테고리 분석 칸은 <b>통째로 사라졌습니다.</b></div>
+        </div>
+
+        <div class="divider">4. 내 상품 현황 <small>노출순위 · 판매추정 · 리뷰 · SEO 4종</small></div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">📍</span>키워드별 노출 순위 <span class="badge b-ok">✅ 실측</span></h3>
+          <div class="grid4">
+            <div class="kpi"><div class="k">노출</div><div class="v">0</div></div>
+            <div class="kpi"><div class="k">200위 밖</div><div class="v">6</div></div>
+            <div class="kpi"><div class="k">노출률</div><div class="v">0<small>%</small></div></div>
+          </div>
+          <div class="chips"><span class="chip bad">김부각 · 200위 밖</span><span class="chip bad">수제 김부각 · 200위 밖</span><span class="chip bad">찹쌀 김부각 · 200위 밖</span></div>
+          <div class="note bad" style="margin-top:10px">❌ 순위를 재지 못했는데 「200위 밖」·「노출률 0%」·「✅ 실측」으로 나옵니다. 판매량 추정·리뷰·SEO 상세 칸은 사라졌는데 장 제목에는 「4종」이 그대로입니다.</div>
+        </div>
+
+        <div class="divider">6. 전략 · 결론</div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🧭</span>1페이지 진입 전략 비교 분석</h3>
+          <ul class="lines">
+            <li>상품 가격 정보를 확인할 수 없습니다. 1페이지 평균가는 <b style="color:#b91c1c">0원</b>입니다.</li>
+            <li>경쟁 상품 가격대(<b style="color:#b91c1c">0~0원</b>)를 참고해 포지셔닝을 결정하세요.</li>
+            <li>주요 카테고리: <b style="color:#b91c1c">'-' (점유율 0%)</b></li>
+            <li><b style="color:#b91c1c">검색 결과에 노출되지 않고 있습니다.</b> 네이버 쇼핑 광고 집행 + 상품명 최적화를 동시에 진행해…</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- 바뀐 뒤 · 직원 화면 -->
+    <div id="st-staff" role="tabpanel" aria-labelledby="t-staff" hidden>
+      <p class="state-note">직원이 로직분석에서 분석을 돌렸을 때입니다. 파란 점선은 새로 생기거나 바뀌는 곳입니다. <b>쇼핑 시장 자료가 생기면(커머스 API 연결 등) 저절로 지금처럼 숫자가 나옵니다</b> — 자료가 없을 때만 이렇게 바뀝니다.</p>
+      <div class="report">
+        <div class="note info new"><b>🛒 쇼핑 시장 자료 없음</b> — 쇼핑 순위 수집을 쉬는 동안(2026-11-05~) 경쟁 상품·가격·카테고리·순위 칸은 비어 있습니다. 검색량·연관 키워드·데이터랩·광고 경쟁 정보는 정상입니다. <b>고장이 아닙니다.</b></div>
+        <div class="audit new"><b>🔍 데이터 검수</b><span style="color:#dc2626">✗ 검색량 · 네이버 검색광고 응답 오류</span><span style="color:#dc2626">✗ 연관 키워드 · 같은 이유</span><span style="color:#64748b">— 상품 검색 · 수집 쉬는 중</span></div>
+        <div class="pmeta" style="margin-top:-4px">상품 검색은 비어 있어도 다시 묻지 않습니다(어차피 서버에 모은 자료만 주므로 기다려도 안 채워짐) — 분석이 7.5초 빨라집니다.</div>
+
+        <div class="divider">1. 종합 요약 <small>광고주가 가장 먼저 보는 핵심 지표</small></div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🎯</span>핵심 결론</h3>
+          <div class="head-row">
+            <div class="pill-box new"><div class="big" style="color:#64748b">—</div><div class="lab">종합 진입 점수 · 계산 불가</div></div>
+            <div style="flex:1;min-width:200px" class="pmeta new">종합 점수와 「긴급」 과제는 경쟁 상품 자료로 계산합니다. 자료가 없어 이번에는 내지 않았습니다.</div>
+          </div>
+          <div class="grid4">
+            <div class="kpi new"><div class="k">월간 검색량</div><div class="v none">불러오지 못함</div><div class="h">네이버 검색광고 응답 오류 — 잠시 뒤 다시 분석</div></div>
+            <div class="kpi"><div class="k">등록 상품수</div><div class="v none">자료 없음</div></div>
+            <div class="kpi new"><div class="k">골든 키워드 <span class="badge b-n">불러오지 못함</span></div><div class="v none">—</div><div class="h">조회에 성공했는데 0개일 때만 「0개 ✅」</div></div>
+            <div class="kpi"><div class="k">경쟁강도</div><div class="v none">자료 없음</div></div>
+          </div>
+        </div>
+
+        <div class="divider">2. 시장 · 수요 진단 <small>검색량 · 트렌드 · 시즌 · 인구 · 요일 · 성장</small></div>
+        <div class="omit new">이번 분석에서 빠진 칸: <b>시장 규모 &amp; 매출 추정</b> — 쇼핑 시장 자료 없음</div>
+        <div class="note warn new">📊 업종을 읽지 못해 데이터랩 성별·연령·트렌드·요일은 <b>「생활/건강」 기준</b>으로 셌습니다. 다른 업종이면 숫자가 다를 수 있습니다.</div>
+
+        <div class="divider">3. 경쟁 진단 <small>경쟁강도 · 광고경쟁 · 경쟁사 · 카테고리</small></div>
+        <div class="omit new">이번 분석에서 빠진 칸: <b>경쟁강도 · 경쟁사 비교표 · 카테고리 등록 분석</b> — 쇼핑 시장 자료 없음</div>
+        <div class="card new">
+          <h3 class="rt-h3"><span class="rt-hic">⚔️</span>예상 CPC · 권장 입찰가</h3>
+          <div class="note none">검색량을 불러오지 못해 예상 CPC를 계산하지 못했습니다. 잠시 뒤 다시 분석하세요.</div>
+        </div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🏆</span>경쟁사 비교 · 격차 분석 <span class="badge b-n new">자료 없음</span></h3>
+          <div class="head-row">
+            <div class="thumb" aria-hidden="true"></div>
+            <div style="flex:1;min-width:200px">
+              <div class="pname">[예시] 바삭한 수제 김부각 120g 3봉</div>
+              <div class="pmeta">상품 페이지에서 읽은 내 상품 정보입니다.</div>
+            </div>
+            <div class="pill-box new"><div class="big" style="color:#64748b">—</div><div class="lab">현재 순위 · 못 잼</div></div>
+            <div class="pill-box new"><div class="big" style="color:#64748b">—</div><div class="lab">종합 점수 · 계산 불가</div></div>
+          </div>
+          <div class="note none new" style="margin-top:10px">경쟁 상품 목록이 없어 상위 10개 비교표와 격차 분석을 만들지 않았습니다.</div>
+        </div>
+
+        <div class="divider">4. 내 상품 현황 <small>노출순위 · 상세페이지 HTML 분석</small></div>
+        <div class="omit new">이번 분석에서 빠진 칸: <b>판매량 추정 · 순위 상승 시 예상 성과 · 리뷰 &amp; 찜 분석 · SEO 상세 · 상세페이지 품질 진단</b> — 쇼핑 시장 자료 없음</div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">📍</span>키워드별 노출 순위 <span class="badge b-n new">못 잼</span></h3>
+          <div class="note none new">쇼핑 순위 수집을 쉬는 중이라 키워드별 순위를 재지 못했습니다. 「200위 밖」이 아니라 <b>모르는 상태</b>입니다.</div>
+        </div>
+
+        <div class="divider">6. 전략 · 결론</div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">🧭</span>1페이지 진입 전략 비교 분석</h3>
+          <ul class="lines">
+            <li class="new">가격: 경쟁 상품 가격 자료가 없어 가격 비교는 넣지 않았습니다.</li>
+            <li class="new">카테고리: 경쟁 상품 자료가 없어 카테고리 점유율은 넣지 않았습니다.</li>
+            <li class="new">순위: 순위를 재지 못해 순위 기반 조언은 넣지 않았습니다.</li>
+            <li>상품명: 내 상품명(32자)에 검색어가 들어 있습니다. <span class="pmeta">(내 상품 기준 내용은 그대로)</span></li>
+          </ul>
+          <div class="pmeta" style="margin-top:6px">AI 종합 분석에도 0원·0% 대신 「자료 없음」을 넘깁니다 — AI가 0을 진짜 값으로 읽지 않게 합니다.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 바뀐 뒤 · 광고주 보고서 -->
+    <div id="st-adv" role="tabpanel" aria-labelledby="t-adv" hidden>
+      <p class="state-note">내보내기(HTML·PDF) · 매일 08:30 자동 보고서 · 공개 주소 · 월요일 주간 보고서처럼 <b>광고주가 보는 것</b>입니다. 결정 ①ⓐ(추천) 기준 — 빈 칸과 빈 장은 빼고, 맨 위에 한 줄만 남깁니다. 「수집을 쉰다」 같은 내부 사정은 적지 않습니다.</p>
+      <div class="report">
+        <div class="note info new">이번 보고서는 <b>검색 수요 · 키워드 · 광고 경쟁</b> 자료를 중심으로 작성했습니다. 경쟁 상품 · 가격 비교는 이번 보고서에 담지 않았습니다.</div>
+
+        <div class="divider">1. 종합 요약</div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">📊</span>종합 요약</h3>
+          <div class="grid4">
+            <div class="kpi"><div class="k">월간 검색량 <span class="badge b-ok">✅ 실측</span></div><div class="v">14,050<small>회</small></div></div>
+            <div class="kpi"><div class="k">골든 키워드 <span class="badge b-ok">✅ 실측</span></div><div class="v">3<small>개</small></div></div>
+            <div class="kpi"><div class="k">광고 경쟁도</div><div class="v">높음</div></div>
+          </div>
+          <div class="pmeta new" style="margin-top:8px">「등록 상품수」·「경쟁강도」 칸과 종합 진입 점수는 자료가 없으면 보고서에서 뺍니다.</div>
+        </div>
+
+        <div class="divider">2. 시장 · 수요 진단</div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">📈</span>검색량 트렌드 · 시즌 · 요일 <span class="badge b-ok">📊 데이터랩</span></h3>
+          <div class="pmeta">(지금과 같은 그래프)</div>
+        </div>
+
+        <div class="divider">3. 경쟁 진단</div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">⚔️</span>검색광고 경쟁 정보 · 예상 CPC <span class="badge b-ok">✅ 실측</span></h3>
+          <div class="pmeta">(지금과 같은 표)</div>
+        </div>
+
+        <div class="divider">5. 기회 발굴</div>
+        <div class="card">
+          <h3 class="rt-h3"><span class="rt-hic">👑</span>연관 · 골든 키워드 <span class="badge b-ok">✅ 실측</span></h3>
+          <div class="pmeta">(지금과 같은 목록)</div>
+        </div>
+        <div class="note none new">목차에서도 빈 장(4. 내 상품 현황의 빠진 칸 등)은 빼고, 장 제목 아래 설명도 실제로 들어간 칸만 적습니다. 08:30 자동 보고서의 「상품 수 0」 · 「경쟁강도 -」 칸도 빠집니다.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 바뀌는 것 / 안 바뀌는 것 -->
+  <section class="panel" aria-labelledby="scope">
+    <h2 id="scope">무엇이 바뀌고 무엇은 그대로인가</h2>
+    <div class="two">
+      <div>
+        <b>바뀌는 것(자료가 없을 때만)</b>
+        <ul>
+          <li>0원 · 0% · 「-」 · 「미노출」 · 「200위 밖」 · 시작값 50점 대신 <b>「자료 없음」 · 「못 잼」 · 「계산 불가」</b>.</li>
+          <li>값이 0인 가격 · 카테고리 · 순위 문장은 만들지 않고, 왜 뺐는지 한 줄로 적습니다.</li>
+          <li>사라지던 칸은 장마다 <b>「이번 분석에서 빠진 칸」</b> 한 줄로 알립니다(직원 화면).</li>
+          <li>검색광고 조회 <b>실패</b>와 <b>0개</b>를 나눠 적고, 실패하면 「✅ 실측」을 붙이지 않습니다.</li>
+          <li>검수 줄의 「✗ 상품 검색」(빨강) → 「— 상품 검색 · 수집 쉬는 중」(회색), 상품 검색은 다시 묻지 않음.</li>
+          <li>예상 CPC 자리의 「0」 한 글자 결함을 고칩니다.</li>
+          <li>업종을 못 읽어 「생활/건강」으로 센 데이터랩 칸에 그 사실을 적습니다.</li>
+          <li>AI 종합 분석 · 08:30 자동 보고서에도 같은 규칙.</li>
+        </ul>
+      </div>
+      <div>
+        <b>그대로인 것</b>
+        <ul>
+          <li>숫자 계산 · 수집기 · 순위 기록 · 네이버 요청 수 — <b>하나도 안 바꿉니다.</b></li>
+          <li>자료가 있는 경우(앞으로 커머스 API 등으로 다시 채워지면) 보고서는 <b>지금과 똑같이</b> 나옵니다.</li>
+          <li>검색량 · 연관 키워드 · 데이터랩 · 광고 경쟁 · 상세페이지 HTML 분석 칸은 무변경.</li>
+          <li>전산(①)이 가져가는 업체 요약(portal-summary)의 칸 이름 · 모양은 그대로 둡니다(값이 없을 때만 빈 칸을 빼는 방향 · 별도 확인).</li>
+        </ul>
+      </div>
+    </div>
+    <p class="state-note">범위: 로직분석 서버(문장 만드는 곳 · 자동 보고서) + 화면 · DB 변경 없음 · 배포는 대표님 「배포하자」 뒤 · 약 1~1.5일.<br>
+    ⚠️ 지난 10/19 시안의 「1페이지 자료로 채우기」(결정 「보고서 빈칸 — ①②③」)는 수집이 완전히 꺼져 쓸 자료가 없으므로 <b>이번 안으로 바꿉니다.</b></p>
+  </section>
+
+  <!-- 4. 결정 -->
+  <section class="panel" aria-labelledby="dec">
+    <h2 id="dec">대표님께서 정하실 3가지</h2>
+    <p class="lede" style="margin-top:0">고르시면 맨 아래 답이 바뀝니다. 그대로 복사해 보내 주시면 됩니다. 추천은 파란 표시입니다.</p>
+
+    <div class="dec" data-q="1">
+      <h3>① 광고주에게 가는 보고서에서 빈 칸은요?</h3>
+      <p class="why">내보내기 · 08:30 자동 보고서 · 공개 주소 · 월요일 주간 보고서가 해당합니다. 직원 화면에는 언제나 「자료 없음」과 이유를 보여 드립니다. 지금은 모든 키워드가 시장 자료가 없어, 「자료 없음」을 그대로 두면 보고서마다 빈 상자가 여러 개 생깁니다.</p>
+      <div class="opts">
+        <button class="opt" data-v="ⓐ" aria-pressed="true">ⓐ 빈 칸 · 빈 장은 빼고, 맨 위에 「검색 수요 · 키워드 · 광고 경쟁 중심으로 작성」 한 줄만<span class="rec">추천</span></button>
+        <button class="opt" data-v="ⓑ" aria-pressed="false">ⓑ 직원 화면처럼 「자료 없음」 상자를 그대로 보여 줌</button>
+      </div>
+    </div>
+
+    <div class="dec" data-q="2">
+      <h3>② 종합 진입 점수(지금 시작값 50)는요?</h3>
+      <p class="why">지금 점수는 50에서 시작해 순위 · 가격 · 상품명으로 더합니다. 순위와 가격이 없으니 거의 모든 업체가 50~60으로 나옵니다.</p>
+      <div class="opts">
+        <button class="opt" data-v="ⓐ" aria-pressed="true">ⓐ 시장 자료가 없으면 점수를 내지 않음(「계산 불가」) · 「긴급」 과제도 그 점수로 고르지 않음<span class="rec">추천</span></button>
+        <button class="opt" data-v="ⓑ" aria-pressed="false">ⓑ 지금 점수를 「참고용 · 시장 자료 없이 계산」 표시와 함께 유지</button>
+      </div>
+    </div>
+
+    <div class="dec" data-q="3">
+      <h3>③ 직원 화면 안내에 이유를 어디까지 적을까요?</h3>
+      <p class="why">직원들이 「분석하는 키워드가 다르다」·「칸이 비었다」고 이야기하던 것과 같은 축입니다. 이유가 보이면 「고장인가?」 묻는 일이 줄어듭니다.</p>
+      <div class="opts">
+        <button class="opt" data-v="ⓐ" aria-pressed="true">ⓐ 「쇼핑 순위 수집을 쉬는 동안(2026-11-05~) 비어 있습니다 · 고장이 아닙니다」까지 적음<span class="rec">추천</span></button>
+        <button class="opt" data-v="ⓑ" aria-pressed="false">ⓑ 「쇼핑 시장 자료 없음」만 적음</button>
+      </div>
+    </div>
+
+    <div class="answer" aria-live="polite">
+      <span>답:</span><code id="ans">보고서 문구 — ①ⓐ ②ⓐ ③ⓐ</code>
+      <button class="copy" id="copy" type="button">복사</button>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="log">
+    <h2 id="log">변경 이력</h2>
+    <ul class="log">
+      <li>2026-11-16 · v2 — 대표 「로직 보고서에 제대로 정보가 안 나오는 부분들 문구 개선」. 쇼핑 수집 종료(11/5) 뒤 상황으로 다시 씀: 칸 24곳을 네 갈래(가짜 값 · 성공처럼 보이는 실패 · 사라지는 칸 · 오류처럼 보이거나 잘못 셈)로 정리 · 직원 화면 / 광고주 보고서 따로 · 결정 3건 새로 · 10/19 「1페이지 자료로 채우기」 안은 폐기.</li>
+      <li>2026-10-19 · v1 — 첫 시안(1페이지 자료로 채우기 · 결정 「보고서 빈칸 — ①②③」).</li>
+    </ul>
+  </section>
+
+</div>
+<script>
+(function () {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+  function show(t) {
+    tabs.forEach(function (x) {
+      var on = x === t;
+      x.setAttribute('aria-selected', on ? 'true' : 'false');
+      document.getElementById(x.getAttribute('aria-controls')).hidden = !on;
+    });
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { show(t); });
+    t.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        var n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+        n.focus(); show(n);
+      }
+    });
+  });
+  var ans = document.getElementById('ans');
+  function update() {
+    var parts = Array.prototype.map.call(document.querySelectorAll('.dec'), function (d) {
+      var p = d.querySelector('.opt[aria-pressed="true"]');
+      return ['①', '②', '③'][Number(d.getAttribute('data-q')) - 1] + (p ? p.getAttribute('data-v') : '?');
+    });
+    ans.textContent = '보고서 문구 — ' + parts.join(' ');
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.dec'), function (d) {
+    var opts = d.querySelectorAll('.opt');
+    Array.prototype.forEach.call(opts, function (o) {
+      o.addEventListener('click', function () {
+        Array.prototype.forEach.call(opts, function (x) { x.setAttribute('aria-pressed', x === o ? 'true' : 'false'); });
+        update();
+      });
+    });
+  });
+  document.getElementById('copy').addEventListener('click', function () {
+    var b = this, txt = ans.textContent;
+    function done() { b.textContent = '복사했습니다'; setTimeout(function () { b.textContent = '복사'; }, 1500); }
+    try { if (navigator.clipboard) { navigator.clipboard.writeText(txt).then(done, done); return; } } catch (e) {}
+    done();
+  });
+})();
+</script>
+</body>
+</html>
