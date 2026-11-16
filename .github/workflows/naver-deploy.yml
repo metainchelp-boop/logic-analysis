@@ -28,7 +28,7 @@ on:
         description: 'inspect = 상태 읽기 / deploy = 배포 / disk-usage = 용량 분석 / app-inventory = 구성 확인 / cleanup-plan·cleanup = 기존 정리 / cleanup-artifacts-plan·cleanup-artifacts = 미사용 NAVER 이미지·release만 정리, 배포 로그 보존'
         required: true
         type: choice
-        options: [inspect, deploy, disk-usage, app-inventory, cleanup-plan, cleanup, cleanup-artifacts-plan, cleanup-artifacts, migrate-prepare, migrate-rehearse, migrate-plan, migrate-deploy, migrate-continue, migrate-rollback, migrate-accept]
+        options: [inspect, deploy, disk-usage, app-inventory, cleanup-plan, cleanup, cleanup-artifacts-plan, cleanup-artifacts, migrate-prepare, migrate-rehearse, migrate-plan, migrate-deploy, migrate-continue, migrate-rollback, migrate-accept, nginx-plan, nginx-apply]
         default: inspect
       allowlist_sha256:
         description: 'cleanup 또는 cleanup-artifacts 전용: 해당 plan mode 결과의 allowlist_sha256(64자리). 두 scope 해시는 혼용 불가'
@@ -39,7 +39,7 @@ on:
         description: 'migrate-prepare/rehearse/plan/deploy 전용: 고정 이관 항목(naver-deploy.sh MIGRATIONS)'
         required: false
         type: choice
-        options: ['', '21-22-exhaust-v1']
+        options: ['', '21-22-exhaust-v1', '22-23-reconcile-v1']
         default: ''
       migration_arg:
         description: 'migrate-deploy = migrate-plan 의 plan_sha256(64자리) / migrate-continue·rollback·accept = run id(예 20261115T120000Z-1d852289209e)'
@@ -47,9 +47,15 @@ on:
         type: string
         default: ''
       confirm:
-        description: 'migrate-deploy/continue/rollback/accept 전용 확인 문구: MIGRATE_NAVER_SCHEMA_21_TO_22_ADDITIVE'
+        description: 'migrate-deploy/continue/rollback/accept 확인 문구: MIGRATE_NAVER_SCHEMA_21_TO_22_ADDITIVE 또는 MIGRATE_NAVER_SCHEMA_22_TO_23_ADDITIVE · nginx-apply: APPLY_NAVER_RECONCILE_UPLOAD_NGINX'
         required: false
         type: string
+        default: ''
+      nginx_step:
+        description: 'nginx-plan/nginx-apply 전용: 고정 nginx 단계(naver-deploy.sh NGINX_STEPS). nginx-apply 의 plan_sha256 은 migration_arg'
+        required: false
+        type: choice
+        options: ['', 'reconcile-upload-v1']
         default: ''
 
 permissions:
@@ -78,6 +84,7 @@ jobs:
           MIGRATION_ID: ${{ inputs.migration_id }}
           MIGRATION_ARG: ${{ inputs.migration_arg }}
           CONFIRM: ${{ inputs.confirm }}
+          NGINX_STEP: ${{ inputs.nginx_step }}
         run: |
           set -euo pipefail
           if [ "$ACTOR" != metainchelp-boop ] || [ "$TRIGGERING_ACTOR" != metainchelp-boop ]; then
@@ -89,7 +96,7 @@ jobs:
           if ! printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "::error::commit 은 40자리 소문자 16진수여야 합니다"; exit 1
           fi
-          case "$MODE" in inspect|deploy|disk-usage|app-inventory|cleanup-plan|cleanup|cleanup-artifacts-plan|cleanup-artifacts|migrate-prepare|migrate-rehearse|migrate-plan|migrate-deploy|migrate-continue|migrate-rollback|migrate-accept) ;; *) echo "::error::mode 이상"; exit 1 ;; esac
+          case "$MODE" in inspect|deploy|disk-usage|app-inventory|cleanup-plan|cleanup|cleanup-artifacts-plan|cleanup-artifacts|migrate-prepare|migrate-rehearse|migrate-plan|migrate-deploy|migrate-continue|migrate-rollback|migrate-accept|nginx-plan|nginx-apply) ;; *) echo "::error::mode 이상"; exit 1 ;; esac
           if [ "$MODE" = cleanup ] || [ "$MODE" = cleanup-artifacts ]; then
             printf '%s' "$ALLOWLIST" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::cleanup 은 allowlist_sha256(64자리)이 필요합니다"; exit 1; }
           elif [ -n "$ALLOWLIST" ]; then
@@ -97,19 +104,29 @@ jobs:
           fi
           case "$MODE" in
             migrate-prepare|migrate-rehearse|migrate-plan|migrate-deploy)
-              [ "$MIGRATION_ID" = 21-22-exhaust-v1 ] || { echo "::error::migration_id 가 필요합니다"; exit 1; } ;;
+              case "$MIGRATION_ID" in 21-22-exhaust-v1|22-23-reconcile-v1) ;; *) echo "::error::migration_id 가 필요합니다"; exit 1 ;; esac ;;
             *) [ -z "$MIGRATION_ID" ] || { echo "::error::migration_id 는 migrate-prepare/rehearse/plan/deploy 전용"; exit 1; } ;;
           esac
           case "$MODE" in
-            migrate-deploy) printf '%s' "$MIGRATION_ARG" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::plan_sha256 이 필요합니다"; exit 1; } ;;
+            nginx-plan|nginx-apply) [ "$NGINX_STEP" = reconcile-upload-v1 ] || { echo "::error::nginx_step 이 필요합니다"; exit 1; } ;;
+            *) [ -z "$NGINX_STEP" ] || { echo "::error::nginx_step 은 nginx 모드 전용"; exit 1; } ;;
+          esac
+          case "$MODE" in
+            migrate-deploy|nginx-apply) printf '%s' "$MIGRATION_ARG" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::plan_sha256 이 필요합니다"; exit 1; } ;;
             migrate-continue|migrate-rollback|migrate-accept)
               printf '%s' "$MIGRATION_ARG" | grep -Eq '^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$' || { echo "::error::run id 가 필요합니다"; exit 1; } ;;
             *) [ -z "$MIGRATION_ARG" ] || { echo "::error::migration_arg 는 이 모드에서 쓰지 않습니다"; exit 1; } ;;
           esac
-          case "$MODE" in
-            migrate-deploy|migrate-continue|migrate-rollback|migrate-accept)
+          case "$MODE:$MIGRATION_ID" in
+            migrate-deploy:21-22-exhaust-v1)
               [ "$CONFIRM" = MIGRATE_NAVER_SCHEMA_21_TO_22_ADDITIVE ] || { echo "::error::확인 문구가 다릅니다"; exit 1; } ;;
-            *) [ -z "$CONFIRM" ] || { echo "::error::confirm 은 이관 변경 모드 전용"; exit 1; } ;;
+            migrate-deploy:22-23-reconcile-v1)
+              [ "$CONFIRM" = MIGRATE_NAVER_SCHEMA_22_TO_23_ADDITIVE ] || { echo "::error::확인 문구가 다릅니다"; exit 1; } ;;
+            migrate-continue:*|migrate-rollback:*|migrate-accept:*)
+              case "$CONFIRM" in MIGRATE_NAVER_SCHEMA_21_TO_22_ADDITIVE|MIGRATE_NAVER_SCHEMA_22_TO_23_ADDITIVE) ;; *) echo "::error::확인 문구가 다릅니다"; exit 1 ;; esac ;;
+            nginx-apply:*)
+              [ "$CONFIRM" = APPLY_NAVER_RECONCILE_UPLOAD_NGINX ] || { echo "::error::확인 문구가 다릅니다"; exit 1; } ;;
+            *) [ -z "$CONFIRM" ] || { echo "::error::confirm 은 변경 모드 전용"; exit 1; } ;;
           esac
 
       - name: 배포 장치 소스 받기
@@ -130,7 +147,7 @@ jobs:
           python -I -B -m unittest discover -s deploy/naver/tests -v
 
       - name: 제품 저장소 읽기 키 확인
-        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy"]'), inputs.mode)
+        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy","nginx-plan","nginx-apply"]'), inputs.mode)
         env:
           KEY_SET: ${{ secrets.NAVER_PRODUCT_DEPLOY_KEY != '' }}
         run: |
@@ -140,7 +157,7 @@ jobs:
           fi
 
       - name: 제품 소스 받기 (읽기 전용 deploy key)
-        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy"]'), inputs.mode)
+        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy","nginx-plan","nginx-apply"]'), inputs.mode)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: metainchelp-boop/metainc-ad-dashboard
@@ -150,19 +167,19 @@ jobs:
           persist-credentials: false
 
       - name: 받은 커밋이 입력과 같은지 확인
-        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy"]'), inputs.mode)
+        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy","nginx-plan","nginx-apply"]'), inputs.mode)
         env:
           COMMIT: ${{ inputs.commit }}
         run: test "$(git -C product rev-parse HEAD)" = "$COMMIT"
 
       - name: Node 22 (화면 시험용)
-        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy"]'), inputs.mode)
+        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy","nginx-plan","nginx-apply"]'), inputs.mode)
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
 
       - name: 시험 의존성 준비 (제품 CI 와 같은 방식)
-        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy"]'), inputs.mode)
+        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy","nginx-plan","nginx-apply"]'), inputs.mode)
         timeout-minutes: 10
         working-directory: product
         env:
@@ -185,7 +202,7 @@ jobs:
           node --version
 
       - name: 제품 단위 시험 (외부망 없는 비루트 namespace · 요약만 출력)
-        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy"]'), inputs.mode)
+        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy","nginx-plan","nginx-apply"]'), inputs.mode)
         run: |
           set -euo pipefail
           # product-tests.sh 는 묶음별 요약·실패 이름만 표준출력에 낸다. 그 밖의 표준오류는 비공개 파일로.
@@ -239,10 +256,12 @@ jobs:
         env:
           COMMIT: ${{ inputs.commit }}
           FROM: ${{ steps.migfrom.outputs.commit }}
+          MIGRATION_ID: ${{ inputs.migration_id }}
         run: |
           set -euo pipefail
           test "$(git -C product-from rev-parse HEAD)" = "$FROM"
           rc=0
+          NAVER_MIGRATION_ID="$MIGRATION_ID" \
           NAVER_PRODUCT_V21_DIR="$GITHUB_WORKSPACE/product-from" NAVER_PRODUCT_V22_DIR="$GITHUB_WORKSPACE/product" \
             python -I -B -m unittest discover -s deploy/naver/tests -p 'test_naver_migrate_deploy.py' -k RealProduct \
             > "$RUNNER_TEMP/private/real-product-migrate.log" 2>&1 || rc=$?
@@ -251,7 +270,7 @@ jobs:
 
       - name: 배포 원본 묶기 · 두 Dockerfile 빌드 확인 (push 없음)
         id: archive
-        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy"]'), inputs.mode)
+        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy","nginx-plan","nginx-apply"]'), inputs.mode)
         env:
           COMMIT: ${{ inputs.commit }}
         run: |
@@ -293,10 +312,12 @@ jobs:
           test "$TRIGGERING_ACTOR" = metainchelp-boop
           test "$REF" = refs/heads/main
           printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'
-          case "$MODE" in inspect|deploy|disk-usage|app-inventory|cleanup-plan|cleanup|cleanup-artifacts-plan|cleanup-artifacts|migrate-prepare|migrate-rehearse|migrate-plan|migrate-deploy|migrate-continue|migrate-rollback|migrate-accept) ;; *) exit 1 ;; esac
+          case "$MODE" in inspect|deploy|disk-usage|app-inventory|cleanup-plan|cleanup|cleanup-artifacts-plan|cleanup-artifacts|migrate-prepare|migrate-rehearse|migrate-plan|migrate-deploy|migrate-continue|migrate-rollback|migrate-accept|nginx-plan|nginx-apply) ;; *) exit 1 ;; esac
           if [ "$MODE" = cleanup ] || [ "$MODE" = cleanup-artifacts ]; then printf '%s' "$ALLOWLIST" | grep -Eq '^[0-9a-f]{64}$'; else test -z "$ALLOWLIST"; fi
           case "$MODE" in
-            migrate-deploy|migrate-continue|migrate-rollback|migrate-accept) test "$CONFIRM" = MIGRATE_NAVER_SCHEMA_21_TO_22_ADDITIVE ;;
+            migrate-deploy|migrate-continue|migrate-rollback|migrate-accept)
+              case "$CONFIRM" in MIGRATE_NAVER_SCHEMA_21_TO_22_ADDITIVE|MIGRATE_NAVER_SCHEMA_22_TO_23_ADDITIVE) ;; *) exit 1 ;; esac ;;
+            nginx-apply) test "$CONFIRM" = APPLY_NAVER_RECONCILE_UPLOAD_NGINX ;;
           esac
 
       - name: 배포 장치 소스 받기
@@ -305,7 +326,7 @@ jobs:
           persist-credentials: false
 
       - name: 제품 소스 받기 (읽기 전용 deploy key)
-        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy"]'), inputs.mode)
+        if: contains(fromJSON('["deploy","migrate-prepare","migrate-rehearse","migrate-plan","migrate-deploy","nginx-plan","nginx-apply"]'), inputs.mode)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: metainchelp-boop/metainc-ad-dashboard
@@ -341,7 +362,8 @@ jobs:
             echo "NSD_MIGRATE_SHA=none" >> "$GITHUB_ENV"
           fi
           if [ "$MODE" = deploy ] || [ "$MODE" = migrate-prepare ] || [ "$MODE" = migrate-rehearse ] \
-              || [ "$MODE" = migrate-plan ] || [ "$MODE" = migrate-deploy ]; then
+              || [ "$MODE" = migrate-plan ] || [ "$MODE" = migrate-deploy ] || [ "$MODE" = nginx-plan ] \
+              || [ "$MODE" = nginx-apply ]; then
             test "$(git -C product rev-parse HEAD)" = "$COMMIT"
             sha=$(bash deploy/naver/make-source-archive.sh product "$COMMIT" "$GITHUB_WORKSPACE/naver-ship/source.tar")
             if [ -z "$TESTED_SHA" ] || [ "$sha" != "$TESTED_SHA" ]; then
@@ -372,11 +394,12 @@ jobs:
           NSD_ALLOWLIST: ${{ inputs.allowlist_sha256 }}
           NSD_MIGRATION_ID: ${{ inputs.migration_id }}
           NSD_MIGRATION_ARG: ${{ inputs.migration_arg }}
+          NSD_NGINX_STEP: ${{ inputs.nginx_step }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: NSD_MODE,NSD_COMMIT,NSD_RUN,NSD_SCRIPT_SHA,NSD_ARCHIVE_SHA,NSD_ALLOWLIST,NSD_APP_SHA,NSD_NGINX_SHA,NSD_MIGRATE_SHA,NSD_MIGRATION_ID,NSD_MIGRATION_ARG
+          envs: NSD_MODE,NSD_COMMIT,NSD_RUN,NSD_SCRIPT_SHA,NSD_ARCHIVE_SHA,NSD_ALLOWLIST,NSD_APP_SHA,NSD_NGINX_SHA,NSD_MIGRATE_SHA,NSD_MIGRATION_ID,NSD_MIGRATION_ARG,NSD_NGINX_STEP
           command_timeout: 55m
           script: |
             set -eu
@@ -446,7 +469,7 @@ jobs:
               printf '%s\n' "$out" | grep "^$prefix={" || fail "${prefix}_FAILED_$rc"
               exit "$rc"
             fi
-            case "$NSD_MODE" in deploy|migrate-*) ;; *) fail MODE ;; esac
+            case "$NSD_MODE" in deploy|migrate-*|nginx-plan|nginx-apply) ;; *) fail MODE ;; esac
             [ "$(id -u)" = 0 ] || fail NOT_ROOT
             command -v systemd-run >/dev/null || fail NO_SYSTEMD_RUN
             base=/var/lib/metainc/naver-deploy
@@ -458,7 +481,7 @@ jobs:
             [ "$(hash_of "$work/naver-deploy.sh")" = "$NSD_SCRIPT_SHA" ] || fail SCRIPT_HASH
             set --
             case "$NSD_MODE" in
-              deploy|migrate-prepare|migrate-rehearse|migrate-plan|migrate-deploy)
+              deploy|migrate-prepare|migrate-rehearse|migrate-plan|migrate-deploy|nginx-plan|nginx-apply)
                 install -m 600 "$incoming/source.tar" "$work/source.tar"
                 [ "$(hash_of "$work/source.tar")" = "$NSD_ARCHIVE_SHA" ] || fail ARCHIVE_HASH
                 set -- "$NSD_COMMIT" "$work/source.tar" ;;
@@ -472,6 +495,8 @@ jobs:
               migrate-prepare|migrate-rehearse|migrate-plan) set -- "$@" "$NSD_MIGRATION_ID" ;;
               migrate-deploy) set -- "$@" "$NSD_MIGRATION_ID" "$NSD_MIGRATION_ARG" ;;
               migrate-continue|migrate-rollback|migrate-accept) set -- "$NSD_MIGRATION_ARG" ;;
+              nginx-plan) set -- "$@" "$NSD_NGINX_STEP" ;;
+              nginx-apply) set -- "$@" "$NSD_NGINX_STEP" "$NSD_MIGRATION_ARG" ;;
             esac
             rm -f "$incoming/naver-deploy.sh" "$incoming/source.tar" "$incoming/naver_schema_migrate.py"
             rmdir "$incoming" || true

@@ -414,6 +414,7 @@ def docker(args):
         for name in ('sync', 'links', 'morning', 'alerts', 'metrics', 'inventory', 'execution', 'backup', 'web',
                      'issue_alerts'):
             switches[name] = env.get('NAVER_ENGINE_%s_ENABLED' % name.upper(), 'false').strip().lower() in ('true', 'on', '1')
+        switches.update(config().get('extra_switches') or {})
         if config().get('check_stderr'):
             sys.stderr.write(config()['check_stderr'] + '\n')
         print(json.dumps({'command': 'check-config', 'configuration': 'valid', 'switches': switches,
@@ -626,8 +627,95 @@ def start_unit(state, name):
     return True
 
 
+def nginx_files():
+    """가짜 /etc/nginx 아래 일반 파일(링크는 대상 내용) — {경로: 내용}. 쓰는 중 임시 파일은 뺀다."""
+    root = config()['root']
+    out = {}
+    base = root + '/etc/nginx'
+    for folder, children, files in os.walk(base):
+        children.sort()
+        for name in sorted(files):
+            if name.endswith('.naver-deploy.tmp'):
+                continue
+            full = os.path.join(folder, name)
+            with open(full, errors='replace') as handle:
+                out[full[len(root):]] = handle.read()
+    return out
+
+
+def nginx(args):
+    """가짜 nginx: -T(파일 구획 덤프) · -t(zone 없이 limit_conn 이면 실패) · -s reload(지금 파일을 '적재')."""
+    state = load(STATE, None)
+    hooks = config()
+    files = nginx_files()
+    if args[:1] == ['-T']:
+        if hooks.get('nginx_T_fail'):
+            sys.exit(1)
+        order = sorted(files, key=lambda p: (p != '/etc/nginx/nginx.conf', p))
+        for path in order:
+            # 실제 nginx -T 와 같은 모양: 구획 머리 + 원문 + LF 하나(원문 끝 LF 와 별개로 언제나).
+            sys.stdout.write('# configuration file %s:\n%s\n' % (path, files[path]))
+        return
+    if args[:1] == ['-t']:
+        uses = any('limit_conn naver_reconcile_upload' in body for body in files.values())
+        zone = any('zone=naver_reconcile_upload' in body for path, body in files.items() if '/conf.d/' in path)
+        if hooks.get('nginx_t_fail') or (uses and not zone):
+            sys.stderr.write('nginx: configuration test failed\n')
+            sys.exit(1)
+        return
+    if args[:2] == ['-s', 'reload']:
+        if hooks.get('nginx_reload_fail'):
+            sys.exit(1)
+        state['nginx_loaded'] = files
+        save(state)
+        return
+    sys.stderr.write('fake nginx: unsupported %s\n' % args)
+    sys.exit(1)
+
+
+def nginx_location(loaded, path):
+    for body in loaded.values():
+        match = re.search(r'(?m)^\s*location\s*=\s*' + re.escape(path) + r'\s*\{([^}]*)\}', body)
+        if match:
+            return match.group(1)
+    return None
+
+
+def curl_https(state, args):
+    """가짜 nginx(443) 응답: 적재된 설정의 정확 일치 location 이 있으면 그 상한, /api/naver-auto 는 64k, 그 밖 1m."""
+    url = args[-1]
+    path = url.split('://', 1)[1].split('/', 1)[1]
+    path = '/' + path
+    loaded = state.get('nginx_loaded') or nginx_files()
+    size = 0
+    if '--data-binary' in args:
+        with open(args[args.index('--data-binary') + 1][1:], 'rb') as handle:
+            size = len(handle.read())
+    block = nginx_location(loaded, path)
+    relay_ok = 'proxy_pass http://unix:/run/metainc/naver-relay/relay.sock:;'
+    if block is not None and 'client_max_body_size 4m;' in block:
+        limit, routed = 4 * 1024 * 1024, relay_ok in block
+    elif path.startswith('/api/naver-auto'):
+        limit, routed = 64 * 1024, True
+    else:
+        limit, routed = 1024 * 1024, True
+    relay_running = any(c.get('project') == 'naver-relay' and c['running'] for c in state['containers'].values())
+    if '-X' not in args:
+        code = '200' if relay_running and path == '/naver/' else '404'
+    elif size > limit:
+        code = '413'
+    elif not routed or not relay_running:
+        code = '502'
+    else:
+        code = str((config().get('nginx_upload_status') or {}).get(path, 401))
+    sys.stdout.write(code)
+
+
 def curl(args):
     state = load(STATE, None)
+    if '--resolve' in args:
+        curl_https(state, args)
+        return
     socket_path = args[args.index('--unix-socket') + 1]
     url = args[-1]
     path = url.split('http://localhost', 1)[1]
@@ -697,6 +785,8 @@ def main(tool):
         systemctl(args)
     elif tool == 'curl':
         curl(args)
+    elif tool == 'nginx':
+        nginx(args)
     elif tool == 'flock':
         flock(args)
     elif tool == 'cp':

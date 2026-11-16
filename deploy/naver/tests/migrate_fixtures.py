@@ -115,23 +115,36 @@ def sha(path):
         return hashlib.sha256(handle.read()).hexdigest()
 
 
+RECON = '''SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS synth_recon_month (
+        month TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY (month))""",
+    """CREATE TABLE IF NOT EXISTS synth_recon_row (
+        month TEXT NOT NULL, seq INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (month, seq), UNIQUE (body))""",
+)
+'''
+RECON_TABLES = ('synth_recon_month', 'synth_recon_row')
+
+
 def make_product(folder, schema):
-    """폴더에 합성 제품(naver_engine/·backend/)을 만든다. v22 는 exhaust_store 를 더한다."""
+    """폴더에 합성 제품(naver_engine/·backend/)을 만든다. v22 는 exhaust_store, v23 은 그 위에 recon_synth 를 더한다."""
     extra = ''
     if schema >= 22:
         write(os.path.join(folder, 'naver_engine/exhaust_store.py'), EXHAUST)
         extra = 'from .exhaust_store import SCHEMA as _EXHAUST_SCHEMA\n_SCHEMA += _EXHAUST_SCHEMA\n'
+    if schema >= 23:
+        write(os.path.join(folder, 'naver_engine/recon_synth.py'), RECON)
+        extra += 'from .recon_synth import SCHEMA as _RECON_SCHEMA\n_SCHEMA += _RECON_SCHEMA\n'
     write(os.path.join(folder, 'naver_engine/__init__.py'), '')
     write(os.path.join(folder, 'naver_engine/store.py'), STORE_TEMPLATE % {'schema': schema, 'extra': extra})
     write(os.path.join(folder, 'backend/__init__.py'), '')
     return folder
 
 
-def new_table_pins(product_v22):
+def new_table_pins(product_v22, module='naver_engine/exhaust_store.py'):
     sys.path.insert(0, product_v22)
     try:
         namespace = {}
-        with open(os.path.join(product_v22, 'naver_engine/exhaust_store.py')) as handle:
+        with open(os.path.join(product_v22, module)) as handle:
             exec(compile(handle.read(), 'x', 'exec'), namespace)
     finally:
         sys.path.remove(product_v22)
@@ -154,6 +167,19 @@ def entry(product_v21, product_v22, from_commit, to_commit, helper_sha, from_sto
             'new_tables': tables, 'autoindexes': indexes, 'helper_sha256': helper_sha}
 
 
+def entry_2223(product_v22, product_v23, from_commit, to_commit, helper_sha):
+    """22→23 형 항목(schema_module·purpose·requires_released)을 합성 제품으로."""
+    module = 'naver_engine/recon_synth.py'
+    tables, indexes = new_table_pins(product_v23, module)
+    return {'from_schema': 22, 'to_schema': 23, 'from_commit': from_commit, 'to_commit': to_commit,
+            'from_store_sha256': sha(os.path.join(product_v22, 'naver_engine/store.py')),
+            'to_store_sha256': sha(os.path.join(product_v23, 'naver_engine/store.py')),
+            'schema_module': {'path': module, 'import': 'naver_engine.recon_synth',
+                              'sha256': sha(os.path.join(product_v23, module))},
+            'purpose': 'pre-migration-22-23', 'requires_released': ['21-22-exhaust-v1'],
+            'new_tables': tables, 'autoindexes': indexes, 'helper_sha256': helper_sha}
+
+
 def load_store(product):
     """합성 제품 store 를 이 프로세스에 불러온다(macOS 에서는 flock 을 끈다 — 로컬 합성 전용)."""
     import importlib.util
@@ -167,15 +193,12 @@ def load_store(product):
 
 def seed_v21(path, product_v21, running=1, flock_off=False):
     """합성 v21 DB: 옛 대역 open_writer 로 만들고 rowid 틈·WITHOUT ROWID·AUTOINCREMENT·running 회차를 넣는다."""
-    import fcntl
-    original = fcntl.flock
-    if flock_off:
-        fcntl.flock = lambda *a, **k: None
-    try:
-        store = load_store(product_v21)
-        store.open_writer(path).close()
-    finally:
-        fcntl.flock = original
+    import subprocess
+    # 별도 프로세스에서 그 제품 패키지로 연다(제품마다 naver_engine 패키지가 달라 한 프로세스에 함께 못 불러온다).
+    code = ('import sys, fcntl\nsys.path.insert(0, sys.argv[1])\n'
+            + ('fcntl.flock = lambda *a, **k: None\n' if flock_off else '')
+            + 'from naver_engine import store\nstore.open_writer(sys.argv[2]).close()\n')
+    subprocess.run([sys.executable, '-I', '-B', '-c', code, product_v21, path], check=True)
     conn = sqlite3.connect(path, isolation_level=None)
     conn.execute("INSERT INTO synth_text_pk (rowid, k, v, n) VALUES (101, 'a', x'00ff', 1.0)")
     conn.execute("INSERT INTO synth_text_pk (rowid, k, v, n) VALUES (7, 'b', NULL, 2)")

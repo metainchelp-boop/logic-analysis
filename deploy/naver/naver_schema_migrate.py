@@ -256,14 +256,34 @@ def file_sha(path):
         os.close(fd)
 
 
+SCHEMA_MODULE_PATH = re.compile(r'naver_engine/[a-z][a-z0-9_]{0,40}\.py\Z')
+
+
+def schema_module_pin(pins):
+    """새 표 SCHEMA 를 가진 제품 모듈의 고정 (경로, import 이름, sha256). 옛 인자(exhaust_sha256)는 21-22 호환 규칙."""
+    module = pins.get('schema_module')
+    if module is None and pins.get('exhaust_sha256'):
+        module = {'path': 'naver_engine/exhaust_store.py', 'import': 'naver_engine.exhaust_store',
+                  'sha256': pins['exhaust_sha256']}
+    if module is None:
+        return None
+    if (not isinstance(module, dict) or set(module) != {'path', 'import', 'sha256'}
+            or not SCHEMA_MODULE_PATH.match(str(module['path'])) or not HEX64.match(str(module['sha256']))
+            or module['import'] != module['path'][:-3].replace('/', '.')):
+        raise Abort('SCHEMA_MODULE_PIN_REFUSED')
+    return module
+
+
 def load_product(pins):
     """고정 경로·권한·해시를 먼저 확인하고 그 두 경로만 sys.path 에 넣는다(-I 는 PYTHONPATH 를 무시한다)."""
+    import importlib
     code = ENV.code
     for folder in (code, os.path.join(code, 'naver_engine'), os.path.join(code, 'backend')):
         verify_tree(folder, 'dir')
     wanted = {'naver_engine/store.py': pins['store_sha256']}
-    if pins.get('exhaust_sha256'):
-        wanted['naver_engine/exhaust_store.py'] = pins['exhaust_sha256']
+    module_pin = schema_module_pin(pins)
+    if module_pin is not None:
+        wanted[module_pin['path']] = module_pin['sha256']
     for relative, expected in wanted.items():
         full = os.path.join(code, relative)
         verify_tree(full, 'file')
@@ -274,9 +294,10 @@ def load_product(pins):
         fcntl.flock = lambda *a, **k: None
     from naver_engine import store
     exhaust = None
-    if pins.get('exhaust_sha256'):
-        from naver_engine import exhaust_store as exhaust
-    for module, relative in ((store, 'naver_engine/store.py'), (exhaust, 'naver_engine/exhaust_store.py')):
+    if module_pin is not None:
+        exhaust = importlib.import_module(module_pin['import'])
+    for module, relative in ((store, 'naver_engine/store.py'),
+                             (exhaust, module_pin['path'] if module_pin else None)):
         if module is None:
             continue
         if os.path.realpath(module.__file__) != os.path.realpath(os.path.join(code, relative)):
@@ -996,7 +1017,9 @@ def step_v21_opens(args):
 
 STEPS = {'chain': step_chain, 'observe': step_observe, 'startcheck': step_startcheck, 'prove': step_prove,
          'gap': step_gap, 'undo': step_undo, 'bundle': step_bundle, 'restore-rename': step_restore_rename,
-         'probe': step_probe, 'seed': step_seed, 'v21-refuses': step_v21_refuses, 'v21-opens': step_v21_opens}
+         'probe': step_probe, 'seed': step_seed, 'v21-refuses': step_v21_refuses, 'v21-opens': step_v21_opens,
+         # 일반 이름(옛 세대 = 이관 전 스키마). v21-* 는 21-22 경로의 같은 함수 별칭으로 남긴다.
+         'old-refuses': step_v21_refuses, 'old-opens': step_v21_opens}
 
 
 def main(argv):

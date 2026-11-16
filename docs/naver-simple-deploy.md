@@ -358,3 +358,37 @@ CI 가 아닌 **VM 전용 throw-away unit/target** 에서만 확인한다(운영
 합성 시험: `test_naver_schema_migrate.py`(helper·PY_HELPER 단위), `test_naver_migrate_deploy.py`(가짜 호스트 종단,
 합성 제품 대역). 실제 제품 두 커밋으로 helper 를 도는 `RealProductHelperTest` 는 `NAVER_PRODUCT_V21_DIR`·
 `NAVER_PRODUCT_V22_DIR` 이 있을 때만 돈다(배포 workflow 의 migrate-* test job 이 비공개 로그로 실행).
+
+### 9.1 22 → 23(`22-23-reconcile-v1`, 보고 대조 3단계)과 고정 nginx 단계
+
+고정 표 `MIGRATIONS` 는 이제 이관 항목 여러 개를 함께 둔다. 이관별 값(커밋·store 해시·새 표 SCHEMA 모듈
+`schema_module`(경로·import·해시)·새 표 SQL 해시·자동 색인·보관 `purpose`)은 모두 그 항목에서만 나온다. 21-22 항목은
+원래 칸 그대로이며 `purpose`·`schema_module` 은 코드의 호환 규칙(`pre-migration-21-22`, `exhaust_store`)으로 같은 값이 된다.
+helper 해시는 두 항목이 같은 값을 쓴다(파일 하나). 엄격 v2 reader 는 두 purpose 를 모두 읽고 purpose·schema 짝이 어긋나면
+`BACKUP_SAFETY` 로 멈춘다. gz 복원은 manifest 의 purpose·schema·source_commit 이 그 run 의 항목과 같을 때만 한다.
+
+운영 순서(각 단계 대표 승인):
+1. 21→22 run(2026-11-16, 43746708424)의 수집 진전·새 OFFSITE_OK 확인 → `migrate-accept`(pin released). 22-23 항목의
+   `requires_released` 때문에 그 전에는 22-23 prepare·deploy 가 `MIGRATION_ORDER` 로 거절된다.
+2. PR38 `9649eae`(스키마 22, 코드만)를 일반 `deploy` 로 올린다. 22-23 항목의 from_commit 이 이 커밋이다.
+3. `migrate-prepare` → `migrate-rehearse` → `migrate-plan` → `migrate-deploy`(`migration_id=22-23-reconcile-v1`,
+   확인 문구 `MIGRATE_NAVER_SCHEMA_22_TO_23_ADDITIVE`). 12260db 는 새 스위치 `reconcile_writes` 를 낸다. 이관 모드는 그 스위치가
+   **꺼져 있을 때만** check-config 를 통과시킨다(켜져 있으면 `CHECK_CONFIG`). 일반 deploy 는 값과 무관하게 받는다.
+4. `nginx-plan` → `nginx-apply`(아래). 업로드는 5에서 대표가 `reconcile_writes` 를 켤 때까지 엔진이 403 이다.
+5. 대표가 런타임 환경에서 `NAVER_ENGINE_RECONCILE_WRITES_ENABLED=true` 로 켠다(이 장치의 범위 밖).
+
+`nginx-plan <커밋> <source.tar> reconcile-upload-v1` / `nginx-apply … <plan_sha256>`(확인 문구
+`APPLY_NAVER_RECONCILE_UPLOAD_NGINX`): 이관과 **따로** 둔 이유 — nginx 는 다른 앱과 함께 쓰는 공용 구성이고, 이관 정지
+창·DB 되돌림과 묶으면 실패 경로가 서로 얽힌다. 업로드 쓰기는 꺼진 채 시작하므로 23 엔진이 먼저 돌아도 안전하고,
+nginx 되돌림(설정 파일 복원)은 DB 와 무관하게 끝난다. 자체 plan_sha256 으로 따로 승인한다.
+- 계획은 `nginx -T` 로 배치를 확인한다: `location ^~ /api/naver-auto` 를 가진 관제 snippet 정확히 하나, 그 snippet 을
+  include 하는 곳이 `dashboard.metainc.co.kr` server 블록 하나, `nginx.conf` 의 `http {}` 가 `conf.d/*.conf` 를 include,
+  proxy_pass 가 관제 중계 형식(`http://unix:/run/metainc/naver-relay/relay.sock:` 또는 `http://naver_relay`).
+  하나라도 다르면 `NGINX_LAYOUT` 으로 거절(아무것도 쓰지 않음).
+- 쓰는 파일은 둘뿐: `conf.d/naver-reconcile-upload-zone.conf`(제품 http include 그대로)와 관제 snippet(제품의 정확 일치
+  두 블록을 그대로 더하되 `proxy_pass` 한 줄만 그 snippet 의 `/api/naver-auto` 와 같은 값). 제품 파일·두 블록 해시는 고정.
+- 적용: 기준선(업로드 경로 64KB 초과 413·`/naver/` 200) → 백업 → 두 파일 쓰기 → `nginx -t` → `nginx -s reload` →
+  두 파일이 계획 내용이고 나머지 `/etc/nginx` 지문이 그대로인지 → 실제 요청(443, 같은 호스트 이름): 두 업로드 경로는
+  4MiB 아래 413·5xx·000 아님 · 4MiB 초과 413, `/api/naver-auto/me` 와 비슷한 다른 경로는 64KB 초과 413, `/naver/` 200.
+  하나라도 실패하면 백업 원문 복원·zone 파일 삭제·`nginx -t`·reload·기준선·전체 지문 확인 → `NGINX_ROLLED_BACK`(2),
+  그것도 실패하면 `NGINX_ROLLBACK_FAILED`(4). 이관 표지가 있거나 끝나지 않은 배포가 있으면 하지 않는다.

@@ -26,6 +26,8 @@ HELPER = os.path.join(os.path.dirname(HERE), 'naver_schema_migrate.py')
 SCRIPT = os.path.join(os.path.dirname(HERE), 'naver-deploy.sh')
 NO_FLOCK = sys.platform == 'darwin'
 RUN = '20261115T010101Z-' + 'b' * 12
+FROM21 = '377768a132614ae8b9ad0318aa4f87019c11a23a'
+M2122 = '21-22-exhaust-v1'
 LINUX_ONLY = unittest.skipIf(NO_FLOCK, 'flock 경합은 Linux 에서만 SQLite 잠금과 독립이다')
 
 
@@ -151,6 +153,23 @@ class ChainTest(HelperBase):
     def test_production_mode_refuses_test_overrides(self):
         rc, out, _ = self.helper('observe', {}, mode='production')
         self.assertEqual(out['code'], 'TEST_OVERRIDE_IN_PRODUCTION')
+
+    def test_schema_module_pin_and_old_aliases(self):   # 22-23
+        module = {'path': 'naver_engine/exhaust_store.py', 'import': 'naver_engine.exhaust_store',
+                  'sha256': '0' * 64}
+        pins = dict(self.pins, schema_module=module)
+        pins.pop('exhaust_sha256')
+        rc, out, _ = self.helper('chain', {'pins': pins, 'floor_bytes': 0})
+        self.assertEqual(out['code'], 'SOURCE_PIN_MISMATCH')
+        bad = dict(module, sha256=self.pins['exhaust_sha256'], **{'import': 'naver_engine.other'})
+        rc, out, _ = self.helper('chain', {'pins': dict(pins, schema_module=bad), 'floor_bytes': 0})
+        self.assertEqual(out['code'], 'SCHEMA_MODULE_PIN_REFUSED')
+        good = dict(module, sha256=self.pins['exhaust_sha256'])
+        rc, out, text = self.helper('chain', {'pins': dict(pins, schema_module=good), 'floor_bytes': 0})
+        self.assertEqual(rc, 0, text)
+        m = load_helper()
+        self.assertIs(m.STEPS['old-refuses'], m.STEPS['v21-refuses'])
+        self.assertIs(m.STEPS['old-opens'], m.STEPS['v21-opens'])
 
     def test_source_pin_mismatch_and_symlinked_code(self):
         pins = dict(self.pins, store_sha256='0' * 64)
@@ -408,6 +427,110 @@ class HostHelperTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(sorted(os.listdir(folder)), ['20261101T000000Z-' + '1' * 12, '20261104T000000Z-' + '4' * 12])
 
+    def test_two_purposes_coexist_and_pairing_is_strict(self):   # 22-23 F4
+        folder = os.path.join(self.root, 'db')
+        self.make_v2(folder, '20261101T000000Z-' + '1' * 12, True)
+        second = self.make_v2(folder, '20261102T000000Z-' + '2' * 12, True)
+        with open(os.path.join(second, 'manifest.json')) as handle:
+            value = json.load(handle)
+        value.update(purpose='pre-migration-22-23', schema=22)
+        with open(os.path.join(second, 'manifest.json'), 'w') as handle:
+            json.dump(value, handle)
+        self.make_v1(folder, '20261103T000000Z-' + '3' * 12)
+        self.make_v1(folder, '20261104T000000Z-' + '4' * 12)
+        done = self.py('backup-prune', folder, '1')
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len(os.listdir(folder)), 3, 'both pinned purposes kept')
+        value.update(schema=21)                                   # purpose 22-23 인데 schema 21 → 짝 불일치
+        with open(os.path.join(second, 'manifest.json'), 'w') as handle:
+            json.dump(value, handle)
+        done = self.py('backup-prune', folder, '1')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('BACKUP_SAFETY', done.stdout.decode())
+
+    def test_restore_refuses_other_migrations_copy(self):   # 22-23 F4
+        data, receipt_path, _ = self.archive_fixture()
+        backups = self.root + '/var/backups/metainc/naver-deploy-db'
+        self.assertEqual(self.py('mig-archive', data, backups, RUN, FROM21, receipt_path, M2122).returncode, 0)
+        os.unlink(data + '/engine.db.pre-v22')
+        done = self.py('mig-restore-gz', backups + '/' + RUN, data, RUN, receipt_path, '22-23-reconcile-v1')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('RESTORE_SOURCE', done.stdout.decode())
+        done = self.py('mig-archive', data, backups, RUN + 'x', FROM21, receipt_path, '22-23-reconcile-v1')
+        self.assertEqual(done.returncode, 1)
+
+    def test_backup_pair_reads_local_and_outgoing_only(self):
+        data = self.root + '/var/lib/metainc/naver-engine'
+        backups = self.root + '/var/backups/metainc/naver-engine'
+        os.makedirs(data)
+        os.makedirs(backups)
+        open(data + '/engine.db', 'wb').close()
+        stem = 'naver-20261115T000000Z-' + 'a' * 32
+        for path in (backups + '/' + stem + '.zip', backups + '/' + stem + '.cms'):
+            open(path, 'wb').close()
+        done = self.py('mig-keep-raw-now', data, backups, NAVER_DEPLOY_FAKE_FREE_BYTES=str(10 ** 12))
+        self.assertEqual(done.stdout.decode().strip(), 'unknown', 'root-level files are not the product layout')
+        os.makedirs(backups + '/local')
+        os.makedirs(backups + '/outgoing')
+        open(backups + '/local/' + stem + '.zip', 'wb').close()
+        done = self.py('mig-keep-raw-now', data, backups, NAVER_DEPLOY_FAKE_FREE_BYTES=str(10 ** 12))
+        self.assertEqual(done.stdout.decode().strip(), 'unknown', 'CMS missing in outgoing')
+        open(backups + '/outgoing/' + stem + '.cms', 'wb').close()
+        done = self.py('mig-keep-raw-now', data, backups, NAVER_DEPLOY_FAKE_FREE_BYTES=str(10 ** 12))
+        self.assertEqual(done.stdout.decode().strip(), 'true')
+
+    def test_backup_pair_requires_regular_files(self):   # PR368 F2
+        data = self.root + '/var/lib/metainc/naver-engine'
+        backups = self.root + '/var/backups/metainc/naver-engine'
+        os.makedirs(data)
+        open(data + '/engine.db', 'wb').close()
+        stem = 'naver-20261115T000000Z-' + 'a' * 32
+        os.makedirs(backups + '/local/' + stem + '.zip')         # ZIP 이름의 폴더
+        os.makedirs(backups + '/outgoing')
+        open(backups + '/outgoing/' + stem + '.cms', 'wb').close()
+        done = self.py('mig-keep-raw-now', data, backups, NAVER_DEPLOY_FAKE_FREE_BYTES=str(10 ** 12))
+        self.assertEqual(done.stdout.decode().strip(), 'unknown')
+        os.rmdir(backups + '/local/' + stem + '.zip')
+        os.symlink(backups + '/outgoing/' + stem + '.cms', backups + '/local/' + stem + '.zip')   # 링크
+        done = self.py('mig-keep-raw-now', data, backups, NAVER_DEPLOY_FAKE_FREE_BYTES=str(10 ** 12))
+        self.assertEqual(done.stdout.decode().strip(), 'unknown')
+
+    def test_nginx_dump_parser_matches_real_format(self):   # PR368 F3
+        # 실제 nginx -T(고정 nginx 이미지) 표준출력 모양: 파일마다 머리 + 원문 + LF 하나. 원문 끝 LF 와 별개.
+        files = {'/etc/nginx/nginx.conf': 'pid /tmp/nginx.pid;\nerror_log stderr;\nevents {}\nhttp {\n'
+                                          '    include /etc/nginx/snippets/*.conf;\n}\n',
+                 '/etc/nginx/snippets/test.conf': 'server {\n    listen 8080;\n}\n',
+                 '/etc/nginx/snippets/no-final-lf.conf': 'location = /x { return 200; }'}
+        dump = ''.join('# configuration file %s:\n%s\n' % (path, body) for path, body in files.items())
+        namespace = {'__name__': 'naver_deploy_helper'}
+        exec(self.code, namespace)
+        self.assertEqual(namespace['parse_nginx_dump'](dump), files)
+        with self.assertRaises(namespace['Refuse']):
+            namespace['parse_nginx_dump']('# configuration file /etc/nginx/a.conf:\nbody')   # 구분 LF 없음
+
+    def test_window_sees_building_in_local_or_outgoing(self):
+        backups = self.root + '/var/backups/metainc/naver-engine'
+        os.makedirs(backups + '/outgoing/.building-abcdefgh')
+        with open(backups + '/state.json', 'w') as handle:
+            json.dump({'code': 'OFFSITE_OK', 'pending': None, 'last_offsite_day': '2026-11-16'}, handle)
+        done = self.py('mig-window', '21:30', backups + '/state.json', NAVER_DEPLOY_FAKE_KST='2026-11-16T10:00')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('진행 중', done.stdout.decode())
+
+    def test_both_entries_share_the_helper_pin(self):
+        namespace = {'os': os, 'json': json, 'ROOT': ''}
+        text = self.code
+        exec(text[text.index('MIGRATIONS = {'):text.index("if ROOT and os.environ.get('NAVER_DEPLOY_TEST_MIGRATIONS')")],
+             namespace)
+        table = namespace['MIGRATIONS']
+        self.assertEqual({e['helper_sha256'] for e in table.values()}, {file_sha(HELPER)})
+        entry = table['22-23-reconcile-v1']
+        self.assertEqual((entry['from_commit'], entry['to_commit']),
+                         ('9649eaec4147623e180d67a85ad9dc3461a8b96f', '12260dbbc946f76d9bf7e2b8562cccc5474ea9a9'))
+        self.assertEqual(len(entry['new_tables']), 7)
+        self.assertEqual(len(entry['autoindexes']), 8)
+        self.assertNotIn('schema_module', table['21-22-exhaust-v1'], '21-22 entry keeps its original fields')
+
     def test_malformed_v2_refuses_everything(self):
         folder = os.path.join(self.root, 'db')
         bad = self.make_v2(folder, '20261101T000000Z-' + '1' * 12, False)
@@ -464,8 +587,10 @@ class HostHelperTest(unittest.TestCase):
         os.makedirs(backups)
         with open(data + '/engine.db', 'wb') as handle:
             handle.truncate(1600000000)
-        zip_path = backups + '/naver-20261115T000000Z-' + 'a' * 32 + '.zip'
-        for path in (zip_path, zip_path[:-4] + '.cms'):
+        os.makedirs(backups + '/local')
+        os.makedirs(backups + '/outgoing')
+        zip_path = backups + '/local/naver-20261115T000000Z-' + 'a' * 32 + '.zip'
+        for path in (zip_path, backups + '/outgoing/naver-20261115T000000Z-' + 'a' * 32 + '.cms'):
             with open(path, 'wb') as handle:
                 handle.truncate(250000000)
         before = self.py('mig-keep-raw-now', data, backups, NAVER_DEPLOY_FAKE_FREE_BYTES='3023741824')
@@ -497,27 +622,27 @@ class HostHelperTest(unittest.TestCase):
     def test_archive_restore_roundtrip_records_restored_identity(self):
         data, receipt_path, raw = self.archive_fixture()
         backups = self.root + '/var/backups/metainc/naver-deploy-db'
-        done = self.py('mig-archive', data, backups, RUN, 'a' * 40, receipt_path)
+        done = self.py('mig-archive', data, backups, RUN, FROM21, receipt_path, M2122)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         copy = backups + '/' + RUN
         with open(copy + '/manifest.json') as handle:
             self.assertTrue(json.load(handle)['pinned'])
         self.assertTrue(os.path.exists(data + '/engine.db.pre-v22'), 'archive never deletes raw')
         self.assertEqual(self.py('mig-unlink-pre', data, receipt_path).returncode, 0)
-        done = self.py('mig-restore-gz', copy, data, RUN, receipt_path)
+        done = self.py('mig-restore-gz', copy, data, RUN, receipt_path, M2122)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         with open(data + '/engine.db', 'rb') as handle:
             self.assertEqual(handle.read(), raw)
         with open(receipt_path) as handle:
             restored = json.load(handle)['restored_identity']
         self.assertEqual(restored['ino'], os.lstat(data + '/engine.db').st_ino)
-        done = self.py('mig-restore-gz', copy, data, RUN, receipt_path)
+        done = self.py('mig-restore-gz', copy, data, RUN, receipt_path, M2122)
         self.assertEqual(done.returncode, 1, 'canonical present → refused')
 
     def test_archive_failure_keeps_partial_and_raw(self):
         data, receipt_path, _ = self.archive_fixture()
         backups = self.root + '/var/backups/metainc/naver-deploy-db'
-        done = self.py('mig-archive', data, backups, RUN, 'a' * 40, receipt_path, NAVER_DEPLOY_FAKE_ARCHIVE_FAIL='1')
+        done = self.py('mig-archive', data, backups, RUN, FROM21, receipt_path, M2122, NAVER_DEPLOY_FAKE_ARCHIVE_FAIL='1')
         self.assertEqual(done.returncode, 1)
         self.assertTrue(os.path.isdir(backups + '/' + RUN + '.archive-failed'), 'partial kept for review')
         self.assertFalse(os.path.lexists(backups + '/' + RUN))
@@ -529,12 +654,12 @@ class HostHelperTest(unittest.TestCase):
     def test_archive_oserror_partial_is_protected_from_common_prune(self):   # PR367 T2
         data, receipt_path, _ = self.archive_fixture()
         backups = self.root + '/var/backups/metainc/naver-deploy-db'
-        done = self.py('mig-archive', data, backups, RUN, 'a' * 40, receipt_path,
+        done = self.py('mig-archive', data, backups, RUN, FROM21, receipt_path, M2122,
                        NAVER_DEPLOY_FAKE_ARCHIVE_FAIL='oserror')
         self.assertEqual(done.returncode, 1)
         self.assertFalse(os.path.lexists(backups + '/' + RUN + '.partial'))
         self.assertTrue(os.path.isdir(backups + '/' + RUN + '.archive-failed'))
-        done = self.py('mig-archive', data, backups, RUN, 'a' * 40, receipt_path,
+        done = self.py('mig-archive', data, backups, RUN, FROM21, receipt_path, M2122,
                        NAVER_DEPLOY_FAKE_ARCHIVE_FAIL='oserror')
         self.assertTrue(os.path.isdir(backups + '/' + RUN + '.archive-failed-2'), 'second failure kept too')
         # 이름이 .partial 인 채 남은 이관 gzip 부분본(예: 정전)도 공통 partial-prune 이 지우지 않는다.
@@ -553,7 +678,7 @@ class HostHelperTest(unittest.TestCase):
         backups = self.root + '/var/backups/metainc/naver-deploy-db'
         with open(data + '/engine.db.pre-v22', 'r+b') as handle:
             handle.write(b'X')
-        done = self.py('mig-archive', data, backups, RUN, 'a' * 40, receipt_path)
+        done = self.py('mig-archive', data, backups, RUN, FROM21, receipt_path, M2122)
         self.assertEqual(done.returncode, 1)
         self.assertIn('ARCHIVE_SOURCE', done.stdout.decode())
         self.assertTrue(os.path.exists(data + '/engine.db.pre-v22'))
@@ -561,11 +686,11 @@ class HostHelperTest(unittest.TestCase):
     def test_restore_refuses_tampered_gz(self):
         data, receipt_path, _ = self.archive_fixture()
         backups = self.root + '/var/backups/metainc/naver-deploy-db'
-        self.assertEqual(self.py('mig-archive', data, backups, RUN, 'a' * 40, receipt_path).returncode, 0)
+        self.assertEqual(self.py('mig-archive', data, backups, RUN, FROM21, receipt_path, M2122).returncode, 0)
         os.unlink(data + '/engine.db.pre-v22')
         with open(backups + '/' + RUN + '/engine.db.gz', 'ab') as handle:
             handle.write(b'tamper')
-        done = self.py('mig-restore-gz', backups + '/' + RUN, data, RUN, receipt_path)
+        done = self.py('mig-restore-gz', backups + '/' + RUN, data, RUN, receipt_path, M2122)
         self.assertEqual(done.returncode, 1)
         self.assertFalse(os.path.lexists(data + '/engine.db'))
 
