@@ -20,10 +20,14 @@
 import re
 from datetime import datetime, timedelta, timezone
 
+import keyword_fit
+
 KST = timezone(timedelta(hours=9))
 
 #: 판정이 바뀌면 화면이 옛 자료를 구분할 수 있게 올린다.
-FACTS_VERSION = 1
+#: 2 (2026-11-16) — 키워드 적합도 판정(keyword_fit) 도입: targets·groups·golden·rows 는 통과분만,
+#:   탈락은 keywords.excluded(사유 코드) · 판정 정보는 keywords.gate · 인기어·급상승어에 fit 표시.
+FACTS_VERSION = 2
 
 #: 정보성(알아보는) 검색어 표지 — 구매까지 거리가 먼 말. 광고보다 체험단·블로그로 간다.
 _INFO_MARKERS = ("추천", "후기", "비교", "순위", "종류", "효능", "효과", "방법", "차이", "만들기",
@@ -118,14 +122,19 @@ def _main_volume(bundle):
 
 
 def _keyword_rows(related):
-    """연관 키워드 — 보고서 표와 같은 칸(검색량·PC·모바일·경쟁강도)."""
+    """연관 키워드 — 보고서 표와 같은 칸(검색량·PC·모바일·경쟁강도).
+
+    ``pool``(2026-11-16 가산) — 연관어 응답이 검색량 상위 50개만 남겨 관련 있는 중소 키워드가 잘리던 것을
+    막으려고 서버가 상위 300개를 함께 준다. 옛 저장 보고서에는 없다(없으면 종전 50개만)."""
     rows, seen = [], set()
-    for it in _l(_d(related).get("related_keywords")) + _l(_d(related).get("golden_keywords")):
+    src = (_l(_d(related).get("related_keywords")) + _l(_d(related).get("golden_keywords"))
+           + _l(_d(related).get("pool")))
+    for it in src:
         it = _d(it)
         kw = _clean(it.get("keyword"))
-        if not kw or kw in seen:
+        if not kw or nospace(kw) in seen:
             continue
-        seen.add(kw)
+        seen.add(nospace(kw))
         pc, mo = to_int(it.get("monthlyPcQcCnt")), to_int(it.get("monthlyMobileQcCnt"))
         total = to_int(it.get("totalVolume"))
         if total is None and (pc is not None or mo is not None):
@@ -137,23 +146,24 @@ def _keyword_rows(related):
 
 
 def is_info_keyword(kw):
-    return any(m in str(kw) for m in _INFO_MARKERS)
+    return any(m in str(kw) for m in _INFO_MARKERS) or keyword_fit.is_info_intent(kw)
 
 
 def pick_targets(rows, main_kw, n=6):
-    """공략 키워드 — 검색량이 있고 경쟁이 「높음」이 아닌 구매형 말부터.
+    """공략 키워드 — **적합도 판정을 통과한 행만 받는다**(build 가 거른 뒤 부른다).
 
-    ⚠️ 정보형 말(추천·후기 …)은 뺀다 — 광고·상품명이 아니라 체험단·블로그 몫이다.
-    ⚠️ 낮음·중간이 모자라면 높음으로 채우지 않는다(「이길 수 있는 키워드」 장의 뜻이 깨진다).
+    대표 확정(2026-11-16): 경쟁 「높음」으로 **확인된** 것만 빼고(미확인은 둔다) 검색량 많은 순. 황금 우선 정렬은 없앴다.
+    ⚠️ 정보형 말(추천·후기·레시피 …)은 뺀다 — 광고·상품명이 아니라 체험단·블로그 몫이다.
+    ⚠️ 2026-11-13 원종당 사고: 종전엔 판정 없이 경쟁 「중간」이면 통과해 '빼빼로'(387,900)가 1순위가 됐다.
     """
-    pool = [r for r in rows if r["total"] and r["comp"] in ("낮음", "중간")
+    pool = [r for r in rows if r["total"] and r["comp"] != "높음"
             and not is_info_keyword(r["keyword"]) and nospace(r["keyword"]) != nospace(main_kw)]
-    pool.sort(key=lambda r: (0 if r["golden"] else 1, -(r["total"] or 0)))
+    pool.sort(key=lambda r: -(r["total"] or 0))
     return pool[:n]
 
 
 def group_keywords(rows, targets, main_kw):
-    """키워드 확장 세 갈래 — 바로 사는 말 · 방식을 정하고 찾는 말 · 알아보는 말."""
+    """키워드 확장 세 갈래 — 바로 사는 말 · 방식을 정하고 찾는 말 · 알아보는 말. rows 는 판정 통과분."""
     tset = {r["keyword"] for r in targets}
     buy = [r for r in targets][:5]
     info = [r for r in rows if r["total"] and is_info_keyword(r["keyword"])]
@@ -266,8 +276,15 @@ def month_name(label):
     return f"{y}년 {mo}월"
 
 
-def _datalab(dl):
+def _datalab(dl, gate=None):
+    """⚠️ categoryPopular·rising 은 **카테고리 전체 지표**라 그대로 두되, 항목마다 ``fit``(이 상품에 맞는 말인가)을
+    붙인다. 장표 표는 그대로 그리고, 문장은 fit 인 것만 말한다(원종당: 인기어 1위 '빼빼로데이'를 「상품명에 넣으라」고 썼다)."""
     dl = _d(dl)
+
+    def fit(kw):
+        if gate is None:
+            return None
+        return nospace(kw) == gate.main_ns or gate.ok(kw)
     tr = _d(dl.get("trend"))
     months = []
     for m in _l(tr.get("months")):
@@ -295,9 +312,11 @@ def _datalab(dl):
     ages = [{"label": _clean(a.get("label")), "ratio": to_float(a.get("ratio"))}
             for a in map(_d, _l(_d(dl.get("age")).get("ages"))) if _clean(a.get("label"))]
     ck = _d(dl.get("categoryKeywords"))
-    popular = [{"keyword": _clean(p.get("keyword")), "volume": to_int(p.get("volume")), "growth": to_float(p.get("growth"))}
+    popular = [{"keyword": _clean(p.get("keyword")), "volume": to_int(p.get("volume")), "growth": to_float(p.get("growth")),
+                "fit": fit(_clean(p.get("keyword")))}
                for p in map(_d, _l(ck.get("popular"))) if _clean(p.get("keyword"))]
-    rising = [{"keyword": _clean(p.get("keyword")), "volume": to_int(p.get("volume")), "growth": to_float(p.get("growth"))}
+    rising = [{"keyword": _clean(p.get("keyword")), "volume": to_int(p.get("volume")), "growth": to_float(p.get("growth")),
+               "fit": fit(_clean(p.get("keyword")))}
               for p in map(_d, _l(ck.get("rising"))) if _clean(p.get("keyword"))]
     avg = round(sum(v for _, v in months) / len(months)) if months else None
     return {
@@ -415,7 +434,51 @@ def _product(bundle, html_detail, advertiser, analysis):
     cat = _category_path(rd) or _category_path(pi) or _category_path(tp)
     return {"name": name or None, "price": price if price and price > 0 else None,
             "category": re.sub(r"\s*>\s*", " > ", cat) or None,
-            "categoryLeaf": (re.split(r"\s*>\s*", cat)[-1] if cat else None)}
+            "categoryLeaf": (re.split(r"\s*>\s*", cat)[-1] if cat else None),
+            # 판매자 태그(2026-11-16 가산) — 상세 진단이 읽은 것. 키워드 적합도 판정에 쓴다. 없으면 [].
+            "tags": _seller_tags(html_detail, pi)}
+
+
+def _seller_tags(html_detail, pi):
+    for src in (_d(html_detail).get("sellerTags"), pi.get("tags"),
+                [t.get("text") for t in map(_d, _l(_d(pi.get("seoInfo")).get("sellerTags")))]):
+        tags = [_clean(t) for t in _l(src) if isinstance(t, str) and _clean(t)]
+        if tags:
+            return list(dict.fromkeys(tags))[:20]
+    return []
+
+
+def _competitor_names(advertiser, shop_products):
+    """검색 결과 1페이지의 타사 스토어명·브랜드·제조사(판정의 타사 브랜드 규칙에 쓴다)."""
+    names = []
+    for it in map(_d, _l(_d(_d(advertiser).get("competitor_comparison")).get("items"))):
+        names += [it.get("store_name"), it.get("mall_name"), it.get("brand"), it.get("maker")]
+    for p in map(_d, _l(shop_products)[:80]):
+        names += [p.get("store_name") or p.get("mallName") or p.get("mall_name"), p.get("brand"), p.get("maker")]
+    return [n for n in names if isinstance(n, str) and n.strip()]
+
+
+def make_gate(bundle, now=None, product=None):
+    """인계 자료 한 벌 → 키워드 적합도 판정기. 제안서와 /api/keywords/fit 이 같은 것을 쓴다."""
+    b = _d(bundle)
+    hd, adv, ana = _d(b.get("htmlDetail")), _d(b.get("advertiser")), _d(b.get("analysis"))
+    product = product or _product(b, hd, adv, ana)
+    now = now or datetime.now(KST)
+    store = " ".join(x for x in (_clean(b.get("name")), _clean(_d(hd.get("storeInfo")).get("name"))) if x)
+    return keyword_fit.Gate(dict(product, store=store), _clean(b.get("keyword")), today=now,
+                            competitor_names=_competitor_names(adv, b.get("shopProducts")))
+
+
+def gate_rows(rows, gate):
+    """연관 키워드 행 → (통과 행, 탈락 목록). 탈락 목록에는 영업자 확인용으로 키워드·검색량·사유만 남긴다.
+    정보 탐색어는 통과(정보 그룹으로 감)이지만 공략에서 빠진 사실을 남기려고 사유 info_intent 로도 적는다."""
+    passed, excluded = gate.split(rows)
+    out = [{"keyword": r["keyword"], "total": r.get("total"), "reason": r["reason"]} for r in excluded]
+    out += [{"keyword": r["keyword"], "total": r.get("total"), "reason": "info_intent"} for r in passed if r.get("infoIntent")]
+    out.sort(key=lambda r: -(r.get("total") or 0))
+    for r in passed:
+        r.pop("infoIntent", None)
+    return passed, out
 
 
 def _store_name(bundle, html_detail):
@@ -439,12 +502,16 @@ def build(bundle, now=None):
     now = now or datetime.now(KST)
 
     main = _main_volume(b)
-    rows = _keyword_rows(b.get("related"))
+    product = _product(b, hd, adv, ana)
+    # 키워드 적합도 판정 — 이 상품을 찾는 말만 남긴다(2026-11-13 원종당 '빼빼로' 사고). 이 아래 키워드는 전부 통과분이다.
+    gate = make_gate(b, now=now, product=product)
+    rows, excluded = gate_rows(_keyword_rows(b.get("related")), gate)
     targets = pick_targets(rows, main["keyword"])
     groups = group_keywords(rows, targets, main["keyword"])
-    product = _product(b, hd, adv, ana)
     head = name_keyword_head(product["name"])
-    targets_missing = [r["keyword"] for r in targets[:2] if nospace(r["keyword"]) not in nospace(head)]
+    # 상품명 처방 — 시즌어('수능초콜릿')는 며칠 뒤 지나가므로 상품명에 넣으라고 하지 않는다(공략·광고 키워드로는 남긴다).
+    targets_missing = [r["keyword"] for r in targets[:2] if keyword_fit.name_worthy(r["keyword"])
+                       and nospace(r["keyword"]) not in nospace(head)]
 
     rel = _d(b.get("related"))
     golden = [r for r in rows if r["golden"]]
@@ -469,12 +536,15 @@ def build(bundle, now=None):
             "targets": targets,
             "groups": groups,
             "targetsMissingInName": targets_missing,
+            # ⚠️ 영업자 확인용 — 고객용 장표·문장에 쓰지 않는다(deck.js 는 읽지 않는다).
+            "excluded": excluded[:60],
+            "gate": gate.describe(),
         },
         "review": _review(hd, b.get("htmlReview")),
         "detail": _detail(hd),
         "seo": _seo(screen),
         "rank": _rank(adv, screen),
-        "datalab": _datalab(b.get("datalab")),
+        "datalab": _datalab(b.get("datalab"), gate),
         "entry": _strategies(adv),
         "competitors": _competitors(adv, b.get("shopProducts")),
         "bid": _bid(screen),

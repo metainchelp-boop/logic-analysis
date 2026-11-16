@@ -8523,7 +8523,8 @@ window.KeywordVolumeSection = function KeywordVolumeSection({
  * 기본 30개만 표시(전달본 다이어트), '전체 보기'는 화면 전용(no-export). 데이터 삭제 없음. */
 window.RelatedKeywordsSection = function RelatedKeywordsSection({
   data,
-  keyword
+  keyword,
+  fit
 }) {
   const {
     useState
@@ -8531,7 +8532,25 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
   const [tab, setTab] = useState('related');
   const [showAll, setShowAll] = useState(false);
   if (!data) return null;
-  const goldenList = data.golden_keywords || [];
+
+  /* 키워드 적합도 판정(2026-11-16) — fit 이 오면 「추천」 두 곳(황금 탭 · 상품명 후보)은 판정 통과분만 쓴다.
+     연관 키워드 표 자체는 검색 데이터라 그대로 둔다. 판정이 없으면(옛 서버·실패) 종전 그대로. */
+  var _n = function (v) {
+    return String(v || '').replace(/\s/g, '').toLowerCase();
+  };
+  var passedSet = null;
+  if (fit && fit.passed) {
+    passedSet = {};
+    fit.passed.forEach(function (k) {
+      passedSet[_n(k)] = 1;
+    });
+  }
+  const goldenAll = data.golden_keywords || [];
+  const goldenList = passedSet ? goldenAll.filter(function (k) {
+    return passedSet[_n(k.keyword)];
+  }) : goldenAll;
+  var excludedList = fit && fit.excluded || [];
+  var reasonLabel = fit && fit.reasons || {};
   const rawRelated = data.related_keywords || [];
 
   /* 연관도 우선 정렬 — keyword 미전달 시 기존 순서 그대로(무손실 폴백) */
@@ -8566,6 +8585,16 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
   var nameCandidates = base ? relatedList.filter(function (k) {
     return isRel(k) && norm(k.keyword) !== base;
   }).slice(0, 5) : [];
+  if (fit && (fit.nameCandidates || fit.targets)) {
+    /* 판정이 있으면 상품명 후보 = 서버가 고른 공략 키워드(이 상품을 찾는 말 · 경쟁 높음 제외 · 검색량순).
+       nameCandidates 는 그중 시즌어(며칠 뒤 지나감)·정보 탐색어를 뺀 것 — 옛 서버엔 없으니 targets 로 받는다. */
+    nameCandidates = (fit.nameCandidates || fit.targets).slice(0, 5).map(function (t) {
+      return {
+        keyword: t.keyword,
+        totalVolume: t.total
+      };
+    });
+  }
   const displayList = tab === 'golden' ? goldenList : relatedVisible;
   const maxVol = displayList.reduce(function (m, k) {
     return Math.max(m, k.totalVolume || 0);
@@ -8659,7 +8688,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
     }
   }, showAll ? '상위 ' + SHOW_LIMIT + '개만 보기' : '전체 ' + fmt(relatedList.length) + '개 보기')), displayList.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
     icon: "💎",
-    text: tab === 'golden' ? '황금 키워드가 없습니다 (검색량 100~5,000 + 경쟁 낮음 조건)' : '연관 키워드가 없습니다'
+    text: tab === 'golden' ? passedSet && goldenAll.length ? '이 상품에 맞는 황금 키워드가 없습니다 (아래 「제외된 키워드」 참고)' : '황금 키워드가 없습니다 (검색량 100~5,000 + 경쟁 낮음 조건)' : '연관 키워드가 없습니다'
   }) : /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
@@ -8834,7 +8863,71 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
       color: '#94a3b8',
       marginTop: 6
     }
-  }, "분석 키워드와 직접 연관된 키워드 중 검색량 상위 — 상품명·태그 반영 후보")))));
+  }, fit && fit.targets ? '이 상품을 찾는 말로 판정된 키워드 중 검색량 상위 — 상품명·태그 반영 후보' : '분석 키워드와 직접 연관된 키워드 중 검색량 상위 — 상품명·태그 반영 후보')), excludedList.length > 0 && /*#__PURE__*/React.createElement("details", {
+    className: "no-export",
+    style: {
+      marginTop: 12,
+      background: '#f8fafc',
+      border: '1px dashed #cbd5e1',
+      borderRadius: 10,
+      padding: '10px 14px'
+    }
+  }, /*#__PURE__*/React.createElement("summary", {
+    style: {
+      cursor: 'pointer',
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: '#475569'
+    }
+  }, "🚫 제외된 키워드 ", excludedList.length, "개 — 영업자 전용(고객 보고서·제안서에는 나가지 않습니다)"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#64748b',
+      margin: '8px 0 6px'
+    }
+  }, "검색량이 커도 이 상품을 찾는 말이 아니면 공략 키워드·상품명 후보·제안서에서 뺍니다. 판정 기준일 ", fit.gate && fit.gate.date || '-', fit.gate && fit.gate.hasTags === false ? ' · 판매자 태그 없이 판정(상품명·카테고리 기준)' : ''), /*#__PURE__*/React.createElement("table", {
+    className: "rt-table",
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 12.5
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "키워드"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      textAlign: 'right'
+    }
+  }, "월간 검색량"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "제외 사유"))), /*#__PURE__*/React.createElement("tbody", null, excludedList.map(function (x) {
+    return /*#__PURE__*/React.createElement("tr", {
+      key: x.keyword + x.reason,
+      style: {
+        borderBottom: '1px solid #e2e8f0'
+      }
+    }, /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: '6px 10px',
+        fontWeight: 600
+      }
+    }, x.keyword), /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: '6px 10px',
+        textAlign: 'right',
+        color: '#64748b'
+      }
+    }, x.total != null ? fmt(x.total) : '미확인'), /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: '6px 10px',
+        color: '#475569'
+      }
+    }, reasonLabel[x.reason] || x.reason));
+  })))))));
 };
 
 ;/* ===== js/components/SeoDiagnosisSection.jsx ===== */
@@ -29669,6 +29762,110 @@ window.AnalysisResults = function AnalysisResults(props) {
   var _storeName = _realStoreName || _urlSlug || '';
   var _displayCompany = companyName || _storeName;
 
+  /* 키워드 적합도 판정(2026-11-16 · 원종당초콜릿 사고) — 파베초콜릿 보고서·제안서에 '빼빼로'가 공략 키워드로 나갔다.
+     이 화면이 이미 받아 둔 자료(연관어·상품명·카테고리·판매자 태그·1페이지 타사)를 서버에 보내
+     「이 상품을 찾는 말인가」를 판정받는다(네이버 호출 없음 · 규칙은 서버 keyword_fit 한 곳 · 제안서와 같은 판정).
+     ⚠️ 실패하면 조용히 종전 화면 그대로(판정 없음). 토스트를 띄우지 않으려고 api 대신 fetch 를 쓴다.
+     ⚠️ 이 컴포넌트에는 early return 이 없다 — 훅을 더할 때도 return 앞에 둘 것(App.jsx #310 사고). */
+  var _fitSt = React.useState(null);
+  var keywordFit = _fitSt[0],
+    setKeywordFit = _fitSt[1];
+  var _fitHd = htmlDetailResult || analysisData && analysisData.htmlDetail || null;
+  var _fitKey = [searchedKeyword || '', searchedProductUrl || '', relatedData ? (relatedData.related_keywords || []).length + ':' + (relatedData.golden_keywords || []).length + ':' + (relatedData.pool || []).length : '-', advertiserReport ? 'a' : '-', _fitHd ? 'h' + (_fitHd.sellerTags || []).length : '-'].join('|');
+  React.useEffect(function () {
+    if (!relatedData || !searchedKeyword) {
+      setKeywordFit(null);
+      return;
+    }
+    var alive = true;
+    var adv = advertiserReport || {};
+    var tp = analysisData && analysisData.targetProductInfo || null;
+    var payload = {
+      keyword: searchedKeyword,
+      name: companyName || '',
+      productName: adv.product_info && adv.product_info.product_name || tp && tp.product_name || '',
+      related: relatedData,
+      advertiser: {
+        product_info: adv.product_info || null,
+        competitor_comparison: {
+          items: ((adv.competitor_comparison || {}).items || []).slice(0, 80).map(function (it) {
+            return {
+              store_name: it.store_name,
+              brand: it.brand
+            };
+          })
+        }
+      },
+      analysis: {
+        targetProductInfo: tp
+      },
+      htmlDetail: _fitHd ? {
+        reviewData: _fitHd.reviewData ? {
+          category: _fitHd.reviewData.category,
+          category1: _fitHd.reviewData.category1
+        } : null,
+        sellerTags: _fitHd.sellerTags || [],
+        storeInfo: _fitHd.storeInfo || null
+      } : null,
+      shopProducts: (shopProducts || []).slice(0, 80).map(function (p) {
+        return {
+          store_name: p.store_name || p.mallName,
+          brand: p.brand
+        };
+      })
+    };
+    var t = setTimeout(function () {
+      try {
+        fetch(API_BASE + '/keywords/fit', {
+          method: 'POST',
+          headers: _authHeaders({
+            'Content-Type': 'application/json'
+          }),
+          body: JSON.stringify({
+            payload: payload
+          })
+        }).then(function (r) {
+          return r.ok ? r.json() : null;
+        }).then(function (j) {
+          if (alive) setKeywordFit(j && j.success ? j.data : null);
+        }).catch(function () {
+          if (alive) setKeywordFit(null);
+        });
+      } catch (e) {
+        setKeywordFit(null);
+      }
+    }, 500);
+    return function () {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [_fitKey]);
+
+  /* 골든 키워드 카드 — 판정에서 빠진 말이면 통과한 황금 키워드로 바꾸고, 없으면 0건 안내를 띄운다. */
+  var _nz = function (v) {
+    return String(v || '').replace(/\s/g, '').toLowerCase();
+  };
+  var _fitGolden = React.useMemo(function () {
+    var g = analysisData ? analysisData.goldenKeyword : null;
+    if (!keywordFit) return g;
+    var passed = {};
+    (keywordFit.passed || []).forEach(function (k) {
+      passed[_nz(k)] = 1;
+    });
+    if (g && passed[_nz(g.name)]) return g;
+    var list = (relatedData && relatedData.golden_keywords || []).filter(function (gk) {
+      return !gk.isStoreName && passed[_nz(gk.keyword)];
+    });
+    return list.length && window.buildGoldenKeywordInfo ? window.buildGoldenKeywordInfo(list[0], searchedKeyword) : null;
+  }, [analysisData, keywordFit, relatedData, searchedKeyword]);
+  /* AI 종합 분석에 넘기는 골든 키워드도 같은 것으로(판정 전에 이미 시작했으면 종전 값 — 키워드당 한 번만 부른다) */
+  var _fitAnalysis = React.useMemo(function () {
+    if (!analysisData || !keywordFit || _fitGolden === analysisData.goldenKeyword) return analysisData;
+    return Object.assign({}, analysisData, {
+      goldenKeyword: _fitGolden
+    });
+  }, [analysisData, keywordFit, _fitGolden]);
+
   /* ===== 쇼핑 1페이지 자료가 없을 때(쇼핑 순위 수집 쉼 · 2026-11-05~) — 대표 결정 「보고서 문구 — ①ⓐ ②ⓐ ③ⓐ」 =====
      ① 광고주 전달본: 빈 칸·빈 장은 빼고 맨 위에 한 줄(.export-only)  ② 점수는 「계산 불가」
      ③ 직원 화면: 이유까지 적은 안내 띠와 장마다 「이번 분석에서 빠진 칸」 한 줄(.no-export).
@@ -30186,14 +30383,15 @@ window.AnalysisResults = function AnalysisResults(props) {
     name: '연관 키워드'
   }, React.createElement(RelatedKeywordsSection, {
     data: relatedData,
-    keyword: searchedKeyword
+    keyword: searchedKeyword,
+    fit: keywordFit
   })), /* 골든 키워드 (0건이어도 대안 안내를 렌더) */
   analysisData && React.createElement(window.SectionErrorBoundary, {
     name: '골든 키워드'
   }, React.createElement('div', {
     id: 'sec-golden'
   }, React.createElement(GoldenKeywordCard, {
-    data: analysisData.goldenKeyword,
+    data: _fitGolden,
     lookupFailed: relatedLookupFailed
   }))), /* 상품명 키워드 분석 (키워드&태그 통합) */
   searchedProductUrl && React.createElement(window.SectionErrorBoundary, {
@@ -30230,7 +30428,7 @@ window.AnalysisResults = function AnalysisResults(props) {
   }, React.createElement(AiFeedbackAllSection, {
     productUrl: searchedProductUrl,
     keyword: searchedKeyword,
-    analysisData: analysisData,
+    analysisData: _fitAnalysis,
     volumeData: volumeData,
     relatedData: relatedData,
     advertiserReport: advertiserReport,
@@ -34673,6 +34871,31 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
 ;/* ===== js/analysis.jsx ===== */
 /* analysis.jsx — 분석 실행 로직(_doSearch)을 App.jsx에서 분리
  * window.createDoSearch(deps) → _doSearch 함수 반환. deps로 App의 setter/ref/값 주입. */
+/* 골든 키워드 카드 한 장의 값 — 분석 직후(여기)와, 키워드 적합도 판정 뒤 대체 카드(AnalysisResults)가 같은 것을 쓴다.
+   (2026-11-16 분리 — 문구·계산은 종전 그대로) */
+window.buildGoldenKeywordInfo = function (gk, keyword) {
+  if (!gk) return null;
+  var gkVolume = gk.totalVolume || 0;
+  var gkClicks = gk.monthlyAvePcClkCnt ? gk.monthlyAvePcClkCnt + gk.monthlyAveMobileClkCnt : 0;
+  var gkClickRate = gkVolume > 0 ? (gkClicks / gkVolume * 100).toFixed(1) : 0;
+
+  // 디테일한 추천 이유 생성
+  var gkReason = '"' + gk.keyword + '"은(는) 월간 검색량 ' + fmt(gkVolume) + '회로 안정적인 수요가 존재합니다. ';
+  if (gkClicks > 0) {
+    gkReason += '평균 클릭수 ' + gkClicks.toFixed(1) + '회(클릭률 ' + gkClickRate + '%)로 구매 의도가 높은 키워드입니다. ';
+  }
+  gkReason += '경쟁강도 "' + compLabel(gk.compIdx) + '" 수준이라 상위 노출 진입 비용이 낮습니다. ';
+  gkReason += '메인 키워드 "' + keyword + '"의 세부 키워드로 상품명에 함께 포함시키면 추가 유입을 확보할 수 있습니다.';
+  return {
+    name: gk.keyword,
+    score: gk.score || (gkVolume ? Math.round(gkVolume / 100) : 0),
+    volume: gkVolume,
+    competition: compLabel(gk.compIdx),
+    ctr: gkClicks,
+    clicks: Math.round(gkVolume * 0.05),
+    reason: gkReason
+  };
+};
 window.createDoSearch = function (deps) {
   var cleanProductUrl = deps.cleanProductUrl;
   var lastHtmlRef = deps.lastHtmlRef;
@@ -34992,26 +35215,7 @@ window.createDoSearch = function (deps) {
           return !gk.isStoreName;
         });
         var gk = filteredGolden.length > 0 ? filteredGolden[0] : rd.golden_keywords[0];
-        var gkVolume = gk.totalVolume || 0;
-        var gkClicks = gk.monthlyAvePcClkCnt ? gk.monthlyAvePcClkCnt + gk.monthlyAveMobileClkCnt : 0;
-        var gkClickRate = gkVolume > 0 ? (gkClicks / gkVolume * 100).toFixed(1) : 0;
-
-        // 디테일한 추천 이유 생성
-        var gkReason = '"' + gk.keyword + '"은(는) 월간 검색량 ' + fmt(gkVolume) + '회로 안정적인 수요가 존재합니다. ';
-        if (gkClicks > 0) {
-          gkReason += '평균 클릭수 ' + gkClicks.toFixed(1) + '회(클릭률 ' + gkClickRate + '%)로 구매 의도가 높은 키워드입니다. ';
-        }
-        gkReason += '경쟁강도 "' + compLabel(gk.compIdx) + '" 수준이라 상위 노출 진입 비용이 낮습니다. ';
-        gkReason += '메인 키워드 "' + keyword + '"의 세부 키워드로 상품명에 함께 포함시키면 추가 유입을 확보할 수 있습니다.';
-        analysis.goldenKeyword = {
-          name: gk.keyword,
-          score: gk.score || (gkVolume ? Math.round(gkVolume / 100) : 0),
-          volume: gkVolume,
-          competition: compLabel(gk.compIdx),
-          ctr: gkClicks,
-          clicks: Math.round(gkVolume * 0.05),
-          reason: gkReason
-        };
+        analysis.goldenKeyword = window.buildGoldenKeywordInfo(gk, keyword);
       }
 
       // 5. 광고주 상품 정보

@@ -56,6 +56,62 @@ window.AnalysisResults = function AnalysisResults(props) {
     var _storeName = _realStoreName || _urlSlug || '';
     var _displayCompany = companyName || _storeName;
 
+    /* 키워드 적합도 판정(2026-11-16 · 원종당초콜릿 사고) — 파베초콜릿 보고서·제안서에 '빼빼로'가 공략 키워드로 나갔다.
+       이 화면이 이미 받아 둔 자료(연관어·상품명·카테고리·판매자 태그·1페이지 타사)를 서버에 보내
+       「이 상품을 찾는 말인가」를 판정받는다(네이버 호출 없음 · 규칙은 서버 keyword_fit 한 곳 · 제안서와 같은 판정).
+       ⚠️ 실패하면 조용히 종전 화면 그대로(판정 없음). 토스트를 띄우지 않으려고 api 대신 fetch 를 쓴다.
+       ⚠️ 이 컴포넌트에는 early return 이 없다 — 훅을 더할 때도 return 앞에 둘 것(App.jsx #310 사고). */
+    var _fitSt = React.useState(null);
+    var keywordFit = _fitSt[0], setKeywordFit = _fitSt[1];
+    var _fitHd = htmlDetailResult || (analysisData && analysisData.htmlDetail) || null;
+    var _fitKey = [searchedKeyword || '', searchedProductUrl || '',
+        relatedData ? ((relatedData.related_keywords || []).length + ':' + (relatedData.golden_keywords || []).length + ':' + (relatedData.pool || []).length) : '-',
+        advertiserReport ? 'a' : '-', _fitHd ? ('h' + ((_fitHd.sellerTags || []).length)) : '-'].join('|');
+    React.useEffect(function() {
+        if (!relatedData || !searchedKeyword) { setKeywordFit(null); return; }
+        var alive = true;
+        var adv = advertiserReport || {};
+        var tp = (analysisData && analysisData.targetProductInfo) || null;
+        var payload = {
+            keyword: searchedKeyword,
+            name: companyName || '',
+            productName: (adv.product_info && adv.product_info.product_name) || (tp && tp.product_name) || '',
+            related: relatedData,
+            advertiser: { product_info: adv.product_info || null,
+                          competitor_comparison: { items: (((adv.competitor_comparison || {}).items) || []).slice(0, 80).map(function(it) { return { store_name: it.store_name, brand: it.brand }; }) } },
+            analysis: { targetProductInfo: tp },
+            htmlDetail: _fitHd ? { reviewData: _fitHd.reviewData ? { category: _fitHd.reviewData.category, category1: _fitHd.reviewData.category1 } : null,
+                                   sellerTags: _fitHd.sellerTags || [], storeInfo: _fitHd.storeInfo || null } : null,
+            shopProducts: (shopProducts || []).slice(0, 80).map(function(p) { return { store_name: p.store_name || p.mallName, brand: p.brand }; })
+        };
+        var t = setTimeout(function() {
+            try {
+                fetch(API_BASE + '/keywords/fit', { method: 'POST', headers: _authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ payload: payload }) })
+                    .then(function(r) { return r.ok ? r.json() : null; })
+                    .then(function(j) { if (alive) setKeywordFit(j && j.success ? j.data : null); })
+                    .catch(function() { if (alive) setKeywordFit(null); });
+            } catch (e) { setKeywordFit(null); }
+        }, 500);
+        return function() { alive = false; clearTimeout(t); };
+    }, [_fitKey]);
+
+    /* 골든 키워드 카드 — 판정에서 빠진 말이면 통과한 황금 키워드로 바꾸고, 없으면 0건 안내를 띄운다. */
+    var _nz = function(v) { return String(v || '').replace(/\s/g, '').toLowerCase(); };
+    var _fitGolden = React.useMemo(function() {
+        var g = analysisData ? analysisData.goldenKeyword : null;
+        if (!keywordFit) return g;
+        var passed = {};
+        (keywordFit.passed || []).forEach(function(k) { passed[_nz(k)] = 1; });
+        if (g && passed[_nz(g.name)]) return g;
+        var list = ((relatedData && relatedData.golden_keywords) || []).filter(function(gk) { return !gk.isStoreName && passed[_nz(gk.keyword)]; });
+        return list.length && window.buildGoldenKeywordInfo ? window.buildGoldenKeywordInfo(list[0], searchedKeyword) : null;
+    }, [analysisData, keywordFit, relatedData, searchedKeyword]);
+    /* AI 종합 분석에 넘기는 골든 키워드도 같은 것으로(판정 전에 이미 시작했으면 종전 값 — 키워드당 한 번만 부른다) */
+    var _fitAnalysis = React.useMemo(function() {
+        if (!analysisData || !keywordFit || _fitGolden === analysisData.goldenKeyword) return analysisData;
+        return Object.assign({}, analysisData, { goldenKeyword: _fitGolden });
+    }, [analysisData, keywordFit, _fitGolden]);
+
     /* ===== 쇼핑 1페이지 자료가 없을 때(쇼핑 순위 수집 쉼 · 2026-11-05~) — 대표 결정 「보고서 문구 — ①ⓐ ②ⓐ ③ⓐ」 =====
        ① 광고주 전달본: 빈 칸·빈 장은 빼고 맨 위에 한 줄(.export-only)  ② 점수는 「계산 불가」
        ③ 직원 화면: 이유까지 적은 안내 띠와 장마다 「이번 분석에서 빠진 칸」 한 줄(.no-export).
@@ -440,13 +496,13 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* 연관 키워드 — 검색광고 조회 실패면 「총 0개 ✅ 실측」 대신 직원 화면에 실패를 적는다(전달본에서는 뺀다) */
                 relatedData && relatedLookupFailed && _staffNote('🔗 연관 키워드 · 불러오지 못함 — 네이버 검색광고 조회가 실패했습니다. 「연관 키워드가 없다」는 뜻이 아닙니다. 잠시 뒤 다시 분석하세요.'),
                 relatedData && !relatedLookupFailed && React.createElement(window.SectionErrorBoundary, { name: '연관 키워드' },
-                    React.createElement(RelatedKeywordsSection, { data: relatedData, keyword: searchedKeyword })
+                    React.createElement(RelatedKeywordsSection, { data: relatedData, keyword: searchedKeyword, fit: keywordFit })
                 ),
     
                 /* 골든 키워드 (0건이어도 대안 안내를 렌더) */
                 analysisData && React.createElement(window.SectionErrorBoundary, { name: '골든 키워드' },
                     React.createElement('div', { id: 'sec-golden' },
-                        React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword, lookupFailed: relatedLookupFailed })
+                        React.createElement(GoldenKeywordCard, { data: _fitGolden, lookupFailed: relatedLookupFailed })
                     )
                 ),
     
@@ -482,7 +538,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                     React.createElement(AiFeedbackAllSection, {
                         productUrl: searchedProductUrl,
                         keyword: searchedKeyword,
-                        analysisData: analysisData,
+                        analysisData: _fitAnalysis,
                         volumeData: volumeData,
                         relatedData: relatedData,
                         advertiserReport: advertiserReport,

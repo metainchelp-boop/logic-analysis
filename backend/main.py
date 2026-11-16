@@ -1635,6 +1635,8 @@ def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict = Dep
                 "reviewData": result.get("reviewData"),
                 # 표시용 스토어/상호명 — 보고서 표지의 슬러그 오표기 방지(2026-07-27)
                 "storeInfo": result.get("storeInfo") or {"name": "", "source": ""},
+                # 판매자 태그 — 키워드 적합도 판정용(2026-11-16 가산)
+                "sellerTags": result.get("sellerTags") or [],
             }
         }
     except Exception as e:
@@ -3694,6 +3696,13 @@ def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depends(ge
                 "seed_keyword": req.keyword,
                 "golden_keywords": golden[:20],
                 "related_keywords": others[:30],
+                # 검색량 상위 300개(2026-11-16 가산) — 위 50개만으로는 상품에 맞는 중소 키워드가 잘린다
+                # (원종당: 상위가 빼빼로 계열로 채워짐). 키워드 적합도 판정(keyword_fit)이 이 묶음까지 본다. 4칸만.
+                "pool": [{"keyword": k["keyword"], "monthlyPcQcCnt": k["monthlyPcQcCnt"],
+                          "monthlyMobileQcCnt": k["monthlyMobileQcCnt"], "totalVolume": k["totalVolume"],
+                          "compIdx": k["compIdx"]}
+                         for k in sorted((k for k in all_keywords if not k["isStoreName"]),
+                                         key=lambda x: -x["totalVolume"])[:300]],
                 "total_found": len(all_keywords),
                 "lookup_ok": lookup_ok,
                 "analyzed_at": datetime.now().isoformat(),
@@ -3702,6 +3711,40 @@ def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depends(ge
     except Exception as e:
         logger.error(f"연관 키워드 분석 실패: {e}")
         raise HTTPException(status_code=500, detail="연관 키워드 분석 중 오류가 발생했습니다.")
+
+
+# ==================== 키워드 적합도 판정 API (2026-11-16) ====================
+# 로직분석 보고서 화면이 이미 받아 둔 자료(연관어·상품명·카테고리·태그·1페이지 타사)로
+# 「이 상품을 찾는 말인가」를 판정한다. 네이버 호출 없음. 규칙은 제안서와 같은 곳(proposal_facts.make_gate → keyword_fit).
+
+class KeywordFitRequest(BaseModel):
+    payload: Dict[str, Any]
+
+
+@app.post("/api/keywords/fit")
+def keywords_fit(req: KeywordFitRequest, current_user: dict = Depends(get_current_user)):
+    """키워드 적합도 — 통과/탈락(사유 코드)을 돌려준다 (인증 필수). 실패해도 화면은 종전처럼 그린다."""
+    try:
+        import proposal_facts as _pf
+        import keyword_fit as _kf
+        b = req.payload if isinstance(req.payload, dict) else {}
+        gate = _pf.make_gate(b)
+        rows, excluded = _pf.gate_rows(_pf._keyword_rows(b.get("related")), gate)
+        targets = _pf.pick_targets(rows, b.get("keyword") or "")
+        return {"success": True, "data": {
+            "passed": [r["keyword"] for r in rows],
+            "targets": [{"keyword": r["keyword"], "total": r["total"], "comp": r["comp"]} for r in targets],
+            # 「상품명에 넣을 후보」 — 공략 키워드 중 시즌어·정보 탐색어를 뺀 것(시즌어는 며칠 뒤 지나간다)
+            "nameCandidates": [{"keyword": r["keyword"], "total": r["total"]} for r in targets
+                               if _kf.name_worthy(r["keyword"])],
+            "golden": [r["keyword"] for r in rows if r.get("golden")],
+            "excluded": excluded[:80],
+            "reasons": _kf.REASONS,
+            "gate": gate.describe(),
+        }}
+    except Exception as e:
+        logger.warning(f"[keywords/fit] 판정 실패: {e}")
+        raise HTTPException(status_code=500, detail="키워드 적합도 판정 중 오류가 발생했습니다.")
 
 
 # ==================== 상품명 키워드 분석 API ====================
