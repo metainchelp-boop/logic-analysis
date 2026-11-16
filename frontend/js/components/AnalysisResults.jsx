@@ -424,6 +424,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* 19. AI 종합 분석 리포트 */
                 analysisData && React.createElement(window.SectionErrorBoundary, { name: 'AI 종합 분석' },
                     React.createElement(AiFeedbackAllSection, {
+                        productUrl: searchedProductUrl,
                         keyword: searchedKeyword,
                         analysisData: analysisData,
                         volumeData: volumeData,
@@ -458,7 +459,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     
                 /* 21. 보고서 출력 */
                 searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '보고서' },
-                    React.createElement(ReportSection, { keyword: searchedKeyword, companyName: companyName, managerName: currentUser && currentUser.name })
+                    React.createElement(ReportSection, { keyword: searchedKeyword, companyName: companyName, managerName: currentUser && currentUser.name, onMakeProposal: props.onMakeProposal })
                 ),
     
                 /* 알림 설정 (admin/superadmin만) */

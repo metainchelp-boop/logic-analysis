@@ -48,8 +48,17 @@ ok("finishedAt 이 깨졌으면 지금(거르지 않는 쪽)", abs(rg.finished_e
 ok("observation_key 는 observationId 소문자", rg.observation_key({"observationId": "ABC-1"}) == "abc-1")
 broken = types.SimpleNamespace(execute=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))
 ok("🔴 가드 조회가 죽으면 거르지 않는다(True)", rg.claim(broken, "product", 1, "k", "d", "o", 1) is True and rg.newer_targets(broken, "k", "d", 1) == set())
-c.execute("INSERT INTO collector_rank_projections VALUES('product', 9, 'x', '2026-01-01', 'o', 1)"); c.commit()
-ok("purge_old 는 오래된 날짜만 지운다", rg.purge_old(c, 30) == 1 and c.execute("SELECT COUNT(*) FROM collector_rank_projections").fetchone()[0] >= 4)
+# 앞선 고정 관측일은 시간이 지나면 보관 기한 밖이 된다. 정리 시험은 별도 DB에서
+# 실제 SQL과 같은 시계·시간대로 경계 전날/당일/다음날/오늘을 만들며 운영 규칙은 바꾸지 않는다.
+with sqlite3.connect(":memory:") as purge_conn:
+    rg.init_db(purge_conn)
+    for target, age in enumerate((31, 30, 29, 0), 1):
+        purge_conn.execute("INSERT INTO collector_rank_projections VALUES('product', ?, 'x', date('now','localtime',?), 'o', 1)",
+                           (target, f"-{age} day"))
+    purge_conn.commit()
+    removed = rg.purge_old(purge_conn, 30)
+    remaining = {r[0] for r in purge_conn.execute("SELECT target_id FROM collector_rank_projections")}
+    ok("purge_old 는 기한보다 오래된 날짜만 지우고 경계일·최근일은 유지한다", removed == 1 and remaining == {2, 3, 4})
 
 print("\n② record_ranks_for_keyword — 옛 전량 재생이 새 양성 순위를 못 덮는다(실제 실행)")
 tmp = tempfile.mkdtemp(); db = os.path.join(tmp, "t.db")

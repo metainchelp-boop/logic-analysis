@@ -34,6 +34,7 @@ window.createDoSearch = function(deps) {
                 try { toast.info('HTML에서 상품 URL을 자동 인식했습니다.'); } catch(e) {}
             }
         }
+        if (window.ReportFacts) window.ReportFacts.begin(keyword, cleanedUrl);
         var currentSearchId = ++searchIdRef.current; // 새 검색마다 ID 증가
         setSearchLoading(true);
         setSearchedKeyword(keyword);

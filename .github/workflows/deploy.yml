@@ -7,6 +7,35 @@ on:
       - '.github/workflows/debug-place.yml'   # 읽기 전용 진단 — 수정이 재배포를 유발하지 않게(① debug-logs 선례)
       - '.github/workflows/debug-rank.yml'    # 〃 (순위 배치·저장소 통합 실측용, 2026-08-05)
       - '.github/workflows/debug-consumption.yml'  # 〃 (수집 키워드 실소비 산출, 2026-08-11)
+      # 네이버 관제 단순 배포(2026-10-30) — 수동 실행 전용. 로직분석 이미지·컨테이너와 무관하므로
+      # 이 파일·폴더만 고친 커밋이 로직분석을 재배포하지 않게 한다(docs/naver-simple-deploy.md).
+      - '.github/workflows/naver-deploy.yml'
+      - '.github/workflows/naver-grammar-preflight.yml'  # 고정 합성 AI 문법 검사, 제품 배포 없음
+      - '.github/workflows/naver-build-cache-maintenance.yml'  # 미사용 빌드 캐시 정리, 앱 배포 없음
+      - '.github/workflows/naver-retired-image-inspect.yml'  # 퇴역 이미지 참조 조회, 앱 배포 없음
+      - '.github/workflows/naver-backup-status.yml'  # 백업 상태·파일 metadata 읽기 전용, 앱 배포 없음
+      - '.github/workflows/naver-backup-bundle.yml'  # 고정 두 복구 사본 보존 전용, 앱 배포 없음
+      - '.github/workflows/naver-cold-backup-archive.yml'  # 기존 복구 사본 무손실 압축, 앱 배포 없음
+      - '.github/workflows/naver-tools-check.yml'  # 합성 CI 정의만 바뀌어도 앱 재배포하지 않음
+      - '.github/workflows/naver-content-preflight.yml'  # 콘텐츠 보존 전 메타데이터 관찰, 앱 배포 없음
+      - '.github/workflows/naver-autobid-key-preflight.yml'  # 고정 키 보관 후보 metadata, 앱 배포 없음
+      - '.github/workflows/naver-data-preservation.yml'  # 앱 데이터 일관 사본 보존, 제품 재배포 없음
+      - '.github/workflows/naver-data-preflight.yml'
+      - '.github/workflows/naver-collector-diagnostic.yml'  # 고정 현재판 수집기 오류 읽기 전용 관찰
+      - '.github/workflows/naver-login-audit-diagnostic.yml'  # 고정 관제 로그인 오류 읽기 전용 관찰
+      - '.github/workflows/naver-inspection-aggregate.yml'  # 일회 읽기·암호문 집계, 앱 배포 없음
+      - '.github/workflows/naver-data-diagnostic.yml'  # 정지된 원본 읽기 전용 진단, 앱 배포 없음
+      - '.github/workflows/naver-data-continuation.yml'  # 동결 원본 별도 사본 보존, 앱 배포 없음
+      - '.github/workflows/naver-control-mutation.yml'  # 수동 철거 통제 도구, 제품 재배포 없음
+      - '.github/workflows/naver-data-control-preflight.yml'  # mutable data 읽기 전용 관찰, 앱 배포 없음
+      - '.github/workflows/naver-images-preservation.yml'  # 남은 고정 이미지 보존 전용, 앱 배포 없음
+      - '.github/workflows/naver-image-preservation.yml'  # 고정 이미지 암호화 보존, 앱 배포 없음
+      - '.github/workflows/naver-key-capsule-preservation.yml'  # 기존 키 capsule 보존, 앱 배포 없음
+      - 'deploy/naver/**'
+      # 이 파일(deploy.yml) 자체만 고친 커밋도 재배포하지 않는다. paths-ignore 는 바뀐 파일이 '전부'
+      # 무시 대상일 때만 건너뛰므로, 이 줄이 없으면 위 목록을 고치는 커밋이 곧바로 재배포를 일으킨다.
+      # 배포 절차만 고친 뒤 바로 반영하려면 Actions 에서 수동 실행(workflow_dispatch)한다.
+      - '.github/workflows/deploy.yml'
       # 크롬 확장은 **서버에 배포되지 않는다**(직원 PC 에 zip 으로 설치). 그런데 이 폴더만
       # 고쳐도 재배포가 돌아 컨테이너가 교체되고, 그 순간 수집기가 502 를 맞는다
       # (2026-08-06 실사고: 확장 수정 푸시 → 10:15 배포 중 '키워드 조회 실패 HTTP 502').
@@ -68,12 +97,29 @@ jobs:
           pip install --quiet beautifulsoup4 requests
           python backend/tests/test_analysis_regression.py
 
+      # SEO는 가짜 DB·공급자 모형만 사용한다. 실패하면 VPS 접촉 전에 중단한다.
+      - name: SEO evidence and read-only diagnosis regressions
+        run: |
+          python backend/tests/test_seo_evidence.py
+          python backend/tests/test_seo_readonly_diagnosis.py
+
+      - name: SEO review API regressions
+        run: |
+          pip install --quiet fastapi==0.115.0 pydantic==2.9.0 anthropic httpx 'python-jose[cryptography]==3.3.0' 'passlib[bcrypt]==1.7.4' bcrypt==4.0.1
+          python backend/tests/test_seo_workflow.py
+
       # 요청 큐 회귀(2026-09-11) — 수집을 꺼 둔 날인데 큐에 하루 576건이 들어왔다.
       # 89% 가 08~09시 배치 창(분당 15~16건 균일) = 배치가 자기 일을 되넣고 있었다.
       # 8/28 에 6곳을 막았는데 상품정보 1차 키워드 경로와 search_products 가 빠져 있었다.
       # stdlib 만 쓴다(소스 검사 — collector·naver_crawler 는 게이트에서 import 불가).
       - name: Request queue regression (되먹임·오래된 대기)
         run: python backend/tests/test_request_queue.py
+
+      # 맞춤제안서 v3(2026-10-26) — 보고서 자료로 제안서 재료·문장을 만든다.
+      # AI 문장은 사실값에 없는 숫자·금액·금지어가 있으면 버리고 규칙 문장을 쓴다.
+      # stdlib 만 쓴다(AI 는 가짜 응답으로 시험).
+      - name: Proposal v3 regression (제안서 재료·문장 검사)
+        run: python backend/tests/test_proposal_v3.py
 
       # 업체 삭제 자식 정리 회귀(2026-09-11) — 하드삭제 경로가 5개인데 지우는 자식이
       # 제각각이었다. clients.py 의 연결만 PRAGMA foreign_keys 를 안 켜 CASCADE 가 안 돌았고,
@@ -218,6 +264,9 @@ jobs:
 
       # App.jsx 훅 순서 — 로그인 전 early return 뒤에 훅을 두면 로그인 직후 React #310 으로
       # 전체 화면이 죽는다(2026-09-15 실사고 · 영업팀 신고 「화면 로드 오류」).
+      - name: Proposal facts product and analysis isolation
+        run: node frontend/tests/proposal-facts-scope.test.cjs
+
       - name: App.jsx hooks-before-early-return regression
         run: python backend/tests/test_app_hooks_order.py
 
@@ -490,6 +539,8 @@ jobs:
                   - .env
                 environment:
                   - TZ=Asia/Seoul
+                  # SEO만 별도 전환. 공용 채팅 모델·운영 인증값은 .env 그대로 보존한다.
+                  - SEO_CLAUDE_MODEL=claude-sonnet-4-6
                 volumes:
                   - ./data:/app/data
                 logging:

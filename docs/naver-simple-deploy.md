@@ -1,0 +1,394 @@
+# 네이버 관제 단순 배포 (naver-deploy)
+
+다른 섹션처럼 **실행 버튼 한 번**(입력: 제품 커밋)으로
+시험 → 이미지 빌드 → 서비스 교체 → 헬스체크 → 실패 시 직전 판 자동 복원까지 끝내는 장치다.
+작은 수정 기준 전체 10~15분, 사람 손은 커밋 입력과 실행 버튼뿐이다.
+
+| 파일 | 하는 일 |
+|---|---|
+| `.github/workflows/naver-deploy.yml` | 실행 버튼. `test`(시험·빌드 확인) → `ship`(서버로 보내 실행) |
+| `deploy/naver/naver-deploy.sh` | 서버에서 도는 배포 스크립트(`inspect` / `deploy`) |
+| `deploy/naver/make-source-archive.sh` | 제품 커밋에서 관제에 필요한 파일만 tar 로 묶음 |
+| `deploy/naver/product-tests.sh` | 제품 단위 시험(요약만 출력) |
+| `deploy/naver/tests/` | 서버 없이 도는 스크립트 시험(가짜 systemctl·docker·curl) |
+
+이 파일들은 `deploy.yml` 의 `paths-ignore` 에 있어 **머지해도 로직분석이 재배포되지 않는다.**
+
+> ⚠️ **main push 동작의 영구 변경.** 같은 커밋이 `deploy.yml` 자신도 고치므로 `deploy.yml` 도 무시 목록에 넣었다
+> (`paths-ignore` 는 바뀐 파일이 전부 무시 대상일 때만 건너뛴다). 그래서 **이 PR 이후 `deploy.yml` 만 고친 커밋은
+> main 에 push 돼도 로직분석을 자동 배포하지 않는다.** 배포 절차를 고친 뒤 바로 반영하려면 Actions 에서
+> 「Deploy to VPS」를 수동 실행한다. 다른 파일(backend·frontend 등)이 함께 바뀐 커밋은 지금처럼 자동 배포된다.
+> CLAUDE.md 「배포 규칙」(main 푸시 → 배포)과 함께 검토할 변경이다.
+
+## 0. 실행 전 지켜야 할 것
+
+- **최초 `inspect` 는 공개 출력 제한 수정(이 문서의 3장 「공개 로그에 나가는 것」)이 들어간 커밋이 재검증·머지된 뒤에만 실행한다.**
+  그 전 판(e747271)의 inspect 는 unit·override·label 원문을 출력했다.
+- **첫 배포와 되돌리기 훈련 동안 옛 실행기(「Conversion diagnostic through existing VPS connection」, 브랜치
+  `codex/naver-conversion-existing-executor-20261026`)는 dispatch 하지 않는다.** 운영 진입점은 이 워크플로 하나뿐이어야 한다.
+  새 장치의 `flock` 은 옛 실행기를 막지 못하고, concurrency group 은 SSH 가 끊긴 뒤 서버에서 계속 도는 작업까지 막지 못한다.
+  가능하면 첫 `deploy` 전에 그 워크플로를 **Disable workflow** 로 꺼 둔다.
+- **같은 SCHEMA_VERSION 안의 데이터·프로토콜 하위 호환은 이 장치가 확인하지 않는다.** 자동 복원은 이미지·unit·override 만 되돌리고
+  DB 는 그대로 두므로, 새 판이 남긴 데이터를 직전 판이 읽을 수 있는지는 **배포 대상마다 리뷰에서** 확인한다. 우회 입력은 없다.
+
+---
+
+## 1. 배포하는 법
+
+1. GitHub → `metainchelp-boop/logic-analysis` → **Actions** 탭
+2. 왼쪽 목록에서 **「네이버 관제 배포 (naver-deploy)」** 선택
+3. 오른쪽 **Run workflow** 버튼 → Branch 는 **main** 그대로
+4. 입력
+   - `commit`: 배포할 제품 커밋 40자리 (`metainc-ad-dashboard`). 예: `abceeb737548ada081072df95279d19981b561f7`
+   - `mode`:
+     - `inspect` — 서버 상태만 읽는다(아무것도 바꾸지 않음). commit 칸은 형식만 맞으면 된다(지금 운영 커밋을 넣으면 됨).
+     - `deploy` — 실제 배포.
+     - `disk-usage` — 디스크 사용처를 소유자별로 나눈 한 줄 JSON(읽기 전용, 잠금 없음). 아래 7장 끝
+     - `cleanup-plan` — 지워도 되는 관제 이미지 태그·release 폴더 목록과 `allowlist_sha256` 을 낸다(읽기 전용). 아래 7장
+     - `cleanup` — `allowlist_sha256` 칸에 직전 `cleanup-plan` 의 값을 넣어야 한다. 다시 계산한 목록과 해시가 정확히 같을 때만 그 목록만 지운다. 아래 7장
+   - `allowlist_sha256`: `cleanup` 에서만 넣는다(다른 mode 에서는 비워 둔다).
+   - `cleanup-plan`·`cleanup` 은 제품 deploy key 를 쓰지 않는다.
+5. **Run workflow** 누르기. 대표 계정(`metainchelp-boop`)이 main 에서 실행할 때만 동작한다.
+
+**처음에는 반드시 `inspect` 를 먼저 돌려** 서버 배치가 아래 「서버 배치 가정」과 같은지 확인한 뒤 `deploy` 한다.
+
+### 결과 읽기
+
+`ship` 작업 로그 마지막 줄 `NAVER_DEPLOY_RESULT={...}` 의 `status`:
+
+| 종료 코드 | status | 뜻 | 할 일 |
+|---|---|---|---|
+| 0 | `DEPLOYED` | 배포·헬스·60초 유지 통과 | 없음 |
+| 0 | `DEPLOYED_WITH_WARNINGS` | 배포·헬스 통과, 마무리 경고(`warnings` 코드) | 경고 코드 확인 |
+| 2 | `DEPLOY_FAILED_RESTORED` | 새 판이 실패해 **직전 판으로 자동 복원**, 복원 판 헬스 통과 | `reason`·`health_status` 로 원인 확인 후 고쳐서 다시 |
+| 3 | `RECOVERED_INTERRUPTED_RUN` | 지난 배포가 중간에 끊겨(SSH 끊김·재부팅 등) 이번 실행이 **먼저 직전 판으로 복원**함 | 같은 입력으로 다시 실행 |
+| 4 | `RESTORE_FAILED` | 복원까지 실패 → 두 서비스 정지를 시도. 실제로 멈췄는지는 `services_stopped_confirmed`(true/false) | 개발 담당에게 즉시 알림. `inspect` 결과 첨부 |
+| 10 | `REFUSED` | 시작 전 거부. **서비스는 그대로**. `reason` 예: `SCHEMA_CHANGED`(`schema_current`→`schema_new`), `CONFIG_SHAPE_CHANGED`, `FLAGS_CHANGED`, `EXECUTION_ENABLED`, `LAYOUT`, `BUILD_FAILED`, `CHECK_CONFIG` | `reason` 확인 |
+| 11 | `LOCKED` | 다른 관제 배포가 서버에서 실행 중 | 끝난 뒤 다시 |
+
+`inspect` 결과는 `NAVER_DEPLOY_INSPECT={...}` 한 줄 JSON 이다.
+
+### 공개 로그에 나가는 것 (이 저장소는 공개다)
+
+- **deploy:** `phase=<단계 이름>` 줄들과 마지막 `NAVER_DEPLOY_RESULT={...}` 한 줄뿐이다. 결과 줄의 모든 값은 필드별 형식
+  (커밋 40자리, `sha256:` 이미지 ID, 숫자, 대문자 사유 코드, `name=true|false` 스위치 등)을 통과한 것만 나가고, 문구는 고정표에서 고른다.
+  자세한 사유·단계 로그는 서버 `/var/lib/metainc/naver-deploy/incoming/<실행번호>/deploy.log`, docker build·compose 원문 출력은
+  `/var/lib/metainc/naver-deploy/runs/<시각>-<커밋>/commands.log`(root 전용 폴더)에만 남는다.
+- **inspect:** unit·override·tmpfiles·label·Env **원문을 내지 않는다.** unit 은 ExecStart 모양(compose 파일 역할 목록, 커밋, 커밋 횟수,
+  Environment 줄 수), override 는 키 이름과 image 태그, tmpfiles 는 허용된 `d` 줄, 컨테이너는 이미지 ID·상태·RestartCount·
+  허용된 label 4개·mount 경로·스위치 참거짓, 데이터 폴더는 파일 이름·크기·권한만 낸다. sqlite 는 쓰지 않는다.
+- **test 작업:** 제품 의존성 설치·시험·Docker build 의 stdout·stderr 는 러너 임시 폴더(`$RUNNER_TEMP/private`)에만 쓰고 올리지 않는다.
+  로그에는 단계 이름·종료 코드·시험 개수만 나간다.
+
+---
+
+## 2. 처음 한 번 — 대표님 작업 (값은 어디에도 적지 않는다)
+
+워크플로가 비공개 제품 저장소(`metainc-ad-dashboard`)의 정확한 커밋을 읽으려면 **읽기 전용 deploy key** 가 필요하다.
+
+1. 내 PC 터미널에서 키 한 쌍을 만든다(암호 없이 Enter 두 번):
+   `ssh-keygen -t ed25519 -C naver-deploy-readonly -f naver-deploy-key`
+   → `naver-deploy-key`(개인키), `naver-deploy-key.pub`(공개키) 두 파일이 생긴다.
+2. **공개키** 등록: GitHub → `metainc-ad-dashboard` → Settings → **Deploy keys** → **Add deploy key**
+   - Title: `logic-analysis naver-deploy (read-only)`
+   - Key: `naver-deploy-key.pub` 내용 붙여넣기
+   - **Allow write access 는 체크하지 않는다**(읽기 전용).
+3. **개인키** 등록: GitHub → `logic-analysis` → Settings → **Secrets and variables → Actions** → **New repository secret**
+   - Name: `NAVER_PRODUCT_DEPLOY_KEY`
+   - Secret: `naver-deploy-key` 파일 내용 전체(첫 줄 `-----BEGIN OPENSSH PRIVATE KEY-----` 부터 끝 줄까지)
+4. 내 PC 의 두 파일을 지운다(GitHub 에만 남긴다).
+
+키가 없으면 `deploy` 는 `test` 단계에서 「NAVER_PRODUCT_DEPLOY_KEY secret 이 없습니다」로 멈춘다(서버 접속 없음).
+`inspect` 는 키 없이도 된다. VPS 접속 secret(`VPS_HOST`·`VPS_USER`·`VPS_SSH_KEY`)은 이미 이 저장소에 있다.
+
+> 대안: VPS secret 3개를 `metainc-ad-dashboard` 에도 등록하고 이 워크플로를 비공개 저장소로 옮기면
+> deploy key 가 필요 없고 로그도 비공개가 된다. 대신 로직분석 배포와 같은 concurrency group 을 공유하지 못한다
+> (서버 쪽 `flock` 직렬화는 그대로 유지된다).
+
+---
+
+## 3. 무엇이 일어나는가
+
+### `test` 작업 (GitHub 러너, 서버 접속 없음)
+1. 실행 조건: 대표 계정 · main · commit 40자리 · mode 확인
+2. 배포 스크립트 시험: `shellcheck` + `deploy/naver/tests`(가짜 서버로 정상 배포·자동 복원·스키마 거부·inspect 읽기 전용·잠금 충돌·중단 복구 등)
+3. (`deploy` 만) 제품 커밋을 deploy key 로 받아
+   - `naver_engine/tests`, `naver_runtime/tests`, `backend/tests/test_naver_relay*` 를 제품 CI 와 같은 방식(외부망 없는 비루트 namespace, Playwright·FastAPI 필수)으로 실행
+   - 관제 범위 파일만 tar 로 묶고(해시 기록) 두 Dockerfile(`Dockerfile.naver-engine`, `Dockerfile.naver-relay`)을 실제로 빌드
+
+### `ship` 작업
+1. 같은 커밋으로 tar 를 다시 만들어 **시험한 tar 와 해시가 같은지** 확인
+2. `scp` 로 스크립트(+tar)를 서버 `/tmp/naver-deploy-<실행번호>` 에 보낸 뒤
+3. `inspect` 는 바로 실행해 JSON 출력.
+   `deploy` 는 root 전용 폴더 `/var/lib/metainc/naver-deploy/incoming/<실행번호>` 로 옮겨 해시를 다시 확인하고,
+   **`systemd-run` 으로 별도 작업**으로 띄운 뒤 단계 이름과 결과 한 줄만 따라 출력한다(서버 로그 원문은 흘리지 않는다).
+   SSH 가 끊겨도 서버에서는 끝까지(실패 시 복원까지) 돈다.
+
+### 서버의 `naver-deploy.sh deploy` 순서
+1. `flock` 잠금(동시 실행 방지). 지난 실행이 서비스를 멈춘 뒤 끝나지 못했으면 **먼저 직전 판으로 복원**하고 끝(코드 3)
+2. 현재 배치 확인 — 모르는 모양이면 거부(아래 「서버 배치 가정」). 실행 중 engine 컨테이너 Env 에서 **유효 스위치 10개**
+   (제품 `naver_runtime/config.py` 와 같은 참/거짓 규칙)와 두 컨테이너 mount 목록을 기록한다. `execution` 은 false 여야 한다
+3. 원본 tar 범위 검사, **SCHEMA_VERSION 비교**(새 판 `naver_engine/store.py` vs 실행 중 이미지 안의 `store.py` 또는 이 장치가 붙인 이미지 라벨). 다르면 거부. 우회 입력 없음
+4. 복구 기록 저장: `state.json` + `runs/<시각>-<커밋>/` 에 현재 unit 2개·override 2개·mount 목록 사본, 직전 이미지 ID, 스위치
+4b. **빌드 전 공간 예산**: 이미지 빌드·release 폴더 생성 **전에** 확인하고, 모자라면 아무것도 만들지 않고 거부(`DISK_PREBUILD`).
+   빌드 예산(**추정치**) = 지금 실행 중인 engine·relay 이미지 `docker image inspect` Size 합(최소 512MiB). 새 Dockerfile 의
+   중간 층·내려받기·build cache 의 최고 사용량을 보장하는 값은 아니다
+   + 원본 tar 크기. DB 사본 예산 = `engine.db*` 합 + 256MiB(직전 사본은 남아 있는 상태 그대로). docker 저장 위치·releases·백업 폴더가
+   같은 파일시스템이면 합산해 비교한다
+5. `releases/naver-<새 커밋>` 생성(이미 있으면 같은 원본인지 확인만), 현재 override 에서 **커밋만 치환**(각 1회 단언)
+6. **서비스를 멈추기 전에**
+   - 두 이미지 빌드(`metainc/naver-{engine,relay}:<커밋>`, 원문 출력은 비공개 명령 로그로)
+   - 지금 판과 새 판의 `compose config`(JSON)에서 **관제 설정 묶음**(서비스 목록, data·socket·backup·tunnel mount, user 10001:10001,
+     restart no, network_mode, read_only, tmpfs, cap_drop, security_opt)을 정규화해 비교 → 이미지 태그 말고 다르면 거부(`CONFIG_SHAPE_CHANGED`).
+     호스트 전체 baseline 은 보지 않는다. environment(비밀값 포함)는 비교·출력하지 않는다
+   - **격리된 `check-config`**: 새 이미지를 `docker run --network none --read-only --user 10001:10001 --cap-drop ALL` 로,
+     운영 data·socket·backup·tunnel mount 없이(데이터 경로는 빈 tmpfs) 실행한다. 환경은 새 compose 설정의 유효 environment
+     (runtime.env 포함)를 `-e 이름` 으로만 넘겨 값이 명령줄·로그에 남지 않는다. 새 판 스위치가 **지금 판과 하나라도 다르면 거부**(`FLAGS_CHANGED`),
+     `execution=false` 단언
+7. DB 복사 공간 확인 → relay 정지 → engine 정지(둘 다 MainPID 0·컨테이너 PID 0 확인)
+8. 엔진이 멈춘 상태에서만 `engine.db*` 파일 복사(`/var/backups/metainc/naver-deploy-db`, **보관 1벌**). sqlite 로 열지 않는다.
+   새 사본은 `<시각>-<커밋>.partial` 에 만들고 원본과 **크기·sha256** 이 같고 fsync 가 끝난 뒤에만 이름을 바꾼 다음 **직전 사본을 지운다**.
+   검증이 실패하면 새 사본만 지우고 직전 사본은 그대로 둔 채 복원한다(`DB_COPY`). 그래서 필요한 공간은 DB 합 + 여유이며 직전 사본은 그 동안 남아 있다.
+   사본 정리는 사본 폴더를 링크를 따르지 않는 폴더 fd 로 열고 그 안의 상대 이름으로만 지운다. 사본 항목 중 하나라도 링크·일반 파일이거나
+   안에 DB 파일·manifest 말고 다른 것(하위 폴더 등)이 있으면 **아무것도 지우지 않고** 멈춘 뒤 직전 판으로 복원한다(`BACKUP_SAFETY`)
+9. unit 2개에서 **커밋만 치환**(engine 6회·relay 4회 단언) → `daemon-reload` → `compose up --no-start --no-build --force-recreate` →
+   새 컨테이너의 mount 목록이 직전과 같고, engine 스위치가 기록과 같은지 확인
+10. engine 시작 → relay 시작
+11. 헬스: engine `/_engine/health` 200, relay `/naver/` 200, `/api/naver-auto/me` 401 → **60초 유지**(두 unit active, MainPID·NRestarts 불변, 컨테이너 RestartCount 0, StartedAt 불변)
+12. 실패하면 기록으로 **직전 unit·override·이미지 복원 → mount·스위치 재확인 → 같은 헬스체크**. 복원도 실패하면 두 서비스 정지를 시도하고,
+    MainPID 0·컨테이너 정지를 실제로 확인했는지(`services_stopped_confirmed`)를 따로 보고한다(코드 4)
+13. 성공하면 이미지 정리: 이 장치가 배포한 기록 중 **최근 3개·현재·직전은 절대 삭제하지 않는다.** 기록에 없는 태그(옛 실행기가 만든 것 등)는 건드리지 않는다
+
+### 건드리지 않는 것
+`runtime.env`, nginx, ERP 터널 unit, 로직분석 등 다른 앱, saved-exports companion(engine unit 의 4번째 `-f` 파일 — 경로 그대로 유지),
+`engine.db`/`-wal`/`-shm`/`-journal`(제자리 보존, 복사만). 끝에 runtime.env·tmpfiles·터널 unit·nginx 지문이 그대로인지 확인해 보고한다.
+옛 release 폴더는 지우지 않는다.
+
+---
+
+## 4. 서버 배치 가정과 확인 방법
+
+옛 실행기(`codex/naver-conversion-existing-executor-20261026` 의 `release/conversion-20261026/backend/tools/`)가 만든 배치를 기준으로 했다.
+`inspect` 로 눈으로 확인하고, `deploy` 는 아래를 실행 때마다 검사해 다르면 **멈추기 전에 거부**한다.
+
+| 가정 | 근거(옛 코드) | 실행 중 확인 |
+|---|---|---|
+| unit `metainc-naver-engine.service` / `metainc-naver-relay.service` 가 `/etc/systemd/system` 에 있고 drop-in 없음, enabled·active | `naver_preview_lifecycle.py` UNITS·UNIT_DIR | `systemctl show` FragmentPath·DropInPaths·UnitFileState·ActiveState |
+| ExecStart = `/usr/bin/docker compose --project-name naver-<이름> -f <release>/compose.naver-<이름>.yml [-f <release>/deploy/naver-engine-backup.override.yml] -f <release>/preview-<이름>.override.yml [engine 만: -f saved-exports companion] up --no-build --no-recreate --abort-on-container-exit --exit-code-from naver-<이름> naver-<이름>`, ExecStop 같은 파일 + `stop --timeout 45`, `Restart=always`, engine `Requires=` 에 터널, relay `Requires=` 에 engine | `unit_files()` :21-42, `ExportProxy.compose` | 토큰 단위로 정확히 비교. companion 은 `/srv/metainc/ad-deploy-staging/saved-exports/<32hex>/naver-saved-exports.override.yml` 만 허용 |
+| release 폴더 `/srv/metainc/ad-deploy-staging/releases/naver-<커밋>`, unit 안 커밋 문자열 engine 6회·relay 4회 | `naver_preview_release.py` ROOT·`compose()` | 횟수 단언 |
+| override `preview-engine.override.yml`·`preview-relay.override.yml` 에 `    image: metainc/naver-<이름>:<커밋>` 한 줄, 커밋 1회 | `prepare()` :329-333, `target_override` | 줄·횟수 단언 |
+| 이미지 `metainc/naver-<이름>:<커밋>`, 라벨 `metainc.naver.preview.source=<커밋>`, 사용자 10001:10001; 컨테이너 1개씩, compose project/service `naver-<이름>` | `manifest()`, `_snapshot()` | `docker image inspect`·`docker inspect` |
+| 소켓 `/run/metainc/naver-engine/engine.sock`, `/run/metainc/naver-relay/relay.sock`, Host `dashboard.metainc.co.kr` | `unix_request()`, tmpfiles | 헬스체크가 곧 확인 |
+| 데이터 `/var/lib/metainc/naver-engine/engine.db*` | compose 기본값 | 이름 규칙 검사(모르는 `engine.db*` 이름이면 거부) |
+| `/etc/tmpfiles.d/metainc-naver-preview.conf`, `docker.service`·`metainc-naver-erp-tunnel.service` active | lifecycle | 존재·active 확인, 지문 불변 확인 |
+| SSH 사용자(VPS_USER)가 root | `deploy.yml` 이 `/root/logic-analysis-deploy` 에 배포, 옛 실행기 euid 0 요구 | `deploy` 는 root 아니면 거부, `inspect` 의 `id` 로 확인 |
+| `python3`, `curl`, `flock`, `systemd-run` 이 서버에 있음 | — | 없으면 거부, `inspect` 의 `tools` |
+
+---
+
+## 5. 첫 배포 계획 (대표 승인 후)
+
+1. (공개 출력 제한 수정이 재검증·머지된 뒤) `inspect`(commit 칸: 지금 운영 커밋) → 결과를 개발 담당이 대표께 보고
+2. 공간 확보: `cleanup-plan` → 목록 승인 → `cleanup` → `inspect` 로 여유 확인(7장). 이 시점부터 옛 실행기는 은퇴(dispatch 금지)
+3. `deploy` abceeb7(`report_output_schema.py` 1파일, 스키마 21 불변)
+4. 되돌리기 훈련: `deploy` c44a663 (기존 `releases/naver-c44a663…` 은 같은 원본인지 확인 후 재사용)
+5. `deploy` abceeb7 재배포
+
+---
+
+## 6. 옛 실행기 은퇴 (`cleanup` 실행 또는 첫 배포 중 먼저 오는 때)
+
+옛 실행기 파일은 지금 바꾸지 않는다. `cleanup` 을 실행하거나 새 방식으로 처음 배포하는 때(먼저 오는 쪽)부터:
+
+1. 옛 경로를 막는다(0장대로 첫 배포 전에 이미 꺼 두는 것을 권한다): GitHub → Actions → 「Conversion diagnostic through existing VPS connection」
+   (브랜치 `codex/naver-conversion-existing-executor-20261026` 의 `debug-rank.yml`) → 오른쪽 `…` → **Disable workflow**.
+   두 경로가 같은 서버를 동시에 바꾸지 않게 하기 위함이다(새 장치의 `flock` 은 옛 실행기를 막지 못한다). 첫 배포·훈련 동안 옛 경로 dispatch 는 금지.
+2. 새 배포가 끝나면 옛 실행기의 host baseline·receipt 는 더 이상 현재 상태와 맞지 않는다. 옛 rollback 도 쓰지 않는다 — 되돌리기는 이 장치로 직전 커밋을 다시 `deploy` 한다.
+3. 옛 이미지 태그는 이 장치가 새로 3번 배포한 뒤 자동으로 정리 대상이 된다(기록에 있는 것만). 그보다 먼저 공간이 필요하면 7장의 `cleanup-plan`/`cleanup` 을 쓴다. receipts 는 지우지 않는다.
+4. 옛 실행기 브랜치·워크플로 정리 PR 은 별도로 검토한다.
+
+---
+
+## 7. 디스크 정리 (`cleanup-plan` → `cleanup`)
+
+2026-10-30 첫 inspect(실행 41103753846) 기준: 파티션 하나에 여유 2.95GiB / 35.06GiB, `engine.db*` 합 3.324GiB, 관제 이미지 태그
+engine 43·relay 43, release 폴더 43개. DB 사본 하나(합 + 256MiB = 3.574GiB)도 못 만들고 빌드 공간도 따로 필요하므로 **첫 배포 전에 정리가 필요하다**.
+
+> ⚠️ **옛 실행기와 함께 결정해야 한다.** 옛 실행기의 이력 검증(`base_success` → 단계별 `_receipt_step` → `upgrade.manifest`)은
+> 과거 release 폴더 파일과 이미지 ID 를 실제로 확인한다. 과거 release·이미지를 지우면 **옛 실행기는 더 이상 동작하지 않는다**
+> (fallback 89a924f 를 남겨도 마찬가지다). 그러므로 `cleanup` 을 실행하는 순간 옛 실행기는 은퇴한 것으로 본다:
+> 옛 파일은 그대로 두되 **그 dispatch(「Conversion diagnostic through existing VPS connection」)는 다시 쓰지 않는다**(Disable workflow 권장).
+> 되돌리기는 이 장치로 직전 커밋을 `deploy` 한다.
+
+순서(대표 승인 후):
+
+1. `mode=cleanup-plan` 실행 → 로그의 `NAVER_DEPLOY_CLEANUP_PLAN={...}` 한 줄을 확인한다.
+   - `candidates`: 지울 항목만(`type`=image|release, `ref`=태그 또는 경로, `id`=이미지 ID, `size_bytes`)
+   - `kept.protected_commits`: 언제나 남기는 판(현재 판, fallback `89a924f2416f0450f38854b531bdf8778558dca6`, 이 장치 기록의 판)
+   - `path_references`: naver 가 들어간 unit·timer·path·socket 의 조각과 **drop-in(`<unit>.d/*.conf`)** —
+     `/etc/systemd/system`, `/run/systemd/system`, `/usr/lib/systemd/system`, `/lib/systemd/system` 과 `systemctl show` 의
+     FragmentPath·DropInPaths — , 현재 compose·override, saved-exports companion, 컨테이너 mount 가 가리켜 남기는 release.
+     이 중 하나라도 읽지 못하거나, `systemctl show` 출력에 FragmentPath·DropInPaths·LoadState 가 정확히 한 번씩 있지 않거나
+     LoadState 가 loaded·masked·not-found 가 아니면 계획을 세우지 않는다(모르는 배치 → 거부)
+   - `reclaim_estimate`: 이미지는 **이미지 ID 별로 한 번만**, 그리고 정리 뒤에도 남는 ID(후보가 아닌 다른 태그·별칭, 컨테이너 사용, 보호 판)는 뺀다.
+     하한 = 그런 ID 의 `docker system df -v` UniqueSize 합(후보끼리만 공유하는 층은 빠져 보수적, 하나라도 모르면 null),
+     상한 = 후보 ID 의 `docker image inspect` Size 합(공유 층 포함). release 는 디스크 블록 **추정치**(hardlink 는 한 번, 같은 파일시스템만).
+     모두 추정이며 보장값이 아니다. 계산 방법은 `method` 에 적힌다
+   - `allowlist_sha256`: 후보 목록(종류·태그/경로·이미지 ID 또는 release 폴더의 dev:inode)을 정렬한 정규 JSON 의 sha256. 크기는 해시에 넣지 않는다
+2. 목록을 검토·승인한 뒤 `mode=cleanup`, `allowlist_sha256=<위 값>` 실행.
+   - 같은 `flock` 아래에서 계획을 **다시 계산해 해시가 정확히 같을 때만** 진행한다. 그 사이 무엇이든 바뀌었으면(새 컨테이너가 이미지를 씀,
+     태그가 다른 이미지를 가리킴, 폴더 추가 등) `REFUSED_HASH_MISMATCH` 로 아무것도 지우지 않는다 → 1부터 다시
+   - 진행 중이거나 끝나지 못한 배포 기록이 있으면 거부(`REFUSED_DEPLOY_NOT_FINISHED`)
+   - 이미지: **항목마다 지우기 직전** 태그가 아직 승인된 이미지 ID 를 가리키는지, 그 ID 를 쓰는 컨테이너(정지 포함)가 없는지,
+     보호 판(현재·fallback·기록)이 아닌지 다시 확인하고 `docker image rm <태그>`(**강제 없음**). 하나라도 어긋나면 지우지 않고 `refused`
+   - release: **항목마다 지우기 직전** 참조 근거(unit·drop-in·timer·compose·override·companion·컨테이너 mount)를 처음부터 다시 모으고,
+     폴더를 releases 폴더 fd 기준·링크 미추적으로 **연 뒤 그 fd 의 dev:inode 를 승인값과 대조**하고, 같은 fd 로만 비운다.
+     하위 폴더도 lstat → 열기 → fstat 대조를 거쳐서만 내려가고, 각 폴더의 마지막 rmdir 직전에 이름이 아직 같은 dev:inode 인지 다시 본다
+     (다른 파일시스템으로 내려가지 않고, 안의 링크는 링크 자체만 지운다). 어긋나면 그 항목은 `refused`. `refused`·`failed` 가 하나라도 있으면 결과는 `PARTIAL`(5)
+   - 결과: `NAVER_DEPLOY_CLEANUP_RESULT={status, removed, refused, failed, free_bytes_before, free_bytes_after}` (0 CLEANED / 5 PARTIAL / 10 거부 / 11 잠금)
+3. 다시 `inspect` 로 여유 공간을 확인한 뒤 배포한다.
+
+### 기존 배포 로그를 보존하는 미사용 산출물 전용 모드
+
+`cleanup-artifacts-plan` → 목록 검토 → `cleanup-artifacts` 순서로 실행한다. 입력은 해당 계획의 `allowlist_sha256`뿐이며 경로나 태그를 직접 지정할 수 없다. `scope=unused-naver-artifacts-v1`이 후보 목록과 함께 해시에 결속되므로 기존 `cleanup-plan`의 해시와 서로 바꿔 쓸 수 없다.
+
+이 모드는 위의 같은 후보 수집·컨테이너 보호·태그 및 release 정체성 재검사를 사용한다. 추가로 unit/drop-in/compose/companion/container mount가 가리키는 release 커밋의 NAVER 이미지와 그 이미지 ID를 공유하는 NAVER 태그도 남긴다. 적용 중 새 참조가 생기면 삭제 직전에 다시 검사하여 해당 항목을 거절한다. 기존 `cleanup`의 후보·보존 동작은 바뀌지 않는다.
+
+적용에는 기존 state 디렉터리, 같은 deploy lock, root 권한, 미완결 배포 거절이 필요하다. 배포 명령 로그를 만들거나 삭제·chmod하지 않으며, 로그 폴더가 없어도 새로 만들지 않는다. Docker 명령의 원문 출력은 버리고 고정 JSON 결과만 출력한다. 백업·데이터·receipts·다른 앱 이미지·volume·build cache에는 접근하여 정리하지 않는다. Actions 실행 기록과 들어온 임시 helper 파일 정리는 기존 workflow 절차로 남는다.
+
+`reclaim_is_estimate=true`와 회수 추정치는 보장 용량이 아니다. 추정 상·하한이 일치하지 않으면 그 값으로 공간 확보를 확정하지 않는다. 결과의 실제 `free_bytes_after`, 후속 `inspect`, 기존 배포 용량 검사를 확인한다. 용량 기준은 완화하지 않는다.
+
+**절대 하지 않는 것**: `docker system prune`·`volume prune`·`builder prune`·`-a`·`-f`, 다른 앱 이미지, 커밋 태그가 아닌 태그(`local-review` 등),
+saved-exports·receipts·runtime.env·키·데이터 폴더(`.*-failed-db-*` 포함)·기존 백업·volume·build cache.
+
+### 디스크 사용처 분석 (`disk-usage`, 읽기 전용)
+
+정리(실행 41174998707, 123개 삭제) 뒤에도 여유가 약 0.49GB 늘어나는 데 그쳐, 무엇이 공유 디스크를 쓰는지 먼저 본다.
+`mode=disk-usage` 는 잠금을 잡지 않고 아무것도 바꾸지 않는다(prune·삭제·journal vacuum·로그 자르기·DB 열기·재시작·이동 없음).
+모든 외부 명령에 시간 제한(docker·journalctl 60~120초, du 300초)이 있고, 실패한 항목은 `null` + 사유 코드(`errors`)로 남긴 채 성공으로 끝난다.
+
+결과 `NAVER_DEPLOY_DISK_USAGE={...}` 한 줄:
+- `filesystems`: 실제 파일시스템별 mountpoint·fstype·total/used/avail 바이트(tmpfs·overlay·proc·sysfs·squashfs 등 제외, 같은 장치는 한 번)
+- `docker`: DockerRootDir·Driver·containerd snapshotter 여부, `docker system df` 요약(이미지·컨테이너·volume·build cache 의 개수·크기·회수 가능, docker 표기를 바이트로 환산한 근사값),
+  저장소별 이미지 수·이미지 ID 수·Size 합(공유 층은 이미지마다 다시 셈), dangling 이미지 수·크기. 다른 앱 저장소 이름도 나온다(비밀 아님)
+- `du`: **실제 파일시스템마다 한 번씩** `du -x -B1` 을 그 mountpoint 에서(nice·ionice 낮은 우선순위, 절대 깊이 4 까지) 훑는다.
+  mount 목록과 장치(major:minor)·FS 안 root 는 `/proc/self/mountinfo` 에서 읽는다. 장치마다 FS root(`/`)를 보이는 mount 하나를 훑고
+  (입력 순서와 무관), 같은 장치의 다른 전체 mount 는 `skipped_duplicate_device`, 하위 폴더 bind 는 `skipped_bind_subtree`(fs_root 표시).
+  FS root 를 보이는 mount 가 없는 장치는 겹치지 않는 하위 폴더마다 훑고 `subtree_only`(미완료)로 표시한다. statvfs 가 실패해도 그 mount 는
+  빠지지 않는다(`statvfs_failed` 사유, du 는 그대로 시도). 공백 등 특수 문자가 든 mount 경로도 빠지지 않는다 — 명령에는 셸 없이 argv 로 넘기고,
+  출력의 모든 경로는 mountinfo 와 같은 고정·가역 8진 표기(공백·제어 문자·역슬래시·ASCII 밖 바이트 → `\ooo`)로 적는다(`path_encoding`). 결과는 파일시스템별 `scanned`/`partial`/`subtree_only`/`timeout`/`failed` 로 표시하고,
+  완료가 아닌 것은 `du.incomplete` 에 모은다. 훑지 못한 FS 에 놓인 경로는 바이트 `null` + 그 FS·상태·사유로 보이며, 상위 FS 의 자리표시 값을 쓰지 않는다.
+  파일시스템마다 따로 장부를 만들고(`scanned_total_bytes`·statvfs used·`by_owner`), 소유자 분할은 규칙 경계(예: `/opt/metainc/naver-*`)까지
+  자식으로 내려가 나눈다. 자식 합이 부모보다 크면 0 으로 덮지 않고 `consistent=false` 와 사유를 남긴다. 각 파일시스템의 `by_owner` 합은 그 scan 합계와 정확히 같고,
+  `by_owner_overall` 합은 파일시스템별 합계의 합과 같다. 그 위에 `/`·`/var`·`/var/lib`·`/var/lib/docker`·`/var/lib/containerd`·
+  `/var/log`·`/var/backups`·`/srv`·`/opt`·`/root`·`/home`·`/tmp`·`/usr`·`/srv/metainc`·`/var/lib/metainc`·`/var/backups/metainc` 아래 상위 15개 폴더와 바이트·소유자.
+  다른 파일시스템의 mountpoint 인 자식은 그 파일시스템 장부 값과 `filesystem` 으로 보여 준다. 폴더 경로만 나오며 파일 이름·내용은 나오지 않는다
+- `du.filesystems[].by_owner` / `du.by_owner_overall`: 겹치지 않게 나눈 소유자별 합 — `naver`(`/var/lib/metainc/naver-*`, `/var/backups/metainc/naver-*`, `/srv/metainc/ad-deploy-staging`, `/opt/metainc/naver-*`),
+  `other_apps`(그 밖의 `/srv/metainc/*`·`/var/lib/metainc/*`, `/root/*`, `/opt/*`), `docker_internal`(`/var/lib/docker`·`/var/lib/containerd`),
+  `os`(`/usr`, `/var/log`(journal 포함), `/var/cache`, snap 등), `backups`(그 밖의 `/var/backups/*`), 그리고 폴더에 직접 있는 파일 몫(`direct_files_*`), 불일치 보정(`inconsistent_remainder`, 음수 가능)
+- `journal`: `journalctl --disk-usage` 바이트(1024 단위 근사)
+
+du 는 폴더가 차지한 디스크, docker 표시는 docker 집계라 서로 더하거나 df 확보량과 같다고 보지 않는다.
+
+---
+
+## 8. 로컬 시험
+
+서버·docker·systemd 없이 가짜 루트로 돈다:
+
+```
+python3 -m unittest discover -s deploy/naver/tests -v
+shellcheck -S warning deploy/naver/*.sh
+```
+
+
+## 철거 전 읽기 전용 구성 조회 (`app-inventory`)
+
+대표 계정이 main에서 `mode=app-inventory`로 수동 실행한다. `commit`은 형식만 확인하며 제품 저장소·제품 키·이미지 빌드·DB를 사용하지 않는다. 명령 출력 원문은 메모리에서만 처리하고, 고정 허용 필드의 `NAVER_DEPLOY_APP_INVENTORY={...}` 한 줄만 공개 로그에 내보낸다. 수집기와 nginx parser도 전송 전후 SHA-256을 대조한다.
+
+앱 실행 상태·알려진 mount/데이터 경로의 메타데이터·nginx 연결 단서·관련 기동 장치를 조회한다. DB/키 파일 내용과 환경값·고객 파일명·원문 설정/로그는 출력하지 않는다. 미확인/실패/잘림은 결과에 남으며, 복잡한 nginx 구성을 확정된 실제 연결로 주장하지 않는다. 이 결과는 종료·삭제 가능 판정이나 원격 보관/복구 증거가 아니다.
+
+Mac의 별도 순위 agent와 ERP 데이터/캐시는 조회하지 않는다. 조회만으로 원격 서비스·키·데이터를 변경하지 않으며, 임시 전달 스크립트만 실행 뒤 제거한다. 설계와 합성 검증 범위는 `docs/superpowers/specs/2026-11-01-app-inventory-design.md`에 있다.
+
+철거 계획 2단계의 제한 보완은 `systemd.related_units`에 관련 미분류 service/timer 최대 16개의 메타데이터를 `related-unit-N` 별칭으로 추가한다. ASCII 이름/길이/suffix를 검증한 대상만 조회하고 원문 이름·Id·Fragment/drop-in·알 수 없는 의존 이름은 공개하지 않는다. 앱 힌트는 이름 prefix에 근거하며 실제 실행 명령/대상 확인을 뜻하지 않는다. WorkingDirectory는 기존 알려진 경로만 공개하고 추가 파일 조회에 사용하지 않는다. 상한 초과·거부·실패·잘림·identity 불일치를 남기며, 전체 systemd 상태는 관련 미분류 대상이 있으면 계속 incomplete이다. 기존 고정 unit 형식은 유지한다.
+
+`root_cron_spool`은 `/var/spool/cron/crontabs`와 그 `root` 파일의 메타데이터만 확인한다. 부모 구성 요소와 최종 경로의 symlink를 거부하고 absent/permission_denied/stat_failed를 구분한다. 파일 내용·디렉터리 목록은 읽지 않는다. 기존 crontab rc1은 unavailable을 유지하며, 표준 spool 파일이 없다는 사실도 다른 사용자·주기 cron·다른 기동 장치가 없다는 증거가 아니다. 로그의 `root` 마스킹은 원본 그대로 둔다. 설계·범위는 `docs/superpowers/specs/2026-11-01-retirement-preflight-design.md`에 있다. 컨테이너 내부 `/tmp`와 원격 보관·복구는 이 보완에 포함하지 않는다.
+
+## 9. 스키마 이관 (`migrate-*`, 21 → 22 추가형)
+
+설계: 작업 폴더의 `DESIGN-CLAUDE-v3.md`(v3.1, sha256 `2b62dbd9…`)와 v2 의 대체되지 않은 부분. `deploy` 모드는
+스키마가 바뀌면 지금처럼 `SCHEMA_CHANGED` 로 거절한다(우회 입력 없음). 이관은 `naver-deploy.sh` 의 고정 표
+`MIGRATIONS` 에 있는 항목(지금은 `21-22-exhaust-v1`: 377768a → 1d85228, store·exhaust_store·새 표 SQL·helper 해시)만,
+아래 순서와 대표 승인으로만 한다.
+
+| 순서 | mode | 서비스 | 하는 일 |
+|---|---|---|---|
+| 1 | `migrate-prepare` | 무변경 | 서버에서 v22 이미지 두 개를 한 번 빌드하고 정확한 이미지 ID 를 기록한다. 실행 중 판·store.py 해시·원본 묶음 해시·helper 해시를 고정 표와 대조한다. |
+| 2 | `migrate-rehearse` | 무변경 | 준비된 정확 이미지 ID 와 운영과 **같은** `docker run` 옵션으로, run 전용 scratch 폴더만 `/var/lib/naver-engine` 에 붙여(운영 DATA_DIR 은 붙이지 않음, 장치+inode 로 확인) 합성 v21 DB 생성 → 이관·검증·교체 → 옛 엔진 거절 확인 → 되돌림 → 옛 엔진 열림까지 돈다. SQLite 버전·`octet_length` 등 기능을 기록한다. |
+| 3 | `migrate-plan` | 무변경 | 바뀌지 않는 값만 해시한 `plan_sha256` 과 실측(여유·DB·WAL·직전 백업 쌍, 해시에 넣지 않음)을 낸다. |
+| 4 | `migrate-deploy` | 정지 창 | 오늘 OFFSITE_OK·pending 없음·백업 진행 없음·KST 21:30 전·직전 배포 뒤의 새 OFFSITE_OK, 리허설 통과 기록, `plan_sha256` 일치를 확인한 뒤 진행한다. |
+| 사후 | `migrate-continue` / `migrate-rollback` / `migrate-accept` | 대표 승인 | HOLD 된 v22 재기동 / bound pin 의 v21 로 복귀(v22 세대는 묶음 보존) / 확정(pin 해제). |
+
+workflow 입력: `mode`, `commit`, `migration_id`(1~4), `migration_arg`(4 = plan_sha256, 사후 = run id),
+`confirm`(4·사후 = `MIGRATE_NAVER_SCHEMA_21_TO_22_ADDITIVE`). helper 파일은 workflow 와 `MIGRATIONS.helper_sha256`
+두 곳에서 해시로 고정한다(helper 안에는 자기 해시가 없다).
+
+`migrate-deploy` 의 핵심 순서: 복구 기록·활성 표지·상태 ACTIVE·복귀 pin(pending, v21 이미지에 `rollback-<run>` 태그)
+→ **hold 파일 + 두 unit 의 drop-in**(`AssertPathExists=!…/migration-hold`, `AssertPathExists=…/engine.db`; 재부팅·의존
+시작도 막음) → 정지 → helper `chain` 하나(원본 flock 을 한 프로세스가 끝까지 쥠: checkpoint(TRUNCATE) → 사본 →
+사본에만 제품 `open_writer` → 실제 rowid 포함 전수 형 대조(허용 차이: 판 번호 한 줄, 고정된 orphan 회차의 3칸) →
+저널을 남긴 두 rename) → unit 교체 → KST 23:00 전 확인 → **guarded_start**(DB 세대 검증 → 서비스 세대 복원·재확인 →
+start intent → hold 를 마지막에 해제 → 기동 → 헬스) → HEALTHY → gzip 보관(v2 manifest, pinned, 푼 sha 대조) →
+해제 복귀 공간(G4)이 있을 때만 raw 삭제 → COMPLETED(표지는 마지막에 지움).
+
+실패 처리(자동은 입증된 경우만):
+
+| 지점 | 동작 | 종료 |
+|---|---|---|
+| 정지 전 | hold·drop-in·pin 을 거두고 거절 | 10 |
+| 정지 뒤·기동 전 | 잠금 아래 identity 로 되돌림 → guarded_start v21 | 2 |
+| 기동 뒤 헬스 실패 | 정지·잠금·checkpoint·rowid manifest. 새 쓰기 없음이 입증되면 v22 세대를 묶음으로 옮기고 v21 복귀, 아니면(새 쓰기·불명) **정지 보존(HOLD)** — 대표 판단 | 2 / 12 |
+| gzip 보관 실패·상한·시간, G4 불통과 | 그 시점 실측으로 `keep_raw_now`(정책 임계치 `max(S+Z, Z+E, Z+2E+1MiB)` + 1GiB; 미래 백업 보장 아님)를 다시 계산. true 면 경고·raw 보존, false/불명이면 HOLD. 게시된 gz·부분본은 자동 삭제하지 않음 | 0 경고 / 12 |
+| 중단된 실행(재부팅·SSH) | 다음 잠금 모드가 먼저 관측 기록 → 상태별 재진입: COMPLETED/ROLLED_BACK 은 세대 재확인 뒤 표지만 정리, HEALTHY 는 정지 없이 마무리, start intent 뒤는 잠재 기동으로 입증, 그 전은 identity 로 되돌림, 모르면 HOLD | 3 / 12 / 4 |
+
+수동 확인(자동 시험 밖): 실제 systemd 의 Assert drop-in 이 명시·의존·부팅 시작을 막고 `Restart=always` 가 돌지 않는지는
+CI 가 아닌 **VM 전용 throw-away unit/target** 에서만 확인한다(운영 서버의 `default.target` 을 재격리하지 않는다). 첫 운영
+이관 전에는 서버 리허설(2)이 필수이며, 여유가 허용되면 A3 cold copy 로 한 번 더 리허설하길 권한다.
+
+합성 시험: `test_naver_schema_migrate.py`(helper·PY_HELPER 단위), `test_naver_migrate_deploy.py`(가짜 호스트 종단,
+합성 제품 대역). 실제 제품 두 커밋으로 helper 를 도는 `RealProductHelperTest` 는 `NAVER_PRODUCT_V21_DIR`·
+`NAVER_PRODUCT_V22_DIR` 이 있을 때만 돈다(배포 workflow 의 migrate-* test job 이 비공개 로그로 실행).
+
+### 9.1 22 → 23(`22-23-reconcile-v1`, 보고 대조 3단계)과 고정 nginx 단계
+
+고정 표 `MIGRATIONS` 는 이제 이관 항목 여러 개를 함께 둔다. 이관별 값(커밋·store 해시·새 표 SCHEMA 모듈
+`schema_module`(경로·import·해시)·새 표 SQL 해시·자동 색인·보관 `purpose`)은 모두 그 항목에서만 나온다. 21-22 항목은
+원래 칸 그대로이며 `purpose`·`schema_module` 은 코드의 호환 규칙(`pre-migration-21-22`, `exhaust_store`)으로 같은 값이 된다.
+helper 해시는 두 항목이 같은 값을 쓴다(파일 하나). 엄격 v2 reader 는 두 purpose 를 모두 읽고 purpose·schema 짝이 어긋나면
+`BACKUP_SAFETY` 로 멈춘다. gz 복원은 manifest 의 purpose·schema·source_commit 이 그 run 의 항목과 같을 때만 한다.
+
+운영 순서(각 단계 대표 승인):
+1. 21→22 run(2026-11-16, 43746708424)의 수집 진전·새 OFFSITE_OK 확인 → `migrate-accept`(pin released). 22-23 항목의
+   `requires_released` 때문에 그 전에는 22-23 prepare·deploy 가 `MIGRATION_ORDER` 로 거절된다.
+2. PR38 `9649eae`(스키마 22, 코드만)를 일반 `deploy` 로 올린다. 22-23 항목의 from_commit 이 이 커밋이다.
+3. `migrate-prepare` → `migrate-rehearse` → `migrate-plan` → `migrate-deploy`(`migration_id=22-23-reconcile-v1`,
+   확인 문구 `MIGRATE_NAVER_SCHEMA_22_TO_23_ADDITIVE`). 12260db 는 새 스위치 `reconcile_writes` 를 낸다. 이관 모드는 그 스위치가
+   **꺼져 있을 때만** check-config 를 통과시킨다(켜져 있으면 `CHECK_CONFIG`). 일반 deploy 는 값과 무관하게 받는다.
+4. `nginx-plan` → `nginx-apply`(아래). 업로드는 5에서 대표가 `reconcile_writes` 를 켤 때까지 엔진이 403 이다.
+5. 대표가 런타임 환경에서 `NAVER_ENGINE_RECONCILE_WRITES_ENABLED=true` 로 켠다(이 장치의 범위 밖).
+
+`nginx-plan <커밋> <source.tar> reconcile-upload-v1` / `nginx-apply … <plan_sha256>`(확인 문구
+`APPLY_NAVER_RECONCILE_UPLOAD_NGINX`): 이관과 **따로** 둔 이유 — nginx 는 다른 앱과 함께 쓰는 공용 구성이고, 이관 정지
+창·DB 되돌림과 묶으면 실패 경로가 서로 얽힌다. 업로드 쓰기는 꺼진 채 시작하므로 23 엔진이 먼저 돌아도 안전하고,
+nginx 되돌림(설정 파일 복원)은 DB 와 무관하게 끝난다. 자체 plan_sha256 으로 따로 승인한다.
+- 계획은 `nginx -T` 로 배치를 확인한다: `location ^~ /api/naver-auto` 를 가진 관제 snippet 정확히 하나, 그 snippet 을
+  include 하는 곳이 `dashboard.metainc.co.kr` server 블록 하나, `nginx.conf` 의 `http {}` 가 `conf.d/*.conf` 를 include,
+  proxy_pass 가 관제 중계 형식(`http://unix:/run/metainc/naver-relay/relay.sock:` 또는 `http://naver_relay`).
+  하나라도 다르면 `NGINX_LAYOUT` 으로 거절(아무것도 쓰지 않음).
+- 쓰는 파일은 둘뿐: `conf.d/naver-reconcile-upload-zone.conf`(제품 http include 그대로)와 관제 snippet(제품의 정확 일치
+  두 블록을 그대로 더하되 `proxy_pass` 한 줄만 그 snippet 의 `/api/naver-auto` 와 같은 값). 제품 파일·두 블록 해시는 고정.
+- 적용: 기준선(업로드 경로 64KB 초과 413·`/naver/` 200) → 백업 → 두 파일 쓰기 → `nginx -t` → `nginx -s reload` →
+  두 파일이 계획 내용이고 나머지 `/etc/nginx` 지문이 그대로인지 → 실제 요청(443, 같은 호스트 이름): 두 업로드 경로는
+  4MiB 아래 413·5xx·000 아님 · 4MiB 초과 413, `/api/naver-auto/me` 와 비슷한 다른 경로는 64KB 초과 413, `/naver/` 200.
+  하나라도 실패하면 백업 원문 복원·zone 파일 삭제·`nginx -t`·reload·기준선·전체 지문 확인 → `NGINX_ROLLED_BACK`(2),
+  그것도 실패하면 `NGINX_ROLLBACK_FAILED`(4). 이관 표지가 있거나 끝나지 않은 배포가 있으면 하지 않는다.

@@ -1,0 +1,198 @@
+name: 정지된 앱 데이터 archive 사전 단계 진단 (읽기 전용)
+
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: naver-data-preservation
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: 대표·main·첫 실행·호스트 검사
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+          ATTEMPT: ${{ github.run_attempt }}
+          HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          [ "$ACTOR" = metainchelp-boop ] && [ "$TRIGGERING_ACTOR" = metainchelp-boop ] || { echo ACTOR_REFUSED; exit 1; }
+          [ "$REF" = refs/heads/main ] && [ "$ATTEMPT" = 1 ] || { echo RUN_REFUSED; exit 1; }
+          [[ "$HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || { echo HOST_REFUSED; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: 진단 전용 합성 검사
+        run: python -I -B -m unittest discover -s deploy/naver/tests -p 'test_retirement_data_diagnostic.py' -v
+      - name: 검토된 공개 helper만 준비
+        run: |
+          set -euo pipefail
+          python -I -B - <<'PYCODE'
+          import base64,hashlib,json,os,pathlib
+          names=['retirement_data_diagnostic.py', 'retirement_data_preflight.py', 'retirement_data_archive.py', 'retirement_data_source.py']
+          ship=pathlib.Path('data-diagnostic-ship');ship.mkdir(mode=0o755)
+          rows=[]
+          for name in names:
+              body=(pathlib.Path('deploy/naver')/name).read_bytes()
+              if not 0<len(body)<=262144:raise SystemExit('ASSETS_REFUSED')
+              p=ship/name;p.write_bytes(body);p.chmod(0o644);rows.append([name,hashlib.sha256(body).hexdigest()])
+          with open(os.environ['GITHUB_ENV'],'a') as out:
+              out.write('NDD_MANIFEST='+base64.b64encode(json.dumps(rows,separators=(',',':')).encode()).decode()+'\nNDD_SHA='+rows[0][1]+'\nNDD_RUN='+os.environ['GITHUB_RUN_ID']+'-1\n')
+          PYCODE
+      - name: 고유 원격 public staging 준비
+        id: prepare_remote
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NDD_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            printf '%s' "$NDD_RUN" | grep -Eq '^[1-9][0-9]*-1$'
+            [ -d /tmp ]
+            [ ! -L /tmp ]
+            umask 077
+            mkdir "/tmp/metainc-data-diagnostic-$NDD_RUN"
+      - name: 공개 source·검토된 공개 증거만 전송
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          command_timeout: 45s
+          source: data-diagnostic-ship/*
+          target: /tmp/metainc-data-diagnostic-${{ github.run_id }}-1
+          strip_components: 1
+          overwrite: false
+      - name: 같은 source bytes로 사전검사 또는 고정 단계 실행
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NDD_RUN,NDD_SHA,NDD_MANIFEST
+          command_timeout: 6m
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            rc=0
+            out=$(timeout -k 10s 300s python3 -I -B -c '
+            import base64,hashlib,json,os,re,stat,sys
+            run,digest,encoded=sys.argv[1:]
+            if re.fullmatch(r"[1-9][0-9]{0,19}-1",run) is None or re.fullmatch(r"[0-9a-f]{64}",digest) is None or len(encoded)>8192:raise SystemExit(2)
+            rows=json.loads(base64.b64decode(encoded,validate=True));allowed={"retirement_data_diagnostic.py","retirement_data_preflight.py","retirement_data_archive.py","retirement_data_source.py"}
+            expected={"retirement_data_diagnostic.py","retirement_data_preflight.py","retirement_data_archive.py","retirement_data_source.py"}
+            if not isinstance(rows,list) or len(rows)!=len(expected) or any(not isinstance(row,list) or len(row)!=2 or row[0] not in allowed or re.fullmatch(r"[0-9a-f]{64}",row[1]) is None for row in rows) or {row[0] for row in rows}!=expected:raise SystemExit(2)
+            flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+            tmp=os.open("/tmp",flags);parent=os.open("metainc-data-diagnostic-"+run,flags,dir_fd=tmp)
+            try:
+                before=os.fstat(parent)
+                if before.st_uid!=0 or stat.S_IMODE(before.st_mode)!=0o700:raise ValueError()
+                source=None
+                for name,pin in rows:
+                    info=os.stat(name,dir_fd=parent,follow_symlinks=False)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or not 0<info.st_size<=262144:raise ValueError()
+                    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+                    try:
+                        if os.fstat(fd).st_ino!=info.st_ino or os.fstat(fd).st_dev!=info.st_dev:raise ValueError()
+                        os.fchown(fd,0,0);os.fchmod(fd,0o600);initial=os.fstat(fd)
+                        body=bytearray()
+                        while True:
+                            block=os.read(fd,min(65536,262145-len(body)))
+                            if not block:break
+                            body.extend(block)
+                            if len(body)>262144:raise ValueError()
+                        def stamp(v):return v.st_dev,v.st_ino,v.st_mode,v.st_uid,v.st_gid,v.st_nlink,v.st_size,v.st_mtime_ns,v.st_ctime_ns
+                        if stamp(os.fstat(fd))!=stamp(initial) or stamp(os.stat(name,dir_fd=parent,follow_symlinks=False))!=stamp(initial) or hashlib.sha256(body).hexdigest()!=pin:raise ValueError()
+                        if name=="retirement_data_diagnostic.py":
+                            if pin!=digest:raise ValueError()
+                            source=bytes(body)
+                    finally:os.close(fd)
+                linked=os.stat("metainc-data-diagnostic-"+run,dir_fd=tmp,follow_symlinks=False)
+                if (linked.st_dev,linked.st_ino,linked.st_uid,stat.S_IMODE(linked.st_mode))!=(before.st_dev,before.st_ino,0,0o700):raise ValueError()
+                path="/tmp/metainc-data-diagnostic-"+run+"/retirement_data_diagnostic.py"
+                sys.argv=[path,run]
+                exec(compile(source,path,"exec"),{"__name__":"__main__","__file__":path})
+            finally:os.close(parent);os.close(tmp)
+            ' "$NDD_RUN" "$NDD_SHA" "$NDD_MANIFEST" 2>/dev/null) || rc=$?
+            case "$rc" in 0|2) ;; *) echo DIAGNOSTIC_EXECUTION_UNCONFIRMED; exit 1 ;; esac
+            if ! printf '%s' "$out" | python3 -I -B -c '
+            import json,sys
+            def require(value):
+                if not value:raise ValueError()
+            def unique(rows):
+                value={}
+                for k,v in rows:require(k not in value);value[k]=v
+                return value
+            try:
+                raw=sys.stdin.buffer.read(8193);require(0<len(raw)<=8192 and len(raw.splitlines())==1 and b"root" not in raw)
+                value=json.loads(raw,object_pairs_hook=unique,parse_constant=lambda _:(_ for _ in ()).throw(ValueError()))
+                expected={"schema","session","status","stage","error","read_only","archive_written","state_changed","cleanup_confirmed","entry_count","file_count","deleted_count","configuration_count","configuration_absent_count"}
+                require(isinstance(value,dict) and set(value)==expected and value["schema"]=="metainc-data-diagnostic-v1" and value["session"]=="data-snapshot-20261102-v1")
+                require(value["status"] in {"diagnosed","blocked"} and value["stage"] in ("dependencies", "frozen_initial", "coverage", "frozen_repeat", "pin_base", "inventory", "deleted", "mapping", "configuration", "frozen_final", "complete") and (value["status"]=="blocked")== (sys.argv[1]=="2"))
+                require(value["read_only"] is True and value["archive_written"] is False and value["state_changed"] is False and type(value["cleanup_confirmed"]) is bool)
+                if value["status"]=="diagnosed":require(value["stage"]=="complete" and value["error"] is None and value["cleanup_confirmed"] is True)
+                else:require(isinstance(value["error"],str) and value["error"] in ("archive_failed", "archive_incomplete", "archive_size_limit", "archive_timeout", "arguments_refused", "asset_invalid", "assets_refused", "async_io_uncovered", "attempt_exists", "attempt_not_terminal", "autobid_container_present", "candidate_uncovered", "cgroup_tasks_changed", "cgroup_unconfirmed", "cipher_limit", "cleanup_unconfirmed", "command_failed", "command_limit", "configuration_changed", "configuration_limit", "configuration_missing", "configuration_unconfirmed", "container_changed", "content_changed", "controls_changed", "coverage_incomplete", "cwd_unconfirmed", "daemon_unverified", "data_size_limit", "database_driver_or_path_uncovered", "database_path_uncovered", "db_config_ambiguous", "deadline_exceeded", "deleted_changed", "deleted_limit", "deleted_ref_limit", "deleted_uncovered", "dependency_failed", "depth_limit", "direct_io_uncovered", "directory_changed", "encrypted_pipe_failed", "encrypted_pipe_required", "entry_limit", "fd_changed", "fd_limit", "fd_metadata_invalid", "fd_set_changed", "file_changed", "file_count_limit", "file_exists", "file_too_large", "filesystem_boundary", "final_guard_changed", "freeze_changed", "hardlink_unresolved", "internal_failure", "interrupted", "invalid_metadata", "invalid_phase", "link_or_special_uncovered", "lock_busy", "manifest_size_limit", "mapping_changed", "mapping_unpinned", "maps_changed", "maps_invalid", "module_refused", "mount_identity_mismatch", "mount_unconfirmed", "mount_uncovered", "name_uncovered", "namespace_changed", "nested_cgroup_uncovered", "not_frozen", "not_prepared", "operation_failed", "operator_evidence_refused", "path_changed", "path_uncovered", "pause_failed", "pid_limit", "pid_visibility_incomplete", "pid_visibility_limit", "pipe_failed", "pipeline_failed", "policy_unresolved", "preflight_contract_refused", "privilege_or_platform_refused", "privilege_required", "process_changed", "process_identity_invalid", "public_key_invalid", "read_limit", "receipt_invalid", "recipient_invalid", "regular_file_uncovered", "relevant_file_changed", "relevant_process_changed", "request_refused", "restart_evidence_unconfirmed", "session_closed", "session_exists", "source_unreviewed", "space_insufficient", "thread_set_unconfirmed", "time_limit", "tree_changed", "unsafe_directory", "unsafe_file", "unsafe_path", "volume_uncovered", "worker_changed", "workers_unconfirmed", "writers_unresolved"))
+                for k,limit in (("entry_count",100000),("file_count",100000),("deleted_count",64),("configuration_count",16),("configuration_absent_count",16)):require(type(value[k]) is int and 0<=value[k]<=limit)
+                require(value["file_count"]<=value["entry_count"])
+                print("RETIREMENT_DATA_DIAGNOSTIC="+json.dumps(value,sort_keys=True,separators=(",",":")))
+            except Exception:raise SystemExit(1)
+            ' "$rc" 2>/dev/null; then echo DIAGNOSTIC_OUTPUT_REFUSED; exit 1; fi
+            exit "$rc"
+      - name: 이번 공개 staging만 정리 (원형·journal 보존)
+        if: always() && steps.prepare_remote.outcome == 'success'
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NDD_RUN,NDD_MANIFEST
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            python3 -I -B -c '
+            import base64,hashlib,json,os,re,stat,sys
+            run,encoded=sys.argv[1:]
+            if re.fullmatch(r"[1-9][0-9]{0,19}-1",run) is None or len(encoded)>8192:raise SystemExit(2)
+            rows=json.loads(base64.b64decode(encoded,validate=True));allowed={"retirement_data_diagnostic.py","retirement_data_preflight.py","retirement_data_archive.py","retirement_data_source.py"}
+            if not isinstance(rows,list) or not 2<=len(rows)<=6 or any(not isinstance(row,list) or len(row)!=2 or row[0] not in allowed or re.fullmatch(r"[0-9a-f]{64}",row[1]) is None for row in rows):raise SystemExit(2)
+            flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+            tmp=os.open("/tmp",flags)
+            try:
+                name="metainc-data-diagnostic-"+run
+                try:folder=os.open(name,flags,dir_fd=tmp)
+                except FileNotFoundError:raise SystemExit(0)
+                try:
+                    info=os.fstat(folder)
+                    if info.st_uid!=0 or stat.S_IMODE(info.st_mode)!=0o700:raise ValueError()
+                    for name,pin in rows:
+                        try:info=os.stat(name,dir_fd=folder,follow_symlinks=False)
+                        except FileNotFoundError:continue
+                        if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or not 0<info.st_size<=262144:raise ValueError()
+                        fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=folder)
+                        try:
+                            body=os.read(fd,262145)
+                            if len(body)>262144 or hashlib.sha256(body).hexdigest()!=pin or os.fstat(fd).st_ino!=info.st_ino:raise ValueError()
+                        finally:os.close(fd)
+                        if os.stat(name,dir_fd=folder,follow_symlinks=False).st_ino!=info.st_ino:raise ValueError()
+                        os.unlink(name,dir_fd=folder)
+                finally:os.close(folder)
+                os.rmdir("metainc-data-diagnostic-"+run,dir_fd=tmp)
+            finally:os.close(tmp)
+            ' "$NDD_RUN" "$NDD_MANIFEST" 2>/dev/null

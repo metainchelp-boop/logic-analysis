@@ -3499,9 +3499,17 @@ def sales_bundle_put(req: SalesBundleRequest, current_user: dict = Depends(get_c
     """영업 자료 인계 — 받아 둔 자료를 보관하고 키를 돌려준다 (인증 필수)."""
     from database import _get_conn
     import sales_bundle
+    payload = req.payload
+    if isinstance(payload, dict) and payload.get("v3"):
+        # 맞춤제안서 v3 — 제안서 재료·문장을 붙여 보관한다(실패해도 원본은 그대로 보관).
+        try:
+            import proposal_v3
+            payload = proposal_v3.enrich(payload)
+        except Exception as e:
+            logger.warning(f"[sales-bundle] 제안서 v3 정리 생략: {e}")
     conn = _get_conn()
     try:
-        key = sales_bundle.put(conn, req.payload, user_id=current_user.get("id"))
+        key = sales_bundle.put(conn, payload, user_id=current_user.get("id"))
         conn.commit()
         return {"success": True, "key": key, "ttl_seconds": sales_bundle.TTL_SECONDS}
     except ValueError as e:

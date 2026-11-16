@@ -1,0 +1,297 @@
+name: 기존 앱 이미지 암호화 보존 (수동 전용)
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: '준비 → 서버 B 수신 준비 → 전송 → 완료된 시도·서버 B 인증 폐기 후 정리'
+        required: true
+        type: choice
+        default: prepare
+        options: [prepare, send, cleanup]
+      profile:
+        description: '고정 이미지 1개; 콘텐츠는 자원 검토 완료 전 전송 거부'
+        required: true
+        type: choice
+        default: autobid-web
+        options: [autobid-web, autobid-engine, autobid-watchdog, content-studio]
+
+permissions:
+  contents: read
+
+# 세 단계는 같은 원본 세션을 사용한다. 전송 중 취소하거나 서로 겹치지 않는다.
+concurrency:
+  group: naver-images-preservation
+  cancel-in-progress: false
+
+jobs:
+  preservation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      NRI_PHASE: ${{ inputs.phase }}
+      NRI_PROFILE: ${{ inputs.profile }}
+    steps:
+      - name: 대표 계정·main·신뢰한 호스트·고정 단계 확인
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+          HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTOR" != metainchelp-boop ]; then echo ACTOR_NOT_AUTHORIZED; exit 1; fi
+          if [ "$TRIGGERING_ACTOR" != metainchelp-boop ]; then echo ACTOR_NOT_AUTHORIZED; exit 1; fi
+          if [ "$REF" != refs/heads/main ]; then echo MAIN_REQUIRED; exit 1; fi
+          if ! [[ "$HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo TRUSTED_HOST_FINGERPRINT_REQUIRED; exit 1; fi
+          case "$NRI_PHASE" in prepare|send|cleanup) ;; *) echo PHASE_NOT_AUTHORIZED; exit 1 ;; esac
+          case "$NRI_PROFILE" in autobid-web|autobid-engine|autobid-watchdog|content-studio) ;; *) echo PROFILE_NOT_AUTHORIZED; exit 1 ;; esac
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: 보존 도구 합성 검사 (제품·DB·키·서버 없음)
+        # 전체 회귀 검사는 정확한 PR 커밋에서 수행한다. 수동 단계는 보존 도구를 다시 확인한다.
+        run: python -I -B -m unittest discover -s deploy/naver/tests -p 'test_retirement_*.py' -v
+      - name: 검사한 helper·공개키·서버 B 호스트 공개키만 준비
+        run: |
+          set -euo pipefail
+          umask 022
+          mkdir -m 755 images-preservation-ship
+          cp deploy/naver/retirement_images_source.py images-preservation-ship/
+          cp deploy/naver/retirement_image_profiles.py images-preservation-ship/
+          cp deploy/naver/preservation/recovery-public.asc images-preservation-ship/
+          cp deploy/naver/preservation/server-b-known-hosts images-preservation-ship/
+          # drone-scp의 다른 UID가 읽을 수 있게 공개 자산 사본만 0644로 둔다.
+          chmod 644 images-preservation-ship/retirement_images_source.py images-preservation-ship/retirement_image_profiles.py images-preservation-ship/recovery-public.asc images-preservation-ship/server-b-known-hosts
+          echo "NRI_HELPER_SHA=$(sha256sum images-preservation-ship/retirement_images_source.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NRI_PROFILE_SHA=$(sha256sum images-preservation-ship/retirement_image_profiles.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NRI_PUBLIC_SHA=$(sha256sum images-preservation-ship/recovery-public.asc | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NRI_HOSTS_SHA=$(sha256sum images-preservation-ship/server-b-known-hosts | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NRI_RUN=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: 충돌 없는 관리자 전용 helper 임시 폴더 준비
+        id: prepare_remote
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NRI_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            case "$NRI_RUN" in ''|*[!0-9-]*) exit 1 ;; esac
+            printf '%s' "$NRI_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            [ -d /tmp ]
+            [ ! -L /tmp ]
+            umask 077
+            mkdir "/tmp/metainc-images-preservation-$NRI_RUN"
+      - name: 공개 helper·공개 profile·공개키 4개 파일만 전송
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          command_timeout: 45s
+          source: images-preservation-ship/retirement_images_source.py,images-preservation-ship/retirement_image_profiles.py,images-preservation-ship/recovery-public.asc,images-preservation-ship/server-b-known-hosts
+          target: /tmp/metainc-images-preservation-${{ github.run_id }}-${{ github.run_attempt }}
+          strip_components: 1
+          overwrite: false
+      - name: 고정 이미지 보존 단계 실행 (공개 상태만 출력)
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NRI_RUN,NRI_HELPER_SHA,NRI_PROFILE_SHA,NRI_PUBLIC_SHA,NRI_HOSTS_SHA,NRI_PHASE,NRI_PROFILE
+          command_timeout: 32m
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            case "$NRI_RUN" in ''|*[!0-9-]*) exit 1 ;; esac
+            printf '%s' "$NRI_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            case "$NRI_PHASE" in prepare|send|cleanup) ;; *) exit 1 ;; esac
+            case "$NRI_PROFILE" in
+              autobid-web|autobid-engine|autobid-watchdog) outer_timeout=930s ;;
+              content-studio) outer_timeout=1830s ;;
+              *) exit 1 ;;
+            esac
+            for digest in "$NRI_HELPER_SHA" "$NRI_PROFILE_SHA" "$NRI_PUBLIC_SHA" "$NRI_HOSTS_SHA"; do
+              [ "${#digest}" = 64 ]
+              case "$digest" in *[!0-9a-f]*) exit 1 ;; esac
+            done
+            incoming="/tmp/metainc-images-preservation-$NRI_RUN"
+            helper="$incoming/retirement_images_source.py"
+            profiles="$incoming/retirement_image_profiles.py"
+            public_key="$incoming/recovery-public.asc"
+            known_hosts="$incoming/server-b-known-hosts"
+            [ -d "$incoming" ]
+            [ ! -L "$incoming" ]
+            [ "$(stat -c '%u:%g:%a' "$incoming")" = 0:0:700 ]
+            for asset in "$helper" "$profiles" "$public_key" "$known_hosts"; do
+              [ -f "$asset" ]
+              [ ! -L "$asset" ]
+              [ "$(stat -c '%h' "$asset")" = 1 ]
+              chown 0:0 "$asset"
+              chmod 600 "$asset"
+              [ "$(stat -c '%u:%g:%a:%h' "$asset")" = 0:0:600:1 ]
+            done
+            [ "$(sha256sum "$helper" | cut -d' ' -f1)" = "$NRI_HELPER_SHA" ]
+            [ "$(sha256sum "$profiles" | cut -d' ' -f1)" = "$NRI_PROFILE_SHA" ]
+            [ "$(sha256sum "$public_key" | cut -d' ' -f1)" = "$NRI_PUBLIC_SHA" ]
+            [ "$(sha256sum "$known_hosts" | cut -d' ' -f1)" = "$NRI_HOSTS_SHA" ]
+            rc=0
+            out=$(timeout -k 5s "$outer_timeout" python3 -I -B "$helper" "$NRI_PHASE" "$NRI_PROFILE" 2>/dev/null) || rc=$?
+            case "$rc" in 0|2) ;; *) echo RETIREMENT_IMAGES_FAILED; exit 1 ;; esac
+            # helper 실패나 예상 밖 출력은 공개 로그에 원문을 싣지 않는다.
+            if ! printf '%s' "$out" | python3 -I -B -c '
+            import base64, json, re, sys
+            def unique(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError()
+                    result[key] = value
+                return result
+            try:
+                raw = sys.stdin.buffer.read(4097)
+                if not 0 < len(raw) <= 4096 or len(raw.splitlines()) != 1:
+                    raise ValueError()
+                data = json.loads(raw, object_pairs_hook=unique)
+                fields = {"phase", "status", "session", "error", "ssh_public_key", "image_size_bytes", "bytes", "sha256", "process_rc", "backup_verified", "resources"}
+                if not isinstance(data, dict) or set(data) != fields:
+                    raise ValueError()
+                permitted = {"prepare": {"prepared"}, "send": {"transferred_unverified"}, "cleanup": {"transport_key_removed", "already_closed"}}
+                if data["phase"] != sys.argv[1] or data["session"] != sys.argv[3] + "-image-20261102-v1" or data["backup_verified"] is not False:
+                    raise ValueError()
+                if data["status"] not in permitted[sys.argv[1]] | {"failed"}:
+                    raise ValueError()
+                if (data["status"] == "failed") != (sys.argv[2] == "2"):
+                    raise ValueError()
+                error = data["error"]
+                if error is not None and (not isinstance(error, str) or re.fullmatch(r"[a-z_]{1,64}", error) is None):
+                    raise ValueError()
+                image_sizes = {"autobid-web": 84303740, "autobid-engine": 84303743, "autobid-watchdog": 84303745, "content-studio": 1381032080}
+                if sys.argv[3] not in image_sizes:
+                    raise ValueError()
+                max_image, max_cipher = (1610612736, 2147483648) if sys.argv[3] == "content-studio" else (268435456, 536870912)
+                for field, maximum in (("image_size_bytes", max_image), ("bytes", max_cipher)):
+                    value = data[field]
+                    if value is not None and (type(value) is not int or not 0 <= value <= maximum):
+                        raise ValueError()
+                digest = data["sha256"]
+                if digest is not None and (not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None):
+                    raise ValueError()
+                public = data["ssh_public_key"]
+                if public is not None:
+                    if not isinstance(public, str) or re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/]{68}", public) is None:
+                        raise ValueError()
+                    wire = base64.b64decode(public.split()[1], validate=True)
+                    if len(wire) != 51 or wire[:19] != b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20":
+                        raise ValueError()
+                result = data["process_rc"]
+                if result is not None and (not isinstance(result, dict) or set(result) != {"docker", "gpg", "ssh"} or any(type(v) is not int or not -255 <= v <= 255 for v in result.values())):
+                    raise ValueError()
+                resources = data["resources"]
+                if resources is not None:
+                    resource_fields = {"client_version", "server_version", "client_variant", "server_variant", "driver", "storage_backend", "docker_data", "docker_tmpdir", "tmpdir", "filesystems", "required_free_bytes", "large_export_gate"}
+                    if not isinstance(resources, dict) or set(resources) != resource_fields:
+                        raise ValueError()
+                    for field in ("client_version", "server_version"):
+                        value = resources[field]
+                        if value is not None and (not isinstance(value, list) or len(value) != 3 or any(type(v) is not int or not 0 <= v <= 999 for v in value)):
+                            raise ValueError()
+                    allowed = {"client_variant": {"unknown", "release", "suffixed"}, "server_variant": {"unknown", "release", "suffixed"}, "driver": {"unknown", "overlay2", "overlayfs"}, "storage_backend": {"unknown", "graphdriver", "containerd_snapshotter"}, "docker_data": {"unknown", "var_lib_docker", "other"}, "docker_tmpdir": {"unknown", "unset", "tmp", "docker_tmp", "other_or_duplicate"}, "tmpdir": {"unknown", "unset", "tmp", "docker_tmp", "other_or_duplicate"}, "large_export_gate": {"not_required", "unreviewed", "reviewed"}}
+                    if any(type(resources[k]) is not str or resources[k] not in values for k, values in allowed.items()):
+                        raise ValueError()
+                    if type(resources["required_free_bytes"]) is not int or resources["required_free_bytes"] != 3221225472:
+                        raise ValueError()
+                    filesystems = resources["filesystems"]
+                    if not isinstance(filesystems, list) or len(filesystems) != 3:
+                        raise ValueError()
+                    for fs, alias in zip(filesystems, ("docker_data", "docker_tmp", "tmp")):
+                        if not isinstance(fs, dict) or set(fs) != {"alias", "status", "device", "available_bytes"} or fs["alias"] != alias:
+                            raise ValueError()
+                        if type(fs["status"]) is not str or fs["status"] not in {"unknown", "ok", "unsafe_path", "path_changed", "missing", "permission_denied", "stat_failed"}:
+                            raise ValueError()
+                        for field in ("device", "available_bytes"):
+                            if fs[field] is not None and (type(fs[field]) is not int or not 0 <= fs[field] <= 9223372036854775807):
+                                raise ValueError()
+                        if fs["status"] == "ok" and (fs["device"] is None or fs["available_bytes"] is None):
+                            raise ValueError()
+                if data["status"] != "failed" and data["phase"] != "cleanup":
+                    if data["image_size_bytes"] != image_sizes[sys.argv[3]] or resources is None:
+                        raise ValueError()
+                    if sys.argv[3] == "content-studio":
+                        if resources["large_export_gate"] != "reviewed" or resources["client_version"] != [29, 4, 0] or resources["server_version"] != [29, 4, 0] or resources["client_variant"] != "release" or resources["server_variant"] != "release" or resources["driver"] != "overlayfs" or resources["storage_backend"] != "containerd_snapshotter":
+                            raise ValueError()
+                    elif resources["large_export_gate"] != "not_required":
+                        raise ValueError()
+                    if resources["client_version"] is None or resources["server_version"] is None or resources["docker_data"] != "var_lib_docker":
+                        raise ValueError()
+                    if any(resources[k] not in {"release", "suffixed"} for k in ("client_variant", "server_variant")):
+                        raise ValueError()
+                    if (resources["driver"], resources["storage_backend"]) not in {("overlay2", "graphdriver"), ("overlayfs", "containerd_snapshotter")}:
+                        raise ValueError()
+                    if any(resources[k] not in {"unset", "tmp", "docker_tmp"} for k in ("docker_tmpdir", "tmpdir")):
+                        raise ValueError()
+                    if resources["filesystems"][0]["device"] != resources["filesystems"][1]["device"]:
+                        raise ValueError()
+                    if any(fs["status"] != "ok" or fs["available_bytes"] < resources["required_free_bytes"] for fs in resources["filesystems"]):
+                        raise ValueError()
+                if data["status"] == "failed":
+                    if error is None:
+                        raise ValueError()
+                else:
+                    if error is not None:
+                        raise ValueError()
+                    if data["phase"] == "prepare":
+                        if public is None or not data["image_size_bytes"] or any(data[k] is not None for k in ("bytes", "sha256", "process_rc")):
+                            raise ValueError()
+                    elif data["phase"] == "send":
+                        if public is not None or not data["image_size_bytes"] or not data["bytes"] or digest is None or result != {"docker": 0, "gpg": 0, "ssh": 0}:
+                            raise ValueError()
+                    elif any(data[k] is not None for k in ("ssh_public_key", "image_size_bytes", "bytes", "sha256", "process_rc", "resources")):
+                        raise ValueError()
+                print("RETIREMENT_IMAGES=" + json.dumps(data, sort_keys=True, separators=(",", ":")))
+            except Exception:
+                raise SystemExit(1)
+            ' "$NRI_PHASE" "$rc" "$NRI_PROFILE" 2>/dev/null; then echo RETIREMENT_IMAGES_OUTPUT_REFUSED; exit 1; fi
+            exit "$rc"
+      - name: 이번 실행의 공개 helper 파일과 빈 임시 폴더만 정리
+        # 운송 키는 남긴다. 전송 시도 종료·서버 B 인증 폐기 후 cleanup 단계를 별도로 실행한다.
+        if: always() && steps.prepare_remote.outcome == 'success'
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NRI_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            case "$NRI_RUN" in ''|*[!0-9-]*) exit 1 ;; esac
+            printf '%s' "$NRI_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            incoming="/tmp/metainc-images-preservation-$NRI_RUN"
+            if [ ! -e "$incoming" ] && [ ! -L "$incoming" ]; then exit 0; fi
+            [ -d "$incoming" ]
+            [ ! -L "$incoming" ]
+            [ "$(stat -c '%u:%g:%a' "$incoming")" = 0:0:700 ]
+            for name in retirement_images_source.py retirement_image_profiles.py recovery-public.asc server-b-known-hosts; do
+              asset="$incoming/$name"
+              if [ -e "$asset" ] || [ -L "$asset" ]; then
+                [ -f "$asset" ]
+                [ ! -L "$asset" ]
+                [ "$(stat -c '%h' "$asset")" = 1 ]
+                rm -f -- "$asset" 2>/dev/null
+              fi
+            done
+            if ! rmdir -- "$incoming" 2>/dev/null; then echo RETIREMENT_IMAGES_CLEANUP_INCOMPLETE; exit 1; fi

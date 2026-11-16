@@ -1,0 +1,229 @@
+name: 기존 앱 키 capsule 암호화 보존 (수동 전용)
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: '준비 → 서버 B 수신 준비 → 전송 → 완료된 시도·서버 B 인증 폐기 후 정리'
+        required: true
+        type: choice
+        default: prepare
+        options: [prepare, send, cleanup]
+
+permissions:
+  contents: read
+
+# 세 단계는 같은 원본 세션을 사용한다. 전송 중 취소하거나 서로 겹치지 않는다.
+concurrency:
+  group: naver-key-capsule-preservation
+  cancel-in-progress: false
+
+jobs:
+  preservation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      NKC_PHASE: ${{ inputs.phase }}
+    steps:
+      - name: 대표 계정·main·신뢰한 호스트·고정 단계 확인
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF: ${{ github.ref }}
+          HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTOR" != metainchelp-boop ]; then echo ACTOR_NOT_AUTHORIZED; exit 1; fi
+          if [ "$TRIGGERING_ACTOR" != metainchelp-boop ]; then echo ACTOR_NOT_AUTHORIZED; exit 1; fi
+          if [ "$REF" != refs/heads/main ]; then echo MAIN_REQUIRED; exit 1; fi
+          if ! [[ "$HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo TRUSTED_HOST_FINGERPRINT_REQUIRED; exit 1; fi
+          case "$NKC_PHASE" in prepare|send|cleanup) ;; *) echo PHASE_NOT_AUTHORIZED; exit 1 ;; esac
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: 보존 도구 합성 검사 (제품·DB·키·서버 없음)
+        # 전체 회귀 검사는 정확한 PR 커밋에서 수행한다. 수동 단계는 보존 도구를 다시 확인한다.
+        run: python -I -B -m unittest discover -s deploy/naver/tests -p 'test_retirement_*.py' -v
+      - name: 검사한 helper·공개키·서버 B 호스트 공개키만 준비
+        run: |
+          set -euo pipefail
+          umask 022
+          mkdir -m 755 key-capsule-ship
+          cp deploy/naver/retirement_key_capsule_source.py key-capsule-ship/
+          cp deploy/naver/preservation/recovery-public.asc key-capsule-ship/
+          cp deploy/naver/preservation/server-b-known-hosts key-capsule-ship/
+          # drone-scp의 다른 UID가 읽을 수 있게 공개 자산 사본만 0644로 둔다.
+          chmod 644 key-capsule-ship/retirement_key_capsule_source.py key-capsule-ship/recovery-public.asc key-capsule-ship/server-b-known-hosts
+          echo "NKC_HELPER_SHA=$(sha256sum key-capsule-ship/retirement_key_capsule_source.py | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NKC_PUBLIC_SHA=$(sha256sum key-capsule-ship/recovery-public.asc | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NKC_HOSTS_SHA=$(sha256sum key-capsule-ship/server-b-known-hosts | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "NKC_RUN=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: 충돌 없는 관리자 전용 helper 임시 폴더 준비
+        id: prepare_remote
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NKC_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            case "$NKC_RUN" in ''|*[!0-9-]*) exit 1 ;; esac
+            printf '%s' "$NKC_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            [ -d /tmp ]
+            [ ! -L /tmp ]
+            umask 077
+            mkdir "/tmp/metainc-key-capsule-$NKC_RUN"
+      - name: 공개 helper·공개키 3개 파일만 전송
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          command_timeout: 45s
+          source: key-capsule-ship/retirement_key_capsule_source.py,key-capsule-ship/recovery-public.asc,key-capsule-ship/server-b-known-hosts
+          target: /tmp/metainc-key-capsule-${{ github.run_id }}-${{ github.run_attempt }}
+          strip_components: 1
+          overwrite: false
+      - name: 고정 키 capsule 보존 단계 실행 (공개 상태만 출력)
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NKC_RUN,NKC_HELPER_SHA,NKC_PUBLIC_SHA,NKC_HOSTS_SHA,NKC_PHASE
+          command_timeout: 6m
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            case "$NKC_RUN" in ''|*[!0-9-]*) exit 1 ;; esac
+            printf '%s' "$NKC_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            case "$NKC_PHASE" in prepare|send|cleanup) ;; *) exit 1 ;; esac
+            for digest in "$NKC_HELPER_SHA" "$NKC_PUBLIC_SHA" "$NKC_HOSTS_SHA"; do
+              [ "${#digest}" = 64 ]
+              case "$digest" in *[!0-9a-f]*) exit 1 ;; esac
+            done
+            incoming="/tmp/metainc-key-capsule-$NKC_RUN"
+            helper="$incoming/retirement_key_capsule_source.py"
+            public_key="$incoming/recovery-public.asc"
+            known_hosts="$incoming/server-b-known-hosts"
+            [ -d "$incoming" ]
+            [ ! -L "$incoming" ]
+            [ "$(stat -c '%u:%g:%a' "$incoming")" = 0:0:700 ]
+            for asset in "$helper" "$public_key" "$known_hosts"; do
+              [ -f "$asset" ]
+              [ ! -L "$asset" ]
+              [ "$(stat -c '%h' "$asset")" = 1 ]
+              chown 0:0 "$asset"
+              chmod 600 "$asset"
+              [ "$(stat -c '%u:%g:%a:%h' "$asset")" = 0:0:600:1 ]
+            done
+            [ "$(sha256sum "$helper" | cut -d' ' -f1)" = "$NKC_HELPER_SHA" ]
+            [ "$(sha256sum "$public_key" | cut -d' ' -f1)" = "$NKC_PUBLIC_SHA" ]
+            [ "$(sha256sum "$known_hosts" | cut -d' ' -f1)" = "$NKC_HOSTS_SHA" ]
+            rc=0
+            out=$(timeout -k 5s 330s python3 -I -B "$helper" "$NKC_PHASE" 2>/dev/null) || rc=$?
+            case "$rc" in 0|2) ;; *) echo RETIREMENT_KEY_CAPSULE_FAILED; exit 1 ;; esac
+            # helper 실패나 예상 밖 출력은 공개 로그에 원문을 싣지 않는다.
+            if ! printf '%s' "$out" | python3 -I -B -c '
+            import base64, json, re, sys
+            def unique(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError()
+                    result[key] = value
+                return result
+            try:
+                raw = sys.stdin.buffer.read(4097)
+                if not 0 < len(raw) <= 4096 or len(raw.splitlines()) != 1:
+                    raise ValueError()
+                data = json.loads(raw, object_pairs_hook=unique)
+                fields = {"phase", "status", "session", "error", "ssh_public_key", "source_size_bytes", "bytes", "sha256", "process_rc", "backup_verified"}
+                if not isinstance(data, dict) or set(data) != fields:
+                    raise ValueError()
+                permitted = {"prepare": {"prepared"}, "send": {"transferred_unverified"}, "cleanup": {"transport_key_removed", "already_closed"}}
+                if data["phase"] != sys.argv[1] or data["session"] != "key-capsule-20261102-v1" or data["backup_verified"] is not False:
+                    raise ValueError()
+                if data["status"] not in permitted[sys.argv[1]] | {"failed"}:
+                    raise ValueError()
+                if (data["status"] == "failed") != (sys.argv[2] == "2"):
+                    raise ValueError()
+                error = data["error"]
+                if error is not None and (not isinstance(error, str) or re.fullmatch(r"[a-z_]{1,64}", error) is None):
+                    raise ValueError()
+                for field, maximum in (("source_size_bytes", 65536), ("bytes", 1048576)):
+                    value = data[field]
+                    if value is not None and (type(value) is not int or not 0 <= value <= maximum):
+                        raise ValueError()
+                digest = data["sha256"]
+                if digest is not None and (not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None):
+                    raise ValueError()
+                public = data["ssh_public_key"]
+                if public is not None:
+                    if not isinstance(public, str) or re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/]{68}", public) is None:
+                        raise ValueError()
+                    wire = base64.b64decode(public.split()[1], validate=True)
+                    if len(wire) != 51 or wire[:19] != b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20":
+                        raise ValueError()
+                result = data["process_rc"]
+                if result is not None and (not isinstance(result, dict) or set(result) != {"gpg", "ssh"} or any(type(v) is not int or not -255 <= v <= 255 for v in result.values())):
+                    raise ValueError()
+                if data["status"] == "failed":
+                    if error is None:
+                        raise ValueError()
+                else:
+                    if error is not None:
+                        raise ValueError()
+                    if data["phase"] == "prepare":
+                        if public is None or not data["source_size_bytes"] or any(data[k] is not None for k in ("bytes", "sha256", "process_rc")):
+                            raise ValueError()
+                    elif data["phase"] == "send":
+                        if public is not None or not data["source_size_bytes"] or not data["bytes"] or digest is None or result != {"gpg": 0, "ssh": 0}:
+                            raise ValueError()
+                    elif any(data[k] is not None for k in ("ssh_public_key", "source_size_bytes", "bytes", "sha256", "process_rc")):
+                        raise ValueError()
+                print("RETIREMENT_KEY_CAPSULE=" + json.dumps(data, sort_keys=True, separators=(",", ":")))
+            except Exception:
+                raise SystemExit(1)
+            ' "$NKC_PHASE" "$rc" 2>/dev/null; then echo RETIREMENT_KEY_CAPSULE_OUTPUT_REFUSED; exit 1; fi
+            exit "$rc"
+      - name: 이번 실행의 공개 helper 파일과 빈 임시 폴더만 정리
+        # 운송 키는 남긴다. 전송 시도 종료·서버 B 인증 폐기 후 cleanup 단계를 별도로 실행한다.
+        if: always() && steps.prepare_remote.outcome == 'success'
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: NKC_RUN
+          command_timeout: 30s
+          script: |
+            set -eu
+            [ "$(id -u)" = 0 ]
+            case "$NKC_RUN" in ''|*[!0-9-]*) exit 1 ;; esac
+            printf '%s' "$NKC_RUN" | grep -Eq '^[0-9]+-[0-9]+$'
+            incoming="/tmp/metainc-key-capsule-$NKC_RUN"
+            if [ ! -e "$incoming" ] && [ ! -L "$incoming" ]; then exit 0; fi
+            [ -d "$incoming" ]
+            [ ! -L "$incoming" ]
+            [ "$(stat -c '%u:%g:%a' "$incoming")" = 0:0:700 ]
+            for name in retirement_key_capsule_source.py recovery-public.asc server-b-known-hosts; do
+              asset="$incoming/$name"
+              if [ -e "$asset" ] || [ -L "$asset" ]; then
+                [ -f "$asset" ]
+                [ ! -L "$asset" ]
+                [ "$(stat -c '%h' "$asset")" = 1 ]
+                rm -f -- "$asset" 2>/dev/null
+              fi
+            done
+            if ! rmdir -- "$incoming" 2>/dev/null; then echo RETIREMENT_KEY_CAPSULE_CLEANUP_INCOMPLETE; exit 1; fi
