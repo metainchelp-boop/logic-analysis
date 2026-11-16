@@ -146,12 +146,36 @@
     } catch (eT) {}
   }
 
+  /* 빈 장 빼기 (2026-11-16) — 장 제목(.report-divider)과 다음 장 제목 사이에 남은 내용이 없으면
+   * 제목도 뺀다. 자료가 없어 칸이 모두 빠진 장이 제목만 남아 광고주에게 가고, 목차에도 실리던 것.
+   * 장에 내용이 있으면 아무것도 바꾸지 않는다(insertToc 보다 먼저 돈다). */
+  function dropEmptyChapters(clone) {
+    try {
+      var divs = clone.querySelectorAll('.report-divider');
+      for (var i = 0; i < divs.length; i++) {
+        var d = divs[i];
+        var n = d.nextElementSibling, has = false;
+        while (n && !(n.classList && n.classList.contains('report-divider'))) {
+          if ((n.textContent || '').trim() || (n.querySelector && n.querySelector('img,canvas,svg,table'))) { has = true; break; }
+          n = n.nextElementSibling;
+        }
+        if (!has && d.parentNode) d.parentNode.removeChild(d);
+      }
+    } catch (eD) {}
+  }
+
   /* 직원용/인터랙티브 요소 제거 + 입력값 평문화 + 반응형 클래스 부여 + 원격 이미지 안전화 */
   function cleanup(clone) {
     REMOVE_SELECTORS.forEach(function (sel) {
       try { clone.querySelectorAll(sel).forEach(function (el) { el.remove(); }); } catch (e) {}
     });
     clone.querySelectorAll('button, .btn').forEach(function (b) { b.remove(); });
+    /* 광고주 전달본에만 싣는 줄(.export-only — 화면에서는 인라인 display:none) 을 보이게 한다 */
+    clone.querySelectorAll('.export-only').forEach(function (el) {
+      el.style.display = '';
+      el.classList.remove('export-only');
+    });
+    dropEmptyChapters(clone);
     clone.querySelectorAll('input, select, textarea').forEach(function (inp) {
       var span = document.createElement('span');
       span.textContent = inp.value || '';

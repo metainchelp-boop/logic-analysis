@@ -4,6 +4,21 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
   var items = Array.isArray(raw) ? raw : (raw ? [raw] : []);
   var valid = items.filter(function(item) { return item && item.name && item.score !== undefined; });
 
+  // 검색광고 조회가 실패한 경우(2026-11-16) — 「0개 ✅ 실측」과 다르다. 직원 화면에만 알리고 전달본에서는 칸째 뺀다.
+  if (valid.length === 0 && props && props.lookupFailed) {
+    return (
+      <div className="card no-export">
+        <h3 className="rt-h3"><span className="rt-hic">👑</span>골든 키워드 <span className="badge b-n">불러오지 못함</span></h3>
+        <div style={{ padding: '18px 20px', textAlign: 'center', background: '#f8fafc', borderRadius: 12, border: '1px dashed #cbd5e1' }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: '#475569', marginBottom: 4 }}>네이버 검색광고 조회가 실패해 골든 키워드를 찾지 못했습니다</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.7 }}>
+            「골든 키워드가 없다」는 뜻이 아닙니다. 잠시 뒤 다시 분석하면 채워질 수 있습니다.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // 0건: 숨기지 않고 대안을 안내 (빈 표/‘없음’이 부정적으로 보이는 문제 개선)
   if (valid.length === 0) {
     return (

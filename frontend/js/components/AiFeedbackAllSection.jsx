@@ -56,7 +56,8 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
         if (volumeData) sections.volume = volumeData;
         if (analysisData.marketRevenue) sections.market = analysisData.marketRevenue;
         if (analysisData.competitionIndex) sections.competition = analysisData.competitionIndex;
-        if (relatedData) sections.related = relatedData;
+        /* 검색광고 조회가 실패한 연관 키워드(lookup_ok=false)는 「0개」가 아니므로 AI 에 넘기지 않는다(2026-11-16) */
+        if (relatedData && relatedData.lookup_ok !== false) sections.related = relatedData;
         if (analysisData.keywordTrend) sections.trend = analysisData.keywordTrend;
         if (analysisData.goldenKeyword) sections.golden = analysisData.goldenKeyword;
         if (analysisData.competitorTable) sections.competitor = analysisData.competitorTable;
@@ -80,6 +81,8 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
             top5AvgReviews: _top5Reviews,
             isDefender: (_myRank != null && _myRank <= 10) || (_myReviews != null && _myReviews >= 100)
         };
+        /* 쇼핑 1페이지 자료 없음 — 서버가 AI 에 「경쟁·가격을 지어내거나 0으로 단정하지 말 것」을 일러 둔다 */
+        if (analysisData.marketMissing) sections.marketMissing = true;
         return sections;
     };
 

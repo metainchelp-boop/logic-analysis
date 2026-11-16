@@ -6,6 +6,10 @@
 window.SummaryCardsSection = function SummaryCardsSection(props) {
   if (!props?.data) return null;
   const { totalVolume, productCount, goldenCount, compLevel, note } = props.data;
+  /* 2026-11-16 — 쇼핑 1페이지 자료가 없을 때(수집 쉼 · 11/5~) 가짜 값 대신 「자료 없음」.
+     marketMissing: 경쟁 상품 0개 / relatedLookupFailed: 검색광고 조회 실패(0개와 다름). */
+  var marketMissing = !!props.marketMissing;
+  var relatedLookupFailed = !!props.data.relatedLookupFailed;
   // ★ totalVolume/productCount 는 App.jsx에서 이미 fmt() 적용된 문자열 → 그대로 출력(이중 포맷 NaN 방지)
 
   /* ===== 히어로 데이터 파생 (전부 기존 분석 데이터 재사용 — 신규 호출 없음) ===== */
@@ -55,9 +59,9 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
     opts = opts || {};
     var missing = opts.forceMissing != null ? opts.forceMissing : isMissing(value);
     return (
-      <div className="kpi">
+      <div className={'kpi' + (opts.cls ? ' ' + opts.cls : '')}>
         <div className="k">{label} {missing
-          ? <span className="badge b-n">집계 없음</span>
+          ? <span className="badge b-n">{opts.missingLabel || '집계 없음'}</span>
           : <span className="badge b-ok">✅</span>}</div>
         <div className="v" style={{ color: missing ? '#94a3b8' : undefined, fontSize: opts.fontSize }}>
           {missing ? '—' : value}
@@ -70,6 +74,16 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
+        {/* 점수를 내지 않은 까닭 — 직원 화면에만(내보내기에는 빈 칸을 싣지 않는다 · 대표 결정 ①ⓐ ②ⓐ) */}
+        {marketMissing && !showHero && (
+          <div className="card no-export" style={{ background: '#f8fafc', border: '1px dashed #cbd5e1', padding: '14px 18px', marginBottom: 14 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 800, color: '#334155' }}>종합 진입 점수 · 계산 불가</div>
+            <div style={{ fontSize: 12.5, color: '#64748b', marginTop: 4, lineHeight: 1.6 }}>
+              종합 점수와 「긴급」 과제는 경쟁 상품 자료로 계산합니다. 자료가 없어 이번에는 내지 않았습니다.
+            </div>
+          </div>
+        )}
+
         {/* ===== 경영자 히어로 요약 (점수·순위 있을 때만 — 없으면 기존 화면 그대로) ===== */}
         {showHero && (
           <div className="card" style={{
@@ -130,9 +144,15 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
           <h3 className="rt-h3"><span className="rt-hic">🎯</span>종합 요약</h3>
           <div className="grid4">
             {Kpi('월간 검색량', totalVolume, '회/월')}
-            {Kpi('등록 상품수', productCount, '개')}
-            <div className="kpi"><div className="k">골든 키워드 <span className="badge b-ok">✅</span></div><div className="v" style={{ color: (Number(goldenCount) === 0 ? '#f59e0b' : undefined) }}>{goldenCount}<small>{Number(goldenCount) === 0 ? '개 — 롱테일 권장' : '개 발견'}</small></div></div>
-            {Kpi('경쟁강도', compLevel, '', { fontSize: '22px' })}
+            {marketMissing
+              ? Kpi('등록 상품수', productCount, '개', { forceMissing: true, missingLabel: '자료 없음', cls: 'no-export' })
+              : Kpi('등록 상품수', productCount, '개')}
+            {relatedLookupFailed
+              ? Kpi('골든 키워드', goldenCount, '개', { forceMissing: true, missingLabel: '불러오지 못함' })
+              : <div className="kpi"><div className="k">골든 키워드 <span className="badge b-ok">✅</span></div><div className="v" style={{ color: (Number(goldenCount) === 0 ? '#f59e0b' : undefined) }}>{goldenCount}<small>{Number(goldenCount) === 0 ? '개 — 롱테일 권장' : '개 발견'}</small></div></div>}
+            {marketMissing
+              ? Kpi('경쟁강도', compLevel, '', { fontSize: '22px', forceMissing: true, missingLabel: '자료 없음', cls: 'no-export' })
+              : Kpi('경쟁강도', compLevel, '', { fontSize: '22px' })}
           </div>
           {note && <div className="note">💡 {note}</div>}
         </div>

@@ -28,6 +28,9 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     var strategy = (advertiserData && advertiserData.entry_strategy) || {};
     var strategies = strategy.strategies || [];
     var overallScore = strategy.overall_score || 0;
+    /* 2026-11-16 — 서버가 쇼핑 1페이지 자료 없이 만든 보고서(수집 쉼 · 11/5~)면 market_data_available=false.
+       점수는 null(계산 불가) · 순위는 못 잰 것 · 경쟁 비교는 만들지 않는다(대표 결정 ①ⓐ ②ⓐ). 옛 서버 응답은 종전대로. */
+    var noMarket = !!(advertiserData && advertiserData.market_data_available === false);
 
     // strategicData fallback
     var stData = strategicData || {};
@@ -117,7 +120,9 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     /* 경쟁 파트만 요청됐는데 보여줄 경쟁 데이터가 없으면 빈 카드 방지 */
     if (part === 'competition' && !advertiserData && !mainBrands) return null;
 
-    return React.createElement('div', { id: part === 'competition' ? 'sec-strategy-comp' : 'sec-strategy', className: 'section fade-in' },
+    /* 자료가 없으면 경쟁 파트는 직원 화면에만(광고주 전달본에서는 칸째 뺀다) */
+    var _sectionCls = 'section fade-in' + (noMarket && part === 'competition' ? ' no-export' : '');
+    return React.createElement('div', { id: part === 'competition' ? 'sec-strategy-comp' : 'sec-strategy', className: _sectionCls },
         React.createElement('div', { className: 'container' },
 
             React.createElement('div', { className: 'card', style: { padding: '20px 22px' } },
@@ -148,14 +153,17 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                     React.createElement('div', {
                         style: {
                             fontWeight: 700, fontSize: 15, marginBottom: 4,
-                            color: productInfo.product_name ? '#0f172a' : '#b45309'
+                            color: productInfo.product_name ? '#0f172a' : (noMarket ? '#475569' : '#b45309')
                         }
-                    }, productInfo.product_name || '상품 정보를 불러오지 못했습니다'),
+                    }, productInfo.product_name || (noMarket ? '상품 정보 · 자료 없음' : '상품 정보를 불러오지 못했습니다')),
                     productInfo.product_name
                         ? React.createElement('div', { style: { fontSize: 13, color: '#64748b' } },
                             productInfo.store_name && React.createElement('span', { style: { marginRight: 12 } }, '판매처: ' + productInfo.store_name),
                             productInfo.price > 0 && React.createElement('span', null, '가격: ' + fmt(productInfo.price) + '원')
                           )
+                        : noMarket
+                        ? React.createElement('div', { style: { fontSize: 12.5, color: '#64748b', lineHeight: 1.6, marginTop: 2 } },
+                            '쇼핑 순위 수집을 쉬는 동안(2026-11-05~) 쇼핑 목록에서 상품 정보를 찾을 수 없습니다. 고장이 아닙니다.')
                         : React.createElement('div', {
                             style: {
                                 fontSize: 12.5, color: '#78350f', background: '#fffbeb',
@@ -170,13 +178,17 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                 React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
                     /* 순위 배지 */
                     React.createElement('div', { style: { textAlign: 'center', padding: '10px 18px', background: '#f8fafc', borderRadius: 12, minWidth: 80, border: '1px solid #e2e8f0' } },
-                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: ranking.current_rank ? '#0f172a' : '#ef4444' } },
-                            ranking.current_rank ? ranking.current_rank + '위' : '미노출'
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: ranking.current_rank ? '#0f172a' : (noMarket ? '#94a3b8' : '#ef4444') } },
+                            ranking.current_rank ? ranking.current_rank + '위' : (noMarket ? '—' : '미노출')
                         ),
-                        React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', fontWeight: 600 } }, '현재 순위')
+                        React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', fontWeight: 600 } }, (!ranking.current_rank && noMarket) ? '현재 순위 · 못 잼' : '현재 순위')
                     ),
-                    /* 종합 점수 - conic gradient circle */
-                    React.createElement('div', { style: { textAlign: 'center', padding: '10px 18px', background: '#f8fafc', borderRadius: 12, minWidth: 80, border: '1px solid #e2e8f0' } },
+                    /* 종합 점수 - conic gradient circle (자료가 없으면 「계산 불가」) */
+                    noMarket && React.createElement('div', { style: { textAlign: 'center', padding: '10px 18px', background: '#f8fafc', borderRadius: 12, minWidth: 80, border: '1px solid #e2e8f0' } },
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#94a3b8' } }, '—'),
+                        React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', fontWeight: 600 } }, '종합 점수 · 계산 불가')
+                    ),
+                    !noMarket && React.createElement('div', { style: { textAlign: 'center', padding: '10px 18px', background: '#f8fafc', borderRadius: 12, minWidth: 80, border: '1px solid #e2e8f0' } },
                         React.createElement('div', { style: {
                             width: 48, height: 48, borderRadius: '50%', margin: '0 auto 4px',
                             background: 'conic-gradient(' + scoreColor + ' ' + (overallScore * 3.6) + 'deg, #f1f5f9 0deg)',
@@ -194,7 +206,11 @@ window.EntryStrategySection = function EntryStrategySection(props) {
             ),
 
             /* === 종합 진입 점수 + KPI (시안 .grid2 + .kpi) === */
-            showStrat && advertiserData && React.createElement('div', { className: 'grid2', style: { alignItems: 'center', marginBottom: 6 } },
+            showStrat && advertiserData && noMarket && React.createElement('div', { className: 'no-export', style: { background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 12, padding: '12px 16px', marginBottom: 12, fontSize: 12.5, color: '#64748b', lineHeight: 1.6 } },
+                React.createElement('b', { style: { color: '#334155' } }, '종합 진입 점수 · 계산 불가'),
+                ' — 점수와 평균가 · 키워드 포함률은 경쟁 상품 자료로 계산합니다. 자료가 없어 이번에는 내지 않았습니다. 아래 전략은 내 상품 정보 기준입니다.'
+            ),
+            showStrat && advertiserData && !noMarket && React.createElement('div', { className: 'grid2', style: { alignItems: 'center', marginBottom: 6 } },
                 React.createElement('div', { style: { textAlign: 'center' } },
                     React.createElement('div', { style: { fontSize: 13, color: '#64748b' } }, '종합 진입 점수'),
                     React.createElement('div', { style: { fontSize: 40, fontWeight: 900, color: scoreColor } },
@@ -219,7 +235,10 @@ window.EntryStrategySection = function EntryStrategySection(props) {
             ),
 
             /* === 경쟁사 상위 10개 비교표 === */
-            showComp && React.createElement('div', { style: { marginBottom: 28 } },
+            showComp && noMarket && React.createElement('div', { style: { background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 12, padding: '12px 16px', fontSize: 12.5, color: '#64748b', lineHeight: 1.6 } },
+                '경쟁 상품 목록이 없어 상위 10개 비교표와 격차 분석을 만들지 않았습니다.'
+            ),
+            showComp && !noMarket && React.createElement('div', { style: { marginBottom: 28 } },
                 React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 } },
                     React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, background: 'linear-gradient(135deg, #eef2ff, #dbeafe)', fontSize: 14 } }, '\uD83C\uDFC6'),
                     ' 경쟁사 상위 10개 비교표'
