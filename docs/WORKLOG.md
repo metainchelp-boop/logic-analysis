@@ -10,6 +10,37 @@
 > **적는 법(append-only 유지)** — 새 차수는 이 파일 **맨 위**(아래 목차 바로 다음)에 적습니다.
 > 진행 중인 동안에는 CLAUDE.md 에도 제목 한 줄을 두고, **배포가 끝나면 그 한 줄만 지웁니다.**
 
+## 2026-11-16 — 🧾 로직분석 보고서 빈칸 「문구 고침」 구현·검증 · 배포 [로직분석 · 서버+화면 · DDL 0 · PR #300]
+
+**대표 결정** — 「추천대로 하고 배포하자.」 = 「보고서 문구 — ①ⓐ ②ⓐ ③ⓐ」(시안 v2 https://claude.ai/artifact/H7qC2kkoHKJTndMtA1CQ17).
+① 광고주 전달본은 빈 칸·빈 장을 빼고 맨 위에 한 줄 ② 시장 자료가 없으면 종합 점수 「계산 불가」(「긴급」도 그 점수로 고르지 않음) ③ 직원 화면에 이유(「쇼핑 순위 수집을 쉬는 동안(2026-11-05~) · 고장이 아닙니다」).
+
+**판정 한 곳** — 「시장 자료 있음」 = 쇼핑 1페이지 상품이 1개 이상. 서버 `compute_advertiser_report` 의 `market_ok = bool(page1_products)`, 화면 `analysis.marketMissing = prods.length === 0`. **자료가 있으면 문장·점수·화면 모두 종전과 한 글자도 같다**(렌더 시험 「자료 있음」 갈래로 고정).
+
+**서버(backend/main.py · auto_analysis.py)**
+- 진입 전략: 자료 없으면 가격 「현재 판매가는 N원입니다. 경쟁 상품 가격 자료가 없어 가격 비교는 넣지 않았습니다.」 · 카테고리 「…카테고리 점유율은 넣지 않았습니다.」 · 순위 「순위를 재지 못해 순위 기반 조언은 넣지 않았습니다.」 · 순위 못 잼으로 severity high 를 고르지 않음(medium) · 점수 None · 응답 `market_data_available`.
+- `/api/keywords/related` 에 `lookup_ok`(검색광고 조회 실패 ≠ 0개) · `/api/rank/keyword-exposure` 결과마다 `measured` + `measured_count`(목록 없음·시간 초과 = 「못 잼」, 200위 밖 아님).
+- `/api/ai/feedback-all` — 화면이 `marketMissing` 을 보내면 「경쟁·가격을 지어내거나 0으로 단정하지 말 것」을 앞에 붙임.
+- 08:30 자동 보고서 — 상품 수·경쟁강도 빈 칸을 빼고 맨 위 한 줄(내부 사정은 적지 않음).
+
+**화면(frontend/js)**
+- `AnalysisResults` — 직원 안내 띠(no-export) · 전달본 한 줄(export-only · 화면 숨김) · 장마다 「이번 분석에서 빠진 칸」(no-export) · 장 부제를 실제 들어간 칸만 · 데이터 검수 줄 no-export · 예상 CPC 「0」 결함(`volumeData.length &&` → `!volumeMissing`) · 검색량 실패 안내 · 데이터랩 「생활/건강」 기준 안내 · 연관 키워드 조회 실패 안내 · 자료 없을 때 상품명 키워드 분석 칸 no-export.
+- `analysis.jsx` — 상품 검색 「성공·빈 목록」은 `off`(회색 「— 상품 검색 · 수집 쉬는 중」 · 재조회 안 함 → 7.5초 단축) · 연관 `lookup_ok=false` 는 실패 · `summaryCards.relatedLookupFailed` · `marketMissing` · 데이터랩 `categoryDefaulted`.
+- `SummaryCardsSection` 「계산 불가」(no-export) · 「등록 상품수」·「경쟁강도」 자료 없음(no-export) · 골든 「불러오지 못함」. `EntryStrategySection` 「현재 순위 · 못 잼」 · 「종합 점수 · 계산 불가」 · 비교표 대신 한 줄 · 경쟁 파트 no-export · 낡은 「쇼핑 검색 API 종료」 문구 대신 수집 쉼 안내. `RankTrackingSection` 「못 잼」 · 「못 잰 키워드」 따로 · 노출률 분모 = 잰 키워드. `GoldenKeywordCard` 조회 실패 「불러오지 못함」. `AiFeedbackAllSection` 조회 실패 연관은 안 보냄 · `marketMissing`.
+- `report-capture.js` — export-only 보이기 · 내용 없는 장 제목 빼기(목차보다 먼저 · 장소 무관 공용 — 플레이스 보고서에도 같은 규칙).
+
+**검증**
+- 배포 게이트 시험 68단계 로컬 전부 통과(CI 의존성 가상 환경).
+- 신규 `backend/tests/test_report_gap_wording.py` 35항(서버 전체 의존성 환경 · `compute_advertiser_report` 실제 실행 — 자료 없음/있음) · 게이트 환경 24항 + 1 건너뜀(실행 묶음) · deploy.yml 등록.
+- 헤드리스 크롬 렌더 26항 — 실제 번들 · 자료 없음/있음 · 화면 글자와 내보내기(사람이 보는 글자 = innerText) · 네트워크 0 · `frontend/tests/report_gap_render.cjs`(로컬 · 러너에 크롬 없음).
+- 사보타주 5/5 — CPC 옛 조건 · 점수 None 제거 · export-only 숨김 · 상품 검색 off 무력화 · 못 잰 키워드 갈래 제거.
+- ⭐ 교훈 — **사보타주 2건이 처음엔 0 실패였다.** ㉠ 전달본을 문자열(태그 제거)로 읽어 `display:none` 인 줄도 「있다」로 셌다 → 사람이 보는 글자(innerText)로 읽게 고침 ㉡ 「모두 못 잼」만 시험해 일부만 잰 갈래를 아무도 안 봤다 → 시험 추가. **사보타주가 통과하면 시험부터 의심한다**(9/16 교훈 재발).
+- ⭐ 시험 실수 — 「0원」 금지 검사가 「12,900원」 안의 「0원」을 잡았다 → 앞이 숫자·쉼표가 아닌 0원만.
+
+**계약 영향** — ① 전산 `LogicAnalysisClient`(`/api/advertiser/analyze` 소비)는 `overall_score` 를 `hasNonNull` 로 읽는다 → 자료 없을 때 그쪽 「score」 칸만 빠짐(형식 불변 · 오류 없음). 소식판 요청함에 통지. portal-summary 무접촉.
+
+**남은 것** — SEO 종합 진단(`/seo/analyze`)은 ① 도 쓰는 계약이라 이번에 안 건드림 · PR #369(다른 세션 · 키워드 적합도)가 같은 파일 몇 곳(AnalysisResults · GoldenKeywordCard · main.py related · dist)을 만져 이 배포 뒤 다시 받아 맞춰야 함.
+
 ## 2026-11-16 — 🧾 로직분석 보고서 빈칸 「문구 고침」 시안 v2 — 쇼핑 수집 종료 뒤 · 대표 결정 3건 대기 [로직분석 · 서버+화면 · 코드 미착수]
 
 - 대표 「일단 로직 보고서에 제대로 정보가 안나오는 부분들에 대해서 문구 개선해야 할 거 같아」(11/16). 같은 시안 링크 v2 https://claude.ai/artifact/H7qC2kkoHKJTndMtA1CQ17 (사본 `docs/report-gap-fix-mockup.html`).
