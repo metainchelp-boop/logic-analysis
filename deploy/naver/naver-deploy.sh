@@ -356,7 +356,7 @@ def container_info():
 SWITCHES = ('sync', 'links', 'morning', 'alerts', 'metrics', 'inventory', 'execution', 'backup', 'web',
             'issue_alerts')
 # 새 판에만 있는 스위치: check-config 가 내도 된다(비교 문자열에는 넣지 않는다). migrate-* 는 반드시 꺼져 있어야 한다
-# (보고 대조 쓰기, 3단계 12260db~ — 이관 직후 꺼진 채 시작하고 대표가 따로 켠다). 일반 deploy 는 runtime.env 값 그대로.
+# (보고 대조 쓰기, 3단계 12260db~ · 통합 7cfb4be — 이관 직후 꺼진 채 시작하고 대표가 따로 켠다). 일반 deploy 는 runtime.env 값 그대로.
 OFF_SWITCHES = ('reconcile_writes',)
 ENV_NAME = re.compile(r'[A-Z][A-Z0-9_]{0,63}\Z')
 RESERVED_ENV = {'PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL', 'USER'}
@@ -2091,22 +2091,31 @@ MIGRATIONS = {
     '22-23-reconcile-v1': {
         'from_schema': 22, 'to_schema': 23,
         'from_commit': '9649eaec4147623e180d67a85ad9dc3461a8b96f',
-        'to_commit': '12260dbbc946f76d9bf7e2b8562cccc5474ea9a9',
+        'to_commit': '7cfb4beac4fe33cae997d9d38593293525f8dee9',
         'from_store_sha256': '741f4309feb375b7eebac0bc9a20e53263a91aa40fcc203b295beca059bfbd63',
-        'to_store_sha256': 'ac0c54bbcf96627e3a17df3a6a5717b62fb8baf717876cddfda5b7bfdbb0ca08',
+        'to_store_sha256': '8e006fa089abdd485df9cad8c4ea5d54eceab700d44137956f294854e6bc239b',
         'schema_module': {'path': 'naver_engine/reconcile_store.py', 'import': 'naver_engine.reconcile_store',
-                          'sha256': 'd04d8a6904fa9d971dac87813f6c8735ad89c4e9ac77f64f9ba45e538e6c85bd'},
+                          'sha256': 'ab336d73c63b55736cbc452c539c8c872307e71a0f2352d9a4f94f0175c7e4f5'},
         'purpose': 'pre-migration-22-23',
         'requires_released': ['21-22-exhaust-v1'],
         'new_tables': {
             'naver_auto_recon_close_result': 'ca9099dad006c73061a732f78cf10441fdad5871fefd40a4275c32d8e0d0dfe0',
-            'naver_auto_recon_month': 'dfd16b8d64d34f10db81d4c9176f9b3dc95a1063481a402281b7f5df66a4cdcd',
-            'naver_auto_recon_settlement_event': '7d8d0b265d32ce890a4504e7e0920a5a40ac188355d2db15ca74857951ffa658',
-            'naver_auto_recon_settlement_head': 'd702211d0c696a509acc8851208abb47b065d21c6a05ebfaf2bebd8fede8bb58',
+            'naver_auto_recon_dg_close_result': '92c638ac7e01120a5804526e66c98940e3031b44220a98f2695a7892a20bdb27',
+            'naver_auto_recon_dg_link': '8fa631b999f78190fcb1673ce3b185f70a13a730cd29aa53fc921534d4a42b80',
+            'naver_auto_recon_dg_row': '19dace84e36ce368de3b8cec3bb539b3ee8f223f65ee6618cf7e1e172a19cb7f',
+            'naver_auto_recon_dg_staff_entry': '871f82728c2d7a721d54d1ee097f80fa6b116aa60920c4b80b38edabef85377e',
+            'naver_auto_recon_month': '5453b3f0a4551fc4fe6795783c06ef0054205ebd80480054db9749e7c2c5256c',
+            'naver_auto_recon_settlement_event': '054085dfdf4aae2e94862e44a464ce8d7653aaf43fdc078786d612cd24bf2f81',
+            'naver_auto_recon_settlement_head': 'a8643a38dde34c52e01d768efd0f10feedde56b328f24b6c09061ac430bd6c52',
             'naver_auto_recon_settlement_row': '7365b09956f60fd059eb529f56520344e795e38cc434abbf407f8c468e239205',
-            'naver_auto_recon_settlement_version': 'f713ad26e4dd4773c12f545e6568584f8c6f53a8faa049e1ddca172a8d298521',
+            'naver_auto_recon_settlement_version': '57281abf2b0f7b82fb953f7ec257dc9f164e414ce7ac353435839d32f1cbec86',
             'naver_auto_recon_staff_entry': '3027c77a42d561791f68725ea840c52af21156c153319c9bcb673c5d1e84c098'},
-        'autoindexes': ['sqlite_autoindex_naver_auto_recon_close_result_1', 'sqlite_autoindex_naver_auto_recon_month_1',
+        'autoindexes': ['sqlite_autoindex_naver_auto_recon_close_result_1',
+                        'sqlite_autoindex_naver_auto_recon_dg_close_result_1',
+                        'sqlite_autoindex_naver_auto_recon_dg_link_1',
+                        'sqlite_autoindex_naver_auto_recon_dg_row_1',
+                        'sqlite_autoindex_naver_auto_recon_dg_staff_entry_1',
+                        'sqlite_autoindex_naver_auto_recon_month_1',
                         'sqlite_autoindex_naver_auto_recon_settlement_event_1',
                         'sqlite_autoindex_naver_auto_recon_settlement_head_1',
                         'sqlite_autoindex_naver_auto_recon_settlement_row_1',
@@ -2923,7 +2932,7 @@ MIG_COMMANDS = {
 import fnmatch  # noqa: E402 (nginx 단계 전용)
 NGINX_STEPS = {
     'reconcile-upload-v1': {
-        'product_commit': '12260dbbc946f76d9bf7e2b8562cccc5474ea9a9',
+        'product_commit': '7cfb4beac4fe33cae997d9d38593293525f8dee9',
         'http_conf': {'member': 'deploy/naver-engine-nginx-http.conf',
                       'sha256': '316f42d2bfb11ff374359d0520d31cf0662210aea75894de5383df417ab26136',
                       'target': '/etc/nginx/conf.d/naver-reconcile-upload-zone.conf'},

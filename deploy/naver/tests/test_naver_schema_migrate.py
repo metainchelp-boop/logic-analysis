@@ -526,9 +526,9 @@ class HostHelperTest(unittest.TestCase):
         self.assertEqual({e['helper_sha256'] for e in table.values()}, {file_sha(HELPER)})
         entry = table['22-23-reconcile-v1']
         self.assertEqual((entry['from_commit'], entry['to_commit']),
-                         ('9649eaec4147623e180d67a85ad9dc3461a8b96f', '12260dbbc946f76d9bf7e2b8562cccc5474ea9a9'))
-        self.assertEqual(len(entry['new_tables']), 7)
-        self.assertEqual(len(entry['autoindexes']), 8)
+                         ('9649eaec4147623e180d67a85ad9dc3461a8b96f', '7cfb4beac4fe33cae997d9d38593293525f8dee9'))
+        self.assertEqual(len(entry['new_tables']), 11)
+        self.assertEqual(len(entry['autoindexes']), 12)
         self.assertNotIn('schema_module', table['21-22-exhaust-v1'], '21-22 entry keeps its original fields')
 
     def test_malformed_v2_refuses_everything(self):
