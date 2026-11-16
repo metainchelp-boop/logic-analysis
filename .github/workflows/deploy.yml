@@ -121,6 +121,12 @@ jobs:
       - name: Proposal v3 regression (제안서 재료·문장 검사)
         run: python backend/tests/test_proposal_v3.py
 
+      # 키워드 적합도 판정(2026-11-16) — 원종당초콜릿(파베초콜릿) 제안서에 '빼빼로'가 공략 키워드·상품명 처방으로
+      # 나간 사고. 제안서 키워드는 「이 상품을 찾는 말」만 — 핵심 명사·글자 겹침·시즌 창·타사 브랜드·다른 형태.
+      # 블랙리스트가 아니라 일반 규칙이어야 한다(베이글·당근·도루묵·닭발·토마토 사례 포함). stdlib 만.
+      - name: Keyword fit regression (상품에 맞는 키워드만)
+        run: python backend/tests/test_keyword_fit.py
+
       # 업체 삭제 자식 정리 회귀(2026-09-11) — 하드삭제 경로가 5개인데 지우는 자식이
       # 제각각이었다. clients.py 의 연결만 PRAGMA foreign_keys 를 안 켜 CASCADE 가 안 돌았고,
       # 그 경로로 지운 업체의 분석·순위이력이 통째로 고아가 됐다.

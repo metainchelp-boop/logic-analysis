@@ -1,5 +1,32 @@
 /* analysis.jsx — 분석 실행 로직(_doSearch)을 App.jsx에서 분리
  * window.createDoSearch(deps) → _doSearch 함수 반환. deps로 App의 setter/ref/값 주입. */
+/* 골든 키워드 카드 한 장의 값 — 분석 직후(여기)와, 키워드 적합도 판정 뒤 대체 카드(AnalysisResults)가 같은 것을 쓴다.
+   (2026-11-16 분리 — 문구·계산은 종전 그대로) */
+window.buildGoldenKeywordInfo = function(gk, keyword) {
+    if (!gk) return null;
+    var gkVolume = gk.totalVolume || 0;
+    var gkClicks = gk.monthlyAvePcClkCnt ? (gk.monthlyAvePcClkCnt + gk.monthlyAveMobileClkCnt) : 0;
+    var gkClickRate = gkVolume > 0 ? ((gkClicks / gkVolume) * 100).toFixed(1) : 0;
+
+    // 디테일한 추천 이유 생성
+    var gkReason = '"' + gk.keyword + '"은(는) 월간 검색량 ' + fmt(gkVolume) + '회로 안정적인 수요가 존재합니다. ';
+    if (gkClicks > 0) {
+        gkReason += '평균 클릭수 ' + gkClicks.toFixed(1) + '회(클릭률 ' + gkClickRate + '%)로 구매 의도가 높은 키워드입니다. ';
+    }
+    gkReason += '경쟁강도 "' + compLabel(gk.compIdx) + '" 수준이라 상위 노출 진입 비용이 낮습니다. ';
+    gkReason += '메인 키워드 "' + keyword + '"의 세부 키워드로 상품명에 함께 포함시키면 추가 유입을 확보할 수 있습니다.';
+
+    return {
+        name: gk.keyword,
+        score: gk.score || (gkVolume ? Math.round(gkVolume / 100) : 0),
+        volume: gkVolume,
+        competition: compLabel(gk.compIdx),
+        ctr: gkClicks,
+        clicks: Math.round(gkVolume * 0.05),
+        reason: gkReason,
+    };
+};
+
 window.createDoSearch = function(deps) {
     var cleanProductUrl = deps.cleanProductUrl;
     var lastHtmlRef = deps.lastHtmlRef;
@@ -287,28 +314,7 @@ window.createDoSearch = function(deps) {
                     return !gk.isStoreName;
                 });
                 var gk = filteredGolden.length > 0 ? filteredGolden[0] : rd.golden_keywords[0];
-
-                var gkVolume = gk.totalVolume || 0;
-                var gkClicks = gk.monthlyAvePcClkCnt ? (gk.monthlyAvePcClkCnt + gk.monthlyAveMobileClkCnt) : 0;
-                var gkClickRate = gkVolume > 0 ? ((gkClicks / gkVolume) * 100).toFixed(1) : 0;
-
-                // 디테일한 추천 이유 생성
-                var gkReason = '"' + gk.keyword + '"은(는) 월간 검색량 ' + fmt(gkVolume) + '회로 안정적인 수요가 존재합니다. ';
-                if (gkClicks > 0) {
-                    gkReason += '평균 클릭수 ' + gkClicks.toFixed(1) + '회(클릭률 ' + gkClickRate + '%)로 구매 의도가 높은 키워드입니다. ';
-                }
-                gkReason += '경쟁강도 "' + compLabel(gk.compIdx) + '" 수준이라 상위 노출 진입 비용이 낮습니다. ';
-                gkReason += '메인 키워드 "' + keyword + '"의 세부 키워드로 상품명에 함께 포함시키면 추가 유입을 확보할 수 있습니다.';
-
-                analysis.goldenKeyword = {
-                    name: gk.keyword,
-                    score: gk.score || (gkVolume ? Math.round(gkVolume / 100) : 0),
-                    volume: gkVolume,
-                    competition: compLabel(gk.compIdx),
-                    ctr: gkClicks,
-                    clicks: Math.round(gkVolume * 0.05),
-                    reason: gkReason,
-                };
+                analysis.goldenKeyword = window.buildGoldenKeywordInfo(gk, keyword);
             }
 
             // 5. 광고주 상품 정보

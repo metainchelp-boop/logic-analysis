@@ -17,6 +17,9 @@
 
 import json
 import re
+from datetime import date
+
+import keyword_fit
 
 #: 기존 AI 피드백(/api/ai/feedback-all)과 같은 모델을 쓴다(한 곳에서 바꾸면 둘 다 바뀌지는 않으니 함께 볼 것).
 MODEL = "claude-sonnet-4-6"
@@ -99,11 +102,16 @@ def template(f):
     t1 = targets[0] if targets else None
     t2 = targets[1] if len(targets) > 1 else None
     dl = f.get("datalab") or {}
-    pop = dl.get("categoryPopular") or []
-    rising = dl.get("rising") or []
+    # ⚠️ 카테고리 인기어·급상승어는 이 상품에 맞는(fit) 것만 문장에 쓴다(2026-11-13 원종당: '빼빼로데이'를 상품명에 넣으라고 썼다).
+    #    fit 이 없는 옛 사실값(판본 1)은 종전처럼 전부 쓴다.
+    pop_all = dl.get("categoryPopular") or []
+    pop = _fit_only(pop_all)
+    rising = _fit_only(dl.get("rising") or [])
 
     def tk(t):
-        return f"{_q(t['keyword'])}(월 {n(t['total'])}회)" if t else ""
+        if not t:
+            return ""
+        return f"{_q(t['keyword'])}(월 {n(t['total'])}회)" if t.get("total") else f"{_q(t['keyword'])}(검색량 미확인)"
 
     tpair = " · ".join(x for x in (tk(t1), tk(t2)) if x)
     # 상품명에 이미 들어 있는 키워드를 「없다」고 쓰지 않는다 — 빠진 것만 말한다.
@@ -255,18 +263,22 @@ def template(f):
     leaf = prod.get("categoryLeaf") or "이"
     c["market.b"] = f"{leaf} 카테고리에서 고객이 가장 많이 찾는 키워드를 데이터랩으로 분석했습니다."
     c["market.p"] = "고객은 상품의 세부 이름보다 넓은 말과 용량·용도 같은 말로 먼저 검색합니다."
-    c["market.d"] = "고객의 검색어를 상품명·광고에 그대로 옮겨 수요를 받습니다."
+    c["market.d"] = "그중 이 상품을 찾는 말만 골라 상품명·광고에 옮겨 수요를 받습니다."
     if pop:
-        top = pop[0]
-        mk = f"{leaf} 카테고리에서 가장 많이 찾는 말은 {_q(top['keyword'])}입니다. "
+        names = "·".join(_q(p["keyword"]) for p in pop[:2])
+        mk = f"{leaf} 카테고리 인기 검색어 가운데 이 상품과 맞닿은 말은 {names}입니다. "
         r0 = rising[0] if rising else None
         if r0 and r0.get("growth"):
             mk += f"{j(_q(r0['keyword']), '는')} 최근 {r0['growth']}% 늘어 급상승 키워드에도 올랐습니다. "
-        mk += "고객이 쓰는 이 말들을 상품명 앞부분과 광고 키워드에 넣으면 이미 있는 수요를 바로 받을 수 있습니다. "
+        mk += ("카테고리 인기어는 시장 전체의 지표라 그대로 상품명에 옮기지 않습니다. 상품명에는 우리 상품을 정확히 가리키는 말만 쓰고, "
+               "이 말들은 광고 키워드와 상세페이지 문구를 정할 때 참고합니다. ")
         info = [p for p in pop if any(m in p["keyword"] for m in ("추천", "후기", "비교"))]
         if info:
             mk += f"반면 {_q(info[0]['keyword'])}처럼 정보를 찾는 말은 구매까지 거리가 멀어, 광고보다는 체험단·블로그 후기로 접근하는 편이 효율적입니다."
         c["market.killer"] = mk
+    elif pop_all:
+        c["market.killer"] = (f"{leaf} 카테고리 인기 검색어에는 시즌 행사나 다른 상품을 찾는 말이 섞여 있어, 이 상품에 그대로 쓸 말은 없었습니다. "
+                              "그래서 공략 키워드는 연관 키워드 가운데 이 상품을 찾는 말만 골라 따로 정했습니다.")
     else:
         c["market.killer"] = "이번 분석에서는 카테고리 인기 키워드가 수집되지 않았습니다. 연관 키워드의 검색량을 기준으로 공략 순서를 정합니다."
 
@@ -299,7 +311,8 @@ def template(f):
         c["targets.killer"] = (f"이 전략은 검색 수요는 있으면서 경쟁이 덜한 키워드부터 1페이지를 점령하는 방식입니다. {store}에는 {j(tnames, '가')} 1순위입니다. "
                                "검색량이 크면서도 경쟁강도가 높지 않아, 이 키워드로 먼저 노출·리뷰를 쌓은 뒤 다음 장의 연관 키워드로 넓혀 갑니다.")
     else:
-        c["targets.killer"] = "경쟁이 낮거나 중간인 구매형 키워드가 이번 분석에서 확인되지 않았습니다. 세부 속성(용량·용도·대상) 키워드 조합으로 진입로를 만듭니다."
+        c["targets.killer"] = ("이 상품을 찾는 말이면서 검색량이 확인된 구매형 키워드가 이번 분석에서 확인되지 않았습니다. "
+                               "검색량만 큰 엉뚱한 키워드로 채우지 않고, 상품명의 세부 속성(용량·용도·대상) 조합으로 진입로를 만듭니다.")
     c["expand.killer"] = (f"키워드는 한 번에 다 잡는 것이 아니라 순서가 핵심입니다. 공략 → 연관 → 대형의 단계적 확장이 같은 예산으로 가장 높은 전환과 노출을 만들어냅니다. "
                           f"분석 키워드 {j(_q(kw), '는')} 상품명에 유지하고, 연관 키워드는 2단계에서 공략합니다.")
     c["oppcost.lead"] = (f"{j(store, '은')} 리뷰와 상세페이지라는 '전환 자산'을 이미 갖추고 있어, 노출만 열리면 매출로 이어질 준비가 된 상태입니다."
@@ -309,6 +322,54 @@ def template(f):
 
 
 # ───────────────────────── ② AI 문장 · 검사 ─────────────────────────
+
+def _fit_only(items):
+    return [p for p in items or [] if isinstance(p, dict) and p.get("fit") is not False]
+
+
+def safe_facts(f):
+    """AI 에 보여 주고 숫자 검사에 쓰는 사실값 — 탈락 키워드(keywords.excluded)와 이 상품에 안 맞는 인기어·급상승어를 뺀다.
+    ⚠️ 보여 주지 않아야 AI 가 그 말을 쓰지 않고, 숫자 허용 목록에서도 빠져 '387,900' 같은 검색량이 문장에 못 들어온다."""
+    out = {k: v for k, v in (f or {}).items() if k != "ai"}
+    kws = dict(out.get("keywords") or {})
+    kws.pop("excluded", None)
+    out["keywords"] = kws
+    dl = dict(out.get("datalab") or {})
+    if dl:
+        dl["categoryPopular"] = _fit_only(dl.get("categoryPopular"))
+        dl["rising"] = _fit_only(dl.get("rising"))
+        out["datalab"] = dl
+    return out
+
+
+def _today(f):
+    for s in (_get(f, "keywords.gate.date"), str(f.get("generatedAt") or "")[:10]):
+        try:
+            return date.fromisoformat(s)
+        except Exception:
+            continue
+    return date.today()
+
+
+def _banned_keywords(f):
+    """문장에 나오면 안 되는 키워드 — 적합도 탈락(정보 탐색어 제외) + 이 상품에 안 맞는 인기어·급상승어.
+    단 허용 키워드(공략·확장·메인·맞는 인기어) 안에 글자로 들어 있는 것은 빼 둔다(오탐 방지)."""
+    kws = f.get("keywords") or {}
+    dl = f.get("datalab") or {}
+    bad = [x.get("keyword") for x in kws.get("excluded") or [] if x.get("reason") != "info_intent"]
+    bad += [p.get("keyword") for p in (dl.get("categoryPopular") or []) + (dl.get("rising") or [])
+            if isinstance(p, dict) and p.get("fit") is False]
+    allowed = [_get(f, "main.keyword", "")] + [t.get("keyword") for t in kws.get("targets") or []]
+    allowed += [x.get("keyword") for g in (kws.get("groups") or {}).values() for x in g or []]
+    allowed += [p.get("keyword") for p in _fit_only(dl.get("categoryPopular")) + _fit_only(dl.get("rising"))]
+    allowed_ns = [keyword_fit.nospace(a) for a in allowed if a]
+    out = []
+    for b in bad:
+        ns = keyword_fit.nospace(b)
+        if len(ns) >= 2 and not any(ns in a for a in allowed_ns) and ns not in out:
+            out.append(ns)
+    return out
+
 
 def _allowed_numbers(f):
     """문장에 나와도 되는 숫자 — 사실값에서 나온 것과 늘 쓰는 고정 숫자."""
@@ -328,7 +389,7 @@ def _allowed_numbers(f):
         elif isinstance(x, str):
             for m in re.findall(r"\d[\d,]*(?:\.\d+)?", x):
                 nums.add(_norm_num(m))
-    walk({k: v for k, v in f.items() if k != "ai"})
+    walk(safe_facts(f))
     # 늘 쓰는 고정 숫자(단계·기간·임계점) — 사실값이 아니라 제안서 원고의 숫자다.
     for k in (1, 2, 3, 4, 5, 12, 30, 90, 100, 40, 200, 300):
         nums.add(str(k))
@@ -351,6 +412,8 @@ def validate(ai, f):
         return ok, [("*", "형식")]
     allowed = _allowed_numbers(f)
     store = _get(f, "store.name", "") or ""
+    banned_kw = _banned_keywords(f)
+    today = _today(f)
     for key, val in ai.items():
         if key not in FIELDS:
             bad.append((key, "모르는 칸"))
@@ -375,12 +438,24 @@ def validate(ai, f):
         if "<" in v or ">" in v:
             bad.append((key, "태그"))
             continue
+        vn = keyword_fit.nospace(v)
+        hit = next((b for b in banned_kw if b in vn), None)
+        if hit:
+            bad.append((key, "탈락 키워드 " + hit))
+            continue
+        # 지난·너무 먼 시즌 — 리뷰 인용 칸(voc.*)은 구매자 원문이라 뺀다.
+        if not key.startswith("voc."):
+            sw = next((w for w, _ in keyword_fit.SEASON_WORDS if w in vn and not keyword_fit.season_ok(w, today)), None)
+            if sw:
+                bad.append((key, "시즌 " + sw))
+                continue
         ok[key] = v
     return ok, bad
 
 
 def prompt(f, base):
-    facts = {k: v for k, v in f.items() if k not in ("ai",)}
+    facts = safe_facts(f)
+    today = _today(f).isoformat()
     return (
         "너는 온라인 쇼핑몰 마케팅 대행사의 제안서 작성자다. 아래 [사실값]만 근거로, [초안]의 각 칸을 "
         "고객(판매자)에게 보내는 제안서 문장으로 더 자연스럽고 설득력 있게 다시 써라.\n"
@@ -390,7 +465,12 @@ def prompt(f, base):
         "3) 사실값에 없는 내용(경쟁사 이름, 판매량, 매출)은 쓰지 마라. 모르는 것은 쓰지 말고 넘어가라.\n"
         "4) 칸 이름은 [초안]과 똑같이, 각 칸 길이는 초안과 비슷하게. HTML 태그 금지.\n"
         "5) voc.hook*.t 는 실제 리뷰 표현을 살린 짧은 광고 문구(두 줄 이내)로 쓴다.\n"
-        "6) JSON 객체 하나만 출력한다. 설명·코드블록 금지.\n\n"
+        "6) JSON 객체 하나만 출력한다. 설명·코드블록 금지.\n"
+        f"7) 오늘(제안서 생성일)은 {today}이다. 생성일 이전에 이미 지난 기념일·행사를 '다가온다'·'앞두고'로 쓰지 마라. "
+        "시즌을 말하려면 생성일 뒤로 가까운 것만 쓴다(예: 11월 중순이면 크리스마스·연말·설).\n"
+        "8) 공략 키워드로 언급하는 말은 facts.keywords.targets 에 있는 것만 쓴다. 그 밖의 키워드를 상품명에 넣으라고 쓰지 마라. "
+        "카테고리 인기어(datalab.categoryPopular)는 시장 지표일 뿐 상품명 처방이 아니다.\n"
+        "9) facts 에 없는 숫자는 쓰지 마라.\n\n"
         "[사실값]\n" + json.dumps(facts, ensure_ascii=False) + "\n\n"
         "[초안]\n" + json.dumps(base, ensure_ascii=False)
     )
