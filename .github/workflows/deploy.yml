@@ -410,6 +410,12 @@ jobs:
       - name: 회귀 — 상세 HTML JSON-LD 판매가·카테고리·상품 주소(②·③)
         run: python backend/tests/test_detail_ld.py
 
+      # 2026-11-16 대표 결정 「보고서 문구 — ①ⓐ ②ⓐ ③ⓐ」 — 쇼핑 1페이지 자료가 없을 때(수집 쉼 · 11/5~)
+      #    가짜 0·시작값 50 대신 「자료 없음 · 못 잼 · 계산 불가」, 광고주 전달본은 빈 칸·빈 장을 뺀다.
+      #    자료가 있으면 종전과 같다(무회귀). 게이트에는 서버 전체 의존성이 없어 실행 확인 1묶음은 건너뛴다.
+      - name: 회귀 — 보고서 빈칸 문구(자료 없음 · 못 잼 · 계산 불가)
+        run: python backend/tests/test_report_gap_wording.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

@@ -112,6 +112,27 @@ window.AnalysisResults = function AnalysisResults(props) {
         return Object.assign({}, analysisData, { goldenKeyword: _fitGolden });
     }, [analysisData, keywordFit, _fitGolden]);
 
+    /* ===== 쇼핑 1페이지 자료가 없을 때(쇼핑 순위 수집 쉼 · 2026-11-05~) — 대표 결정 「보고서 문구 — ①ⓐ ②ⓐ ③ⓐ」 =====
+       ① 광고주 전달본: 빈 칸·빈 장은 빼고 맨 위에 한 줄(.export-only)  ② 점수는 「계산 불가」
+       ③ 직원 화면: 이유까지 적은 안내 띠와 장마다 「이번 분석에서 빠진 칸」 한 줄(.no-export).
+       자료가 있으면 아래 갈래는 전부 꺼져 지금 화면과 똑같다. */
+    var marketMissing = !!(analysisData && analysisData.marketMissing);
+    var relatedLookupFailed = !!(relatedData && relatedData.lookup_ok === false);
+    var volumeMissing = !(volumeData && volumeData.length > 0);
+    var _staffNote = function(text) {
+        return React.createElement('div', { className: 'section no-export' },
+            React.createElement('div', { className: 'container' },
+                React.createElement('div', { style: { background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 10, padding: '9px 14px', fontSize: 12.5, color: '#64748b', lineHeight: 1.6 } }, text)
+            )
+        );
+    };
+    var _missingLine = function(names) {
+        return _staffNote(React.createElement(React.Fragment, null,
+            React.createElement('b', { style: { color: '#475569' } }, '이번 분석에서 빠진 칸: '),
+            names.join(' · '),
+            ' — 쇼핑 시장 자료 없음'));
+    };
+
     return (
                 React.createElement('div', { className: 'report-shell' },
                   /* 좌측 고정 목차 (와이드 화면 전용) — 분석 결과(섹션 2개 이상)가 있을 때만 표시 */
@@ -193,15 +214,16 @@ window.AnalysisResults = function AnalysisResults(props) {
                 !searchedProductUrl && React.createElement(DashboardSummary, { products: products, searchResult: relatedData }),
     
                 /* [검수] 데이터 검수 상태 배너 — 항목별 실데이터 확보 현황(✓ 확보 · ↻ 재조회 중 · ✗ 실패) */
-                auditStatus && auditStatus.items && auditStatus.items.length > 0 && React.createElement('div', { className: 'section fade-in' },
+                auditStatus && auditStatus.items && auditStatus.items.length > 0 && React.createElement('div', { className: 'section fade-in no-export' },
                     React.createElement('div', { className: 'container' },
                         React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px', fontSize: 12.5 } },
                             React.createElement('b', { style: { color: '#334155' } },
                                 auditStatus.phase === 'auditing' ? '🔍 데이터 검수 중…' : '🔍 데이터 검수'),
                             auditStatus.items.map(function(it, i) {
-                                var color = it.st === 'ok' ? '#059669' : (it.st === 'retry' ? '#d97706' : (it.st === 'wait' ? '#94a3b8' : '#dc2626'));
-                                var mark = it.st === 'ok' ? '✓' : (it.st === 'retry' ? '↻' : (it.st === 'wait' ? '…' : '✗'));
-                                return React.createElement('span', { key: i, style: { color: color, whiteSpace: 'nowrap', fontWeight: 600 } }, mark + ' ' + it.name);
+                                /* off = 「성공 · 빈 목록」(쇼핑 수집 쉼) — 실패가 아니라 회색 「—」 */
+                                var color = it.st === 'ok' ? '#059669' : (it.st === 'retry' ? '#d97706' : ((it.st === 'wait' || it.st === 'off') ? '#94a3b8' : '#dc2626'));
+                                var mark = it.st === 'ok' ? '✓' : (it.st === 'retry' ? '↻' : (it.st === 'wait' ? '…' : (it.st === 'off' ? '—' : '✗')));
+                                return React.createElement('span', { key: i, style: { color: color, whiteSpace: 'nowrap', fontWeight: 600 } }, mark + ' ' + it.name + (it.st === 'off' ? ' · 수집 쉬는 중' : ''));
                             })
                         )
                     )
@@ -232,6 +254,26 @@ window.AnalysisResults = function AnalysisResults(props) {
     
                 /* ==================== 보고서 6단계 흐름 (v6.0 — 광고주 발송용 재배치) ==================== */
     
+                /* [자료 없음] 직원 화면 안내 띠 — 결정 ③ⓐ 이유까지 */
+                marketMissing && React.createElement('div', { className: 'section fade-in no-export' },
+                    React.createElement('div', { className: 'container' },
+                        React.createElement('div', { style: { background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 10, padding: '11px 15px', fontSize: 13, color: '#334155', lineHeight: 1.65 } },
+                            React.createElement('b', null, '🛒 쇼핑 시장 자료 없음'),
+                            ' — 쇼핑 순위 수집을 쉬는 동안(2026-11-05~) 경쟁 상품·가격·카테고리·순위 칸은 비어 있습니다. 검색량·연관 키워드·데이터랩·광고 경쟁 칸은 이 일과 상관없습니다. ',
+                            React.createElement('b', null, '고장이 아닙니다.')
+                        )
+                    )
+                ),
+
+                /* [자료 없음] 광고주 전달본 맨 위 한 줄 — 결정 ①ⓐ (화면에서는 숨김 · 내보내기에서만 보임) */
+                marketMissing && React.createElement('div', { className: 'section export-only', style: { display: 'none' } },
+                    React.createElement('div', { className: 'container' },
+                        React.createElement('div', { style: { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '11px 15px', fontSize: 13, color: '#334155', lineHeight: 1.65 } },
+                            '이번 보고서는 검색 수요 · 키워드 · 광고 경쟁 자료를 중심으로 작성했습니다. 경쟁 상품 · 가격 비교는 이번 보고서에 담지 않았습니다.'
+                        )
+                    )
+                ),
+
                 /* ========== 1. 종합 요약 ========== */
                 analysisData && React.createElement(window.SectionDivider, { label: '1. 종합 요약', icon: '📋', color: '#3b82f6', sub: '광고주가 가장 먼저 보는 핵심 지표' }),
     
@@ -239,6 +281,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                     React.createElement('div', { id: 'sec-summary' },
                         React.createElement(SummaryCardsSection, {
                             data: analysisData.summaryCards,
+                            marketMissing: marketMissing,
                             /* 히어로 요약용 — 전부 기존 데이터 재사용(없으면 히어로만 생략) */
                             keyword: searchedKeyword,
                             advertiserReport: advertiserReport,
@@ -260,7 +303,8 @@ window.AnalysisResults = function AnalysisResults(props) {
                 ),
     
                 /* ========== 2. 시장 · 수요 진단 ========== */
-                analysisData && React.createElement(window.SectionDivider, { label: '2. 시장 · 수요 진단', icon: '📊', color: '#0ea5e9', sub: '검색량 · 트렌드 · 시즌 · 인구 · 요일 · 성장 · 시장규모' }),
+                analysisData && React.createElement(window.SectionDivider, { label: '2. 시장 · 수요 진단', icon: '📊', color: '#0ea5e9', sub: marketMissing ? '검색량 · 트렌드 · 시즌 · 인구 · 요일 · 성장' : '검색량 · 트렌드 · 시즌 · 인구 · 요일 · 성장 · 시장규모' }),
+                marketMissing && _missingLine(['시장 규모 & 매출 추정']),
     
                 /* 키워드 검색량 */
                 volumeData && React.createElement(window.SectionErrorBoundary, { name: '키워드 검색량' },
@@ -273,6 +317,9 @@ window.AnalysisResults = function AnalysisResults(props) {
                     style: { background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10,
                              padding: '10px 14px', color: '#92400e', fontSize: 13, lineHeight: 1.6 }
                 }, '⏳ ' + datalabData.quotaNotice),
+
+                /* [DATALAB] 업종을 못 읽어 「생활/건강」 기준으로 센 경우 — 직원 화면에만 그 사실을 적는다 */
+                datalabData && datalabData.categoryDefaulted && _staffNote('📊 업종을 읽지 못해 데이터랩 성별·연령·트렌드·요일은 「생활/건강」 기준으로 셌습니다. 다른 업종이면 숫자가 다를 수 있습니다.'),
 
                 /* [DATALAB] 12개월 검색량 트렌드 (꺾은선) */
                 datalabData && datalabData.trend && React.createElement(window.SectionErrorBoundary, { name: '검색량 트렌드' },
@@ -317,7 +364,8 @@ window.AnalysisResults = function AnalysisResults(props) {
                 ),
     
                 /* ========== 3. 경쟁 진단 ========== */
-                analysisData && React.createElement(window.SectionDivider, { label: '3. 경쟁 진단', icon: '⚔️', color: '#ef4444', sub: '경쟁강도 · 광고경쟁 · 경쟁사 · 카테고리' }),
+                analysisData && React.createElement(window.SectionDivider, { label: '3. 경쟁 진단', icon: '⚔️', color: '#ef4444', sub: marketMissing ? '광고경쟁 · 예상 CPC' : '경쟁강도 · 광고경쟁 · 경쟁사 · 카테고리' }),
+                marketMissing && _missingLine(['경쟁강도', '경쟁사 비교표', '카테고리 등록 분석']),
     
                 /* 키워드 경쟁강도 */
                 analysisData && analysisData.competitionIndex && React.createElement(window.SectionErrorBoundary, { name: '경쟁강도' },
@@ -332,9 +380,11 @@ window.AnalysisResults = function AnalysisResults(props) {
                 ),
 
                 /* 예상 CPC · 권장 입찰가 (추정) */
-                analysisData && volumeData && volumeData.length && React.createElement(window.SectionErrorBoundary, { name: '예상 CPC' },
+                /* ⚠️ 종전 조건 `volumeData.length &&` 는 빈 배열이면 숫자 0 을 돌려 화면·전달본에 「0」 한 글자가 찍혔다(2026-11-16 고침) */
+                analysisData && !volumeMissing && React.createElement(window.SectionErrorBoundary, { name: '예상 CPC' },
                     React.createElement(window.CpcBidEstimateSection, { volumeData: volumeData, keyword: searchedKeyword })
                 ),
+                analysisData && volumeMissing && _staffNote('⚔️ 검색량을 불러오지 못해 예상 CPC를 계산하지 못했습니다. 잠시 뒤 다시 분석하세요.'),
     
                 /* 경쟁사 비교표 (상위 80개) */
                 analysisData && analysisData.competitorTable && React.createElement(window.SectionErrorBoundary, { name: '경쟁사 비교표' },
@@ -359,7 +409,8 @@ window.AnalysisResults = function AnalysisResults(props) {
                 ),
     
                 /* ========== 4. 내 상품 현황 ========== */
-                analysisData && React.createElement(window.SectionDivider, { label: '4. 내 상품 현황', icon: '🛒', color: '#059669', sub: '노출순위 · 판매추정 · 리뷰 · SEO 4종' }),
+                analysisData && React.createElement(window.SectionDivider, { label: '4. 내 상품 현황', icon: '🛒', color: '#059669', sub: marketMissing ? '노출순위 · SEO 진단 · 상세페이지 분석' : '노출순위 · 판매추정 · 리뷰 · SEO 4종' }),
+                marketMissing && _missingLine(['판매량 추정', '순위 상승 시 예상 성과', '리뷰 & 찜 분석', 'SEO 상세', '상세페이지 품질 진단']),
     
                 /* 키워드별 노출 순위 — analysisOnly 모드(노출 분석·1회성 조회만, 보고서 구성 요소).
                    추적 상품 목록·등록 관리만 📊 키워드 순위 탭으로 분리(2026-08-04, 직원 신고로
@@ -439,23 +490,28 @@ window.AnalysisResults = function AnalysisResults(props) {
                 ),
     
                 /* ========== 5. 기회 발굴 ========== */
-                analysisData && React.createElement(window.SectionDivider, { label: '5. 기회 발굴', icon: '💎', color: '#7c3aed', sub: '연관키워드 · 골든키워드 · 상품명 최적화' }),
+                analysisData && React.createElement(window.SectionDivider, { label: '5. 기회 발굴', icon: '💎', color: '#7c3aed', sub: marketMissing ? '연관키워드 · 골든키워드' : '연관키워드 · 골든키워드 · 상품명 최적화' }),
+                marketMissing && _missingLine(['상품명 키워드 분석', '상품명 SEO 최적화 제안']),
     
-                /* 연관 키워드 */
-                relatedData && React.createElement(window.SectionErrorBoundary, { name: '연관 키워드' },
+                /* 연관 키워드 — 검색광고 조회 실패면 「총 0개 ✅ 실측」 대신 직원 화면에 실패를 적는다(전달본에서는 뺀다) */
+                relatedData && relatedLookupFailed && _staffNote('🔗 연관 키워드 · 불러오지 못함 — 네이버 검색광고 조회가 실패했습니다. 「연관 키워드가 없다」는 뜻이 아닙니다. 잠시 뒤 다시 분석하세요.'),
+                relatedData && !relatedLookupFailed && React.createElement(window.SectionErrorBoundary, { name: '연관 키워드' },
                     React.createElement(RelatedKeywordsSection, { data: relatedData, keyword: searchedKeyword, fit: keywordFit })
                 ),
     
                 /* 골든 키워드 (0건이어도 대안 안내를 렌더) */
                 analysisData && React.createElement(window.SectionErrorBoundary, { name: '골든 키워드' },
                     React.createElement('div', { id: 'sec-golden' },
-                        React.createElement(GoldenKeywordCard, { data: _fitGolden })
+                        React.createElement(GoldenKeywordCard, { data: _fitGolden, lookupFailed: relatedLookupFailed })
                     )
                 ),
     
                 /* 상품명 키워드 분석 (키워드&태그 통합) */
                 searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '상품명 분석' },
-                    React.createElement(ProductNameSection, { keyword: searchedKeyword, shopProducts: shopProducts })
+                    /* 경쟁 상품명이 없으면 이 칸은 비어 있다 — 직원이 손으로 붙여 넣어 쓸 수 있게 화면에는 두고, 전달본에서는 뺀다 */
+                    React.createElement('div', { className: marketMissing ? 'no-export' : undefined },
+                        React.createElement(ProductNameSection, { keyword: searchedKeyword, shopProducts: shopProducts })
+                    )
                 ),
     
                 /* 상품명 SEO 최적화 제안 */

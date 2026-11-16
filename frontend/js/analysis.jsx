@@ -125,12 +125,17 @@ window.createDoSearch = function(deps) {
                 setAuditStatus({ phase: phase, items: Object.keys(_auditItems).map(function(n) { return { name: n, st: _auditItems[n] }; }) });
             } catch (e) {}
         };
+        /* 상품 검색이 「성공 · 빈 목록」이면 쇼핑 수집을 쉬는 중(2026-11-05~) — 서버에 모은 자료만 주므로
+           다시 물어도 채워지지 않는다. 빨간 실패로 그리지 않고 다시 묻지도 않는다(2026-11-16).
+           연관 키워드는 서버가 lookup_ok=false(검색광고 조회 실패)를 주면 「성공 · 0개」와 갈라 실패로 본다. */
+        var _shopOff = function(r) { return !!(r && r.success && r.data && (r.data.products || []).length === 0); };
+        var _relOk = function(r) { return !!(r && r.success && !(r.data && r.data.lookup_ok === false)); };
         var _fetchTriple = function(prev) {
             prev = prev || [null, null, null];
             var ok = {
                 vol: !!(prev[0] && prev[0].success && prev[0].data && prev[0].data[0]),
-                rel: !!(prev[1] && prev[1].success),
-                shop: !!(prev[2] && prev[2].success && prev[2].data && (prev[2].data.products || []).length > 0),
+                rel: _relOk(prev[1]),
+                shop: !!(prev[2] && prev[2].success && prev[2].data && (prev[2].data.products || []).length > 0) || _shopOff(prev[2]),
             };
             // 성공한 항목은 재호출하지 않고 그대로 유지 — 실패분만 다시 받는다
             return Promise.all([
@@ -333,7 +338,11 @@ window.createDoSearch = function(deps) {
                 productCount: fmt(productCount),
                 goldenCount: rd ? (rd.golden_keywords || []).length : 0,
                 compLevel: analysis.competitionIndex ? analysis.competitionIndex.compLabel : '-',
+                /* 검색광고 조회 실패 — 「골든 0개 ✅」와 갈라 「불러오지 못함」(2026-11-16) */
+                relatedLookupFailed: !!(rd && rd.lookup_ok === false),
             };
+            /* 쇼핑 1페이지 자료 없음(수집 쉼 · 11/5~) — 화면은 가짜 0 대신 「자료 없음」, 전달본은 빈 칸을 뺀다 */
+            analysis.marketMissing = prods.length === 0;
 
             // 7. 카테고리 분석 (대>중>소 계층 경로)
             if (prods.length > 0) {
@@ -833,6 +842,8 @@ window.createDoSearch = function(deps) {
                         .then(function(dlRes) {
                             if (searchIdRef.current !== currentSearchId) return;
                             var d = (dlRes && dlRes.success && dlRes.data) || null;
+                            /* 업종(카테고리)을 못 읽으면 서버가 「생활/건강」 기준으로 센다 — 그 사실을 화면에 적으려고 표시(2026-11-16) */
+                            if (d && !cat1) d = Object.assign({}, d, { categoryDefaulted: true });
                             if (d) setDatalabData(d);
                             var missing = [];
                             _dlExpected.forEach(function(n) {
@@ -877,13 +888,14 @@ window.createDoSearch = function(deps) {
             if (searchIdRef.current !== currentSearchId) return;
             var ok = {
                 vol: !!(results[0] && results[0].success && results[0].data && results[0].data[0]),
-                rel: !!(results[1] && results[1].success),
+                rel: _relOk(results[1]),
                 shop: !!(results[2] && results[2].success && results[2].data && (results[2].data.products || []).length > 0),
             };
-            var retrying = (!ok.vol || !ok.rel || !ok.shop) && round < 2;
+            var shopOff = !ok.shop && _shopOff(results[2]);
+            var retrying = (!ok.vol || !ok.rel || (!ok.shop && !shopOff)) && round < 2;
             _auditItems['검색량'] = ok.vol ? 'ok' : (retrying ? 'retry' : 'fail');
             _auditItems['연관 키워드'] = ok.rel ? 'ok' : (retrying ? 'retry' : 'fail');
-            _auditItems['상품 검색'] = ok.shop ? 'ok' : (retrying ? 'retry' : 'fail');
+            _auditItems['상품 검색'] = ok.shop ? 'ok' : (shopOff ? 'off' : (retrying ? 'retry' : 'fail'));
             _pushAudit(retrying ? 'auditing' : 'collected');
             if (retrying) {
                 if (round === 0) { try { toast.info('🔍 데이터 검수 — 누락 항목을 재조회합니다…'); } catch (e) {} }

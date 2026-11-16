@@ -751,9 +751,11 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
             try:
                 _prods = _shared_crawl(kw, 200)  # 공유 캐시(3h) → 반복/동시 노출조회 중복 크롤 제거
                 rank, page, _ = find_product_rank(kw, req.product_url, max_pages=2, cached_products=_prods)
-                return {"keyword": kw, "rank": rank, "page": page}
+                # measured — 그 키워드의 쇼핑 목록이 있어 실제로 재 본 것인가(2026-11-16 가산).
+                #   목록이 비면 순위가 None 이어도 「200위 밖」이 아니라 「못 잼」이다(수집 쉼 · 11/5~).
+                return {"keyword": kw, "rank": rank, "page": page, "measured": bool(_prods)}
             except Exception:
-                return {"keyword": kw, "rank": None, "page": None}
+                return {"keyword": kw, "rank": None, "page": None, "measured": False}
 
         # ⏱️ 벽시계 예산: 이 시간 안에 끝난 키워드만 모으고, 지연된 키워드는 '미조회(None)'로 채워
         #    '부분 결과라도 항상 반환'한다. 느린 네이버 조회로 요청이 프록시 타임아웃(≈60s)에 걸려
@@ -776,7 +778,7 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         # 예산 내 미완료 키워드는 미조회(None)로 채워 부분 결과 유지
         for _fut, _kw in futures.items():
             if _kw not in done_kws:
-                results.append({"keyword": _kw, "rank": None, "page": None})
+                results.append({"keyword": _kw, "rank": None, "page": None, "measured": False})
         executor.shutdown(wait=False, cancel_futures=True)
 
         # 내 상품 키워드 vs 참고(연관/급상승) 구분
@@ -798,6 +800,8 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
                 # 노출률 분모 = 내 상품 키워드만(무관 연관어 제외 — R6)
                 "total_keywords": len(own_candidates),
                 "exposed_count": sum(1 for r in own_results if r["rank"] is not None),
+                # 실제로 재 본 내 상품 키워드 수 — 0 이면 화면은 「못 잼」(노출률 0% 로 그리지 않는다)
+                "measured_count": sum(1 for r in own_results if r.get("measured")),
                 "results": results,
                 "recommended": recommended,
             }
@@ -3588,6 +3592,9 @@ def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depends(ge
         import requests as req_lib
 
         all_keywords = []
+        # 검색광고 조회가 실제로 성공했는가(2026-11-16 가산) — 실패해도 success:true + 빈 목록이라
+        # 화면이 「0개 ✅ 실측」으로 그리던 것을 가른다. 키가 없으면 조회를 안 했으니 False.
+        lookup_ok = False
 
         # 검색광고 API 연관 키워드 조회 (retry 포함)
         if SEARCHAD_API_KEY and SEARCHAD_SECRET_KEY and SEARCHAD_CUSTOMER_ID:
@@ -3610,6 +3617,7 @@ def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depends(ge
                     resp = req_lib.get(url, params=params, headers=headers, timeout=10)
                     resp.raise_for_status()
                     data = resp.json()
+                    lookup_ok = True
                     break
                 except Exception as retry_err:
                     if attempt < max_retries:
@@ -3696,6 +3704,7 @@ def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depends(ge
                          for k in sorted((k for k in all_keywords if not k["isStoreName"]),
                                          key=lambda x: -x["totalVolume"])[:300]],
                 "total_found": len(all_keywords),
+                "lookup_ok": lookup_ok,
                 "analyzed_at": datetime.now().isoformat(),
             }
         }
@@ -3891,6 +3900,10 @@ def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: b
         page1_products = all_products[:80]
         if not page1_products:
             logger.warning(f"광고주분석: 쇼핑 API 결과 0건 (keyword={req.keyword}) → 평균가 산출 불가")
+        # 쇼핑 시장 자료(1페이지 경쟁 상품)가 있는가 — 없으면 0원·0%·「노출 안 됨」·시작값 점수를
+        # 진짜 값처럼 내지 않는다(2026-11-16 · 보고서 빈칸 문구 고침 · 대표 「보고서 문구 — ①ⓐ ②ⓐ ③ⓐ」).
+        # ⚠️ 자료가 있으면 아래 문장·점수는 종전과 한 글자도 같다.
+        market_ok = bool(page1_products)
 
         # 4) 경쟁사 비교 분석 데이터 구성
         my_price = product_info.get("price", 0)
@@ -4051,6 +4064,12 @@ def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: b
                 price_actions.append("같은 가격이면 '무료배송', '당일출고', '사은품'이 클릭률을 좌우합니다.")
                 price_actions.append("네이버페이 적립, 카드 즉시할인 등 체감 할인 요소를 적극 활용하세요.")
                 price_actions.append("후기 수가 적다면 '리뷰 이벤트'로 초기 신뢰도를 확보하는 게 가격보다 중요합니다.")
+        elif not market_ok:
+            # 경쟁 상품 가격이 없다 — 0원 문장을 만들지 않는다
+            if my_price > 0:
+                price_insights.append(f"현재 판매가는 {my_price:,}원입니다. 경쟁 상품 가격 자료가 없어 가격 비교는 넣지 않았습니다.")
+            else:
+                price_insights.append("경쟁 상품 가격 자료가 없어 가격 비교는 넣지 않았습니다.")
         else:
             price_insights.append(f"상품 가격 정보를 확인할 수 없습니다. 1페이지 평균가는 {avg_price:,}원입니다.")
             price_actions.append(f"경쟁 상품 가격대({min_price:,}~{max_price:,}원)를 참고해 포지셔닝을 결정하세요.")
@@ -4099,11 +4118,17 @@ def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: b
                     pos_pct = round(kw_pos / max(len(_stripped), 1) * 100)
                     _loc = "맨 앞" if pos_pct == 0 else f"{pos_pct}% 지점"
                     seo_insights.append(f"핵심 키워드 '{req.keyword}'가 상품명의 {_loc}에 위치합니다." + (" 앞부분 배치로 SEO에 유리합니다." if pos_pct < 30 else " 가능하면 앞부분(30% 이내)에 배치하면 노출 확률이 높아집니다."))
+            elif not market_ok:
+                seo_insights.append(f"상품명에 '{req.keyword}' 키워드가 없습니다. 검색 노출을 위해 상품명에 넣는 것을 권합니다.")
+                seo_actions.append(f"상품명 앞부분에 '{req.keyword}'를 반드시 추가하세요. 키워드 앞부분 배치가 검색 노출에 가장 큰 영향을 줍니다.")
             else:
                 seo_insights.append(f"상품명에 '{req.keyword}' 키워드가 없습니다. 1페이지 상품 중 {keyword_in_name_ratio}%가 포함하고 있어 필수 삽입이 필요합니다.")
                 seo_actions.append(f"상품명 앞부분에 '{req.keyword}'를 반드시 추가하세요. 키워드 앞부분 배치가 검색 노출에 가장 큰 영향을 줍니다.")
 
-            seo_insights.append(f"현재 상품명 길이: {my_name_len}자 (1페이지 평균: {avg_name_length:.0f}자)")
+            if market_ok:
+                seo_insights.append(f"현재 상품명 길이: {my_name_len}자 (1페이지 평균: {avg_name_length:.0f}자)")
+            else:
+                seo_insights.append(f"현재 상품명 길이: {my_name_len}자")
             if kw_total > 0:
                 seo_insights.append(f"1페이지 상품 중 {round(kw_front_count/max(kw_total,1)*100)}%가 키워드를 상품명 앞쪽에 배치하고 있습니다.")
 
@@ -4149,8 +4174,13 @@ def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: b
             store_names = ', '.join([s[0] for s in top_stores[:3]])
             comp_insights.append(f"주요 경쟁 스토어: {store_names}")
 
-        comp_insights.append(f"주요 카테고리: '{top_cat}' (점유율 {cat_share}%)")
-        if cat_share >= 70:
+        if not market_ok:
+            comp_insights.append("경쟁 상품 자료가 없어 카테고리 점유율은 넣지 않았습니다.")
+        else:
+            comp_insights.append(f"주요 카테고리: '{top_cat}' (점유율 {cat_share}%)")
+        if not market_ok:
+            pass
+        elif cat_share >= 70:
             comp_actions.append(f"카테고리를 '{top_cat}'으로 반드시 맞추세요. 다른 카테고리 설정 시 노출 자체가 불리합니다.")
         else:
             comp_actions.append(f"'{top_cat}' 카테고리가 가장 많지만 다양한 카테고리가 공존합니다. 상품 특성에 맞는 카테고리를 선택하되, 상위 상품과 같은 카테고리면 유리합니다.")
@@ -4163,6 +4193,9 @@ def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: b
                 comp_actions.append(f"현재 {rank}위로 1페이지 내 위치합니다. {target_rank}위권 진입을 목표로 리뷰 확보와 판매량 부스팅이 필요합니다.")
             else:
                 comp_actions.append(f"현재 {rank}위(1페이지 밖)입니다. 네이버 쇼핑 광고(파워링크/쇼핑검색광고)로 초기 노출을 확보한 뒤, 판매 실적으로 자연 순위를 끌어올리는 2단계 전략을 추천합니다.")
+        elif not market_ok:
+            # 순위를 못 잰 것이지 「노출 안 됨」이 아니다
+            comp_insights.append("순위를 재지 못해 순위 기반 조언은 넣지 않았습니다.")
         else:
             comp_actions.append("검색 결과에 노출되지 않고 있습니다. 네이버 쇼핑 광고 집행 + 상품명 최적화를 동시에 진행해 초기 데이터를 쌓으세요.")
 
@@ -4189,7 +4222,7 @@ def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: b
         strategies.append({
             "area": "경쟁 환경 & 차별화 방향",
             "icon": "⚔️",
-            "severity": "high" if (not rank or rank > 40) else "medium" if rank > 10 else "low",
+            "severity": ("medium" if not market_ok else "high") if not rank else ("high" if rank > 40 else "medium" if rank > 10 else "low"),
             "insights": comp_insights,
             "actions": comp_actions,
             "recommendations": comp_recs,
@@ -4253,7 +4286,8 @@ def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: b
         roadmap_recs = []
         if not rank or rank > 40:
             roadmap_recs = [
-                {"name": "쇼핑검색광고", "reason": "[즉시] 1페이지 미노출 상태에서 가장 빠르게 노출을 확보하는 핵심 수단입니다."},
+                {"name": "쇼핑검색광고", "reason": ("[즉시] 1페이지 미노출 상태에서 가장 빠르게 노출을 확보하는 핵심 수단입니다."
+                                                    if market_ok else "[즉시] 노출을 가장 빠르게 확보하는 핵심 수단입니다.")},
                 {"name": "체험단 마케팅", "reason": "[1주 내] 리뷰 0건에서 시작한다면, 체험단으로 포토리뷰 10~20개를 2주 내 확보하세요."},
                 {"name": "SEO 최적화", "reason": "[즉시~1주] 상품명·카테고리·속성 최적화는 모든 전략의 기반입니다. 가장 먼저 진행하세요."},
                 {"name": "마케팅 메세지", "reason": "[1개월] 구매 고객에게 재구매·리뷰 유도 메세지를 발송하여 지속 성장 구조를 만드세요."},
@@ -4297,6 +4331,10 @@ def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: b
         if my_price > 0 and avg_price > 0 and my_price <= avg_price:
             score += 10
         score = min(score, 100)
+        if not market_ok:
+            # 50 은 자료 없이 붙는 시작값이다 — 「계산 불가」(None)로 낸다(대표 ②ⓐ). 소비처는 None 을 견딘다
+            # (화면 3곳 · proposal_facts.to_int). 자료가 있으면 종전 점수 그대로.
+            score = None
 
         return {
             "success": True,
@@ -4304,6 +4342,8 @@ def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: b
                 "keyword": req.keyword,
                 "product_url": req.product_url,
                 "product_info": product_info,
+                # 쇼핑 시장 자료가 있었는가(2026-11-16 가산) — 화면·자동 보고서가 「자료 없음」 문구를 고른다
+                "market_data_available": market_ok,
                 "ranking": {
                     "current_rank": rank,
                     "page_number": page,
@@ -4405,6 +4445,12 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
         if isinstance(_sea, dict):
             _ctx_bits.append(f"[시즌·월별 트렌드(반드시 인용)] {json.dumps(_sea, ensure_ascii=False, default=str)[:1500]} "
                              f"— 데이터에 트렌드/시즌이 있으므로 '데이터 없음'이라 말하지 말 것. 비수기면 낮은 수치는 비수기 탓임을 명시.")
+        # 쇼핑 1페이지 자료가 없을 때(2026-11-05 수집 쉼 뒤) — 화면이 marketMissing 을 보낸다.
+        #   AI 가 빈 경쟁·가격 칸을 0 으로 읽거나 지어내지 않게 미리 일러 둔다.
+        if req.sections.get("marketMissing"):
+            _ctx_bits.append("[경쟁 상품 자료 없음(반드시 반영)] 이번 분석에는 쇼핑 1페이지 경쟁 상품 자료가 없습니다. "
+                             "경쟁 상품 수·가격·리뷰·판매량·순위를 추측하거나 0으로 단정하지 말고, "
+                             "검색량·키워드·광고 경쟁 자료만으로 작성하세요. 자료가 없는 것을 오류나 고장으로 표현하지 마세요.")
         _rev = req.sections.get("review")
         if isinstance(_rev, dict):
             _ctx_bits.append(f"[리뷰 격차] {json.dumps(_rev, ensure_ascii=False, default=str)[:800]}")
