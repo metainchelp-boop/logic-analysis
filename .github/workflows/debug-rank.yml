@@ -526,6 +526,16 @@ jobs:
             except Exception as e:
                 print("  조회 자체 실패", type(e).__name__, str(e)[:200])
             PY
+            echo "== AI 채팅 최근 대화(오늘 · 읽은 뒤 실행 기록 삭제) =="
+            docker logs --since 6h logic-analysis 2>&1 | grep -E '\[Chat\]|claude-models' | cut -c1-260 | tail -15 || true
+            docker exec -i logic-analysis python3 - <<'PYC' || true
+            import sqlite3, os
+            c = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"), timeout=10)
+            rows = c.execute("SELECT id, user_id, role, created_at, length(content), substr(replace(content, char(10), ' / '), 1, 700) FROM chat_messages WHERE created_at >= date('now','localtime') ORDER BY id DESC LIMIT 10").fetchall()
+            print("  오늘 채팅 줄:", len(rows))
+            for r in reversed(rows):
+                print("  ", r)
+            PYC
             echo "== 아침 분석 점검 등록 · 이어서 하기 줄(#374) =="
             docker logs logic-analysis 2>&1 | grep -E '아침 분석 점검|아침 분석 기록|이어서 하기|daily_analysis_watch' | sed -E 's/\[[^]]{1,60}\]/[**]/g' | cut -c1-220 | tail -10 || true
             docker exec -i logic-analysis python3 - <<'PYW' || true
