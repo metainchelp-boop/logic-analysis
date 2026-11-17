@@ -76,7 +76,7 @@ ch = read(BACKEND / "chat.py")
 check("채팅 · 대체 모델 목록으로 묻는다", "for _mdl in model_candidates(CLAUDE_MODEL):" in ch
       and "model=_mdl," in ch)
 check("채팅 · 「없음」이 아니면 그대로 올려 보낸다(시간 초과 · 요청 많음 문구 유지)",
-      "if not is_model_missing_error(_e):\n                    raise" in ch)
+      re.search(r"if not is_model_missing_error\(_e\):\n\s+raise\n", ch) is not None)
 check("채팅 · 예전처럼 설정 모델 하나만 묻는 줄이 없다", "model=CLAUDE_MODEL," not in ch)
 cd = read(BACKEND / "client_dashboard.py")
 check("코칭 · 시도 목록이 claude_models 규칙", "models_to_try = model_candidates(CLAUDE_MODEL)" in cd)

@@ -68,7 +68,10 @@ def get_related_keywords(keyword: str) -> dict:
 
     uri = "/keywordstool"
     url = f"https://api.searchad.naver.com{uri}"
-    params = {"hintKeywords": keyword, "showDetail": "1"}
+    # ⚠️ keywordstool 은 hintKeywords 에 공백이 있으면 400 을 낸다 — 띄어 쓴 키워드는 연관 키워드가 늘 비었다.
+    #    main.py /keywords/related 는 #371(2026-11-17)에서 고쳤고, 08:30 자동 분석 · AI 채팅이 쓰는 이 함수만
+    #    남아 있었다(2026-11-18 발견). 같은 규칙: 공백을 빼고 묻는다. 결과를 거르는 기준(seed 낱말)은 원문 그대로.
+    params = {"hintKeywords": (keyword or "").strip().replace(" ", ""), "showDetail": "1"}
     data = {}
 
     for attempt in range(3):
