@@ -410,6 +410,11 @@ jobs:
       - name: 회귀 — 보고서 빈칸 문구(자료 없음 · 못 잼 · 계산 불가)
         run: python backend/tests/test_report_gap_wording.py
 
+      # 2026-11-17 대표 「권고대로해」 — 서버 .env 의 은퇴한 AI 모델 이름 고침 + 채팅 · 코칭은
+      #    「없음(404)」이면 대체 모델로 다시 묻는다. 게이트에는 anthropic 이 없어 실행 확인 1묶음은 건너뛴다.
+      - name: 회귀 — AI 모델 이름(은퇴 모델 고침 · 대체 모델)
+        run: python backend/tests/test_claude_models.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
@@ -529,6 +534,17 @@ jobs:
                 echo "${_name} 주입 완료"
               fi
             done
+
+            # ── 은퇴한 AI 모델 이름 고침 (2026-11-17 · 대표 「권고대로해」) ──
+            # .env 의 CLAUDE_MODEL 이 은퇴해 없어진 `claude-sonnet-4-20250514` 로 남아
+            # AI 채팅이 매번 실패했다(모델 조회 404). 그 값일 때만 claude-sonnet-4-6 으로 바꾼다.
+            # ⚠️ 다른 값이면 손대지 않는다(사람이 일부러 고른 모델은 그대로).
+            # ⚠️ compose 에는 CLAUDE_MODEL 을 넣지 않는다(test_deploy_source 가 막는다) — .env 한 줄만.
+            if grep -qx 'CLAUDE_MODEL=claude-sonnet-4-20250514' .env 2>/dev/null; then
+              cp .env .env.bak-claude-model 2>/dev/null || true
+              sed -i 's/^CLAUDE_MODEL=claude-sonnet-4-20250514$/CLAUDE_MODEL=claude-sonnet-4-6/' .env
+              echo "CLAUDE_MODEL 은퇴 모델 → claude-sonnet-4-6 (.env.bak-claude-model 백업)"
+            fi
 
             # docker-compose.yml 작성
             cat > docker-compose.yml << 'COMPEOF'

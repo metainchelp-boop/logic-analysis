@@ -2485,10 +2485,9 @@ def compare_coaching(req: CompareCoachingRequest, current_user: dict = Depends(g
         )
         # 설정된 모델(CLAUDE_MODEL)이 유효하지 않거나 접근 불가일 때를 대비해
         # 널리 접근 가능한 모델로 폴백을 시도한다(서버 .env 오설정에도 자동 복구).
-        models_to_try = []
-        for m in (CLAUDE_MODEL, "claude-sonnet-4-6", "claude-haiku-4-5"):
-            if m and m not in models_to_try:
-                models_to_try.append(m)
+        # 은퇴 모델 · 「없음」이 확인된 모델은 처음부터 건너뛴다(claude_models.py · 2026-11-17).
+        from claude_models import model_candidates, is_model_missing_error, mark_unavailable
+        models_to_try = model_candidates(CLAUDE_MODEL)
         last_err = None
         for mdl in models_to_try:
             try:
@@ -2501,6 +2500,8 @@ def compare_coaching(req: CompareCoachingRequest, current_user: dict = Depends(g
             except Exception as e:
                 last_err = e
                 logger.error(f"[compare-coaching] Claude 호출 실패(model={mdl}): {type(e).__name__}: {e}")
+                if is_model_missing_error(e):
+                    mark_unavailable(mdl, "compare-coaching")
                 continue
         # 모든 모델 실패 — 원인 파악을 위해 오류 요약을 함께 반환(민감정보 없음).
         _detail = f"{type(last_err).__name__}: {str(last_err)[:180]}" if last_err else ""
