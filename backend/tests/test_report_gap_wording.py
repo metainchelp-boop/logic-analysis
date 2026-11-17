@@ -174,6 +174,17 @@ rc = read(FE / "report-capture.js")
 check("내보내기 · export-only 를 보이게 함", ".export-only" in rc and "classList.remove('export-only')" in rc)
 check("내보내기 · 빈 장 빼기(dropEmptyChapters) 가 목차보다 먼저", "function dropEmptyChapters" in rc
       and rc.index("dropEmptyChapters(clone)") < rc.index("insertToc(clone);", rc.index("function buildHtml")))
+es_src = read(FE / "components" / "EntryStrategySection.jsx")
+# 6장 — 경쟁 상품 자료가 없으면 「경쟁사 데이터 기반 … 비교 분석」은 사실이 아니다(2026-11-17 대표 지시)
+check("6장 · 자료 없음이면 제목 「1페이지 진입 전략」(비교 분석 아님)",
+      "(noMarket ? '1페이지 진입 전략' : '1페이지 진입 전략 비교 분석')" in es_src)
+check("6장 · 자료 없음이면 설명은 쓴 자료만(검색 수요 · 키워드 · 광고 경쟁)",
+      "noMarket ? '검색 수요 · 키워드 · 광고 경쟁 자료와 내 상품 정보로 1페이지 진입 전략을 제안합니다'" in es_src)
+check("6장 · 자료 없음이면 맺음 줄에 「노출 순위」를 말하지 않음",
+      "noMarket ? '네이버 공식 자료(검색량 · 광고 경쟁) 기준 분석 결과입니다.'" in es_src)
+check("6장 · 자료 있음 문구는 그대로(무회귀)",
+      "'경쟁사 데이터 기반 1페이지 진입 전략을 제안합니다'" in es_src
+      and "'네이버 공식 API 기준 분석 결과이며, 실제 검색 노출 순위와 차이가 있을 수 있습니다.'" in es_src)
 an = read(FE / "analysis.jsx")
 check("분석 · 「성공 · 빈 목록」 상품 검색은 다시 묻지 않음(off)",
       "var shopOff = !ok.shop && _shopOff(results[2]);" in an
