@@ -70,6 +70,10 @@ on:
         description: "네이버 관제와 우리 수집·검색량 오류의 접점 (on 이면 실행 · 읽기 전용 · IP·키워드 미출력)"
         required: false
         default: ""
+      ai_batch:
+        description: '🤖 AI 호출 실패 · 아침 분석 날짜별 건수 — off(기본) / on (읽기 전용 · 업체명·키워드·IP 미출력 · 모델 조회는 생성 호출 없음)'
+        required: false
+        default: 'off'
       board_live:
         description: '🛰 수집 현황판(#286) 라이브 확인 — off(기본) / on. 파일·경로·인증·번들 표지 + 실제 DB 로 현황판 계산(숫자만 · 키워드 미출력).'
         required: false
@@ -480,6 +484,65 @@ jobs:
             docker exec logic-analysis sh -c "[ -e '$T' ] && echo '  ⚠️ 아직 남아 있다' || echo '  ✅ 폴더 없음'"
             docker exec logic-analysis sh -c 'ls -la --time-style=+%m-%d_%H:%M /app/data/backups/'
             df -h / | tail -1
+
+      - name: 🤖 AI 호출 실패 · 아침 분석 날짜별 (ai_batch=on · 읽기 전용)
+        if: ${{ github.event.inputs.ai_batch == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 180s
+          script: |
+            echo "== 컨테이너 기동 =="
+            docker inspect -f 'StartedAt={{.State.StartedAt}} Restarts={{.RestartCount}}' logic-analysis
+            echo "== 서버 AI 모델 설정(비밀 아님 · 비어 있으면 코드 기본값 claude-sonnet-4-6) =="
+            for v in CLAUDE_MODEL SEO_CLAUDE_MODEL; do printf '  %s=' "$v"; docker exec logic-analysis printenv "$v" 2>/dev/null || echo '(설정 없음)'; done
+            echo "== 모델 조회(생성 호출 없음 · 모델 목록 API 로 있나만) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import os
+            try:
+                import anthropic
+                key = os.getenv("CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+                if not key:
+                    print("  키 없음 — 조회 못 함")
+                else:
+                    c = anthropic.Anthropic(api_key=key)
+                    names = [os.getenv("CLAUDE_MODEL") or "claude-sonnet-4-6", "claude-sonnet-4-6", "claude-haiku-4-5", os.getenv("SEO_CLAUDE_MODEL") or ""]
+                    seen = []
+                    for m in names:
+                        if not m or m in seen:
+                            continue
+                        seen.append(m)
+                        try:
+                            r = c.models.retrieve(m)
+                            print(f"  {m}: 있음 (id={getattr(r,'id','?')})")
+                        except Exception as e:
+                            print(f"  {m}: 실패 {type(e).__name__}: {str(e)[:220]}")
+                    print("  anthropic 패키지", getattr(anthropic, "__version__", "?"))
+            except Exception as e:
+                print("  조회 자체 실패", type(e).__name__, str(e)[:200])
+            PY
+            echo "== AI 호출 실패 줄(이 컨테이너 기동 뒤 · 업체명 대괄호 가림) =="
+            docker logs --timestamps logic-analysis 2>&1 | grep -E 'Claude 호출 실패|compare-coaching' | sed -E 's/\[[^]]{1,60}\]/[**]/g' | cut -c1-600 | tail -20
+            echo "== 코칭 요청 응답 코드(IP 미출력) =="
+            docker logs logic-analysis 2>&1 | grep -oE '"(POST|GET) /api/cd/compare-coaching[^"]*" [0-9]{3}' | awk '{print $NF}' | sort | uniq -c
+            echo "== 아침 분석 — 날짜별 분석 줄 수 · 처음/마지막 갱신 · 08~11시에 갱신된 줄 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            for r in c.execute("SELECT analyzed_date, COUNT(*), MIN(updated_at), MAX(updated_at), SUM(CASE WHEN substr(updated_at,12,2) IN ('08','09','10','11') THEN 1 ELSE 0 END) FROM client_analyses WHERE analyzed_date >= date('now','localtime','-24 day') GROUP BY analyzed_date ORDER BY analyzed_date"):
+                print("  ", r)
+            print("== 날짜별 · 시각별(최근 9일 · 시 단위) ==")
+            for r in c.execute("SELECT analyzed_date, substr(updated_at,12,2) h, COUNT(*) FROM client_analyses WHERE analyzed_date >= date('now','localtime','-9 day') GROUP BY analyzed_date, h ORDER BY analyzed_date, h"):
+                print("  ", r)
+            print("== 아침 분석 대상 규모(활성 업체 · 키워드) ==")
+            try:
+                print("  활성 업체", c.execute("SELECT COUNT(*) FROM clients WHERE status='active'").fetchone()[0])
+            except Exception as e:
+                print("  못 쟀다", type(e).__name__)
+            PY
 
       - name: 🩺 서버 건강 — 디스크·메모리·워커·백업 (server_health=on · 읽기 전용)
         if: ${{ github.event.inputs.server_health == 'on' }}
