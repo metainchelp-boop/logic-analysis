@@ -77,6 +77,11 @@ check("서버 · 순위 문장 「순위 기반 조언은 넣지 않았습니다
 rel = src[src.index('"/api/keywords/related"'):]
 rel = rel[:rel.index("\n@app.")]
 check("서버 · 연관 키워드 응답에 lookup_ok(조회 실패 ≠ 0개)", '"lookup_ok": lookup_ok' in rel and "lookup_ok = True" in rel)
+# 띄어 쓴 키워드 — keywordstool 은 hintKeywords 에 공백이 있으면 400(naver_crawler 와 같은 규칙).
+# 원문을 그대로 보내면 「수제 부각」 같은 키워드는 연관 키워드가 늘 「불러오지 못함」이 된다(2026-11-16 운영 실측 400 6건).
+check("서버 · 연관 키워드 조회는 공백을 뺀 키워드로 묻는다",
+      '"hintKeywords": (req.keyword or "").strip().replace(" ", "")' in rel
+      and '"hintKeywords": req.keyword,' not in rel)
 exp = src[src.index('"/api/rank/keyword-exposure"'):]
 exp = exp[:exp.index("\n@app.")]
 check("서버 · 노출 순위에 measured · measured_count(못 잼 ≠ 200위 밖)", '"measured": bool(_prods)' in exp and '"measured_count"' in exp)
@@ -134,6 +139,26 @@ if have_full:
               [s.get("severity") for s in comp2])
     finally:
         main.get_product_info, main._shared_crawl, main.find_product_rank, naver_crawler.search_products = orig
+    # 연관 키워드 — 실제 함수가 검색광고에 보내는 hintKeywords(네트워크는 가로챔)
+    import requests as _rq
+    sent = []
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"keywordList": []}
+    _orig_get = _rq.get
+    _orig_keys = (naver_crawler.SEARCHAD_API_KEY, naver_crawler.SEARCHAD_SECRET_KEY, naver_crawler.SEARCHAD_CUSTOMER_ID)
+    try:
+        naver_crawler.SEARCHAD_API_KEY, naver_crawler.SEARCHAD_SECRET_KEY, naver_crawler.SEARCHAD_CUSTOMER_ID = "k", "s", "c"
+        _rq.get = lambda url, params=None, **k: (sent.append(dict(params or {})), _Resp())[1]
+        out = main.related_keywords(main.RelatedKeywordRequest(keyword=" 수제 부각 "), current_user={"id": 1})
+        hk = [p.get("hintKeywords") for p in sent if "hintKeywords" in p]
+        check("실행 · 띄어 쓴 키워드 → 검색광고에 공백 없이 보냄", bool(hk) and hk[0] == "수제부각", hk)
+        d3 = out.get("data") if isinstance(out, dict) else None
+        check("실행 · 조회 성공이면 lookup_ok True", isinstance(d3, dict) and d3.get("lookup_ok") is True,
+              (d3 or {}).get("lookup_ok") if isinstance(d3, dict) else out)
+    finally:
+        _rq.get = _orig_get
+        naver_crawler.SEARCHAD_API_KEY, naver_crawler.SEARCHAD_SECRET_KEY, naver_crawler.SEARCHAD_CUSTOMER_ID = _orig_keys
 else:
     skipped += 1
     print("  SKIP  실행 확인(서버 전체 의존성 없음 — 소스 고정으로 갈음)")
