@@ -70,6 +70,10 @@ on:
         description: "네이버 관제와 우리 수집·검색량 오류의 접점 (on 이면 실행 · 읽기 전용 · IP·키워드 미출력)"
         required: false
         default: ""
+      chat_probe:
+        description: '💬 AI 채팅 실제 한 번 묻기(#375 확인) — off(기본) / on (일반 키워드 「수제 부각」만 · 대화 기록에 안 남김 · 검색광고 1~3회 · Claude 1~4회)'
+        required: false
+        default: 'off'
       ai_batch:
         description: '🤖 AI 호출 실패 · 아침 분석 날짜별 건수 — off(기본) / on (읽기 전용 · 업체명·키워드·IP 미출력 · 모델 조회는 생성 호출 없음)'
         required: false
@@ -484,6 +488,33 @@ jobs:
             docker exec logic-analysis sh -c "[ -e '$T' ] && echo '  ⚠️ 아직 남아 있다' || echo '  ✅ 폴더 없음'"
             docker exec logic-analysis sh -c 'ls -la --time-style=+%m-%d_%H:%M /app/data/backups/'
             df -h / | tail -1
+
+      - name: 💬 AI 채팅 실제 한 번 묻기 (chat_probe=on)
+        if: ${{ github.event.inputs.chat_probe == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 180s
+          script: |
+            echo "== 컨테이너 기동 =="
+            docker inspect -f 'StartedAt={{.State.StartedAt}} Restarts={{.RestartCount}}' logic-analysis
+            echo "== #375 반영(도구 정의 줄 수 · 1 이상이면 반영) =="
+            docker exec logic-analysis grep -c 'tools=CHAT_TOOLS' /app/chat.py || true
+            docker exec -i logic-analysis python3 - <<'PYP' || true
+            import json, time
+            import chat
+            print("== 도구만 실행(검색광고 1회) ==")
+            print(chat._run_chat_tool("keyword_volume", {"keywords": ["수제 부각"]})[:600])
+            print("== 채팅 함수 실제 실행(대화 기록에 안 남김) ==")
+            t = time.time()
+            ans = chat._call_claude_sync([], "수제 부각 검색량 얼마야? 연관 키워드도 몇 개 알려줘")
+            print("걸린 시간", round(time.time() - t, 1), "초")
+            print(ans[:1200].replace("\n", " / "))
+            PYP
+            docker logs --since 5m logic-analysis 2>&1 | grep -E '\[Chat\]|claude-models|키워드 볼륨 조회' | cut -c1-200 | tail -10 || true
 
       - name: 🤖 AI 호출 실패 · 아침 분석 날짜별 (ai_batch=on · 읽기 전용)
         if: ${{ github.event.inputs.ai_batch == 'on' }}
