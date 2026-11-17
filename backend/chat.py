@@ -465,12 +465,27 @@ def _call_claude_sync(messages: list, user_message: str, context_data: str = "",
         if not client:
             return "AI 채팅 기능을 사용하려면 관리자가 CLAUDE_API_KEY를 설정해야 합니다. 관리자에게 문의해주세요."
 
-        resp = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=1500,
-            system=SYSTEM_PROMPT,
-            messages=api_messages,
-        )
+        # 설정한 모델이 은퇴해 「없음」이면 대체 모델로 다시 묻는다(2026-11-17 · claude_models.py).
+        from claude_models import model_candidates, is_model_missing_error, mark_unavailable
+        resp = None
+        last_missing = None
+        for _mdl in model_candidates(CLAUDE_MODEL):
+            try:
+                resp = client.messages.create(
+                    model=_mdl,
+                    max_tokens=1500,
+                    system=SYSTEM_PROMPT,
+                    messages=api_messages,
+                )
+                break
+            except anthropic.APIError as _e:
+                if not is_model_missing_error(_e):
+                    raise
+                last_missing = _e
+                logger.error(f"[Chat] Claude 모델 사용 불가(model={_mdl}): {_e}")
+                mark_unavailable(_mdl, "Chat")
+        if resp is None:
+            raise last_missing
 
         if resp.content:
             logger.info(f"[Chat] Claude 응답 완료 (토큰: input={resp.usage.input_tokens}, output={resp.usage.output_tokens})")
