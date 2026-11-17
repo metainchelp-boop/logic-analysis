@@ -497,6 +497,8 @@ jobs:
           script: |
             echo "== 컨테이너 기동 =="
             docker inspect -f 'StartedAt={{.State.StartedAt}} Restarts={{.RestartCount}}' logic-analysis
+            echo "== #371 반영(연관 키워드 공백 빼기 줄 수 · 1 이상이면 반영) =="
+            docker exec logic-analysis grep -c '"hintKeywords": (req.keyword or "").strip().replace(" ", "")' /app/main.py || echo "  0 또는 못 읽음"
             echo "== 서버 AI 모델 설정(비밀 아님 · 비어 있으면 코드 기본값 claude-sonnet-4-6) =="
             for v in CLAUDE_MODEL SEO_CLAUDE_MODEL; do printf '  %s=' "$v"; docker exec logic-analysis printenv "$v" 2>/dev/null || echo '(설정 없음)'; done
             echo "== 모델 조회(생성 호출 없음 · 모델 목록 API 로 있나만) =="
