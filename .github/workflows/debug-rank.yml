@@ -530,6 +530,47 @@ jobs:
             docker logs --timestamps logic-analysis 2>&1 | grep -E 'Claude 호출 실패|compare-coaching' | sed -E 's/\[[^]]{1,60}\]/[**]/g' | cut -c1-600 | tail -20
             echo "== 코칭 요청 응답 코드(IP 미출력) =="
             docker logs logic-analysis 2>&1 | grep -oE '"(POST|GET) /api/cd/compare-coaching[^"]*" [0-9]{3}' | awk '{print $NF}' | sort | uniq -c
+            sudo -n true 2>/dev/null && SU="sudo -n" || SU=""
+            echo "== 서버가 켜진 시각 · 커널 기록 범위 =="
+            uptime -s 2>/dev/null; $SU journalctl -k --list-boots 2>/dev/null | tail -3 || true
+            echo "== 커널 기록 11/3·11/4·11/15·11/16 08:25~08:40 (충돌·강제종료·메모리 · 줄 수와 앞 120자) =="
+            for d in 2026-11-03 2026-11-04 2026-11-15 2026-11-16 2026-11-17; do
+              n=$($SU journalctl -k --since "$d 08:25" --until "$d 08:40" 2>/dev/null | grep -ciE 'segfault|killed process|oom|trap|general protection|python' || true)
+              echo "  $d 08:25~08:40 커널 줄: ${n:-못 읽음}"
+            done
+            $SU journalctl -k --since "2026-11-01" 2>/dev/null | grep -iE 'segfault|killed process|out of memory|general protection' | cut -c1-120 | tail -10 || echo "  (못 읽음)"
+            echo "== nginx 접근 기록 보관 범위 · 그날 08:29~08:35 응답 코드(IP 미출력) =="
+            ls -la /var/log/nginx/ 2>/dev/null | awk '{print $5, $6, $7, $8, $9}' | tail -20
+            for d in "03/Nov/2026" "04/Nov/2026" "15/Nov/2026" "16/Nov/2026" "17/Nov/2026"; do
+              c=$($SU zgrep -h "$d:08:3[0-4]" /var/log/nginx/access.log* 2>/dev/null | grep -oE '" [0-9]{3} ' | sort | uniq -c | tr '\n' ' ')
+              echo "  $d 08:30~08:34: ${c:-(줄 없음 또는 못 읽음)}"
+            done
+            echo "== nginx 오류 기록 그날 08:29~08:40 (upstream 끊김 · 줄 수) =="
+            for d in "2026/11/03" "2026/11/04" "2026/11/15" "2026/11/16" "2026/11/17"; do
+              c=$($SU zgrep -h "^$d 08:[23][0-9]" /var/log/nginx/error.log* 2>/dev/null | grep -ciE 'upstream|prematurely|refused|reset' || true)
+              echo "  $d 08:20~08:39 upstream 오류 줄: ${c:-못 읽음}"
+            done
+            echo "== uvicorn 일꾼 생존 확인(설치된 판의 코드 · 시간 제한 값) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import inspect
+            try:
+                import uvicorn, uvicorn.supervisors.multiprocess as m
+                print("  uvicorn", uvicorn.__version__)
+                src = inspect.getsource(m.Process.is_alive) + inspect.getsource(m.Process.ping)
+                print("  " + "\n  ".join(l for l in src.splitlines() if "timeout" in l or "def " in l))
+                cfg = inspect.getsource(uvicorn.config.Config.__init__)
+                print("  " + "\n  ".join(l.strip() for l in cfg.splitlines() if "healthcheck" in l))
+            except Exception as e:
+                print("  못 읽음", type(e).__name__, e)
+            PY
+            echo "== 그날 처음 분석된 업체 번호(이름 없음 · 갱신 순 앞 4줄) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            for d in ("2026-11-02","2026-11-03","2026-11-04","2026-11-05","2026-11-13","2026-11-14","2026-11-15","2026-11-16","2026-11-17"):
+                rows = c.execute("SELECT client_id, updated_at FROM client_analyses WHERE analyzed_date=? AND substr(updated_at,12,5) BETWEEN '08:30' AND '08:31' ORDER BY updated_at LIMIT 4", (d,)).fetchall()
+                print("  ", d, [(r[0], r[1][11:19]) for r in rows])
+            PY
             echo "== 아침 분석 — 날짜별 분석 줄 수 · 처음/마지막 갱신 · 08~11시에 갱신된 줄 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
