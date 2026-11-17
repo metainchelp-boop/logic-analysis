@@ -526,6 +526,17 @@ jobs:
             except Exception as e:
                 print("  조회 자체 실패", type(e).__name__, str(e)[:200])
             PY
+            echo "== 아침 분석 점검 등록 · 이어서 하기 줄(#374) =="
+            docker logs logic-analysis 2>&1 | grep -E '아침 분석 점검|아침 분석 기록|이어서 하기|daily_analysis_watch' | sed -E 's/\[[^]]{1,60}\]/[**]/g' | cut -c1-220 | tail -10 || true
+            docker exec -i logic-analysis python3 - <<'PYW' || true
+            import sqlite3, os
+            c = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"), timeout=10)
+            ok = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='daily_batch_runs'").fetchone()
+            print("  진행 기록 표:", "있음" if ok else "아직 없음(첫 08:30 또는 오전 점검 때 생김)")
+            if ok:
+                for r in c.execute("SELECT run_date, started_at, heartbeat_at, finished_at, total, done, failed, skipped, resumes, pid FROM daily_batch_runs ORDER BY run_date DESC LIMIT 5"):
+                    print("  ", r)
+            PYW
             echo "== AI 호출 실패 줄(이 컨테이너 기동 뒤 · 업체명 대괄호 가림) =="
             docker logs --timestamps logic-analysis 2>&1 | grep -E 'Claude 호출 실패|compare-coaching' | sed -E 's/\[[^]]{1,60}\]/[**]/g' | cut -c1-600 | tail -20
             echo "== 코칭 요청 응답 코드(IP 미출력) =="
