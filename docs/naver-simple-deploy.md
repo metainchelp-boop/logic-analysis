@@ -372,7 +372,8 @@ helper 해시는 두 항목이 같은 값을 쓴다(파일 하나). 엄격 v2 re
    `requires_released` 때문에 그 전에는 22-23 prepare·deploy 가 `MIGRATION_ORDER` 로 거절된다.
 2. PR38 `9649eae`(스키마 22, 코드만)를 일반 `deploy` 로 올린다. 22-23 항목의 from_commit 이 이 커밋이다.
 3. `migrate-prepare` → `migrate-rehearse` → `migrate-plan` → `migrate-deploy`(`migration_id=22-23-reconcile-v1`,
-   확인 문구 `MIGRATE_NAVER_SCHEMA_22_TO_23_ADDITIVE`). 12260db 는 새 스위치 `reconcile_writes` 를 낸다. 이관 모드는 그 스위치가
+   확인 문구 `MIGRATE_NAVER_SCHEMA_22_TO_23_ADDITIVE`). 대상(to_commit)은 통합본 7cfb4be(PR39 12260db + PR40 잔액 갱신 + PR41 당근 대조,
+   새 표 11개·자동 색인 12개), nginx 단계 product_commit 도 같은 커밋이다(nginx 두 파일은 12260db 와 바이트 동일). 12260db 는 새 스위치 `reconcile_writes` 를 낸다. 이관 모드는 그 스위치가
    **꺼져 있을 때만** check-config 를 통과시킨다(켜져 있으면 `CHECK_CONFIG`). 일반 deploy 는 값과 무관하게 받는다.
 4. `nginx-plan` → `nginx-apply`(아래). 업로드는 5에서 대표가 `reconcile_writes` 를 켤 때까지 엔진이 403 이다.
 5. 대표가 런타임 환경에서 `NAVER_ENGINE_RECONCILE_WRITES_ENABLED=true` 로 켠다(이 장치의 범위 밖).

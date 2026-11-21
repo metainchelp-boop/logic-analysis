@@ -30,8 +30,12 @@ NO_FLOCK = sys.platform == 'darwin'
 FAKE_OLD_STORE = b'SCHEMA_VERSION = 21   # fake\n'
 
 
+# 시험 날짜는 모듈을 읽을 때 한 번만 정한다. 실행이 KST 자정을 넘겨도 백업 상태의 '오늘'과 가짜 시각의 날짜가 갈리지 않는다.
+TEST_DAY = time.strftime('%Y-%m-%d', time.gmtime(time.time() + 9 * 3600))
+
+
 def kst(hour_minute='10:00'):
-    return time.strftime('%Y-%m-%d', time.gmtime(time.time() + 9 * 3600)) + 'T' + hour_minute
+    return TEST_DAY + 'T' + hour_minute
 
 
 def file_sha(path):
