@@ -62,11 +62,17 @@ SYSTEM_PROMPT = """당신은 네이버 쇼핑 키워드 분석 분야에서 10�
 
 로직 분석 프로그램의 기능 (질문에 답할 때 참고):
 - 키워드 분석: 검색량, 경쟁강도, 상품 수, 클릭률 분석
-- 순위 추적: 키워드별 네이버 쇼핑 순위 자동 추적 (400위까지)
+- 순위 추적: 네이버 쇼핑 순위 수집은 2026-11-05부터 쉬고 있습니다. 순위를 말할 때는 마지막으로 기록된 값이며 오늘 순위가 아니라는 것을 함께 말하세요
 - 데이터랩: 네이버 쇼핑인사이트 연동 (트렌드, 연령/성별/기기별 분석)
 - AI 인사이트: 가격 최적화, 키워드 발굴, 리뷰 감성, 광고 효율, 순위 예측 등 8가지
 - 업체 관리: 광고주별 키워드 분석 이력, 보고서 생성
 - 사용자 역할: superadmin(전체 관리), manager(담당 업체 관리), viewer(조회 전용, 일 3회)
+
+검색량 · 연관 키워드 조회 도구(직접 조회할 수 있습니다):
+- 키워드의 검색량 · 클릭수 · 경쟁 정도를 물으면 keyword_volume 도구로 네이버 검색광고 자료를 직접 조회해서 답하세요. 「실시간 데이터에 접근할 수 없다」고 답하지 마세요
+- 연관 키워드 · 황금 키워드를 물으면 related_keywords 도구를 쓰세요
+- 조회한 검색량은 최근 한 달 기준 월간 검색수이고, PC 와 모바일을 나눠 말하면 좋아요. 값이 10 이면 네이버가 「10 미만」으로 준 것일 수 있어요
+- 도구가 결과를 못 가져오면 조회하지 못했다고 그대로 말하고, 수치를 지어내지 마세요
 
 중요한 답변 원칙:
 - 아래에 [참조 데이터]가 제공되면, 반드시 그 실제 데이터를 근거로 답변하세요
@@ -79,6 +85,117 @@ SYSTEM_PROMPT = """당신은 네이버 쇼핑 키워드 분석 분야에서 10�
 
 의견/피드백 태그가 포함된 메시지(#오류, #요청, #의견 등)는 프로그램 개선 피드백이니, 공감하면서 "접수했어요, 확인해볼게요" 정도로 자연스럽게 응답하세요.
 """
+
+# ==================== 채팅 도구 — 검색량 · 연관 키워드 직접 조회 (2026-11-18) ====================
+# 대표 신고(11/18 「검색량 물어보니까 답변도 제대로 못하는데?」): 채팅은 우리 분석 기록에 있는 키워드만
+# 참고 자료로 받아, 처음 묻는 키워드(예: 업체 이름)는 「실시간 데이터에 접근할 수 없다」고 답했다.
+# ⇒ 분석 화면과 같은 네이버 검색광고 조회(get_keyword_volume · get_related_keywords)를 AI 가 직접 부르게 한다.
+# ⚠️ 쇼핑 검색 API(종료) · 수집기는 쓰지 않는다. 검색광고 API 만 — 분석 화면 한 번과 같은 호출이다.
+CHAT_TOOL_MAX_ROUNDS = 3        # 한 질문에서 도구를 부르는 최대 횟수(묶음)
+CHAT_TOOL_MAX_KEYWORDS = 5      # 검색광고 keywordstool 이 한 번에 받는 최대 키워드 수
+
+CHAT_TOOLS = [
+    {
+        "name": "keyword_volume",
+        "description": ("네이버 검색광고 기준 키워드의 최근 한 달 월간 검색수(PC · 모바일), 월평균 클릭수, "
+                        "경쟁 정도, 평균 광고 노출 깊이를 조회한다. 키워드 1~5개."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keywords": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 5,
+                             "description": "조회할 키워드(띄어쓰기 그대로 써도 된다)"},
+            },
+            "required": ["keywords"],
+        },
+    },
+    {
+        "name": "related_keywords",
+        "description": ("네이버 검색광고 기준으로 한 키워드의 연관 키워드(검색량 많은 순)와 황금 키워드"
+                        "(검색량 100~5,000 · 경쟁 낮음)를 조회한다."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"keyword": {"type": "string", "description": "기준 키워드 하나"}},
+            "required": ["keyword"],
+        },
+    },
+]
+
+
+def _tool_keyword_volume(keywords):
+    from naver_crawler import get_keyword_volume
+    kws = []
+    for k in (keywords or []):
+        k = str(k or "").strip()
+        if k and k not in kws:
+            kws.append(k)
+    kws = kws[:CHAT_TOOL_MAX_KEYWORDS]
+    if not kws:
+        return {"error": "조회할 키워드가 없습니다."}
+    rows = get_keyword_volume(kws) or []
+    found = {}
+    for r in rows:
+        pc = int(r.get("monthlyPcQcCnt") or 0)
+        mo = int(r.get("monthlyMobileQcCnt") or 0)
+        found[r.get("keyword")] = {
+            "keyword": r.get("keyword"),
+            "monthly_pc": pc, "monthly_mobile": mo, "monthly_total": pc + mo,
+            "avg_clicks_pc": r.get("monthlyAvePcClkCnt"), "avg_clicks_mobile": r.get("monthlyAveMobileClkCnt"),
+            "competition": r.get("compIdx"), "avg_ad_depth": r.get("plAvgDepth"),
+        }
+    return {
+        "source": "네이버 검색광고 키워드 도구 · 최근 한 달",
+        "results": [found[k] for k in kws if k in found],
+        "not_found": [k for k in kws if k not in found],
+        "note": "not_found 는 네이버가 값을 주지 않았거나 조회에 실패한 키워드다(수치를 지어내지 말 것).",
+    }
+
+
+def _tool_related_keywords(keyword):
+    from auto_analysis import get_related_keywords
+    kw = str(keyword or "").strip()
+    if not kw:
+        return {"error": "기준 키워드가 없습니다."}
+    data = get_related_keywords(kw) or {}
+
+    def _slim(rows, n):
+        return [{"keyword": r.get("keyword"), "monthly_total": r.get("totalVolume"),
+                 "competition": r.get("compIdx")} for r in (rows or [])[:n]]
+    total = int(data.get("total_found") or 0)
+    out = {
+        "source": "네이버 검색광고 키워드 도구 · 최근 한 달",
+        "seed_keyword": kw,
+        "total_found": total,
+        "golden_keywords": _slim(data.get("golden_keywords"), 10),
+        "related_keywords": _slim(data.get("related_keywords"), 15),
+    }
+    if total == 0:
+        out["note"] = "연관 키워드를 가져오지 못했다(조회 실패이거나 결과 없음 — 수치를 지어내지 말 것)."
+    return out
+
+
+def _run_chat_tool(name, args):
+    """도구 하나를 실행해 결과 JSON 문자열을 돌려준다. 실패해도 채팅은 계속된다(오류를 그대로 AI 에 알린다)."""
+    try:
+        if name == "keyword_volume":
+            res = _tool_keyword_volume((args or {}).get("keywords"))
+        elif name == "related_keywords":
+            res = _tool_related_keywords((args or {}).get("keyword"))
+        else:
+            res = {"error": f"모르는 도구: {name}"}
+    except Exception as e:
+        logger.error(f"[Chat] 도구 실행 실패({name}): {type(e).__name__}: {e}")
+        res = {"error": "조회 중 오류가 나 결과를 가져오지 못했습니다."}
+    return json.dumps(res, ensure_ascii=False)
+
+
+def _response_text(resp):
+    """응답에서 글자 부분만 이어 붙인다(도구 호출 블록은 뺀다)."""
+    parts = []
+    for b in (getattr(resp, "content", None) or []):
+        if getattr(b, "type", "text") == "text" and getattr(b, "text", None):
+            parts.append(b.text)
+    return "\n".join(parts).strip()
+
 
 # ==================== DB 초기화 ====================
 def init_chat_db():
@@ -465,16 +582,50 @@ def _call_claude_sync(messages: list, user_message: str, context_data: str = "",
         if not client:
             return "AI 채팅 기능을 사용하려면 관리자가 CLAUDE_API_KEY를 설정해야 합니다. 관리자에게 문의해주세요."
 
-        resp = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=1500,
-            system=SYSTEM_PROMPT,
-            messages=api_messages,
-        )
+        # 설정한 모델이 은퇴해 「없음」이면 대체 모델로 다시 묻는다(2026-11-17 · claude_models.py).
+        from claude_models import model_candidates, is_model_missing_error, mark_unavailable
 
-        if resp.content:
+        def _create(msgs):
+            last_missing = None
+            for _mdl in model_candidates(CLAUDE_MODEL):
+                try:
+                    return client.messages.create(
+                        model=_mdl,
+                        max_tokens=1500,
+                        system=SYSTEM_PROMPT,
+                        messages=msgs,
+                        tools=CHAT_TOOLS,
+                    )
+                except anthropic.APIError as _e:
+                    if not is_model_missing_error(_e):
+                        raise
+                    last_missing = _e
+                    logger.error(f"[Chat] Claude 모델 사용 불가(model={_mdl}): {_e}")
+                    mark_unavailable(_mdl, "Chat")
+            raise last_missing
+
+        resp = _create(api_messages)
+        # 검색량 · 연관 키워드 도구(2026-11-18) — AI 가 도구를 부르면 실행해 결과를 돌려주고 다시 묻는다.
+        _rounds = 0
+        _used = []
+        while getattr(resp, "stop_reason", None) == "tool_use" and _rounds < CHAT_TOOL_MAX_ROUNDS:
+            _rounds += 1
+            _results = []
+            for _b in (resp.content or []):
+                if getattr(_b, "type", None) == "tool_use":
+                    _used.append(_b.name)
+                    _results.append({"type": "tool_result", "tool_use_id": _b.id,
+                                     "content": _run_chat_tool(_b.name, _b.input)})
+            api_messages = api_messages + [{"role": "assistant", "content": resp.content},
+                                           {"role": "user", "content": _results}]
+            resp = _create(api_messages)
+        if _used:
+            logger.info(f"[Chat] 도구 사용 {len(_used)}회: {', '.join(_used)}")
+
+        text = _response_text(resp)
+        if text:
             logger.info(f"[Chat] Claude 응답 완료 (토큰: input={resp.usage.input_tokens}, output={resp.usage.output_tokens})")
-            return resp.content[0].text
+            return text
         return "응답을 처리할 수 없습니다."
 
     except anthropic.APITimeoutError:

@@ -3601,7 +3601,9 @@ def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depends(ge
             uri = "/keywordstool"
             method = "GET"
             url = f"https://api.searchad.naver.com{uri}"
-            params = {"hintKeywords": req.keyword, "showDetail": "1"}
+            # ⚠️ keywordstool 은 hintKeywords 에 공백이 있으면 400 을 낸다(naver_crawler 와 같은 규칙 ·
+            # 2026-08-05 실측). 여기만 원문을 보내 띄어 쓴 키워드는 연관 키워드가 늘 비었다(2026-11-16 확인).
+            params = {"hintKeywords": (req.keyword or "").strip().replace(" ", ""), "showDetail": "1"}
             data = {}
             max_retries = 2
             for attempt in range(max_retries + 1):

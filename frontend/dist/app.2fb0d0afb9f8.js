@@ -13362,9 +13362,10 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     className: 'rt-h3'
   }, React.createElement('span', {
     className: 'rt-hic'
-  }, part === 'competition' ? '🏆' : '🧭'), part === 'competition' ? '경쟁사 비교 · 격차 분석' : '1페이지 진입 전략 비교 분석'), React.createElement('div', {
+  }, part === 'competition' ? '🏆' : '🧭'), part === 'competition' ? '경쟁사 비교 · 격차 분석' : noMarket ? '1페이지 진입 전략' : '1페이지 진입 전략 비교 분석'), React.createElement('div', {
     className: 'rt-desc'
-  }, part === 'competition' ? '상위 노출 경쟁사와 내 상품의 격차를 진단합니다' : '경쟁사 데이터 기반 1페이지 진입 전략을 제안합니다'), /* === 상품 정보 헤더 (광고주 데이터가 있을 때만) === */
+  }, part === 'competition' ? '상위 노출 경쟁사와 내 상품의 격차를 진단합니다'
+  /* 경쟁 상품 자료가 없을 때(2026-11-16~)는 「경쟁사 데이터 기반」이 사실이 아니다 — 쓴 자료만 말한다 */ : noMarket ? '검색 수요 · 키워드 · 광고 경쟁 자료와 내 상품 정보로 1페이지 진입 전략을 제안합니다' : '경쟁사 데이터 기반 1페이지 진입 전략을 제안합니다'), /* === 상품 정보 헤더 (광고주 데이터가 있을 때만) === */
   showComp && advertiserData && React.createElement('div', {
     style: {
       background: '#fff',
@@ -14362,7 +14363,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
       textAlign: 'center',
       border: '1px solid #e2e8f0'
     }
-  }, '네이버 공식 API 기준 분석 결과이며, 실제 검색 노출 순위와 차이가 있을 수 있습니다.', advertiserData && advertiserData.analyzed_at ? ' | 분석 시각: ' + new Date(advertiserData.analyzed_at).toLocaleString('ko-KR') : ''), /* 반응형 스타일 */
+  }, noMarket ? '네이버 공식 자료(검색량 · 광고 경쟁) 기준 분석 결과입니다.' : '네이버 공식 API 기준 분석 결과이며, 실제 검색 노출 순위와 차이가 있을 수 있습니다.', advertiserData && advertiserData.analyzed_at ? ' | 분석 시각: ' + new Date(advertiserData.analyzed_at).toLocaleString('ko-KR') : ''), /* 반응형 스타일 */
   React.createElement('style', null, '\n@media (max-width: 768px) {\n  #sec-strategy .card-grid-4 { grid-template-columns: 1fr 1fr !important; }\n}\n'))));
 };
 

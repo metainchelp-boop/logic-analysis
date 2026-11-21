@@ -7,6 +7,7 @@ APScheduler 기반 통합 스케줄러
 - 일일 API 호출: ~147회 (기존 25,000+에서 99% 절감)
 """
 import logging
+import threading
 import time
 import json
 from datetime import datetime, date, timedelta
@@ -102,6 +103,17 @@ def start_scheduler():
         trigger=CronTrigger(hour=8, minute=30),
         id="daily_analysis",
         name="전체 분석 + 보고서 (08:30)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # 2-1) 아침 분석 점검 — 08:35~10:55 10분마다. 끊긴 날은 남은 키워드만 이어서 한다(2026-11-17).
+    #      ⚠️ 08:30 정각과 겹치지 않게 5분 단위 · 11시 이후에는 안 한다(daily_batch_state.decide).
+    _scheduler.add_job(
+        _watch_daily_analysis,
+        trigger=CronTrigger(hour="8-10", minute="5,15,25,35,45,55"),
+        id="daily_analysis_watch",
+        name="아침 분석 점검 (끊기면 이어서)",
         replace_existing=True,
         max_instances=1,
     )
@@ -1143,29 +1155,86 @@ def _run_rank_tracking():
 
 # ==================== 08:30 전체 분석 + 보고서 ====================
 
-def _run_daily_analysis():
+# 같은 일꾼 안에서 08:30 분석과 오전 점검(이어서 하기)이 겹쳐 돌지 않게 한다.
+_daily_analysis_lock = threading.Lock()
+
+
+def _run_daily_analysis(resume=False, note=""):
+    """08:30 전체 분석 — 같은 일꾼에서 이미 돌고 있으면 건너뛴다(오전 점검과 겹침 방지)."""
+    if not _daily_analysis_lock.acquire(blocking=False):
+        logger.warning("⏭ 전체 분석이 이 일꾼에서 이미 도는 중 — 건너뜀")
+        return
+    try:
+        _run_daily_analysis_inner(resume, note)
+    finally:
+        _daily_analysis_lock.release()
+
+
+def _batch_state(fn, *args, **kw):
+    """진행 기록 쓰기 — 실패해도 분석은 그대로 돈다(기록 때문에 분석이 멈추면 안 된다)."""
+    if not args or args[0] is None:
+        return None
+    try:
+        return fn(*args, **kw)
+    except Exception as _e:
+        logger.warning(f"[아침 분석 기록] 기록 실패(분석은 계속): {_e}")
+        return None
+
+
+def _run_daily_analysis_inner(resume=False, note=""):
     """
     08:30 전체 분석 + HTML 보고서 — 08:00 캐시된 상품 데이터를 재사용.
     쇼핑 API 추가 호출 없음 (검색광고 API만 사용: 검색량 + 연관 키워드).
     캐시 미스 시에만 쇼핑 API 호출 (fallback).
+
+    resume=True(오전 점검이 부름) — 오늘 이미 분석한 업체 · 키워드는 건너뛰고 남은 것만 한다.
+    진행은 daily_batch_runs 표에 남는다(daily_batch_state.py · 2026-11-17).
     """
     global _api_cache, _api_cache_date
     import sqlite3
     import os
+    import daily_batch_state as _dbs
 
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     today = date.today().isoformat()
 
-    # 만료 경쟁사 자동 삭제 (영업사원 등록·30일 경과) — 일일 1회
+    # 진행 기록 — 시작(또는 이어서 하기). 표를 못 열어도 분석은 그대로 돈다.
+    _st = None
     try:
-        from client_dashboard import cleanup_expired_competitors
-        _n = cleanup_expired_competitors()
-        if _n:
-            logger.info(f"🗑️ 만료 경쟁사 {_n}건 자동 삭제 완료")
+        _st = sqlite3.connect(DB_PATH, timeout=10)
+        _dbs.ensure_table(_st)
     except Exception as _e:
-        logger.error(f"[cleanup] 만료 경쟁사 삭제 실패: {_e}")
+        logger.warning(f"[아침 분석 기록] 표 열기 실패(분석은 계속): {_e}")
+        _st = None
+    _batch_state(_dbs.mark_start, _st, today, os.getpid(), resume=resume, note=note)
 
-    logger.info(f"📊 전체 분석 + 보고서 생성 시작 ({datetime.now().strftime('%H:%M')})")
+    try:
+        _run_daily_analysis_body(resume, today, DB_PATH, _st, _dbs)
+    finally:
+        if _st is not None:
+            try:
+                _st.close()
+            except Exception:
+                pass
+
+
+def _run_daily_analysis_body(resume, today, DB_PATH, _st, _dbs):
+    global _api_cache, _api_cache_date
+    import sqlite3
+    import os
+
+    # 만료 경쟁사 자동 삭제 (영업사원 등록·30일 경과) — 일일 1회(이어서 하기 때는 이미 했으므로 건너뜀)
+    if not resume:
+        try:
+            from client_dashboard import cleanup_expired_competitors
+            _n = cleanup_expired_competitors()
+            if _n:
+                logger.info(f"🗑️ 만료 경쟁사 {_n}건 자동 삭제 완료")
+        except Exception as _e:
+            logger.error(f"[cleanup] 만료 경쟁사 삭제 실패: {_e}")
+
+    logger.info(f"📊 전체 분석 + 보고서 생성 시작 ({datetime.now().strftime('%H:%M')})"
+                f"{' — 이어서 하기(오늘 이미 분석한 키워드는 건너뜀)' if resume else ''}")
 
     # 캐시 유효성 확인
     cache_valid = (_api_cache_date == today and len(_api_cache) > 0)
@@ -1230,6 +1299,26 @@ def _run_daily_analysis():
             kw_set -= _muted.get(cid, set())
             client_keyword_map[cid] = list(kw_set)
 
+        # 이어서 하기 — 오늘 이미 분석한 업체 · 키워드는 다시 하지 않는다(직원이 오늘 직접 분석한 것도 포함).
+        _skipped = 0
+        if resume:
+            try:
+                _done_today = set(
+                    (r["client_id"], (r["keyword"] or "").strip())
+                    for r in conn.execute(
+                        "SELECT client_id, keyword FROM client_analyses WHERE analyzed_date = ?", (today,))
+                )
+            except Exception as _e:
+                logger.warning(f"  오늘 분석 목록 조회 실패 — 전부 다시 분석: {_e}")
+                _done_today = set()
+            for _cid in list(client_keyword_map):
+                _left = [k for k in client_keyword_map[_cid] if (_cid, k) not in _done_today]
+                _skipped += len(client_keyword_map[_cid]) - len(_left)
+                client_keyword_map[_cid] = _left
+            logger.info(f"  ↪ 이어서 하기 — 오늘 이미 분석한 {_skipped}건 건너뜀 · 남은 "
+                        f"{sum(len(v) for v in client_keyword_map.values())}건")
+        _batch_state(_dbs.set_total, _st, today, sum(len(v) for v in client_keyword_map.values()), _skipped)
+
         # 키워드별 상품 등록부를 한 번에 읽는다 (2026-08-21 이예은 신고).
         # 업체 주소는 '첫 등록 상품' 으로 굳어 있어, 한 업체가 상품 둘을 각각 다른 키워드로
         # 추적하면 두 번째 키워드가 매일 「미노출」로 기록됐다. 여기 적힌 게 있으면 그 주소를 쓴다.
@@ -1249,6 +1338,7 @@ def _run_daily_analysis():
         if not clients:
             logger.info("  등록된 활성 업체가 없습니다. 분석 건너뜀.")
             conn.close()
+            _batch_state(_dbs.mark_finish, _st, today)
             return
 
         total_analyzed = 0
@@ -1326,6 +1416,7 @@ def _run_daily_analysis():
                     )
                     total_analyzed += 1
                     logger.info(f"    ✅ [{keyword}] 분석 완료")
+                    _batch_state(_dbs.heartbeat, _st, today, cid, True)
 
                     # 검색광고 API 간격 (1초)
                     time.sleep(1)
@@ -1333,6 +1424,7 @@ def _run_daily_analysis():
                 except Exception as e:
                     total_errors += 1
                     logger.error(f"    ❌ [{client_name}:{keyword}] 분석 실패: {e}")
+                    _batch_state(_dbs.heartbeat, _st, today, cid, False)
                     time.sleep(1)
 
         conn.close()
@@ -1344,9 +1436,49 @@ def _run_daily_analysis():
             f"✅ 전체 분석 완료: 분석 {total_analyzed}건, 실패 {total_errors}건"
             f"{f', fallback API {total_fallback_api}회' if total_fallback_api > 0 else ''}"
         )
+        _batch_state(_dbs.mark_finish, _st, today)
 
     except Exception as e:
         logger.error(f"❌ 전체 분석 실패: {e}")
+        _batch_state(_dbs.add_note, _st, today, f"전체 분석 실패 {datetime.now().strftime('%H:%M:%S')} — {type(e).__name__}: {e}")
+
+
+def _watch_daily_analysis(now=None):
+    """오전 점검(08:35~10:59 · 10분마다) — 아침 분석이 끊겼으면 남은 키워드만 이어서 한다.
+
+    11/3 · 11/4 · 11/15 · 11/16 처럼 시작 직후 멈추고 그날 다시 돌지 않던 것을 막는다(2026-11-17 · 대표 「고쳐」).
+    판단 규칙은 daily_batch_state.decide 한 곳. 11시가 넘으면 이어서 하지 않는다(업무 시간 부하).
+    """
+    import sqlite3
+    import os
+    import daily_batch_state as _dbs
+
+    now = now or datetime.now()
+    today = now.date().isoformat()
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            _dbs.ensure_table(conn)
+            row = _dbs.get_run(conn, today)
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"[아침 분석 점검] 기록 조회 실패 — 이번 점검 건너뜀: {e}")
+        return None
+
+    action = _dbs.decide(row, now, running_here=_daily_analysis_lock.locked())
+    if action == "stuck":
+        logger.warning(f"⚠️ [아침 분석 점검] 이 일꾼에서 도는 중인데 진행이 멈춤 — 마지막 갱신 "
+                       f"{(row or {}).get('heartbeat_at')} · 진행 {(row or {}).get('done')}건 (새로 돌리지 않음)")
+    elif action == "resume":
+        logger.warning(f"↪ [아침 분석 점검] 끊긴 분석 이어서 하기 — 마지막 갱신 {row.get('heartbeat_at')} · "
+                       f"진행 {row.get('done')}건 · 직전 일꾼 {row.get('pid')} · 지금 일꾼 {os.getpid()}")
+        _run_daily_analysis(resume=True)
+    elif action == "start":
+        logger.warning("↪ [아침 분석 점검] 오늘 아침 분석이 시작되지 않음 — 지금 시작(오늘 이미 분석한 키워드는 건너뜀)")
+        _run_daily_analysis(resume=True, note=f"08:30 에 시작 안 됨 — 오전 점검이 {now.strftime('%H:%M')} 에 시작")
+    return action
 
 
 def _run_daily_report():
