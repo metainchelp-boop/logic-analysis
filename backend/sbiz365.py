@@ -692,12 +692,23 @@ def _resolve_upjong_candidates(industry_label: str, limit: int = 3, hint: str = 
     pairs = _upjong_pairs()
     if not pairs:
         return []
-    terms = list(_hint_terms(hint))   # 업체명·키워드에서 읽은 업종이 항상 우선
+    hint_terms = list(_hint_terms(hint))   # 업체명·키워드에서 읽은 업종이 우선(아래 — 고른 업종의 큰 분류 안에서만)
+    label_terms = []
     for lk, ts in _UPJONG_SEARCH_TERMS.items():
         if label and (lk in label or label in lk):
-            terms.extend(ts)
+            label_terms.extend(ts)
     if label:
-        terms.append(label)  # 사전 미등재 라벨은 라벨 자체 부분일치 폴백
+        label_terms.append(label)  # 사전 미등재 라벨은 라벨 자체 부분일치 폴백
+    terms = hint_terms + label_terms
+
+    # ⚠️ 힌트는 **고른 업종의 큰 분류(경로의 첫 조각) 안에서만** 좁힌다(2026-11-22).
+    #    업체명·키워드에 우연히 든 글자('스터디카페'의 카페 · '빵빵 수학학원'의 빵)가 고른 업종(학원·교육)을
+    #    다른 큰 분류(음식)로 뒤집지 않게 한다. 죽어 있던 힌트 검색어를 분류표에 맞게 살리면서 드러난 문제다(교차검증 재현).
+    #    라벨이 없거나 라벨로 아무것도 못 찾을 때는 종전처럼 힌트를 그대로 쓴다.
+    def _top(name):
+        return str(name).split(">")[0].strip()
+
+    label_tops = {_top(n) for _, n in pairs for t in label_terms if t and t in n}
 
     # ⚠️ 검색어별로 따로 고르면 안 된다. '음식점'이라는 낱말은 트리에서 하필 잔여 버킷
     #    (기타 한식 음식점·기타 일식 음식점·그 외 기타 간이 음식점…)에만 들어 있어서,
@@ -707,8 +718,11 @@ def _resolve_upjong_candidates(industry_label: str, limit: int = 3, hint: str = 
     for rank, term in enumerate(terms):
         if not term:
             continue
+        from_hint = rank < len(hint_terms)
         for c, n in pairs:
             if term in n and c not in seen:
+                if from_hint and label_tops and _top(n) not in label_tops:
+                    continue
                 seen.add(c)
                 scored.append((_is_residual_bucket(n), rank, len(c), c, n))
     scored.sort()
