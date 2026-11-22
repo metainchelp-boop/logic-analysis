@@ -2751,6 +2751,11 @@ jobs:
                     print(f"    {'🟡' if only_resid else '✅'} {lb} → {names}{' (기타·잔여 분류뿐 — 매출이 0 으로 나올 수 있다)' if only_resid else ''}")
                 print(f"  ⇒ 13종 중 이어지는 분류가 없는 업종 {bad}개 · 잔여 분류로만 이어지는 업종 {resid_only}개")
                 print("     (업체명·키워드 힌트 없이 업종 이름만으로 본 것 — 실제 분석은 힌트가 더해져 더 잘 이어질 수 있다)")
+            if pairs:
+                # 소상공인365 업종 분류 이름 전부(공개 분류표 — 업체 정보 아님). 사전에 넣을 검색어를 고르려고 본다.
+                print("  -- 업종 분류 전체(코드 · 이름) --")
+                for code, name in sorted(pairs, key=lambda x: str(x[1])):
+                    print(f"    {code} {name}")
             if "sbiz_health" not in tabs:
                 print("  상권 건강 기록 표 없음 — 못 쟀다")
             else:
