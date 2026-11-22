@@ -264,6 +264,12 @@ jobs:
 
       # App.jsx 훅 순서 — 로그인 전 early return 뒤에 훅을 두면 로그인 직후 React #310 으로
       # 전체 화면이 죽는다(2026-09-15 실사고 · 영업팀 신고 「화면 로드 오류」).
+      # 2026-11-22 — 업종 선택 13종 ↔ 소상공인365 업종 분류 짝 맞춤. 분류표 이름이 바뀌어 사전의 검색어가 죽어 있었다
+      #    (「베이커리·제과」는 통째로 안 이어져 상권 카드가 빠졌고 「병원·의원」은 동물병원이, 「주점·바」는 유흥 주점이 맨 앞).
+      #    운영 캐시의 분류표 사본(fixtures/sbiz_upjong_tree.tsv)으로 13종 전부 · 사전의 검색어 전부를 확인한다. 네트워크 0.
+      - name: 회귀 — 업종 13종과 상권 업종 분류 짝 맞춤
+        run: python backend/tests/test_sbiz_upjong_map.py
+
       - name: Proposal facts product and analysis isolation
         run: node frontend/tests/proposal-facts-scope.test.cjs
 
