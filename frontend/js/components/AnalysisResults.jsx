@@ -2,7 +2,8 @@
  * report-shell(좌측 목차 + 본문 전 섹션). App의 상태/핸들러를 props로 받음. */
 
 /* 키워드 적합도 판정(/api/keywords/fit)에 보내는 묶음 — 화면이 이미 받아 둔 자료만 쓴다(네이버 호출 없음).
-   연관어·검색어가 없으면 null(판정 없음). ⚠️ 여기 넣는 칸이 곧 「판정을 다시 받을 조건」이다(아래 keywordFitKey). */
+   연관어·검색어가 없으면 null(판정 없음). ⚠️ 여기 넣는 칸이 곧 「판정을 다시 받을 조건」이다 —
+   화면은 이 묶음을 문자열로 만든 **본문 그대로**를 열쇠로 쓴다(해시로 줄이지 않는다 · 아래 훅). */
 window.buildKeywordFitPayload = function(src) {
     src = src || {};
     if (!src.relatedData || !src.keyword) return null;
@@ -22,14 +23,6 @@ window.buildKeywordFitPayload = function(src) {
         shopProducts: (src.shopProducts || []).slice(0, 80).map(function(p) { return { store_name: p.store_name || p.mallName, brand: p.brand }; })
     };
 };
-/* 보낼 내용(문자열)의 지문 — 길이 + 해시. 내용이 한 글자라도 바뀌면 달라지고, 같은 내용이면 객체가 새로 만들어져도 같다. */
-window.keywordFitKey = function(body) {
-    if (!body) return '';
-    var h = 5381;
-    for (var i = 0; i < body.length; i++) h = ((h << 5) + h + body.charCodeAt(i)) | 0;
-    return body.length + ':' + (h >>> 0).toString(36);
-};
-
 window.AnalysisResults = function AnalysisResults(props) {
     var advertiserLoading = props.advertiserLoading;
     var advertiserReport = props.advertiserReport;
@@ -91,10 +84,12 @@ window.AnalysisResults = function AnalysisResults(props) {
        「이 상품을 찾는 말인가」를 판정받는다(네이버 호출 없음 · 규칙은 서버 keyword_fit 한 곳 · 제안서와 같은 판정).
        ⚠️ 실패하면 조용히 종전 화면 그대로(판정 없음). 토스트를 띄우지 않으려고 api 대신 fetch 를 쓴다.
        ⚠️ 이 컴포넌트에는 early return 이 없다 — 훅을 더할 때도 return 앞에 둘 것(App.jsx #310 사고).
-       ⚠️ 판정을 다시 받을지는 **보내는 내용 그대로의 지문**(window.keywordFitKey)으로 정한다(2026-11-21 고침).
+       ⚠️ 판정을 다시 받을지는 **서버에 보내는 본문 문자열 그대로**로 정한다(2026-11-21 고침 · 11-22 보강).
           종전엔 판매자 태그·연관어의 「개수」만 봐서, 개수가 같은 채 내용이 바뀌면(#다크초콜릿 → #밀크초콜릿 ·
           저장 보고서를 불러와 상태를 갈아 끼울 때) 옛 판정이 그대로 남았다.
-          받은 판정은 그 지문과 함께 들고 있다가 **지금 지문과 같을 때만** 쓴다 — 다른 자료의 판정을 잠깐이라도 쓰지 않는다. */
+          ⛔ 본문을 해시로 줄여 열쇠로 쓰지 말 것 — 길이가 같고 해시가 겹치는 다른 본문('Ab…' ↔ 'BA…')에서
+             다시 묻지 않아 옛 판정이 남는다(교차검증 재현). 문자열 비교는 정확하고 충분히 싸다.
+          받은 판정은 그때 보낸 본문과 함께 들고 있다가 **지금 본문과 정확히 같을 때만** 쓴다 — 다른 자료의 판정을 잠깐이라도 쓰지 않는다. */
     var _fitSt = React.useState(null);
     var _fitHd = htmlDetailResult || (analysisData && analysisData.htmlDetail) || null;
     var _fitBody = React.useMemo(function() {
@@ -103,22 +98,21 @@ window.AnalysisResults = function AnalysisResults(props) {
             analysisData: analysisData, htmlDetail: _fitHd, shopProducts: shopProducts });
         return payload ? JSON.stringify({ payload: payload }) : '';
     }, [searchedKeyword, companyName, relatedData, advertiserReport, analysisData, _fitHd, shopProducts]);
-    var _fitKey = window.keywordFitKey(_fitBody);
-    var keywordFit = (_fitSt[0] && _fitSt[0].key === _fitKey) ? _fitSt[0].data : null;
+    var keywordFit = (_fitSt[0] && _fitSt[0].body === _fitBody) ? _fitSt[0].data : null;
     React.useEffect(function() {
         var setFit = _fitSt[1];
         if (!_fitBody) { setFit(null); return; }
-        var alive = true, key = _fitKey;
+        var alive = true, body = _fitBody;
         var t = setTimeout(function() {
             try {
-                fetch(API_BASE + '/keywords/fit', { method: 'POST', headers: _authHeaders({ 'Content-Type': 'application/json' }), body: _fitBody })
+                fetch(API_BASE + '/keywords/fit', { method: 'POST', headers: _authHeaders({ 'Content-Type': 'application/json' }), body: body })
                     .then(function(r) { return r.ok ? r.json() : null; })
-                    .then(function(j) { if (alive) setFit(j && j.success ? { key: key, data: j.data } : null); })
+                    .then(function(j) { if (alive) setFit(j && j.success ? { body: body, data: j.data } : null); })
                     .catch(function() { if (alive) setFit(null); });
             } catch (e) { setFit(null); }
         }, 500);
         return function() { alive = false; clearTimeout(t); };
-    }, [_fitKey]);
+    }, [_fitBody]);
 
     /* 골든 키워드 카드 — 판정에서 빠진 말이면 통과한 황금 키워드로 바꾸고, 없으면 0건 안내를 띄운다. */
     var _nz = function(v) { return String(v || '').replace(/\s/g, '').toLowerCase(); };

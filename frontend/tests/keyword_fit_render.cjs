@@ -5,7 +5,7 @@
  *   이미 떠 있는 크롬에 붙으려면 CDP_URL=http://127.0.0.1:9333 을 준다(없으면 playwright 가 크롬을 띄운다).
  * 네트워크 0 — CDN·/api 요청을 모두 가로채 가짜로 답한다. 확인하는 것:
  *   판매자 태그 개수는 같고 내용만 바뀌어도 판정을 다시 받아 「상품명에 넣을 후보」가 바뀐다 · 같은 내용이면 다시 묻지 않는다 ·
- *   연관어 개수가 같은 다른 보고서로 갈아 끼워도 다시 묻는다 · 직원 화면의 제외 목록 개수 · 전달본에는 제외 목록이 없다. */
+ *   연관어 개수가 같은 다른 보고서로 갈아 끼워도 다시 묻는다 · 길이·해시가 겹치는 본문끼리도 다시 묻는다 · 직원 화면의 제외 목록 개수 · 전달본에는 제외 목록이 없다. */
 const http = require('http'), fs = require('fs'), path = require('path');
 const FE = process.argv[2], RX = process.argv[3];
 function need(name) { try { return require(name); } catch (e) { return require(path.join(RX, 'node_modules', name)); } }
@@ -92,6 +92,17 @@ function props(tags, related) {
 
   await mount(props(['밀크초콜릿'], ['말차초콜릿', '밀크초콜릿', '카카오닙스'])); await page.waitForTimeout(1600);
   check('연관어 개수는 같고 내용이 다른 보고서로 갈아 끼움 — 다시 묻는다', fitCalls.length === 3, JSON.stringify(fitCalls));
+
+  // 길이가 같고 흔한 문자열 해시(djb2)가 겹치는 두 본문 — 'Ab…' ↔ 'BA…'. 그래도 다시 묻고 후보가 바뀌어야 한다
+  const HREL = ['Ab초콜릿', 'BA초콜릿', '화이트초콜릿'];
+  await mount(props(['Ab초콜릿'], HREL)); await page.waitForTimeout(1600);
+  const nHash = fitCalls.length; box = await nameBox();
+  check('(해시 겹침) 첫 후보는 Ab초콜릿', box.includes('Ab초콜릿') && !box.includes('BA초콜릿'), box);
+  await mount(props(['BA초콜릿'], HREL)); await page.waitForTimeout(1600);
+  box = await nameBox();
+  check('(해시 겹침) 태그가 BA초콜릿으로 바뀌면 다시 묻는다', fitCalls.length === nHash + 1 && fitCalls[fitCalls.length - 1] === 'BA초콜릿', JSON.stringify(fitCalls));
+  check('(해시 겹침) 후보가 BA초콜릿으로 바뀌고 Ab초콜릿은 남지 않음', box.includes('BA초콜릿') && !box.includes('Ab초콜릿'), box);
+  await mount(props(['밀크초콜릿'], ['말차초콜릿', '밀크초콜릿', '카카오닙스'])); await page.waitForTimeout(1600);
 
   const txt = await page.evaluate(() => document.getElementById('harness').innerText);
   check('직원 화면 — 제외 목록 전체 개수와 표시 개수', /제외된 키워드 102개 \(검색량 상위 2개만 표시\)/.test(txt.replace(/\s+/g, ' ')), (txt.match(/제외된 키워드[^\n]{0,60}/) || [''])[0]);
