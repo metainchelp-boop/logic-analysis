@@ -16,6 +16,8 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword,
     const goldenAll = data.golden_keywords || [];
     const goldenList = passedSet ? goldenAll.filter(function(k) { return passedSet[_n(k.keyword)]; }) : goldenAll;
     var excludedList = (fit && fit.excluded) || [];
+    /* 서버는 표에 검색량 상위 80개만 싣는다 — 전체 개수는 excludedTotal(옛 서버엔 없으니 표 길이로) */
+    var excludedTotal = (fit && typeof fit.excludedTotal === 'number') ? fit.excludedTotal : excludedList.length;
     var reasonLabel = (fit && fit.reasons) || {};
     const rawRelated = data.related_keywords || [];
 
@@ -182,7 +184,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword,
                 {excludedList.length > 0 && (
                     <details className="no-export" style={{ marginTop: 12, background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 10, padding: '10px 14px' }}>
                         <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 700, color: '#475569' }}>
-                            🚫 제외된 키워드 {excludedList.length}개 — 영업자 전용(고객 보고서·제안서에는 나가지 않습니다)
+                            🚫 제외된 키워드 {excludedTotal}개{excludedTotal > excludedList.length ? ' (검색량 상위 ' + excludedList.length + '개만 표시)' : ''} — 영업자 전용(고객 보고서·제안서에는 나가지 않습니다)
                         </summary>
                         <div style={{ fontSize: 11.5, color: '#64748b', margin: '8px 0 6px' }}>
                             검색량이 커도 이 상품을 찾는 말이 아니면 공략 키워드·상품명 후보·제안서에서 뺍니다. 판정 기준일 {(fit.gate && fit.gate.date) || '-'}{fit.gate && fit.gate.hasTags === false ? ' · 판매자 태그 없이 판정(상품명·카테고리 기준)' : ''}

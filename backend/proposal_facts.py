@@ -26,7 +26,8 @@ KST = timezone(timedelta(hours=9))
 
 #: 판정이 바뀌면 화면이 옛 자료를 구분할 수 있게 올린다.
 #: 2 (2026-11-16) — 키워드 적합도 판정(keyword_fit) 도입: targets·groups·golden·rows 는 통과분만,
-#:   탈락은 keywords.excluded(사유 코드) · 판정 정보는 keywords.gate · 인기어·급상승어에 fit 표시.
+#:   탈락은 keywords.excluded(사유 코드 · 검색량 상위만) · 문장 검사용 전체 목록은 keywords.banned ·
+#:   판정 정보는 keywords.gate · 인기어·급상승어에 fit 표시.
 FACTS_VERSION = 2
 
 #: 정보성(알아보는) 검색어 표지 — 구매까지 거리가 먼 말. 광고보다 체험단·블로그로 간다.
@@ -154,7 +155,7 @@ def pick_targets(rows, main_kw, n=6):
 
     대표 확정(2026-11-16): 경쟁 「높음」으로 **확인된** 것만 빼고(미확인은 둔다) 검색량 많은 순. 황금 우선 정렬은 없앴다.
     ⚠️ 정보형 말(추천·후기·레시피 …)은 뺀다 — 광고·상품명이 아니라 체험단·블로그 몫이다.
-    ⚠️ 2026-11-13 원종당 사고: 종전엔 판정 없이 경쟁 「중간」이면 통과해 '빼빼로'(387,900)가 1순위가 됐다.
+    ⚠️ 2026-11-13 초콜릿 판매자 제안서 사고: 종전엔 판정 없이 경쟁 「중간」이면 통과해 '빼빼로'(387,900)가 1순위가 됐다.
     """
     pool = [r for r in rows if r["total"] and r["comp"] != "높음"
             and not is_info_keyword(r["keyword"]) and nospace(r["keyword"]) != nospace(main_kw)]
@@ -278,7 +279,7 @@ def month_name(label):
 
 def _datalab(dl, gate=None):
     """⚠️ categoryPopular·rising 은 **카테고리 전체 지표**라 그대로 두되, 항목마다 ``fit``(이 상품에 맞는 말인가)을
-    붙인다. 장표 표는 그대로 그리고, 문장은 fit 인 것만 말한다(원종당: 인기어 1위 '빼빼로데이'를 「상품명에 넣으라」고 썼다)."""
+    붙인다. 장표 표는 그대로 그리고, 문장은 fit 인 것만 말한다(11/13 사고: 인기어 1위 '빼빼로데이'를 「상품명에 넣으라」고 썼다)."""
     dl = _d(dl)
 
     def fit(kw):
@@ -481,6 +482,22 @@ def gate_rows(rows, gate):
     return passed, out
 
 
+#: 묶음·화면에 싣는 탈락 키워드 수(검색량 상위). 문장 검사는 이 한도와 무관하게 전부 본다(banned_keys).
+EXCLUDED_SHOWN = 60
+
+
+def banned_keys(excluded):
+    """탈락 목록 전체 → 문장에 나오면 안 되는 말(공백 뗀 글자 · 중복 없음). 정보 탐색어는 정보 그룹에 쓰이므로 뺀다."""
+    out = []
+    for r in excluded or []:
+        if r.get("reason") == "info_intent":
+            continue
+        ns = nospace(r.get("keyword"))
+        if len(ns) >= 2 and ns not in out:
+            out.append(ns)
+    return out
+
+
 def _store_name(bundle, html_detail):
     si = _d(_d(html_detail).get("storeInfo"))
     return _clean(bundle.get("name") or si.get("name")) or "고객사"
@@ -503,7 +520,7 @@ def build(bundle, now=None):
 
     main = _main_volume(b)
     product = _product(b, hd, adv, ana)
-    # 키워드 적합도 판정 — 이 상품을 찾는 말만 남긴다(2026-11-13 원종당 '빼빼로' 사고). 이 아래 키워드는 전부 통과분이다.
+    # 키워드 적합도 판정 — 이 상품을 찾는 말만 남긴다(2026-11-13 '빼빼로' 사고). 이 아래 키워드는 전부 통과분이다.
     gate = make_gate(b, now=now, product=product)
     rows, excluded = gate_rows(_keyword_rows(b.get("related")), gate)
     targets = pick_targets(rows, main["keyword"])
@@ -536,8 +553,12 @@ def build(bundle, now=None):
             "targets": targets,
             "groups": groups,
             "targetsMissingInName": targets_missing,
-            # ⚠️ 영업자 확인용 — 고객용 장표·문장에 쓰지 않는다(deck.js 는 읽지 않는다).
-            "excluded": excluded[:60],
+            # ⚠️ 영업자 확인용 — 고객용 장표·문장에 쓰지 않는다(deck.js 는 읽지 않는다). 검색량 상위 EXCLUDED_SHOWN 개만 싣는다.
+            "excluded": excluded[:EXCLUDED_SHOWN],
+            "excludedTotal": len(excluded),
+            # ⚠️ 문장 검사용 — 탈락 **전부**(정보 탐색어 제외 · 공백 뗀 글자). 위 표시 한도와 따로 둔다:
+            #    한도 밖(61번째~) 탈락어를 AI 문장이 권해도 검사에 걸리게 하려는 것이다(proposal_copy._banned_keywords).
+            "banned": banned_keys(excluded),
             "gate": gate.describe(),
         },
         "review": _review(hd, b.get("htmlReview")),

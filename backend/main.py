@@ -3699,7 +3699,7 @@ def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depends(ge
                 "golden_keywords": golden[:20],
                 "related_keywords": others[:30],
                 # 검색량 상위 300개(2026-11-16 가산) — 위 50개만으로는 상품에 맞는 중소 키워드가 잘린다
-                # (원종당: 상위가 빼빼로 계열로 채워짐). 키워드 적합도 판정(keyword_fit)이 이 묶음까지 본다. 4칸만.
+                # (11/13 사고: 상위가 빼빼로 계열로 채워짐). 키워드 적합도 판정(keyword_fit)이 이 묶음까지 본다. 4칸만.
                 "pool": [{"keyword": k["keyword"], "monthlyPcQcCnt": k["monthlyPcQcCnt"],
                           "monthlyMobileQcCnt": k["monthlyMobileQcCnt"], "totalVolume": k["totalVolume"],
                           "compIdx": k["compIdx"]}
@@ -3740,7 +3740,9 @@ def keywords_fit(req: KeywordFitRequest, current_user: dict = Depends(get_curren
             "nameCandidates": [{"keyword": r["keyword"], "total": r["total"]} for r in targets
                                if _kf.name_worthy(r["keyword"])],
             "golden": [r["keyword"] for r in rows if r.get("golden")],
+            # 화면 표시는 검색량 상위 80개까지 — 전체 개수는 excludedTotal(화면이 「N개 중 80개」로 적는다)
             "excluded": excluded[:80],
+            "excludedTotal": len(excluded),
             "reasons": _kf.REASONS,
             "gate": gate.describe(),
         }}

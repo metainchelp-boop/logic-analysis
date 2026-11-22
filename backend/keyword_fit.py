@@ -1,6 +1,6 @@
 """키워드 적합도 판정 — 이 키워드가 **이 상품을 찾는 말**인가 (2026-11-16).
 
-⚠️ **왜 만들었나 (2026-11-13 원종당초콜릿 제안서 사고)**
+⚠️ **왜 만들었나 (2026-11-13 초콜릿 판매자 제안서 사고)**
    파베초콜릿 판매자 제안서에 공략 키워드로 '빼빼로'(월 387,900)·'수제빼빼로'가 올라가
    요약 숫자 · 상품명 처방(「앞 30자에 '빼빼로'를 넣기」) · 키워드 확장 장표가 전부 빼빼로로 채워졌다.
    상품명 첫 키워드 '생초콜릿'은 한 번도 나오지 않았다.
@@ -15,7 +15,7 @@
   3 no_core           핵심 명사를 포함하지 않음        ('빼빼로' ← 파베초콜릿)
   4 low_overlap       상품명·태그·카테고리와 글자 겹침 부족
   5 season_passed     시즌어인데 생성일 기준 2~75일 창 밖('빼빼로데이' ← 11/13)
-  6 competitor_brand  타사 스토어·브랜드명 포함        ('량진희무뼈닭발')
+  6 competitor_brand  타사 스토어·브랜드명 포함        ('예시네무뼈닭발')
   7 other_form        다른 형태 상품                   ('토마토주스' ← 방울토마토)
   ─ 통과한 것 중 —
   8 info_intent       정보 탐색어 — 공략 키워드(상품명·광고)에서만 빼고 groups.info 로 보낸다
@@ -30,7 +30,8 @@ import unicodedata
 from datetime import date, datetime
 
 #: 판정 규칙이 바뀌면 올린다(묶음에 함께 저장 — 어느 규칙으로 걸렀는지 나중에 안다).
-GATE_VERSION = 2   # 2: 같은 종류의 다른 상품(other_variety) · 시즌어는 상품명 처방에서 뺌(2026-11-16)
+GATE_VERSION = 3   # 2: 같은 종류의 다른 상품(other_variety) · 시즌어는 상품명 처방에서 뺌(2026-11-16)
+                   # 3: 다른 형태 판정 — 같은 형태의 다른 표기(주스·쥬스) · 종류 이름 꼬리('베이글빵')는 같은 상품(2026-11-21)
 
 REASONS = {
     "modifier_only": "수식어만 남음",
@@ -73,10 +74,18 @@ INFO_INTENT_WORDS = ["레시피", "만들기", "만드는법", "효능", "칼로
 # 경쟁 스토어·브랜드명에서 떼어낼 꼬리말(남은 2자 이상이 후보에 들어 있으면 타사 브랜드 키워드로 보고 제외)
 _BRAND_SUFFIXES = ["주식회사", "(주)", "㈜", "정과", "식품", "푸드", "농원", "농장", "수산", "축산", "상회", "마켓", "스토어", "연구소",
                    "몰", "샵", "숍", "마을", "본가", "직판장", "유통", "에프엔비", "f&b", "산업", "컴퍼니", "코리아"]
-# 다른 형태 상품·요리 이름(11-13 숲정이 실측: 대추방울토마토에 '토마토마리네이드'·'토마토주스'·'토마토요리'가 공략 키워드로 올라옴)
+# 다른 형태 상품·요리 이름(11-13 방울토마토 판매자 실측: 대추방울토마토에 '토마토마리네이드'·'토마토주스'·'토마토요리'가 공략 키워드로 올라옴)
 OTHER_FORM_WORDS = ["마리네이드", "주스", "쥬스", "즙", "잼", "요리", "소스", "샐러드", "피클", "스프", "수프", "케첩", "케찹", "말랭이",
                     "칩", "파스타", "카레", "장아찌", "분말", "가루", "효소", "음료", "라떼", "볶음", "무침", "조림", "찜", "청", "차", "전", "국",
                     "탕", "빵", "떡", "튀김", "스무디", "에이드", "식초", "와인", "막걸리"]
+# 같은 형태를 가리키는 다른 표기 — 상품 쪽에 이것이 있으면 이미 그 형태의 상품이다('토마토주스' 파는 집의 '토마토쥬스').
+_FORM_SAME_SPELLING = {"주스": ("쥬스",), "쥬스": ("주스",), "케첩": ("케찹",), "케찹": ("케첩",),
+                       "스프": ("수프",), "수프": ("스프",)}
+# 한 글자 「종류 이름」 꼬리 — 'X빵'·'X차'·'X칩' 은 X 가 그 종류의 하나일 때 같은 상품을 부르는 말이다(베이글빵·보이차·나초칩).
+#   상품명에 그 글자가 없어도, **카테고리가 그 계열**이고 후보가 **메인 키워드를 통째로 품었으면** 같은 형태로 본다.
+#   ⛔ 재료에서 만든 다른 상품('쌀빵' ← 쌀 · '생강차' ← 생강)은 카테고리가 그 계열이 아니라 그대로 탈락한다.
+#   ⚠️ 알려진 한계 — 카테고리가 비어 있으면 근거가 없어 종전처럼 탈락한다.
+_FORM_FAMILY_MARKS = {"빵": ("베이커리", "브레드"), "차": ("차류", "다류", "티백"), "칩": ("스낵",)}
 _UNIT_RX = re.compile(r"\d+(?:\.\d+)?\s*(?:kg|g|ml|l|개입|개|팩|병|box|박스|인분|매|장|cm|mm)?", re.I)
 _SPLIT_RX = r"[\s,/·()\[\]]+"
 
@@ -170,7 +179,7 @@ def core_anchors(product: dict, keyword: str) -> list:
 
 def competitor_brand_tokens(names, product: dict, keyword: str = "") -> list:
     """타사 스토어명·브랜드·제조사에서 2자 이상 핵심어를 뽑는다(우리 상품명·스토어·카테고리·태그에 있는 것은 제외).
-    '량진희정과' → '량진희' 처럼 꼬리말을 뗀다.
+    '예시네정과' → '예시네' 처럼 꼬리말을 뗀다.
 
     ⚠️ 참조 구현보다 하나 더 거른다 — 범용 수식어('수제' 등)이거나 우리 핵심 명사 안에 든 말('초콜릿')은
        브랜드로 보지 않는다. 태그가 없을 때 '밀크'라는 브랜드 하나가 '밀크초콜릿'을 지우지 않게 하기 위해서다."""
@@ -278,12 +287,28 @@ def is_competitor_brand(candidate, brand_tokens) -> bool:
     return any(b in s for b in brand_tokens if len(b) >= 2)
 
 
-def is_other_form(candidate, product: dict) -> bool:
+def is_other_form(candidate, product: dict, keyword: str = "") -> bool:
+    """다른 형태의 상품인가 — 후보가 형태 말(주스·즙·빵 …)로 끝나는데 상품 쪽은 그 형태가 아닐 때.
+
+    상품이 이미 그 형태라는 근거(하나라도 있으면 다른 형태가 아니다)
+      ① 상품명·카테고리(끝 분류 포함)·판매자 태그에 그 형태 말이 있다           ('토마토주스' 파는 집)
+      ② 같은 형태의 다른 표기가 있다(주스·쥬스 · 케첩·케찹 · 스프·수프)          ('토마토쥬스')
+      ③ 한 글자 종류 이름(빵·차·칩) — 카테고리가 그 계열이고 후보가 메인 키워드를 통째로 품었다
+         ('베이글빵' ← 베이글 · 카테고리 「과자/베이커리」). keyword 를 주지 않으면 ③은 보지 않는다.
+    """
     c = nospace(candidate)
-    ctx = nospace((product.get("name") or "") + " " + str(product.get("category") or "") + " " + " ".join(_tags(product)))
+    ctx = nospace(" ".join([product.get("name") or "", str(product.get("category") or ""),
+                            str(product.get("categoryLeaf") or "")] + _tags(product)))
+    main = (strip_modifiers(keyword) or nospace(keyword)) if keyword else ""
     for w in OTHER_FORM_WORDS:
-        if c.endswith(w) and len(c) > len(w) + (1 if len(w) >= 2 else 2) and w not in ctx:
-            return True
+        if not (c.endswith(w) and len(c) > len(w) + (1 if len(w) >= 2 else 2)):
+            continue
+        if w in ctx or any(a in ctx for a in _FORM_SAME_SPELLING.get(w, ())):
+            continue
+        marks = _FORM_FAMILY_MARKS.get(w)
+        if marks and main and main in c[: -len(w)] and any(m in ctx for m in marks):
+            continue
+        return True
     return False
 
 
@@ -351,7 +376,7 @@ class Gate:
             return "season_passed"
         if is_competitor_brand(kw, self.brands):
             return "competitor_brand"
-        if is_other_form(kw, self.product):
+        if is_other_form(kw, self.product, self.keyword):
             return "other_form"
         if is_other_variety(kw, self.product, self.keyword, self.cores):
             return "other_variety"

@@ -102,7 +102,7 @@ def template(f):
     t1 = targets[0] if targets else None
     t2 = targets[1] if len(targets) > 1 else None
     dl = f.get("datalab") or {}
-    # ⚠️ 카테고리 인기어·급상승어는 이 상품에 맞는(fit) 것만 문장에 쓴다(2026-11-13 원종당: '빼빼로데이'를 상품명에 넣으라고 썼다).
+    # ⚠️ 카테고리 인기어·급상승어는 이 상품에 맞는(fit) 것만 문장에 쓴다(2026-11-13 사고: '빼빼로데이'를 상품명에 넣으라고 썼다).
     #    fit 이 없는 옛 사실값(판본 1)은 종전처럼 전부 쓴다.
     pop_all = dl.get("categoryPopular") or []
     pop = _fit_only(pop_all)
@@ -333,6 +333,8 @@ def safe_facts(f):
     out = {k: v for k, v in (f or {}).items() if k != "ai"}
     kws = dict(out.get("keywords") or {})
     kws.pop("excluded", None)
+    kws.pop("banned", None)          # 문장 검사용 전체 탈락 목록 — AI 에 보여 주지 않는다
+    kws.pop("excludedTotal", None)   # 탈락 개수는 문장에 쓸 숫자가 아니다
     out["keywords"] = kws
     dl = dict(out.get("datalab") or {})
     if dl:
@@ -352,11 +354,14 @@ def _today(f):
 
 
 def _banned_keywords(f):
-    """문장에 나오면 안 되는 키워드 — 적합도 탈락(정보 탐색어 제외) + 이 상품에 안 맞는 인기어·급상승어.
+    """문장에 나오면 안 되는 키워드 — 적합도 탈락 **전부**(정보 탐색어 제외) + 이 상품에 안 맞는 인기어·급상승어.
+    ⚠️ 화면 표시용 excluded 는 검색량 상위 60개뿐이다 — 그것만 보면 61번째 이후 탈락어가 검사를 빠져나간다.
     단 허용 키워드(공략·확장·메인·맞는 인기어) 안에 글자로 들어 있는 것은 빼 둔다(오탐 방지)."""
     kws = f.get("keywords") or {}
     dl = f.get("datalab") or {}
-    bad = [x.get("keyword") for x in kws.get("excluded") or [] if x.get("reason") != "info_intent"]
+    # keywords.banned = 탈락 전부(표시 한도와 무관). 없으면(판본 2 초기 묶음) excluded 만으로 본다.
+    bad = list(kws.get("banned") or [])
+    bad += [x.get("keyword") for x in kws.get("excluded") or [] if x.get("reason") != "info_intent"]
     bad += [p.get("keyword") for p in (dl.get("categoryPopular") or []) + (dl.get("rising") or [])
             if isinstance(p, dict) and p.get("fit") is False]
     allowed = [_get(f, "main.keyword", "")] + [t.get("keyword") for t in kws.get("targets") or []]

@@ -1,12 +1,12 @@
-"""회귀 — 키워드 적합도 판정 (2026-11-16 · 원종당초콜릿 제안서 사고)
+"""회귀 — 키워드 적합도 판정 (2026-11-16 · 초콜릿 판매자 제안서 사고)
 
 지키는 것:
   ① 판정기 — 부록 B(로컬 제안서 생성기 시험)를 그대로: 수식어·단위 제거 · 노이즈 · 핵심 명사 포함 ·
      시즌 창 · 다른 형태 상품 · 타사 브랜드 · 정보 탐색어.
   ② 사유 코드 — 탈락마다 정해진 8개 코드 중 하나.
-  ③ 제안서 재료(proposal_facts.build) — 원종당 사례에서 빼빼로 계열이 targets·groups·상품명 처방·golden 어디에도 없다.
+  ③ 제안서 재료(proposal_facts.build) — 초콜릿 판매자 사례에서 빼빼로 계열이 targets·groups·상품명 처방·golden 어디에도 없다.
      생초콜릿·수제초콜릿이 통과한다. 탈락 목록과 사유가 묶음에 남는다.
-  ④ 닭발 — 정보 탐색어 '닭발레시피'는 공략 아님(groups 정보/방식으로), 타사 '량진희정과' 의 '량진희무뼈닭발' 탈락.
+  ④ 닭발 — 정보 탐색어 '닭발레시피'는 공략 아님(groups 정보/방식으로), 타사 '예시네정과' 의 '예시네무뼈닭발' 탈락.
   ⑤ 문장(proposal_copy) — 규칙 문장에 탈락 키워드가 없다 · 인기어를 「상품명에 넣을 말」로 처방하지 않는다 ·
      AI 문장이 탈락 키워드·지난 시즌을 말하면 그 칸을 버린다 · 프롬프트에 생성일과 규칙이 들어간다.
 
@@ -93,7 +93,7 @@ cores, anc = kf.core_anchors(fish, "도루묵"), kf.anchors(fish, "도루묵")
 ok(not kf.is_relevant("조개구이", anc, cores) and not kf.is_relevant("메로구이", anc, cores), "조개구이·메로구이 탈락")
 ok(kf.is_relevant("알도루묵", anc, cores) and kf.is_relevant("도루묵 제철", anc, cores), "알도루묵·도루묵 제철 통과")
 
-choc = {"name": "뉴질랜드 생초콜릿 수제초콜릿 파베초콜릿", "categoryLeaf": "초콜릿", "tags": ["다크초콜릿", "발렌타인데이"]}
+choc = {"name": "프리미엄 생초콜릿 수제초콜릿 파베초콜릿", "categoryLeaf": "초콜릿", "tags": ["다크초콜릿", "발렌타인데이"]}
 ok("초콜릿" in kf.core_anchors(choc, "파베초콜릿"), "초콜릿 핵심 명사")
 
 chicken = {"name": "직화 무뼈 닭발 매운 뼈없는 숯불 닭발 국내산 200g", "categoryLeaf": "닭양념육", "tags": ["닭발", "숯불닭발"]}
@@ -109,15 +109,34 @@ ok(not kf.is_other_form("방울토마토", prod) and not kf.is_other_form("스�
 ok(not kf.is_other_form("토마토주스", {"name": "착즙 토마토주스 1L", "category": "식품>음료"}), "주스 파는 집엔 주스가 맞음")
 ok(not kf.is_other_form("녹차", {"name": "제주 녹차 잎차"}), "녹차 — 짧은 말은 안 자름")
 
+# 다른 형태 — 같은 상품을 부르는 말은 떨어뜨리지 않는다(2026-11-21 · 교차검증 지적: 베이글 상품의 '베이글빵' 오탐)
+bagel2 = {"name": "플레인 베이글", "category": "식품>과자/베이커리>베이글", "categoryLeaf": "베이글", "tags": []}
+gb2 = kf.Gate(bagel2, "베이글", TODAY)
+ok(gb2.reason("베이글빵") is None and gb2.reason("수제베이글빵") is None, "베이글빵 — 베이커리 계열에서 메인 키워드를 품은 '빵'은 같은 상품")
+ok(kf.Gate(bagel, "베이글", TODAY).reason("베이글빵") is None, "카테고리 끝 분류('식빵/베이글')에 그 형태가 있으면 같은 형태")
+ok(kf.Gate({"name": "유기농 캐모마일 티백 50개입"}, "캐모마일", TODAY).reason("캐모마일차") is None, "캐모마일차 — 티백 상품의 '차'는 같은 상품")
+ok(not kf.is_other_form("토마토쥬스", {"name": "착즙 토마토주스 1L", "category": "식품>음료"}), "같은 형태의 다른 표기(주스·쥬스)")
+ok(not kf.is_other_form("토마토케찹", {"name": "유기농 토마토케첩"}), "같은 형태의 다른 표기(케첩·케찹)")
+# 재료에서 만든 다른 상품은 그대로 탈락한다(보강이 문을 넓히지 않는다)
+sweet = {"name": "해남 꿀고구마 3kg", "category": "식품>농산물>채소>고구마", "categoryLeaf": "고구마"}
+gs = kf.Gate(sweet, "고구마", TODAY)
+ok(gs.reason("고구마빵") == "other_form" and gs.reason("고구마칩") == "other_form" and gs.reason("고구마라떼") == "other_form",
+   "고구마 → 고구마빵·칩·라떼 = 다른 형태")
+ok(kf.Gate({"name": "플레인 베이글"}, "베이글", TODAY).reason("베이글빵") == "other_form", "카테고리가 비면 근거가 없어 종전처럼 탈락(알려진 한계)")
+ok(kf.Gate({"name": "생초콜릿 파베초콜릿", "category": "식품>과자/베이커리>초콜릿", "categoryLeaf": "초콜릿"}, "파베초콜릿", TODAY)
+   .reason("초콜릿빵") == "other_form", "베이커리 계열이어도 메인 키워드를 통째로 품지 않으면 다른 형태")
+ok(kf.is_other_form("베이글빵", bagel2) and not kf.is_other_form("베이글빵", bagel2, "베이글"), "종류 이름 꼬리 판정은 메인 키워드를 알 때만")
+ok(kf.is_other_form("베이글주스", bagel2, "베이글") and kf.is_other_form("베이글떡", bagel2, "베이글"), "베이커리 계열 표지는 '빵'에만 통한다")
+
 # 타사 브랜드
-toks = kf.competitor_brand_tokens(["량진희정과", "우리닭발", "수제", "밀크"], chicken, "무뼈닭발")
-ok("량진희" in toks, "량진희정과 → 량진희")
+toks = kf.competitor_brand_tokens(["예시네정과", "우리닭발", "수제", "밀크"], chicken, "무뼈닭발")
+ok("예시네" in toks, "예시네정과 → 예시네")
 ok("수제" not in toks, "범용 수식어는 브랜드로 안 봄")
 ok(kf.competitor_brand_tokens(["밀크"], choc, "파베초콜릿") == ["밀크"], "핵심 명사와 무관한 브랜드는 남김")
 ok(kf.competitor_brand_tokens(["초콜릿"], {"name": "x"}, "파베초콜릿") == [], "핵심 명사 안에 든 말은 브랜드 아님")
 
 # ───────────── ② 사유 코드 ─────────────
-g = kf.Gate({"name": "뉴질랜드 생초콜릿 수제초콜릿 파베초콜릿", "category": "식품>젤리/사탕/초콜릿>초콜릿",
+g = kf.Gate({"name": "프리미엄 생초콜릿 수제초콜릿 파베초콜릿", "category": "식품>젤리/사탕/초콜릿>초콜릿",
              "categoryLeaf": "초콜릿"}, "파베초콜릿", TODAY, competitor_names=["달콤하우스"])
 ok(g.reason("수제선물세트") == "modifier_only", "사유 modifier_only")
 ok(g.reason("빼빼로") == "no_core", "사유 no_core — 빼빼로")
@@ -137,7 +156,7 @@ ok(g.reason("말차생초콜릿") == "other_variety", "말차생초콜릿 = 다�
 ok(g.reason("생초콜릿") is None and g.reason("수제초콜릿") is None, "붙은 말이 상품명에 있으면 통과(생·수제)")
 ok(g.reason("수능초콜릿") is None, "시즌어는 떼고 본다")
 ok(g.reason("초콜릿선물") is None and g.reason("파베초콜릿선물") is None, "범용 수식어·메인 키워드 포함은 통과")
-gt = kf.Gate({"name": "뉴질랜드 생초콜릿 수제초콜릿 파베초콜릿", "tags": ["화이트초콜릿"]}, "파베초콜릿", TODAY)
+gt = kf.Gate({"name": "프리미엄 생초콜릿 수제초콜릿 파베초콜릿", "tags": ["화이트초콜릿"]}, "파베초콜릿", TODAY)
 ok(gt.reason("화이트초콜릿") is None, "판매자 태그에 있으면 통과 — 블랙리스트 아님")
 gb = kf.Gate(bagel, "베이글", TODAY)
 ok(gb.reason("플레인베이글") is None, "메인 키워드를 품은 말은 이 판정을 받지 않음(부록 B 플레인베이글)")
@@ -151,16 +170,16 @@ ok(not kf.name_worthy("수능초콜릿") and not kf.name_worthy("파베초콜릿
    "name_worthy — 시즌어·정보 탐색어 제외")
 ok(g.describe()["date"] == "2026-11-13" and g.describe()["version"] == kf.GATE_VERSION, "판정 정보")
 
-# ───────────── ③ 원종당 — 제안서 재료 ─────────────
+# ───────────── ③ 초콜릿 판매자 사례 — 제안서 재료 ─────────────
 
 def rk(k, total, pc=None, mo=None, comp="중간"):
     return {"keyword": k, "monthlyPcQcCnt": pc, "monthlyMobileQcCnt": mo, "totalVolume": total, "compIdx": comp}
 
 
-WONJONG = {
-    "v3": True, "keyword": "파베초콜릿", "name": "원종당초콜릿",
-    "storeUrl": "https://smartstore.naver.com/kiaora2/products/9569376815",
-    "productName": "뉴질랜드 생초콜릿 수제초콜릿 파베초콜릿",
+CHOCO = {
+    "v3": True, "keyword": "파베초콜릿", "name": "예시초콜릿",
+    "storeUrl": "https://smartstore.naver.com/example/products/123",
+    "productName": "프리미엄 생초콜릿 수제초콜릿 파베초콜릿",
     "volume": [{"relKeyword": "파베초콜릿", "monthlyPcQcCnt": 1310, "monthlyMobileQcCnt": 8200, "compIdx": "중간"}],
     "related": {
         "related_keywords": [rk("빼빼로", 387900, 58300, 329600), rk("수제빼빼로", 41160, 5360, 35800),
@@ -171,7 +190,7 @@ WONJONG = {
                             rk("생초콜릿", 7200, None, None, "") | {"isGolden": True}],
         "total_found": 400,
     },
-    "advertiser": {"product_info": {"product_name": "뉴질랜드 생초콜릿 수제초콜릿 파베초콜릿", "price": 18500},
+    "advertiser": {"product_info": {"product_name": "프리미엄 생초콜릿 수제초콜릿 파베초콜릿", "price": 18500},
                    "competitor_comparison": {"items": [{"store_name": "로이스몰", "brand": "로이스", "price": 30000}]}},
     "htmlDetail": {"reviewData": {"category": "식품>젤리/사탕/초콜릿>초콜릿", "reviewCount": 63, "rating": 4.9},
                    "sellerTags": ["다크초콜릿", "밀크초콜릿", "수제초콜릿선물", "초콜릿선물", "초콜릿포장", "발렌타인데이",
@@ -183,7 +202,7 @@ WONJONG = {
         "rising": [{"keyword": "빼빼로데이", "volume": 235700, "growth": 1661.1}]}},
 }
 NOW = datetime(2026, 11, 13, 10, 0, tzinfo=pf.KST)
-f = pf.build(WONJONG, now=NOW)
+f = pf.build(CHOCO, now=NOW)
 kw = f["keywords"]
 tg = [t["keyword"] for t in kw["targets"]]
 for bad in ("빼빼로", "수제빼빼로", "빼빼로만들기", "동결건조딸기", "빼빼로데이", "빼빼로선물"):
@@ -217,27 +236,27 @@ ok(f["datalab"]["rising"][0]["fit"] is False, "급상승어 빼빼로데이 = �
 json.dumps(f, ensure_ascii=False)
 
 # 같은 상품, 날짜만 바꾸면 시즌어가 따라 움직인다
-f2 = pf.build(WONJONG, now=datetime(2026, 10, 20, tzinfo=pf.KST))
+f2 = pf.build(CHOCO, now=datetime(2026, 10, 20, tzinfo=pf.KST))
 ok("빼빼로데이" in {x["keyword"]: 1 for x in f2["keywords"]["excluded"]}, "빼빼로데이 — 10/20 에도 핵심 명사 없음으로 탈락")
-f3 = pf.build(WONJONG, now=datetime(2026, 11, 19, tzinfo=pf.KST))
+f3 = pf.build(CHOCO, now=datetime(2026, 11, 19, tzinfo=pf.KST))
 ok("수능초콜릿" not in [t["keyword"] for t in f3["keywords"]["targets"]], "수능 당일 생성 — 수능초콜릿 탈락")
 
 # 경쟁 「높음」으로 확인된 것만 뺀다(미확인은 둔다) — 대표 확정 2026-11-16
-b = json.loads(json.dumps(WONJONG))
+b = json.loads(json.dumps(CHOCO))
 b["related"]["related_keywords"].append(rk("다크초콜릿", 50000, comp="높음"))
 f4 = pf.build(b, now=NOW)
 ok("다크초콜릿" not in [t["keyword"] for t in f4["keywords"]["targets"]], "경쟁 높음 제외")
 ok("생초콜릿" in [t["keyword"] for t in f4["keywords"]["targets"]], "경쟁 미확인(생초콜릿)은 남김")
 
 # 적합 키워드가 하나도 없으면 비워 둔다(엉뚱한 말로 채우지 않는다)
-b = json.loads(json.dumps(WONJONG))
+b = json.loads(json.dumps(CHOCO))
 b["related"] = {"related_keywords": [rk("빼빼로", 387900), rk("동결건조딸기", 9910)], "golden_keywords": []}
 f5 = pf.build(b, now=NOW)
 ok(f5["keywords"]["targets"] == [] and f5["keywords"]["targetsMissingInName"] == [], "적합 없으면 targets 비움")
 ok(all(not v for v in f5["keywords"]["groups"].values()), "groups 도 비움")
 
 # pool(검색량 상위 300) — 상위 50 밖의 관련 키워드도 판정 대상
-b = json.loads(json.dumps(WONJONG))
+b = json.loads(json.dumps(CHOCO))
 b["related"]["pool"] = [rk("말차생초콜릿", 1500), rk("밀크초콜릿", 1400)]
 f6 = pf.build(b, now=NOW)
 ok("밀크초콜릿" in [t["keyword"] for t in f6["keywords"]["targets"]] or
@@ -248,22 +267,22 @@ ok({x["keyword"]: x["reason"] for x in f6["keywords"]["excluded"]}.get("말차�
 DAKBAL = {
     "v3": True, "keyword": "무뼈닭발", "name": "테스트닭발",
     "productName": "직화 무뼈 닭발 매운 뼈없는 숯불 닭발 국내산 200g",
-    "related": {"related_keywords": [rk("닭발레시피", 30000), rk("량진희무뼈닭발", 12000), rk("숯불닭발", 9000),
+    "related": {"related_keywords": [rk("닭발레시피", 30000), rk("예시네무뼈닭발", 12000), rk("숯불닭발", 9000),
                                      rk("국물닭발", 7000), rk("무뼈닭발맛집", 5000), rk("숯불", 80000), rk("튤립닭발", 3000)],
                 "golden_keywords": []},
     "advertiser": {"product_info": {"product_name": "직화 무뼈 닭발 매운 뼈없는 숯불 닭발 국내산 200g", "category1": "식품",
                                     "category2": "축산", "category3": "닭고기", "category4": "닭양념육"},
-                   "competitor_comparison": {"items": [{"store_name": "량진희정과", "brand": ""},
+                   "competitor_comparison": {"items": [{"store_name": "예시네정과", "brand": ""},
                                                         {"store_name": "닭발명가", "brand": "닭발명가"}]}},
     "htmlDetail": {"sellerTags": ["닭발", "숯불닭발"]},
 }
 fd = pf.build(DAKBAL, now=NOW)
 names = [t["keyword"] for t in fd["keywords"]["targets"]]
-ok("닭발레시피" not in names and "량진희무뼈닭발" not in names, f"닭발 공략: {names}")
+ok("닭발레시피" not in names and "예시네무뼈닭발" not in names, f"닭발 공략: {names}")
 ok(any("닭발" in n for n in names), "닭발 계열 공략 키워드 있음")
 non_buy = [x["keyword"] for grp in ("method", "info") for x in fd["keywords"]["groups"][grp]]
 ok("닭발레시피" in non_buy, f"닭발레시피는 방식/정보 그룹으로: {non_buy}")
-ok({x["keyword"]: x["reason"] for x in fd["keywords"]["excluded"]}.get("량진희무뼈닭발") == "competitor_brand", "량진희 = 타사 브랜드")
+ok({x["keyword"]: x["reason"] for x in fd["keywords"]["excluded"]}.get("예시네무뼈닭발") == "competitor_brand", "예시네 = 타사 브랜드")
 ok("숯불" not in names, "숯불 단독 탈락")
 
 # ───────────── ⑤ 문장 ─────────────
@@ -291,6 +310,29 @@ pr = pc.prompt(f, c)
 ok("2026-11-13" in pr and "facts.keywords.targets" in pr, "프롬프트에 생성일·공략 키워드 규칙")
 ok("빼빼로" not in pr, "프롬프트 사실값에도 탈락 키워드 없음")
 
+# 탈락어가 표시 한도(60개)보다 많아도 문장 검사는 전부 본다(2026-11-21 · 교차검증 지적: 61번째 이후 탈락어가 AI 문장 검사를 빠져나감)
+b = json.loads(json.dumps(CHOCO))
+b["related"]["pool"] = [rk(f"빼빼로맛{i:03d}", 300000 - i) for i in range(70)]
+f7 = pf.build(b, now=NOW)
+k7 = f7["keywords"]
+ok(len(k7["excluded"]) == pf.EXCLUDED_SHOWN and k7["excludedTotal"] >= 78, f"표시 목록은 한도까지 · 전체 개수는 따로: {len(k7['excluded'])}/{k7.get('excludedTotal')}")
+ok("화이트초콜릿" not in [x["keyword"] for x in k7["excluded"]], "화이트초콜릿은 표시 목록(검색량 상위 60) 밖")
+ok("화이트초콜릿" in k7["banned"] and "빼빼로맛069" in k7["banned"], "문장 검사용 목록에는 탈락어가 전부 있다")
+ok("파베초콜릿만들기" not in k7["banned"], "정보 탐색어는 금지어가 아니다(정보 그룹에 쓴다)")
+ai7 = {"summary.problem": "상품명 앞쪽에 '화이트초콜릿'을 넣어 수요를 받으세요.",
+       "diag.opportunity": "같은 상품으로 '수제초콜릿'·'생초콜릿'을 공략할 수 있습니다."}
+good, bad = pc.validate(ai7, f7)
+ok("summary.problem" not in good and "탈락 키워드" in dict(bad).get("summary.problem", ""), f"표시 한도 밖 탈락어를 권하는 문장도 버림: {bad}")
+ok("diag.opportunity" in good, "공략 키워드만 언급한 칸은 그대로 통과")
+sf7 = pc.safe_facts(f7)["keywords"]
+ok("banned" not in sf7 and "excluded" not in sf7 and "excludedTotal" not in sf7, "AI 에 보여 주는 사실값에는 탈락 목록이 없다")
+ok("화이트초콜릿" not in pc.prompt(f7, pc.template(f7)) and "빼빼로맛" not in pc.prompt(f7, pc.template(f7)), "프롬프트에도 탈락어 없음")
+ok(not pc.validate(pc.template(f7), f7)[1], "규칙 문장은 스스로 검사 통과(탈락어가 많아도)")
+old7 = json.loads(json.dumps(f)); old7["keywords"].pop("banned", None)
+ok("summary.problem" not in pc.validate(ai, old7)[0], "banned 칸이 없는 묶음은 종전처럼 excluded 로 검사")
+src_pf = open(os.path.join(HERE, "..", "proposal_facts.py"), encoding="utf-8").read()
+ok('"banned": banned_keys(excluded)' in src_pf, "묶음에 문장 검사용 전체 목록을 싣는다")
+
 # 공략 키워드가 없을 때 문장이 어색하지 않다
 c5 = pc.template(f5)
 ok("빼빼로" not in json.dumps(c5, ensure_ascii=False), "적합 없음 — 문장에 빼빼로 없음")
@@ -301,9 +343,10 @@ src_main = open(os.path.join(HERE, "..", "main.py"), encoding="utf-8").read()
 i = src_main.find('@app.post("/api/keywords/related")')
 ok('"pool"' in src_main[i:i + 7000], "연관어 응답에 pool 가산")
 ok('@app.post("/api/keywords/fit")' in src_main and "keyword_fit" in src_main, "/api/keywords/fit 경로")
+ok('"excludedTotal": len(excluded)' in src_main, "판정 API 가 탈락 전체 개수를 준다")
 src_cr = open(os.path.join(HERE, "..", "naver_crawler.py"), encoding="utf-8").read()
 ok('"sellerTags"' in src_cr and "def extract_seller_tags" in src_cr, "상세 진단에 판매자 태그 추출")
-ok(kf.GATE_VERSION >= 1, "판정 판본")
+ok(kf.GATE_VERSION >= 3, "판정 판본")
 
 print(f"keyword_fit: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

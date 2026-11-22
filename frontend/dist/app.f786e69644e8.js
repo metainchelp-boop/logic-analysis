@@ -8550,6 +8550,8 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
     return passedSet[_n(k.keyword)];
   }) : goldenAll;
   var excludedList = fit && fit.excluded || [];
+  /* 서버는 표에 검색량 상위 80개만 싣는다 — 전체 개수는 excludedTotal(옛 서버엔 없으니 표 길이로) */
+  var excludedTotal = fit && typeof fit.excludedTotal === 'number' ? fit.excludedTotal : excludedList.length;
   var reasonLabel = fit && fit.reasons || {};
   const rawRelated = data.related_keywords || [];
 
@@ -8879,7 +8881,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
       fontWeight: 700,
       color: '#475569'
     }
-  }, "🚫 제외된 키워드 ", excludedList.length, "개 — 영업자 전용(고객 보고서·제안서에는 나가지 않습니다)"), /*#__PURE__*/React.createElement("div", {
+  }, "🚫 제외된 키워드 ", excludedTotal, "개", excludedTotal > excludedList.length ? ' (검색량 상위 ' + excludedList.length + '개만 표시)' : '', " — 영업자 전용(고객 보고서·제안서에는 나가지 않습니다)"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: '#64748b',
@@ -29708,6 +29710,57 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
 ;/* ===== js/components/AnalysisResults.jsx ===== */
 /* AnalysisResults — 메인 분석결과 렌더 (App.jsx에서 분리)
  * report-shell(좌측 목차 + 본문 전 섹션). App의 상태/핸들러를 props로 받음. */
+
+/* 키워드 적합도 판정(/api/keywords/fit)에 보내는 묶음 — 화면이 이미 받아 둔 자료만 쓴다(네이버 호출 없음).
+   연관어·검색어가 없으면 null(판정 없음). ⚠️ 여기 넣는 칸이 곧 「판정을 다시 받을 조건」이다(아래 keywordFitKey). */
+window.buildKeywordFitPayload = function (src) {
+  src = src || {};
+  if (!src.relatedData || !src.keyword) return null;
+  var adv = src.advertiserReport || {};
+  var tp = src.analysisData && src.analysisData.targetProductInfo || null;
+  var hd = src.htmlDetail || null;
+  return {
+    keyword: src.keyword,
+    name: src.companyName || '',
+    productName: adv.product_info && adv.product_info.product_name || tp && tp.product_name || '',
+    related: src.relatedData,
+    advertiser: {
+      product_info: adv.product_info || null,
+      competitor_comparison: {
+        items: ((adv.competitor_comparison || {}).items || []).slice(0, 80).map(function (it) {
+          return {
+            store_name: it.store_name,
+            brand: it.brand
+          };
+        })
+      }
+    },
+    analysis: {
+      targetProductInfo: tp
+    },
+    htmlDetail: hd ? {
+      reviewData: hd.reviewData ? {
+        category: hd.reviewData.category,
+        category1: hd.reviewData.category1
+      } : null,
+      sellerTags: hd.sellerTags || [],
+      storeInfo: hd.storeInfo || null
+    } : null,
+    shopProducts: (src.shopProducts || []).slice(0, 80).map(function (p) {
+      return {
+        store_name: p.store_name || p.mallName,
+        brand: p.brand
+      };
+    })
+  };
+};
+/* 보낼 내용(문자열)의 지문 — 길이 + 해시. 내용이 한 글자라도 바뀌면 달라지고, 같은 내용이면 객체가 새로 만들어져도 같다. */
+window.keywordFitKey = function (body) {
+  if (!body) return '';
+  var h = 5381;
+  for (var i = 0; i < body.length; i++) h = (h << 5) + h + body.charCodeAt(i) | 0;
+  return body.length + ':' + (h >>> 0).toString(36);
+};
 window.AnalysisResults = function AnalysisResults(props) {
   var advertiserLoading = props.advertiserLoading;
   var advertiserReport = props.advertiserReport;
@@ -29763,58 +29816,41 @@ window.AnalysisResults = function AnalysisResults(props) {
   var _storeName = _realStoreName || _urlSlug || '';
   var _displayCompany = companyName || _storeName;
 
-  /* 키워드 적합도 판정(2026-11-16 · 원종당초콜릿 사고) — 파베초콜릿 보고서·제안서에 '빼빼로'가 공략 키워드로 나갔다.
+  /* 키워드 적합도 판정(2026-11-16 · 초콜릿 판매자 제안서 사고) — 파베초콜릿 보고서·제안서에 '빼빼로'가 공략 키워드로 나갔다.
      이 화면이 이미 받아 둔 자료(연관어·상품명·카테고리·판매자 태그·1페이지 타사)를 서버에 보내
      「이 상품을 찾는 말인가」를 판정받는다(네이버 호출 없음 · 규칙은 서버 keyword_fit 한 곳 · 제안서와 같은 판정).
      ⚠️ 실패하면 조용히 종전 화면 그대로(판정 없음). 토스트를 띄우지 않으려고 api 대신 fetch 를 쓴다.
-     ⚠️ 이 컴포넌트에는 early return 이 없다 — 훅을 더할 때도 return 앞에 둘 것(App.jsx #310 사고). */
+     ⚠️ 이 컴포넌트에는 early return 이 없다 — 훅을 더할 때도 return 앞에 둘 것(App.jsx #310 사고).
+     ⚠️ 판정을 다시 받을지는 **보내는 내용 그대로의 지문**(window.keywordFitKey)으로 정한다(2026-11-21 고침).
+        종전엔 판매자 태그·연관어의 「개수」만 봐서, 개수가 같은 채 내용이 바뀌면(#다크초콜릿 → #밀크초콜릿 ·
+        저장 보고서를 불러와 상태를 갈아 끼울 때) 옛 판정이 그대로 남았다.
+        받은 판정은 그 지문과 함께 들고 있다가 **지금 지문과 같을 때만** 쓴다 — 다른 자료의 판정을 잠깐이라도 쓰지 않는다. */
   var _fitSt = React.useState(null);
-  var keywordFit = _fitSt[0],
-    setKeywordFit = _fitSt[1];
   var _fitHd = htmlDetailResult || analysisData && analysisData.htmlDetail || null;
-  var _fitKey = [searchedKeyword || '', searchedProductUrl || '', relatedData ? (relatedData.related_keywords || []).length + ':' + (relatedData.golden_keywords || []).length + ':' + (relatedData.pool || []).length : '-', advertiserReport ? 'a' : '-', _fitHd ? 'h' + (_fitHd.sellerTags || []).length : '-'].join('|');
+  var _fitBody = React.useMemo(function () {
+    var payload = window.buildKeywordFitPayload({
+      keyword: searchedKeyword,
+      companyName: companyName,
+      relatedData: relatedData,
+      advertiserReport: advertiserReport,
+      analysisData: analysisData,
+      htmlDetail: _fitHd,
+      shopProducts: shopProducts
+    });
+    return payload ? JSON.stringify({
+      payload: payload
+    }) : '';
+  }, [searchedKeyword, companyName, relatedData, advertiserReport, analysisData, _fitHd, shopProducts]);
+  var _fitKey = window.keywordFitKey(_fitBody);
+  var keywordFit = _fitSt[0] && _fitSt[0].key === _fitKey ? _fitSt[0].data : null;
   React.useEffect(function () {
-    if (!relatedData || !searchedKeyword) {
-      setKeywordFit(null);
+    var setFit = _fitSt[1];
+    if (!_fitBody) {
+      setFit(null);
       return;
     }
-    var alive = true;
-    var adv = advertiserReport || {};
-    var tp = analysisData && analysisData.targetProductInfo || null;
-    var payload = {
-      keyword: searchedKeyword,
-      name: companyName || '',
-      productName: adv.product_info && adv.product_info.product_name || tp && tp.product_name || '',
-      related: relatedData,
-      advertiser: {
-        product_info: adv.product_info || null,
-        competitor_comparison: {
-          items: ((adv.competitor_comparison || {}).items || []).slice(0, 80).map(function (it) {
-            return {
-              store_name: it.store_name,
-              brand: it.brand
-            };
-          })
-        }
-      },
-      analysis: {
-        targetProductInfo: tp
-      },
-      htmlDetail: _fitHd ? {
-        reviewData: _fitHd.reviewData ? {
-          category: _fitHd.reviewData.category,
-          category1: _fitHd.reviewData.category1
-        } : null,
-        sellerTags: _fitHd.sellerTags || [],
-        storeInfo: _fitHd.storeInfo || null
-      } : null,
-      shopProducts: (shopProducts || []).slice(0, 80).map(function (p) {
-        return {
-          store_name: p.store_name || p.mallName,
-          brand: p.brand
-        };
-      })
-    };
+    var alive = true,
+      key = _fitKey;
     var t = setTimeout(function () {
       try {
         fetch(API_BASE + '/keywords/fit', {
@@ -29822,18 +29858,19 @@ window.AnalysisResults = function AnalysisResults(props) {
           headers: _authHeaders({
             'Content-Type': 'application/json'
           }),
-          body: JSON.stringify({
-            payload: payload
-          })
+          body: _fitBody
         }).then(function (r) {
           return r.ok ? r.json() : null;
         }).then(function (j) {
-          if (alive) setKeywordFit(j && j.success ? j.data : null);
+          if (alive) setFit(j && j.success ? {
+            key: key,
+            data: j.data
+          } : null);
         }).catch(function () {
-          if (alive) setKeywordFit(null);
+          if (alive) setFit(null);
         });
       } catch (e) {
-        setKeywordFit(null);
+        setFit(null);
       }
     }, 500);
     return function () {
