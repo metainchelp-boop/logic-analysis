@@ -112,12 +112,15 @@ ok(not kf.is_other_form("녹차", {"name": "제주 녹차 잎차"}), "녹차 —
 # 다른 형태 — 같은 상품을 부르는 말은 떨어뜨리지 않는다(2026-11-21 · 교차검증 지적: 베이글 상품의 '베이글빵' 오탐)
 bagel2 = {"name": "플레인 베이글", "category": "식품>과자/베이커리>베이글", "categoryLeaf": "베이글", "tags": []}
 gb2 = kf.Gate(bagel2, "베이글", TODAY)
-ok(gb2.reason("베이글빵") is None and gb2.reason("수제베이글빵") is None, "베이글빵 — 베이글은 빵의 한 종류라 같은 상품(종류 이름 사전)")
+ok(gb2.reason("베이글빵") is None and gb2.reason("수제베이글빵") is None, "베이글빵 — 끝 분류가 '베이글'(빵의 한 종류)이라 같은 상품")
+ok(kf.Gate({"name": "플레인 베이글", "category": "식품>과자/베이커리>베이글", "tags": []}, "베이글", TODAY).reason("베이글빵") is None,
+   "끝 분류 칸이 없어도 카테고리 경로의 마지막 조각을 끝 분류로 본다")
 ok(kf.Gate(bagel, "베이글", TODAY).reason("베이글빵") is None, "끝 분류가 '식빵/베이글' 인 베이글 상품의 베이글빵")
 ok(kf.Gate({"name": "착즙 100% 제주 감귤 1L", "categoryLeaf": "과일주스"}, "감귤", TODAY).reason("감귤주스") is None,
    "카테고리 끝 분류에 그 형태가 있으면 같은 형태(상품명·태그에 '주스'가 없어도)")
 ok(kf.Gate({"name": "제주 감귤 5kg", "categoryLeaf": "감귤"}, "감귤", TODAY).reason("감귤주스") == "other_form", "과일 파는 집의 감귤주스는 다른 형태")
-ok(kf.Gate({"name": "유기농 캐모마일 티백 50개입"}, "캐모마일", TODAY).reason("캐모마일차") is None, "캐모마일차 — 티백 상품의 '차'는 같은 상품")
+ok(kf.Gate({"name": "유기농 캐모마일 티백 50개입", "category": "식품>음료>차류>허브차"}, "캐모마일", TODAY).reason("캐모마일차") is None,
+   "캐모마일차 — 차류 카테고리 상품의 '차'는 같은 형태")
 ok(not kf.is_other_form("토마토쥬스", {"name": "착즙 토마토주스 1L", "category": "식품>음료"}), "같은 형태의 다른 표기(주스·쥬스)")
 ok(not kf.is_other_form("토마토케찹", {"name": "유기농 토마토케첩"}), "같은 형태의 다른 표기(케첩·케찹)")
 # 재료에서 만든 다른 상품은 그대로 탈락한다(보강이 문을 넓히지 않는다)
@@ -125,7 +128,14 @@ sweet = {"name": "해남 꿀고구마 3kg", "category": "식품>농산물>채소
 gs = kf.Gate(sweet, "고구마", TODAY)
 ok(gs.reason("고구마빵") == "other_form" and gs.reason("고구마칩") == "other_form" and gs.reason("고구마라떼") == "other_form",
    "고구마 → 고구마빵·칩·라떼 = 다른 형태")
-ok(kf.Gate({"name": "플레인 베이글"}, "베이글", TODAY).reason("베이글빵") is None, "카테고리가 비어도 메인 키워드가 빵의 종류면 같은 상품")
+ok(kf.Gate({"name": "플레인 베이글"}, "베이글", TODAY).reason("베이글빵") == "other_form", "끝 분류가 없으면 근거가 없어 종전처럼 탈락(알려진 한계)")
+# ⛔ 메인 키워드가 종류 이름 사전에 있다는 것은 근거가 아니다 — 맛·재료 이름일 수 있다(2026-11-22 교차검증 재현 2건)
+ok(kf.Gate({"name": "얼그레이 쿠키", "category": "식품>과자/베이커리>쿠키/비스킷", "categoryLeaf": "쿠키/비스킷", "tags": []}, "얼그레이", TODAY)
+   .reason("얼그레이차") == "other_form", "얼그레이 쿠키의 '얼그레이차' 는 다른 형태(끝 분류가 쿠키/비스킷)")
+ok(kf.Gate({"name": "인절미 스낵", "category": "식품>과자/베이커리>스낵", "categoryLeaf": "스낵", "tags": []}, "인절미", TODAY)
+   .reason("인절미떡") == "other_form", "인절미 스낵의 '인절미떡' 은 다른 형태(끝 분류가 스낵)")
+ok(kf.Gate({"name": "베이글칩 오리지널", "categoryLeaf": "베이글칩"}, "베이글", TODAY).reason("베이글빵") == "other_form",
+   "끝 분류가 종류 이름을 품기만 한 다른 말이면 근거가 아니다(정확히 같아야 한다)")
 # ⛔ 카테고리 윗단계('과자/베이커리')는 근거가 아니다 — 초콜릿도 그 밑에 있다(2026-11-22 교차검증 재현: '파베초콜릿빵' 이 새로 통과했다)
 gcb = kf.Gate({"name": "생초콜릿 파베초콜릿", "category": "식품>과자/베이커리>초콜릿", "categoryLeaf": "초콜릿", "tags": []}, "파베초콜릿", TODAY)
 ok(gcb.reason("파베초콜릿빵") == "other_form", "베이커리 카테고리의 초콜릿 상품 — '파베초콜릿빵' 은 다른 형태")
@@ -134,10 +144,11 @@ ok(kf.Gate({"name": "수제 초콜릿", "category": "식품>과자/베이커리>
    .reason("초콜릿빵") == "other_form", "메인 키워드가 '초콜릿'이어도 '초콜릿빵' 은 다른 형태(초콜릿은 빵의 종류가 아니다)")
 ok(kf.Gate({"name": "통밀 베이글", "categoryLeaf": "베이글"}, "통밀베이글", TODAY).reason("베이글빵") == "other_form",
    "메인 키워드를 통째로 품지 않으면 종류가 맞아도 다른 형태로 둔다(알려진 한계)")
+ok(kf.Gate({"name": "통밀 베이글", "categoryLeaf": "베이글"}, "통밀베이글", TODAY).reason("통밀베이글빵") is None, "메인 키워드를 통째로 품으면 통과")
 ok(kf.Gate({"name": "수제 휘낭시에"}, "휘낭시에", TODAY).reason("휘낭시에빵") == "other_form", "사전에 없는 종류는 종전처럼 탈락(알려진 한계)")
 ok(kf.is_other_form("베이글빵", bagel2) and not kf.is_other_form("베이글빵", bagel2, "베이글"), "종류 이름 꼬리 판정은 메인 키워드를 알 때만")
 ok(kf.is_other_form("베이글주스", bagel2, "베이글") and kf.is_other_form("베이글떡", bagel2, "베이글"), "빵의 종류는 '빵' 꼬리에만 통한다")
-ok(kf.Gate({"name": "콩고물 인절미 1kg"}, "인절미", TODAY).reason("인절미떡") is None, "인절미떡 — 인절미는 떡의 한 종류")
+ok(kf.Gate({"name": "콩고물 인절미 1kg", "categoryLeaf": "인절미"}, "인절미", TODAY).reason("인절미떡") is None, "인절미떡 — 끝 분류가 '인절미'(떡의 한 종류)")
 
 # 타사 브랜드
 toks = kf.competitor_brand_tokens(["예시네정과", "우리닭발", "수제", "밀크"], chicken, "무뼈닭발")

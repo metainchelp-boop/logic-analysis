@@ -31,7 +31,7 @@ from datetime import date, datetime
 
 #: 판정 규칙이 바뀌면 올린다(묶음에 함께 저장 — 어느 규칙으로 걸렀는지 나중에 안다).
 GATE_VERSION = 3   # 2: 같은 종류의 다른 상품(other_variety) · 시즌어는 상품명 처방에서 뺌(2026-11-16)
-                   # 3: 다른 형태 판정 — 같은 형태의 다른 표기(주스·쥬스) · 종류 이름 사전('베이글빵' = 베이글)(2026-11-22)
+                   # 3: 다른 형태 판정 — 같은 형태의 다른 표기(주스·쥬스) · 끝 분류가 그 종류일 때의 종류 이름 꼬리('베이글빵')(2026-11-22)
 
 REASONS = {
     "modifier_only": "수식어만 남음",
@@ -82,15 +82,18 @@ OTHER_FORM_WORDS = ["마리네이드", "주스", "쥬스", "즙", "잼", "요리
 _FORM_SAME_SPELLING = {"주스": ("쥬스",), "쥬스": ("주스",), "케첩": ("케찹",), "케찹": ("케첩",),
                        "스프": ("수프",), "수프": ("스프",)}
 # 한 글자 「종류 이름」 꼬리 — 'X빵'·'X차'·'X떡' 은 X 가 그 종류의 하나일 때 같은 상품을 부르는 말이다('베이글빵' = 베이글).
-#   X 가 그 종류인지는 글자만으로 알 수 없다('쌀빵' ← 쌀 은 재료에서 만든 다른 상품). 그래서 **종류 이름 사전**으로 본다:
-#   상품의 메인 키워드(또는 카테고리 끝 분류)가 사전에 있는 종류이고, 후보가 그 메인 키워드를 통째로 품었을 때만 같은 형태다.
-#   ⛔ 카테고리 윗단계('과자/베이커리')는 근거가 아니다 — 초콜릿·쿠키도 그 밑에 있다('파베초콜릿빵' 은 다른 형태 · 교차검증 재현).
-#   ⚠️ 사전에 없는 종류는 종전처럼 탈락한다(영업자 화면 「제외된 키워드」에 사유와 함께 보인다) — 필요하면 여기에 더한다.
+#   X 가 그 종류인지는 글자만으로 알 수 없다('쌀빵' ← 쌀 은 재료에서 만든 다른 상품). 그래서 **종류 이름 사전**으로 보되,
+#   근거는 **상품의 실제 끝 분류**다: 카테고리 끝 분류(를 '/'·'·' 로 나눈 조각)가 사전에 있는 종류 이름과 **정확히 같고**,
+#   후보가 메인 키워드를 통째로 품었을 때만 같은 형태로 본다.
+#   ⛔ 카테고리 윗단계('과자/베이커리')는 근거가 아니다 — 초콜릿·쿠키도 그 밑에 있다('파베초콜릿빵' 은 다른 형태).
+#   ⛔ 메인 키워드가 사전에 있다는 것도 근거가 아니다 — 맛·재료 이름일 수 있다('얼그레이 쿠키' 의 '얼그레이차',
+#      '인절미 스낵' 의 '인절미떡' 은 다른 형태). 둘 다 교차검증에서 재현된 회귀다.
+#   ⚠️ 끝 분류가 없거나 사전에 없는 종류면 종전처럼 탈락한다(영업자 화면 「제외된 키워드」에 사유와 함께 보인다).
 _FORM_KINDS = {
     "빵": ("베이글", "바게트", "크루아상", "크로와상", "치아바타", "깜빠뉴", "캄파뉴", "브리오슈", "포카치아",
            "스콘", "머핀", "도넛", "도너츠", "카스테라", "카스텔라", "프레첼", "프레즐", "모닝롤"),
     "차": ("보이", "루이보스", "캐모마일", "카모마일", "페퍼민트", "히비스커스", "얼그레이", "우롱", "자스민", "재스민", "다즐링", "마테"),
-    "떡": ("인절미", "송편", "백설기", "절편", "가래떡", "시루떡", "찹쌀떡"),
+    "떡": ("인절미", "송편", "백설기", "절편"),
 }
 _UNIT_RX = re.compile(r"\d+(?:\.\d+)?\s*(?:kg|g|ml|l|개입|개|팩|병|box|박스|인분|매|장|cm|mm)?", re.I)
 _SPLIT_RX = r"[\s,/·()\[\]]+"
@@ -299,21 +302,23 @@ def is_other_form(candidate, product: dict, keyword: str = "") -> bool:
     상품이 이미 그 형태라는 근거(하나라도 있으면 다른 형태가 아니다)
       ① 상품명·카테고리(끝 분류 포함)·판매자 태그에 그 형태 말이 있다           ('토마토주스' 파는 집)
       ② 같은 형태의 다른 표기가 있다(주스·쥬스 · 케첩·케찹 · 스프·수프)          ('토마토쥬스')
-      ③ 한 글자 종류 이름(빵·차·떡) — 상품의 메인 키워드나 카테고리 끝 분류가 그 종류(사전)이고
-         후보가 메인 키워드를 통째로 품었다('베이글빵' ← 베이글). keyword 를 주지 않으면 ③은 보지 않는다.
+      ③ 한 글자 종류 이름(빵·차·떡) — 상품의 **끝 분류**가 그 종류 이름(사전)과 정확히 같고
+         후보가 메인 키워드를 통째로 품었다('베이글빵' ← 끝 분류가 '베이글'). keyword 를 주지 않으면 ③은 보지 않는다.
     """
     c = nospace(candidate)
     ctx = nospace(" ".join([product.get("name") or "", str(product.get("category") or ""),
                             str(product.get("categoryLeaf") or "")] + _tags(product)))
     main = (strip_modifiers(keyword) or nospace(keyword)) if keyword else ""
-    leaf = nospace(product.get("categoryLeaf") or "")
+    # 끝 분류 — categoryLeaf, 없으면 category 경로의 마지막 조각. '식빵/베이글' 은 ['식빵', '베이글'] 로 나눠 본다.
+    leaf = str(product.get("categoryLeaf") or "") or re.split(r"\s*>\s*", str(product.get("category") or ""))[-1]
+    leaf_parts = [nospace(x) for x in re.split(r"[/·,]", leaf) if nospace(x)]
     for w in OTHER_FORM_WORDS:
         if not (c.endswith(w) and len(c) > len(w) + (1 if len(w) >= 2 else 2)):
             continue
         if w in ctx or any(a in ctx for a in _FORM_SAME_SPELLING.get(w, ())):
             continue
         kinds = _FORM_KINDS.get(w)
-        if kinds and main and main in c[: -len(w)] and any(k in main or k in leaf for k in kinds):
+        if kinds and main and main in c[: -len(w)] and any(seg in kinds for seg in leaf_parts):
             continue
         return True
     return False
