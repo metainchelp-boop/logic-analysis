@@ -884,6 +884,29 @@ def test_상권건강_자가점검은_하나만_되면_정상으로_본다():
         conn.close(); os.unlink(db)
 
 
+def test_상권건강_자가점검은_직원사용_기록을_남기지_않는다():
+    """점검이 공개 진입점(get_place_sbiz)을 부르면 호출마다 source='live' 가 함께 남는다 —
+    매일 05:00 의 'live' 를 직원 사용으로 읽게 된다(2026-09-23 점검에서 발견 · 2026-11-22 고침).
+    인자 없이 부르는 실제 경로(스케줄러가 쓰는 경로)를 그대로 돌린다 — 본문만 가짜로 바꾼다."""
+    import os, tempfile, sbiz_health, sbiz365
+    db = tempfile.mktemp(suffix=".db")
+    conn = _sh_db(db)
+    old_impl = sbiz365._get_place_sbiz_impl
+    try:
+        sbiz365._get_place_sbiz_impl = lambda region, industry, hint="", biz_name="", reason=None: {"sales": {"avgAmt": 1}}
+        r = sbiz_health.run_probe()
+        assert r["ok"] is True, r
+        rows = [dict(x) for x in conn.execute("SELECT ok, source FROM sbiz_health ORDER BY id").fetchall()]
+        assert rows == [{"ok": 1, "source": "probe"}], f"점검 1회는 'probe' 1건만 남겨야 한다: {rows}"
+        # 직원이 돌린 분석(공개 진입점)은 종전처럼 'live' 로 남는다
+        sbiz365.get_place_sbiz("역삼동", "한식")
+        srcs = [x["source"] for x in conn.execute("SELECT source FROM sbiz_health ORDER BY id").fetchall()]
+        assert srcs == ["probe", "live"], f"직원 사용은 'live' 로 남아야 한다: {srcs}"
+    finally:
+        sbiz365._get_place_sbiz_impl = old_impl
+        conn.close(); os.unlink(db)
+
+
 def test_상권건강_자가점검은_전부_실패해야_실패로_남는다():
     import os, tempfile, sbiz_health
     db = tempfile.mktemp(suffix=".db")

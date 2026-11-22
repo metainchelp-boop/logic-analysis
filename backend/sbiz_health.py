@@ -62,6 +62,7 @@ def ensure_table(conn) -> None:
                 ok        INTEGER NOT NULL,
                 reason    TEXT DEFAULT '',
                 source    TEXT DEFAULT ''    -- 'probe'(자가 점검) / 'live'(직원이 돌림)
+                                             -- ⚠️ 2026-11-22 배포 전의 'live' 에는 자가 점검분(매일 05:00 · 하루 1건)이 섞여 있다
             )""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sbiz_health_at ON sbiz_health(checked_at)")
         if not in_tx:
@@ -143,7 +144,11 @@ def run_probe(get_place_sbiz=None) -> dict:
     ⚠️ get_place_sbiz 를 인자로 받는다 — 테스트가 네트워크 없이 부를 수 있어야 한다.
     """
     if get_place_sbiz is None:
-        from sbiz365 import get_place_sbiz as _f
+        # ⚠️ 감싼 공개 진입점(get_place_sbiz)이 아니라 **본문**을 부른다(2026-11-22).
+        #    공개 진입점은 호출마다 source='live'(직원이 돌림)를 남긴다 — 그걸 부르면 점검 1회가
+        #    'probe' 1건 + 'live' 1건을 남겨, 표를 읽는 사람이 매일 05:00 의 'live' 를 직원 사용으로 읽게 된다
+        #    (9/23 점검에서 발견). 점검의 흔적은 아래 record(..., source="probe") 한 줄뿐이어야 한다.
+        from sbiz365 import _get_place_sbiz_impl as _f
         get_place_sbiz = _f
 
     tried, reached, ok, last_reason = 0, 0, False, ""
@@ -172,3 +177,23 @@ def run_probe(get_place_sbiz=None) -> dict:
 
     record(ok, "" if ok else last_reason, source="probe")
     return {"ok": ok, "tried": tried, "reached": reached, "reason": last_reason}
+
+
+def check_industry_map(logger=None):
+    """업종 선택 목록 ↔ 소상공인365 분류표 어긋남 점검(2026-11-22). 매일 자가 점검 뒤에 한 번 부른다.
+
+    돌려주는 값: 분류에 이어지지 않는 업종 목록(없으면 []) · 분류표를 못 받았으면 None(「0개」와 다르다).
+    어긋난 것이 있을 때만 경고 한 줄을 남긴다 — 그 업종은 상권 카드가 조용히 빠지므로 로그가 유일한 흔적이다.
+    ⚠️ 예외를 밖으로 내지 않는다 — 점검이 다른 배치를 넘어뜨리면 안 된다.
+    """
+    try:
+        from sbiz365 import unmapped_industry_labels
+        miss = unmapped_industry_labels()
+    except Exception as e:
+        if logger is not None:
+            logger.warning(f"  🩺 업종 사전 점검 실행 실패(무시): {e}")
+        return None
+    if miss and logger is not None:
+        logger.warning(f"  🩺 업종 사전 점검 — ⚠️ 분류표에 이어지지 않는 업종 {len(miss)}개: {', '.join(miss)} "
+                       f"(그 업종은 상권 카드가 빠진다 — sbiz365._UPJONG_SEARCH_TERMS 를 분류표에 맞출 것)")
+    return miss

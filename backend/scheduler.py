@@ -618,6 +618,13 @@ def _run_sbiz_health_probe():
                            f"(API 까지 간 표본 {r.get('reached')}개 전부 · 사유 {r.get('reason')})")
     except Exception as e:
         logger.warning(f"  🩺 소상공인365 자가 점검 실행 실패(무시): {e}")
+    # 업종 사전 ↔ 분류표 어긋남(2026-11-22) — 분류표는 30일마다 다시 받아 이름이 바뀔 수 있고, 어긋난 업종은
+    #    상권 카드가 조용히 빠진다(「베이커리·제과」가 그렇게 빠져 있었다). 어긋난 것이 있을 때만 경고 한 줄.
+    try:
+        from sbiz_health import check_industry_map
+        check_industry_map(logger)
+    except Exception as e:
+        logger.warning(f"  🩺 업종 사전 점검 실행 실패(무시): {e}")
 
 
 def _run_collect_health_check():
