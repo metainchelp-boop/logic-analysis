@@ -401,5 +401,8 @@ nginx 되돌림(설정 파일 복원)은 DB 와 무관하게 끝난다. 자체 p
 - 일반 `deploy` 는 runtime.env 값 그대로 받는다(꺼짐 · 켜짐 모두). 이관 모드(`migrate-*`)는 **꺼져 있을 때만** 통과한다(켜져 있으면 `CHECK_CONFIG`) —
   켠 채 쓰기 저장소를 열면 월간 상태 표가 생겨 이관 검증의 「늘어난 표 = 고정된 새 표」가 깨지기 때문이다. 이관이 필요하면 먼저 끄고 재기동한다.
 - 저장 판 번호는 23 그대로다(SCHEMA_VERSION 비교 무변경). 전산 서버 전용 입구의 월간 경로는 이 장치가 아니라 전산 BE 저장소의 이관 도구가 고친다.
-- 켜는 법: 꺼진 채 배포가 끝난 뒤 대표가 서버 runtime.env 에 `NAVER_ENGINE_MONTHLY_ENABLED=true` 를 넣고 엔진을 재기동한다(이 장치의 범위 밖).
-  매달 3일 지난달 재수집 동안에는 재기동을 피한다.
+- 켜는 법: 꺼진 채 배포가 끝난 뒤 대표가 서버 runtime.env 에 `NAVER_ENGINE_MONTHLY_ENABLED=true` 한 줄을 넣고(이 장치의 범위 밖),
+  **새 제품 커밋을 이 장치로 `deploy`** 한다. 엔진 unit 은 `up --no-recreate` 로 시작하고 `stop` 으로 멈추므로 `systemctl restart` 로는
+  컨테이너가 다시 만들어지지 않아 바뀐 환경이 반영되지 않는다. 같은 커밋은 `ALREADY_RUNNING` 으로 거절되므로 문서만 바뀐 커밋이라도
+  새 커밋을 올린다 — 이때 격리된 check-config 가 바뀐 환경으로 전제(`sync` · `links` · `inventory`)를 먼저 확인한다.
+  매달 3일 지난달 재수집 동안에는 배포 · 재기동을 피한다.
