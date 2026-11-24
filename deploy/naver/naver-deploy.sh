@@ -357,7 +357,9 @@ SWITCHES = ('sync', 'links', 'morning', 'alerts', 'metrics', 'inventory', 'execu
             'issue_alerts')
 # 새 판에만 있는 스위치: check-config 가 내도 된다(비교 문자열에는 넣지 않는다). migrate-* 는 반드시 꺼져 있어야 한다
 # (보고 대조 쓰기, 3단계 12260db~ · 통합 7cfb4be — 이관 직후 꺼진 채 시작하고 대표가 따로 켠다). 일반 deploy 는 runtime.env 값 그대로.
-OFF_SWITCHES = ('reconcile_writes',)
+# monthly = 전산 월간 보고서 숫자 송신(NAVER_ENGINE_MONTHLY_ENABLED · 저장 판 23 그대로 · 켠 채 쓰기 저장소를 열 때만 월간 상태 표를
+# 만든다) — 꺼진 채 배포하고 대표가 runtime.env 로 켠다. 이관은 꺼진 채에서만(이관 검증의 「늘어난 표 = 고정된 새 표」를 지키려고).
+OFF_SWITCHES = ('reconcile_writes', 'monthly')
 ENV_NAME = re.compile(r'[A-Z][A-Z0-9_]{0,63}\Z')
 RESERVED_ENV = {'PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SHELL', 'USER'}
 CHECK_DATA_TMPFS = '/var/lib/naver-engine:rw,noexec,nosuid,nodev,size=8m,uid=10001,gid=10001,mode=0700'
