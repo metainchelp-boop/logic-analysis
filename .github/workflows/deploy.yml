@@ -121,6 +121,12 @@ jobs:
       - name: Proposal v3 regression (제안서 재료·문장 검사)
         run: python backend/tests/test_proposal_v3.py
 
+      # 키워드 적합도 판정(2026-11-16) — 초콜릿 판매자(파베초콜릿) 제안서에 '빼빼로'가 공략 키워드·상품명 처방으로
+      # 나간 사고. 제안서 키워드는 「이 상품을 찾는 말」만 — 핵심 명사·글자 겹침·시즌 창·타사 브랜드·다른 형태.
+      # 블랙리스트가 아니라 일반 규칙이어야 한다(베이글·당근·도루묵·닭발·토마토 사례 포함). stdlib 만.
+      - name: Keyword fit regression (상품에 맞는 키워드만)
+        run: python backend/tests/test_keyword_fit.py
+
       # 업체 삭제 자식 정리 회귀(2026-09-11) — 하드삭제 경로가 5개인데 지우는 자식이
       # 제각각이었다. clients.py 의 연결만 PRAGMA foreign_keys 를 안 켜 CASCADE 가 안 돌았고,
       # 그 경로로 지운 업체의 분석·순위이력이 통째로 고아가 됐다.
@@ -266,6 +272,13 @@ jobs:
       # 전체 화면이 죽는다(2026-09-15 실사고 · 영업팀 신고 「화면 로드 오류」).
       - name: Proposal facts product and analysis isolation
         run: node frontend/tests/proposal-facts-scope.test.cjs
+
+      # 2026-11-21 — 보고서 화면의 키워드 판정 「다시 받기」. 열쇠가 판매자 태그·연관어 「개수」만 봐서, 개수가 같은 채
+      #    내용이 바뀌면(태그 교체 · 저장 보고서 불러오기) 옛 판정(옛 상품명 후보)이 남았다. 서버에 보내는 본문 그대로를
+      #    열쇠로 쓰고(해시로 줄이지 않는다 — 겹치면 같은 일이 난다) 지금 본문의 답만 쓴다.
+      #    실제 훅 코드를 작은 React 흉내로 돌린다(의존성 없음).
+      - name: Keyword fit re-request key (판정 다시 받기 · 화면)
+        run: node frontend/tests/keyword-fit-key.test.cjs
 
       - name: App.jsx hooks-before-early-return regression
         run: python backend/tests/test_app_hooks_order.py
