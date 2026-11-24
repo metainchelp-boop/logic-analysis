@@ -765,6 +765,14 @@ class Migrate2223Test(unittest.TestCase):
         self.assertIn('CHECK_CONFIG', done.stdout.decode())
         self.assertEqual(self.host.meta_schema(), '22')
 
+    def test_22_23_requires_monthly_off(self):
+        plan = self.host.ready()
+        self.host.set(extra_switches={'monthly': True})
+        done = self.host.migrate(plan)
+        self.assertEqual(done.returncode, 10)
+        self.assertIn('CHECK_CONFIG', done.stdout.decode())
+        self.assertEqual(self.host.meta_schema(), '22')
+
     def test_22_23_refused_when_running_schema_is_21(self):
         self.host.set(product_by_commit={C0: self.host.v2122_old, C1: self.host.v22})
         done = self.host.prepare()
@@ -786,6 +794,20 @@ class SwitchAndBackupLayoutTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout.decode()[-3000:])
         self.host.set(extra_switches={'unknown_switch': False})
         done = self.host.deploy('2' * 40)
+        self.assertEqual(done.returncode, 10)
+        self.assertIn('CHECK_CONFIG', done.stdout.decode())
+
+    def test_monthly_switch_is_accepted_by_plain_deploy_off_and_on(self):
+        self.host.set(extra_switches={'reconcile_writes': False, 'monthly': False})
+        done = self.host.deploy(C1)
+        self.assertEqual(done.returncode, 0, done.stdout.decode()[-3000:])
+        self.host.set(extra_switches={'reconcile_writes': False, 'monthly': True})
+        done = self.host.deploy('2' * 40)
+        self.assertEqual(done.returncode, 0, done.stdout.decode()[-3000:])
+
+    def test_monthly_switch_must_be_a_boolean(self):
+        self.host.set(extra_switches={'monthly': 'true'})
+        done = self.host.deploy(C1)
         self.assertEqual(done.returncode, 10)
         self.assertIn('CHECK_CONFIG', done.stdout.decode())
 
