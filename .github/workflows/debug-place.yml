@@ -2698,6 +2698,12 @@ jobs:
             done
             echo
             echo "== [F] 업종 13종 ↔ 소상공인365 분류 짝 맞춤 · 상권 기록 출처 (읽기 전용 · 캐시만 읽음 · 외부 호출 0) =="
+            echo "  -- 배포 반영 표지(#377 · 숫자만) --"
+            docker inspect -f '  컨테이너 기동 {{.State.StartedAt}} · 재시작 {{.RestartCount}}' logic-analysis
+            for m in 'sbiz365.py:CACHE_NS = "v4"' 'sbiz365.py:def unmapped_industry_labels' 'sbiz365.py:label_tops' 'sbiz_health.py:def check_industry_map' 'sbiz_health.py:_get_place_sbiz_impl as _f' 'scheduler.py:check_industry_map(logger)'; do
+              f=${m%%:*}; pat=${m#*:}
+              printf "    %-14s %-40s %s\n" "$f" "$pat" "$(docker exec logic-analysis grep -cF "$pat" /app/$f 2>/dev/null || echo 못읽음)"
+            done
             docker exec -i logic-analysis python3 - <<'PYU' || echo "  ⚠️ 업종 짝 맞춤 점검 실행 실패 — 못 쟀다"
             # 업종 13종 → 소상공인365 업종 분류 짝 맞춤 점검 — 읽기 전용 · 외부 호출 0(캐시된 업종 목록만 읽는다) · 업체명·지역·키워드 미출력
             import os, sys, json, sqlite3
@@ -2722,8 +2728,7 @@ jobs:
             if "sbiz_cache" not in tabs:
                 print("  업종 목록 캐시 표 없음 — 못 쟀다")
             else:
-                row = con.execute("SELECT payload, fetched_at FROM sbiz_cache WHERE cache_key = ?",
-                                  (f"{sb.CACHE_NS}:sbiz:upjong-tree",)).fetchone()
+                row = con.execute("SELECT payload, fetched_at FROM sbiz_cache WHERE cache_key LIKE '%:sbiz:upjong-tree' ORDER BY fetched_at DESC").fetchone()
                 if not row:
                     print("  업종 목록 캐시 없음(30일이 지났거나 아직 안 받음) — 못 쟀다. 여기서는 상권 API 를 부르지 않는다")
                 else:
