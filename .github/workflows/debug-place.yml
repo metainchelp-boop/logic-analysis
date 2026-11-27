@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       ops_cleanup:
-        description: '서버 디스크 정리(2026-11-27 대표 승인 「서버 정리해」 · 콘텐츠 스튜디오 철거 마무리) — 정확히 go-20261127 을 넣을 때만 실행. 그 밖의 값은 아무것도 안 한다.'
+        description: '서버 디스크 정리 — go-20261127 = 콘텐츠 스튜디오 철거 마무리(11/27 대표 승인) · go-20261128-ad = 광고센터 · 자동입찰 철거 마무리(11/28 대표 승인). 그 밖의 값은 아무것도 안 한다.'
         required: false
         default: ''
       offline_health:
@@ -2778,3 +2778,82 @@ jobs:
             docker images --format '{{.Repository}}:{{.Tag}} | {{.Size}}' | head -30
             echo "  -- 로직분석 살아 있나 --"
             docker inspect -f 'logic-analysis 상태={{.State.Status}} 재시작={{.RestartCount}} 기동={{.State.StartedAt}}' logic-analysis
+
+      - name: 광고센터 · 자동입찰 철거 마무리 (ops_cleanup=go-20261128-ad · 대표 승인 2026-11-28)
+        if: ${{ github.event.inputs.ops_cleanup == 'go-20261128-ad' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 300s
+          script: |
+            # 대표 승인(2026-11-28) — 「남은 광고센터 몫도 안 쓰는 거면 지워」.
+            # 11/2 철거한 광고센터(ad-api) · 자동입찰(autobid)의 남은 것만 지운다. 복구 사본(이미지 · 자료 · 키 · 설정 암호화본)은
+            # 11/2 에 보관 서버와 대표님 맥에 따로 저장 · 검증됨.
+            # ⛔ 건드리지 않는 것: 돌고 있는 컨테이너(로직분석 · 네이버 관제) · 네이버 관제 이미지(지난 판 = 관제 되돌림용) ·
+            #    네이버 관제 폴더(/var/lib/metainc · /srv/metainc · /root/naver-ad-dashboard) · 로직분석 · nginx 설정.
+            # 지우기 전 확인: 돌고 있는 컨테이너가 그 폴더 · 보관함을 쓰는지, crontab · systemd 가 그 폴더를 부르는지 — 하나라도 있으면 그대로 둔다.
+            # ⚠️ 공개 저장소 — 이름 · 크기 · 개수만 찍는다.
+            set -u
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            echo "== 정리 전 =="
+            df -h / | tail -1
+            timeout 60 docker system df 2>/dev/null || true
+            RUN_MOUNTS=$(for c in $(docker ps -q); do docker inspect -f '{{range .Mounts}}{{.Source}} {{.Name}}{{"\n"}}{{end}}' "$c"; done)
+            CRON=$( ($S crontab -l 2>/dev/null; $S cat /etc/crontab /etc/cron.d/* /var/spool/cron/crontabs/* 2>/dev/null) )
+            echo
+            echo "== ① 광고센터 API 컨테이너 · 이미지 =="
+            ST=$(docker inspect -f '{{.State.Status}}' ad-api 2>/dev/null || echo none)
+            echo "  ad-api 상태: $ST"
+            case "$ST" in
+              exited|created|dead) docker rm ad-api && echo "  컨테이너 지움" ;;
+              none) echo "  컨테이너 없음" ;;
+              *) echo "  ⚠️ 상태가 $ST 라 건드리지 않음" ;;
+            esac
+            echo
+            echo "== ② 철거 앱 이미지(쓰는 컨테이너가 없을 때만) =="
+            for I in ad-dashboard-deploy-ad-api:latest autobid-autobid-watchdog:latest autobid-autobid-engine:latest autobid-autobid-web:latest; do
+              if ! docker image inspect "$I" >/dev/null 2>&1; then echo "  $I 없음"; continue; fi
+              ID=$(docker image inspect -f '{{.Id}}' "$I")
+              if docker ps -a --format '{{.Image}} {{.ID}}' | awk '{print $1}' | grep -qx "$I" || docker ps -aq --filter "ancestor=$ID" | grep -q .; then
+                echo "  ⚠️ $I 를 쓰는 컨테이너가 있어 그대로 둠"
+              else
+                docker rmi "$I" >/dev/null && echo "  $I 지움"
+              fi
+            done
+            echo
+            echo "== ③ 자동입찰 자료 보관함(docker volume) =="
+            for V in $(docker volume ls -q); do
+              case "$V" in
+                *autobid*|*ad-data*|*studio-data*)
+                  if echo "$RUN_MOUNTS" | grep -qw "$V"; then echo "  ⚠️ $V 를 돌고 있는 컨테이너가 써서 그대로 둠"
+                  else docker volume rm "$V" >/dev/null && echo "  보관함 $V 지움"; fi ;;
+                *) echo "  보관함 $V — 철거 앱 이름이 아니라 그대로 둠" ;;
+              esac
+            done
+            echo
+            echo "== ④ 철거 앱 폴더 =="
+            for D in /root/ad-dashboard-deploy /root/autobid-archive; do
+              if ! $S test -d "$D"; then echo "  $D 없음"; continue; fi
+              echo "  $D 크기 $($S du -sh "$D" 2>/dev/null | cut -f1) · 파일 $($S find "$D" -type f 2>/dev/null | wc -l)개"
+              NC=$(echo "$CRON" | grep -c "$D"); NS=$($S grep -rl "$D" /etc/systemd/system 2>/dev/null | wc -l)
+              NM=$(echo "$RUN_MOUNTS" | grep -c "^$D")
+              echo "    crontab 참조 $NC · systemd 참조 $NS · 돌고 있는 컨테이너가 쓰는 곳 $NM"
+              if [ "$NC" = "0" ] && [ "$NS" = "0" ] && [ "$NM" = "0" ]; then
+                $S rm -rf --one-file-system "$D" && echo "    폴더 지움"
+              else
+                echo "    ⚠️ 참조가 있어 그대로 둠"
+              fi
+            done
+            echo
+            echo "== 정리 후 =="
+            df -h / | tail -1
+            timeout 60 docker system df 2>/dev/null || true
+            echo "  -- 컨테이너 --"; docker ps -a --format '{{.Names}} | {{.Status}}'
+            echo "  -- 이미지 --"; docker images --format '{{.Repository}}:{{.Tag}} | {{.Size}}' | head -30
+            echo "  -- 보관함 --"; docker volume ls -q
+            echo "  -- 살아 있나 --"
+            docker inspect -f 'logic-analysis 상태={{.State.Status}} 재시작={{.RestartCount}}' logic-analysis
+            for c in naver-engine-naver-engine-1 naver-relay-naver-relay-1; do docker inspect -f "$c 상태={{.State.Status}} 재시작={{.RestartCount}}" "$c" 2>/dev/null; done
+            systemctl is-active metainc-naver-engine.service metainc-naver-relay.service metainc-naver-erp-tunnel.service 2>/dev/null | tr '\n' ' '; echo
