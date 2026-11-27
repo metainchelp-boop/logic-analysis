@@ -83,6 +83,10 @@ on:
       hang_probe:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
+      ops_cleanup:
+        description: '서버 디스크 정리(2026-11-27 대표 승인 「서버 정리해」 · 콘텐츠 스튜디오 철거 마무리) — 정확히 go-20261127 을 넣을 때만 실행. 그 밖의 값은 아무것도 안 한다.'
+        required: false
+        default: ''
       offline_health:
         description: '오프라인(플레이스) 분석 점검 — off(기본) / on. 무인 순위 추적(활성 대상 전부를 매일 재나 · 미확인 추이) · 직원 분석·상권·제안서 보강의 성공/실패를 건수로만. 업체명·키워드·지역·IP 미출력(읽기 전용).'
         required: false
@@ -2696,3 +2700,81 @@ jobs:
             for w in "지도 순위 추적 보기" "logic_place_alert_off" "추적 상태를 불러오지 못했습니다" "스토어 수동 분석 · 플레이스 " "사용량을 불러오지 못했습니다"; do
               printf "      %-28s %s\n" "$w" "$(grep -cF "$w" $D/dist/$B 2>/dev/null || echo 못읽음)"
             done
+
+      - name: 서버 디스크 정리 (ops_cleanup=go-20261127 · 대표 승인 2026-11-27)
+        if: ${{ github.event.inputs.ops_cleanup == 'go-20261127' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 300s
+          script: |
+            # 대표 승인(2026-11-27) — 「서버 정리해」 · 「콘텐츠 스튜디오는 폐지해서 아예 안 쓰는 건데 … 처리해」.
+            # 지우는 것(이것만):
+            #   ① 콘텐츠 스튜디오 — 11/2 철거 때 멈춰 둔 컨테이너 · 이미지 · 배포 폴더(/root/content-studio-deploy).
+            #      복구 사본(이미지 · 자료 · 설정 암호화본)은 11/2 에 보관 서버와 대표님 맥에 따로 저장 · 검증됨.
+            #   ② 로직분석 옛 이미지 logic-analysis:identity-* 2개(되돌림용 logic-analysis:rollback 은 남김).
+            #   ③ 이름 없는 이미지 · 도커 빌드 캐시 · 시스템 기록(journal 200MB 까지).
+            # ⛔ 건드리지 않는 것: 돌고 있는 컨테이너 · 꺼진 다른 컨테이너(광고센터 API 등 — container prune 안 함) ·
+            #    이름 붙은 다른 이미지(관제 · 광고센터 · 자동입찰 · 각 rollback) · 데이터 볼륨 · 로직분석 DB · nginx 설정.
+            # ⚠️ 공개 저장소 — 경로 이름 · 크기 · 개수만 찍는다(파일 내용 · 비밀값 미출력).
+            set -u
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            echo "== 정리 전 =="
+            df -h / | tail -1
+            timeout 60 docker system df 2>/dev/null || true
+            echo
+            echo "== ① 콘텐츠 스튜디오 =="
+            ST=$(docker inspect -f '{{.State.Status}}' content-studio 2>/dev/null || echo none)
+            echo "  컨테이너 상태: $ST"
+            case "$ST" in
+              exited|created|dead) docker rm content-studio && echo "  컨테이너 지움" ;;
+              none) echo "  컨테이너 없음" ;;
+              *) echo "  ⚠️ 상태가 $ST 라 건드리지 않음(꺼진 것만 지운다)" ;;
+            esac
+            if docker ps -a --format '{{.Image}}' | grep -qx 'content-studio:latest'; then
+              echo "  ⚠️ 이미지를 쓰는 컨테이너가 남아 있어 이미지는 그대로 둠"
+            elif docker image inspect content-studio:latest >/dev/null 2>&1; then
+              docker rmi content-studio:latest && echo "  이미지 content-studio:latest 지움"
+            else
+              echo "  이미지 없음"
+            fi
+            D=/root/content-studio-deploy
+            if $S test -d "$D"; then
+              echo "  배포 폴더 크기: $($S du -sh "$D" 2>/dev/null | cut -f1) · 파일 $($S find "$D" -type f 2>/dev/null | wc -l)개"
+              echo "  crontab 에서 이 폴더를 부르는 줄: $( ($S crontab -l 2>/dev/null; $S cat /etc/crontab /etc/cron.d/* 2>/dev/null) | grep -c 'content-studio-deploy')"
+              echo "  systemd 에서 이 폴더를 부르는 단위: $($S grep -rl 'content-studio-deploy' /etc/systemd/system 2>/dev/null | wc -l)"
+              if docker ps --format '{{.Names}}' | grep -q '^content-studio$'; then
+                echo "  ⚠️ 스튜디오가 다시 떠 있어 폴더는 그대로 둠"
+              else
+                $S rm -rf --one-file-system "$D" && echo "  배포 폴더 지움"
+              fi
+            else
+              echo "  배포 폴더 없음"
+            fi
+            echo
+            echo "== ② 로직분석 옛 이미지 =="
+            for T in identity-16edab879ee3 identity-before-16edab879ee3; do
+              if docker image inspect "logic-analysis:$T" >/dev/null 2>&1; then
+                docker rmi "logic-analysis:$T" && echo "  logic-analysis:$T 지움"
+              else
+                echo "  logic-analysis:$T 없음"
+              fi
+            done
+            docker image inspect logic-analysis:rollback >/dev/null 2>&1 && echo "  되돌림 이미지 logic-analysis:rollback 남아 있음(정상)"
+            echo
+            echo "== ③ 이름 없는 이미지 · 빌드 캐시 · 시스템 기록 =="
+            docker image prune -f | tail -1
+            docker builder prune -af | tail -1
+            $S journalctl --vacuum-size=200M 2>&1 | tail -1 || true
+            echo
+            echo "== 정리 후 =="
+            df -h / | tail -1
+            timeout 60 docker system df 2>/dev/null || true
+            echo "  -- 컨테이너 --"
+            docker ps -a --format '{{.Names}} | {{.Status}}'
+            echo "  -- 이미지 --"
+            docker images --format '{{.Repository}}:{{.Tag}} | {{.Size}}' | head -30
+            echo "  -- 로직분석 살아 있나 --"
+            docker inspect -f 'logic-analysis 상태={{.State.Status}} 재시작={{.RestartCount}} 기동={{.State.StartedAt}}' logic-analysis
