@@ -2,13 +2,23 @@
  * '콤부차' 보고서에 쌀·계란 등 대분류 인기 키워드가 상위를 차지하던 문제 개선:
  * ① 분석 키워드를 포함(또는 포함되는) 키워드를 앞으로 → ② 나머지는 검색량순.
  * 기본 30개만 표시(전달본 다이어트), '전체 보기'는 화면 전용(no-export). 데이터 삭제 없음. */
-window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword }) {
+window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword, fit }) {
     const { useState } = React;
     const [tab, setTab] = useState('related');
     const [showAll, setShowAll] = useState(false);
     if (!data) return null;
 
-    const goldenList = data.golden_keywords || [];
+    /* 키워드 적합도 판정(2026-11-16) — fit 이 오면 「추천」 두 곳(황금 탭 · 상품명 후보)은 판정 통과분만 쓴다.
+       연관 키워드 표 자체는 검색 데이터라 그대로 둔다. 판정이 없으면(옛 서버·실패) 종전 그대로. */
+    var _n = function(v) { return String(v || '').replace(/\s/g, '').toLowerCase(); };
+    var passedSet = null;
+    if (fit && fit.passed) { passedSet = {}; fit.passed.forEach(function(k) { passedSet[_n(k)] = 1; }); }
+    const goldenAll = data.golden_keywords || [];
+    const goldenList = passedSet ? goldenAll.filter(function(k) { return passedSet[_n(k.keyword)]; }) : goldenAll;
+    var excludedList = (fit && fit.excluded) || [];
+    /* 서버는 표에 검색량 상위 80개만 싣는다 — 전체 개수는 excludedTotal(옛 서버엔 없으니 표 길이로) */
+    var excludedTotal = (fit && typeof fit.excludedTotal === 'number') ? fit.excludedTotal : excludedList.length;
+    var reasonLabel = (fit && fit.reasons) || {};
     const rawRelated = data.related_keywords || [];
 
     /* 연관도 우선 정렬 — keyword 미전달 시 기존 순서 그대로(무손실 폴백) */
@@ -33,6 +43,11 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword 
     var relatedVisible = (tab === 'related' && !showAll) ? relatedList.slice(0, SHOW_LIMIT) : relatedList;
     /* 상품명 후보: 연관도 상위 5개 (분석 키워드 자체 제외) */
     var nameCandidates = base ? relatedList.filter(function(k) { return isRel(k) && norm(k.keyword) !== base; }).slice(0, 5) : [];
+    if (fit && (fit.nameCandidates || fit.targets)) {
+        /* 판정이 있으면 상품명 후보 = 서버가 고른 공략 키워드(이 상품을 찾는 말 · 경쟁 높음 제외 · 검색량순).
+           nameCandidates 는 그중 시즌어(며칠 뒤 지나감)·정보 탐색어를 뺀 것 — 옛 서버엔 없으니 targets 로 받는다. */
+        nameCandidates = (fit.nameCandidates || fit.targets).slice(0, 5).map(function(t) { return { keyword: t.keyword, totalVolume: t.total }; });
+    }
 
     const displayList = tab === 'golden' ? goldenList : relatedVisible;
     const maxVol = displayList.reduce(function(m, k) { return Math.max(m, k.totalVolume || 0); }, 1);
@@ -91,7 +106,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword 
                 </div>
 
                 {displayList.length === 0 ? (
-                    <EmptyState icon="💎" text={tab === 'golden' ? '황금 키워드가 없습니다 (검색량 100~5,000 + 경쟁 낮음 조건)' : '연관 키워드가 없습니다'} />
+                    <EmptyState icon="💎" text={tab === 'golden' ? (passedSet && goldenAll.length ? '이 상품에 맞는 황금 키워드가 없습니다 (아래 「제외된 키워드」 참고)' : '황금 키워드가 없습니다 (검색량 100~5,000 + 경쟁 낮음 조건)') : '연관 키워드가 없습니다'} />
                 ) : (
                     <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 16 }}>
                       <div style={{ maxHeight: 540, overflowY: 'auto' }}>
@@ -161,8 +176,34 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword 
                                 return <span key={k.keyword} className="tag2">{k.keyword} · 월 {fmt(k.totalVolume)}</span>;
                             })}
                         </div>
-                        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>분석 키워드와 직접 연관된 키워드 중 검색량 상위 — 상품명·태그 반영 후보</div>
+                        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>{fit && fit.targets ? '이 상품을 찾는 말로 판정된 키워드 중 검색량 상위 — 상품명·태그 반영 후보' : '분석 키워드와 직접 연관된 키워드 중 검색량 상위 — 상품명·태그 반영 후보'}</div>
                     </div>
+                )}
+
+                {/* 영업자 전용 — 판정에서 빠진 키워드와 사유. 보고서 내보내기·캡처에는 넣지 않는다(no-export). */}
+                {excludedList.length > 0 && (
+                    <details className="no-export" style={{ marginTop: 12, background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 10, padding: '10px 14px' }}>
+                        <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 700, color: '#475569' }}>
+                            🚫 제외된 키워드 {excludedTotal}개{excludedTotal > excludedList.length ? ' (검색량 상위 ' + excludedList.length + '개만 표시)' : ''} — 영업자 전용(고객 보고서·제안서에는 나가지 않습니다)
+                        </summary>
+                        <div style={{ fontSize: 11.5, color: '#64748b', margin: '8px 0 6px' }}>
+                            검색량이 커도 이 상품을 찾는 말이 아니면 공략 키워드·상품명 후보·제안서에서 뺍니다. 판정 기준일 {(fit.gate && fit.gate.date) || '-'}{fit.gate && fit.gate.hasTags === false ? ' · 판매자 태그 없이 판정(상품명·카테고리 기준)' : ''}
+                        </div>
+                        <table className="rt-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                            <thead><tr><th style={{ textAlign: 'left' }}>키워드</th><th style={{ textAlign: 'right' }}>월간 검색량</th><th style={{ textAlign: 'left' }}>제외 사유</th></tr></thead>
+                            <tbody>
+                                {excludedList.map(function(x) {
+                                    return (
+                                        <tr key={x.keyword + x.reason} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                                            <td style={{ padding: '6px 10px', fontWeight: 600 }}>{x.keyword}</td>
+                                            <td style={{ padding: '6px 10px', textAlign: 'right', color: '#64748b' }}>{x.total != null ? fmt(x.total) : '미확인'}</td>
+                                            <td style={{ padding: '6px 10px', color: '#475569' }}>{reasonLabel[x.reason] || x.reason}</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </details>
                 )}
                 </div>
             </div>

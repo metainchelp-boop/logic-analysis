@@ -1899,6 +1899,43 @@ def _analyze_reviews(reviews: list) -> dict:
     }
 
 
+def extract_seller_tags(html: str) -> list:
+    """판매자 태그(2026-11-16) — 키워드 적합도 판정(keyword_fit)이 '이 상품을 찾는 말'인지 볼 때 쓴다.
+
+    ① 상품 JSON 의 ``"sellerTags":[{"text": ...}]`` (붙여넣은 스마트스토어 HTML)
+    ② 크롤 합성 HTML 의 ``<div class="tag-section">#태그 #태그</div>`` (get_product_info 경로)
+    ⚠️ 붙여넣은 HTML 에 ①이 실제로 들어 있는지는 표본으로 확인하지 못했다 — 못 찾으면 [] (판정은 상품명·카테고리로 돈다).
+    """
+    import json as _json
+    out = []
+    try:
+        src = html or ""
+        dec = _json.JSONDecoder()
+        for m in re.finditer(r'"sellerTags"\s*:\s*\[', src):
+            try:
+                arr, _ = dec.raw_decode(src, m.end() - 1)
+            except Exception:
+                continue
+            for t in arr if isinstance(arr, list) else []:
+                txt = t.get("text") if isinstance(t, dict) else (t if isinstance(t, str) else None)
+                if isinstance(txt, str) and txt.strip():
+                    out.append(txt.strip())
+            if out:
+                break
+        if not out:
+            m = re.search(r'<div class="tag-section">(.*?)</div>', src, re.S)
+            if m:
+                out = re.findall(r"#([^#<\s]+)", m.group(1))
+    except Exception:
+        return []
+    clean = []
+    for t in out:
+        t = t.lstrip("#").strip()
+        if 1 <= len(t) <= 30 and t not in clean:
+            clean.append(t)
+    return clean[:20]
+
+
 def extract_store_display_name(html: str, product_url: str = "") -> Dict:
     """상세페이지 HTML에서 '표시용' 스토어/상호명을 추출한다 (2026-07-27).
 
@@ -2561,4 +2598,6 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         "reviewData": review_data,
         # 표시용 스토어/상호명 (슬러그 오표기 방지 — 2026-07-27). 실패 시 name=""
         "storeInfo": extract_store_display_name(html, product_url),
+        # 판매자 태그 — 키워드 적합도 판정용(2026-11-16 가산). 못 찾으면 []
+        "sellerTags": extract_seller_tags(html),
     }
