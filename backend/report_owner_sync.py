@@ -90,13 +90,17 @@ def fetch_client_managers_payload(base: str, api_key: str, timeout: int = 15):
     )
     if resp.status_code != 200:
         raise RuntimeError(f"전산 담당자 조회 실패 (HTTP {resp.status_code})")
-    result = (resp.json() or {}).get("result") or {}
-    return (result.get("items") or []), result.get("total")
+    result = (resp.json() or {}).get("result")
+    if not isinstance(result, dict):
+        return None, None
+    # ⚠️ items 가 없을 때 [] 로 채우지 않는다 — 「연결 0곳」으로 오판해 보호가 풀린다(교차검증 재현). 모양 판단은 받는 쪽(erp_link_guard.complete).
+    return result.get("items"), result.get("total")
 
 
 def fetch_client_managers(base: str, api_key: str, timeout: int = 15):
     """전산 ① 에서 연결 광고주별 현재 담당자 로그인을 받아 온다(읽기 전용)."""
-    return fetch_client_managers_payload(base, api_key, timeout)[0]
+    items = fetch_client_managers_payload(base, api_key, timeout)[0]
+    return items if isinstance(items, list) else []
 
 
 def _ensure_log_table(conn: sqlite3.Connection) -> None:
@@ -165,7 +169,7 @@ def run_report_owner_sync(db_path: str | None = None, base: str | None = None,
         try:
             from erp_link_guard import save_linked_set, ids_from_items, complete
             if not complete(items, total):
-                logger.warning(f"전산 연결 목록이 온전하지 않아 저장하지 않음(total={total!r} · items={len(items)}) — 담당자 정렬은 계속")
+                logger.warning(f"전산 연결 목록이 온전하지 않아 저장하지 않음(total={total!r} · items={len(items) if isinstance(items, list) else '없음'}) — 담당자 정렬은 계속")
             else:
                 _lc = sqlite3.connect(db_path, timeout=30)
                 try:
@@ -176,6 +180,8 @@ def run_report_owner_sync(db_path: str | None = None, base: str | None = None,
                 logger.info(f"전산 연결 목록 저장: {_saved}")
         except Exception as e:
             logger.warning(f"전산 연결 목록 저장 실패(담당자 정렬은 계속): {type(e).__name__}: {e}")
+
+    items = items if isinstance(items, list) else []   # 담당자 정렬은 종전처럼(없으면 빈 목록)
 
     # baseline 백업·original_created_by 보존은 인수인계 서비스와 같은 표를 재사용(멱등).
     HandoverTransferService(db_path).initialize()

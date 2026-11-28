@@ -102,7 +102,8 @@ reset_guard()
 c = conn()
 g.save_linked_set(c, {20, 21})
 ok(g.linked_among(c, [20, 21], fetch=fake_fetch([], fail=True)) == {20, 21}, "받기에 실패하면 저장본으로 판단(연결 업체는 계속 막음)")
-ok(g.complete([1, 2], 2) and not g.complete([1], 2) and not g.complete([1], None) and not g.complete([1], True), "total = items 개수일 때만 온전한 목록")
+_it = lambda n: [{"logic_client_id": i} for i in range(n)]
+ok(g.complete(_it(2), 2) and not g.complete(_it(1), 2) and not g.complete(_it(1), None) and not g.complete(_it(1), True), "total = items 개수일 때만 온전한 목록")
 big = set(range(1000, 1100))
 g.save_linked_set(c, big)
 r = g.save_linked_set(c, set(range(1000, 1070)))
@@ -120,10 +121,23 @@ import time as _t   # noqa: E402
 t_new = _t.time()
 r1 = g.save_linked_set(c, set(range(1000, 1090)) | {6000}, started_at=t_new)
 r2 = g.save_linked_set(c, set(range(1000, 1090)), started_at=t_new - 5)
-ok(r1.get("saved") and r2.get("reason") == "stale" and g.stored_linked(c, [6000]) == {6000},
-   "먼저 받기 시작한 옛 응답이 나중에 도착해도 새 목록(6000 포함)을 덮지 않는다")
+ok(r1.get("saved") and g.stored_linked(c, [6000]) == {6000},
+   "먼저 받기 시작한 옛 응답이 나중에 도착해도 더 늦게 본 연결(6000)은 해제하지 못한다")
 r3 = g.save_linked_set(c, set(), started_at=t_new - 1)
-ok(r3.get("saved") is False and g.stored_linked(c, [6000]) == {6000}, "옛 빈 응답도 새 보호를 지우지 못한다")
+ok(g.stored_linked(c, [6000]) == {6000} and len(g.stored_linked(c, list(range(1000, 1090)))) == 90,
+   "옛 빈 응답도 새 보호를 지우지 못한다")
+c.close()
+
+# 두 응답이 엇갈려 도착 — 새 응답(B · 대량 감소라 해제 보류)이 본 새 연결 P 를 옛 응답(A)이 지우지 못한다(교차검증 재현)
+reset_guard()
+c = conn()
+base = set(range(7000, 7025))
+g.save_linked_set(c, base, started_at=100.0)
+t_b = 200.0
+rb = g.save_linked_set(c, set(range(7000, 7010)) | {7999}, started_at=t_b)
+ra = g.save_linked_set(c, base, started_at=t_b - 50)
+ok(rb.get("held") is True and g.stored_linked(c, [7999]) == {7999} and len(g.stored_linked(c, list(base))) == 25,
+   f"대량 감소라 해제는 보류해도 B 가 본 새 연결 7999 는 바로 기록되고, 늦게 온 옛 응답 A 도 지우지 못한다: {rb} {ra}")
 c.close()
 
 # 거절한 목록이 20시간 넘게 똑같이 이어지면 진짜 변화로 받아들인다(교차검증 반영 — 거절만 하면 진짜 끊은 연결이 영영 막힘)
@@ -145,7 +159,7 @@ c.commit()
 ok(g.save_linked_set(c, set(range(2000, 2006))).get("saved") is False, "20시간 지났어도 목록이 바뀌었으면 다시 거절")
 g.save_linked_set(c, {1})   # 작은 목록으로(빈 목록 규칙 시험용)
 c.execute("DELETE FROM erp_linked_clients")
-c.execute("INSERT INTO erp_linked_clients VALUES (3000, 'x')")
+c.execute("INSERT INTO erp_linked_clients VALUES (3000, 'x', 0)")
 c.commit()
 ok(g.save_linked_set(c, set()).get("reason") == "empty", "빈 목록 첫 번째 = 거절")
 c.execute("UPDATE erp_link_sync SET pending_since=?", ((datetime.now() - timedelta(hours=21)).isoformat(),))
@@ -231,6 +245,41 @@ ros.fetch_client_managers_payload = ros_payload_partial
 c = conn()
 ok(g.linked_among(c, [8]) == {8}, "지울 때 전산이 일부만 주면 실패로 보고 저장본으로 — 8번은 계속 막힌다")
 c.close()
+ros.fetch_client_managers_payload = lambda base, key, timeout=8: (None, 0)
+c = conn()
+st, known = g.link_status(c, [8])
+ok(known is False and st == {8}, "전산 응답에 목록 칸(items)이 없으면(total 0) 「연결 0곳」이 아니라 확인 못 함(교차검증 재현)")
+c.close()
+ok(not g.complete(None, 0) and not g.complete([{"logic_client_id": "x"}], 1) and not g.complete([{}], 1) and g.complete([], 0),
+   "목록이 아니거나 번호를 못 읽는 줄이 있으면 온전하지 않다")
+
+
+# 실제 받기 함수 — 전산이 200 {"result":{"total":0}}(items 칸 없음)을 주면 items 를 빈 목록으로 채우지 않는다
+class _Resp:
+    status_code = 200
+
+    def __init__(self, body):
+        self._b = body
+
+    def json(self):
+        return self._b
+
+
+_real_get = ros.requests.get
+_real_payload = getattr(ros, "_orig_payload", None)
+import importlib   # noqa: E402
+ros_fresh = importlib.reload(ros)   # 위에서 바꿔 끼운 가짜를 걷어 내고 진짜 함수로
+ros_fresh.HandoverTransferService = _NoHandover
+ros_fresh.requests.get = lambda *a, **k: _Resp({"result": {"total": 0}})
+items_x, total_x = ros_fresh.fetch_client_managers_payload("http://t", "k")
+ok(items_x is None and total_x == 0 and not g.complete(items_x, total_x),
+   f"items 칸이 없으면 None 그대로 — 「연결 0곳」으로 오판하지 않는다: {items_x!r}")
+ros_fresh.requests.get = lambda *a, **k: _Resp({"result": {"total": 1, "items": [{"logic_client_id": 9}]}})
+ok(ros_fresh.fetch_client_managers_payload("http://t", "k") == ([{"logic_client_id": 9}], 1), "정상 응답은 그대로")
+ok(ros_fresh.fetch_client_managers("http://t", "k") == [{"logic_client_id": 9}], "담당자 정렬용 받기는 종전처럼 목록")
+ros_fresh.requests.get = lambda *a, **k: _Resp({"result": {"total": 0}})
+ok(ros_fresh.fetch_client_managers("http://t", "k") == [], "담당자 정렬용 받기는 items 가 없으면 빈 목록(종전처럼)")
+ros_fresh.requests.get = _real_get
 os.environ["ERP_AD_SYNC_API_KEY"] = ""
 
 # ②⑤ 삭제 경로 끝까지 — 화면 삭제 · 미리보기 · 옛 업체 API · 자동 삭제
@@ -362,6 +411,39 @@ c.commit()
 c.close()
 ok(r.status_code == 200 and r.json().get("reports") is None, f"건수를 못 세면 None(0건과 구분): {r.json().get('reports')!r}")
 
+# 판정과 지우기 사이에 다른 연결이 보호를 기록하면, 쓰기 잠금 안에서 한 번 더 보고 막는다(교차검증 재현)
+c = conn()
+c.execute("INSERT INTO clients (id, name, created_by, role) VALUES (121, '판정 뒤 연결되는 업체', 1, 'advertiser')")
+c.commit()
+c.close()
+_real_ls = g.link_status
+
+
+def _racy_link_status(cn, ids, fetch=None, save=True):
+    out = _real_ls(cn, ids, fetch, save)
+    other = conn()
+    g.save_linked_set(other, {105, 201, 202, 121})   # 판정 직후 다른 요청이 121 연결을 기록
+    other.close()
+    return out
+
+
+g.link_status = _racy_link_status
+r = req("DELETE", "/api/cd/121")
+g.link_status = _real_ls
+ok(r.status_code == 409 and exists(121), f"판정 뒤 기록된 연결도 지우기 직전에 다시 봐서 막는다: {r.status_code}")
+
+# 연결을 정상적으로 끊은 뒤 — 미리보기도 실제 삭제와 같은 답(교차검증 재현: 미리보기만 계속 막혀 삭제로 못 감)
+g._default_fetch = fake_fetch([105, 201, 202])
+r = req("GET", "/api/cd/121/delete-preview")
+ok(r.status_code == 200 and r.json().get("erp_linked") is False and r.json().get("erp_known") is True,
+   f"전산에서 끊은 뒤 미리보기 = 연결 아님(실제 삭제와 같은 규칙): {r.json().get('erp_linked')}")
+c = conn()
+still = g.stored_linked(c, [121])
+c.close()
+ok(still == {121}, "미리보기는 그래도 저장본을 바꾸지 않는다")
+r = req("DELETE", "/api/cd/121")
+ok(r.status_code == 200 and not exists(121), f"그리고 실제로 지워진다: {r.status_code}")
+
 # 옛 업체 API 삭제 경로
 c = conn()
 c.execute("INSERT INTO clients (id, name, created_by, role) VALUES (201, '옛 경로 연결 업체', 9, 'advertiser'), (203, '옛 경로 보통 업체', 9, 'advertiser')")
@@ -372,6 +454,24 @@ r = req("DELETE", "/api/clients/201")
 ok(r.status_code == 409 and exists(201), f"옛 업체 API 삭제도 연결 업체를 막는다: {r.status_code}")
 r = req("DELETE", "/api/clients/203")
 ok(r.status_code == 200 and not exists(203), f"옛 업체 API 로 연결 안 된 업체는 지워진다: {r.status_code}")
+c = conn()
+c.execute("INSERT INTO clients (id, name, created_by, role) VALUES (211, '옛 경로 판정 뒤 연결', 9, 'advertiser')")
+c.commit()
+c.close()
+
+
+def _racy211(cn, ids, fetch=None, save=True):
+    out = _real_ls(cn, ids, fetch, save)
+    other = conn()
+    g.save_linked_set(other, {105, 201, 202, 211})
+    other.close()
+    return out
+
+
+g.link_status = _racy211
+r = req("DELETE", "/api/clients/211")
+g.link_status = _real_ls
+ok(r.status_code == 409 and exists(211), f"옛 업체 API 도 판정 뒤 기록된 연결을 지우기 직전에 다시 봐서 막는다: {r.status_code}")
 
 # 30일 지난 영업 대상·경쟁사 자동 삭제
 past = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
@@ -407,6 +507,33 @@ c.commit()
 c.close()
 n = cd.cleanup_expired_competitors()
 ok(n == 0 and exists(209) and exists(210), f"오래된 저장본만 있고 지금 못 받으면 자동 삭제는 그 회차를 건너뛴다: 지운 {n}건")
+
+# 자동 삭제 — 연결된 부모에 붙은 경쟁사는 그 경쟁사가 따로 기한이 지나도 남긴다(교차검증 재현)
+reset_guard()
+g._default_fetch = fake_fetch([300])
+c = conn()
+c.execute("INSERT INTO clients (id, name, created_by, role) VALUES (300, '연결된 광고주', 1, 'advertiser')")
+c.execute("INSERT INTO clients (id, name, created_by, role, competitor_of, expires_at) VALUES (301, '연결 광고주의 기한 지난 경쟁사', 1, 'competitor', 300, ?)", (past,))
+c.execute("INSERT INTO clients (id, name, created_by, role, expires_at) VALUES (302, '판정 중 기한이 늘어날 영업 대상', 1, 'prospect', ?)", (past,))
+c.execute("INSERT INTO clients (id, name, created_by, role, competitor_of) VALUES (303, '그 경쟁사', 1, 'competitor', 302)")
+c.commit()
+c.close()
+
+
+def _extend_during(cn, ids, fetch=None, save=True):
+    out = _real_ls(cn, ids, fetch, save)
+    other = conn()
+    other.execute("UPDATE clients SET expires_at=? WHERE id=302", ((datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S"),))
+    other.commit()
+    other.close()
+    return out
+
+
+g.link_status = _extend_during
+n = cd.cleanup_expired_competitors()
+g.link_status = _real_ls
+ok(exists(301), "연결된 광고주의 경쟁사는 따로 기한이 지나도 지우지 않는다")
+ok(exists(302) and exists(303), f"전산을 기다리는 사이 기한이 늘어난 영업 대상(과 그 경쟁사)은 지우지 않는다(쓰기 안에서 다시 확인 · 앞 시험의 다른 만료분 {n}건은 지움)")
 
 # ⑥ 화면
 src = open(os.path.join(HERE, "..", "..", "frontend", "js", "components", "ClientDashboard.jsx"), encoding="utf-8").read()

@@ -14,9 +14,11 @@
 
   - 원칙: 지금 전산이 「연결 안 됨」이라고 확인해 준 업체만 지운다. 지우기 직전마다 새로 묻고,
     방금 받은 목록 ∪ 저장본을 연결로 본다 — 방금 연결된 업체도 막고, 방금 끊은 업체는 바로 풀어 준다.
-  - 받기에 실패하거나 목록이 온전하지 않으면(total ≠ items 개수) 「확인 못 함」이다.
-  - 새 목록이 비었거나 저장된 목록에서 한꺼번에 20% 넘게 빠지면 바로 바꾸지 않는다(전산 쪽 오류로 보호가
-    한꺼번에 풀리지 않게 · 경고 로그). 같은 목록이 20시간 넘게 이어지면(다음 날 04:20) 진짜 변화로 받아들인다.
+  - 받기에 실패하거나 목록이 온전하지 않으면(items 없음 · total ≠ items 개수 · 번호 못 읽는 줄) 「확인 못 함」이다.
+  - 저장본은 「연결을 본 기록」이다. 응답에 보인 연결은 언제나 더하고(늦게 온 응답이라도), 해제는 그 연결을 마지막으로
+    본 응답보다 늦게 받기 시작한 응답만 한다. 빈 목록이나 한꺼번에 20% 넘는 해제는 보류하고, 같은 목록이 20시간 넘게
+    이어지면(다음 날 04:20) 해제한다.
+  - 지우는 쪽은 네트워크를 다녀온 뒤 쓰기 트랜잭션 안에서 저장본으로 한 번 더 확인한다.
   - 근거가 전혀 없으면(저장본도 없고 지금도 못 받음) 지우지 않는다 — 사람이 지울 때는 「잠시 후 다시」 안내,
     30일 자동 삭제는 그 회차를 건너뛴다(교차검증 반영 · 모르는 채로 지우면 연결 업체일 수 있다).
 """
@@ -41,11 +43,12 @@ class LinkFetchError(RuntimeError):
 
 
 def ensure_tables(conn: sqlite3.Connection) -> None:
+    # seen_started = 이 업체를 연결로 본 응답 중 가장 늦게 받기 시작한 시각 — 해제는 그보다 늦게 받기 시작한 응답만 할 수 있다
     conn.execute("CREATE TABLE IF NOT EXISTS erp_linked_clients ("
-                 "client_id INTEGER PRIMARY KEY, seen_at TEXT NOT NULL)")
+                 "client_id INTEGER PRIMARY KEY, seen_at TEXT NOT NULL, seen_started REAL)")
     conn.execute("CREATE TABLE IF NOT EXISTS erp_link_sync ("
                  "id INTEGER PRIMARY KEY CHECK (id = 1), synced_at TEXT NOT NULL, linked_count INTEGER NOT NULL, "
-                 "fetch_started REAL, pending_hash TEXT, pending_since TEXT)")
+                 "pending_hash TEXT, pending_since TEXT)")
 
 
 def ids_from_items(items) -> set[int]:
@@ -59,9 +62,31 @@ def ids_from_items(items) -> set[int]:
     return out
 
 
+def _valid_id(it) -> bool:
+    if not isinstance(it, dict):
+        return False
+    v = it.get("logic_client_id")
+    if isinstance(v, bool):
+        return False
+    try:
+        int(v)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def complete(items, total) -> bool:
-    """전산 응답이 온전한가 — 전산은 total = items 개수로 준다(ReportSyncService). 다르거나 total 이 없으면 일부만 온 것으로 본다."""
-    return isinstance(total, int) and not isinstance(total, bool) and isinstance(items, list) and total == len(items)
+    """전산 응답이 온전한가 — 전산은 total = items 개수로 준다(ReportSyncService).
+    items 칸이 없거나(목록이 아님) · total 이 없거나 다르거나 · 번호를 못 읽는 줄이 하나라도 있으면 온전하지 않다(교차검증 반영)."""
+    return (isinstance(total, int) and not isinstance(total, bool) and isinstance(items, list)
+            and total == len(items) and all(_valid_id(it) for it in items))
+
+
+def _has_tables(conn: sqlite3.Connection) -> bool:
+    try:
+        return conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='erp_linked_clients'").fetchone()[0] == 1
+    except sqlite3.Error:
+        return False
 
 
 def _writer(conn: sqlite3.Connection):
@@ -77,58 +102,74 @@ def _writer(conn: sqlite3.Connection):
     return w, True
 
 
-def save_linked_set(conn: sqlite3.Connection, ids, started_at: float | None = None) -> dict:
-    """연결 목록을 통째로 바꿔 저장. 쓰기 잠금(BEGIN IMMEDIATE) 안에서 확인하고 바꾼다(교차검증 반영 — 잠금 밖에서
-    세면 그 사이 다른 요청이 저장한 보호를 빈 목록이 지웠다). 바꾸지 않는 경우:
-      - 더 늦게 받기 시작한 목록이 이미 저장됐다(started_at 이 저장된 것보다 이르다 — 늦게 도착한 옛 응답)
-      - 새 목록이 비었는데 저장된 것이 있다
-      - 저장된 목록(20곳 이상)에서 한꺼번에 20% 넘게 빠진다
-    """
-    ids = {int(i) for i in ids}
+def _plan(c: sqlite3.Connection, fresh: set[int], started_at: float):
+    """한 응답을 반영하면 무엇이 바뀌는지 계산만 한다(읽기만 · 표가 없으면 빈 저장본).
+    반환: (지금 저장본 {번호: seen_started}, 해제할 번호들, 해제를 보류하나, 보류 이유, 덧정보)
+      - 해제 후보 = 저장본에 있는데 이 응답에 없고, 이 응답보다 먼저 받기 시작한 응답에서만 보인 것
+        (더 늦게 받기 시작한 응답이 본 연결은 늦게 도착한 옛 응답이 해제할 수 없다 — 교차검증 반영)
+      - 빈 목록이거나 저장본(20곳 이상)의 20% 넘게 한꺼번에 해제되면 보류 — 같은 목록이 CONFIRM_HOURS 넘게 이어지면 해제한다"""
+    old, row = {}, None
+    if _has_tables(c):
+        old = {int(r[0]): (float(r[1]) if r[1] is not None else 0.0)
+               for r in c.execute("SELECT client_id, seen_started FROM erp_linked_clients")}
+        row = c.execute("SELECT pending_hash, pending_since FROM erp_link_sync WHERE id = 1").fetchone()
+    remove = {i for i, seen in old.items() if i not in fresh and seen < started_at}
+    reason = None
+    if remove and not fresh:
+        reason = "empty"
+    elif len(old) >= DROP_GUARD_MIN and len(remove) > len(old) * DROP_GUARD_RATIO:
+        reason = "mass-drop"
+    if not reason:
+        return old, remove, False, None, {}
+    digest = hashlib.sha1(",".join(map(str, sorted(fresh))).encode()).hexdigest()
+    same = bool(row and row[0] == digest and row[1])
+    if same:
+        try:
+            if (datetime.now() - datetime.fromisoformat(row[1])).total_seconds() >= CONFIRM_HOURS * 3600:
+                return old, remove, False, reason + "-confirmed", {}
+        except ValueError:
+            pass
+    return old, remove, True, reason, {"digest": digest, "pending_same": same}
+
+
+def apply_response(conn: sqlite3.Connection, fresh, started_at: float) -> dict:
+    """온전한 응답 하나를 저장본에 반영한다(따로 연 연결 · 쓰기 잠금 안).
+    ① 이 응답에 보인 연결은 **언제나** 더한다(늦게 온 응답 · 보류된 응답이라도) — 관측한 보호를 잃지 않게.
+    ② 해제는 _plan 이 허락한 것만(이 응답보다 늦게 본 연결은 해제하지 않음 · 대량 해제는 보류)."""
+    fresh = {int(i) for i in fresh}
     w, own = _writer(conn)
     try:
         ensure_tables(w)
         w.execute("BEGIN IMMEDIATE")
         try:
-            row = w.execute("SELECT fetch_started FROM erp_link_sync WHERE id = 1").fetchone()
-            if started_at is not None and row and row[0] is not None and started_at < float(row[0]):
-                w.execute("ROLLBACK")
-                logger.info("[전산 연결 목록] 더 나중에 받은 목록이 이미 저장돼 이 응답은 버림")
-                return {"saved": False, "reason": "stale"}
-            old = {int(r[0]) for r in w.execute("SELECT client_id FROM erp_linked_clients")}
-            dropped = len(old - ids)
-            reason = None
-            if not ids and old:
-                reason = "empty"
-            elif len(old) >= DROP_GUARD_MIN and dropped > len(old) * DROP_GUARD_RATIO:
-                reason = "mass-drop"
+            old, remove, held, reason, x = _plan(w, fresh, started_at)
             now = datetime.now().isoformat(timespec="seconds")
-            if reason:
-                # 같은 목록이 CONFIRM_HOURS 넘게 이어지면 전산의 진짜 변화로 받아들인다 — 거절만 하면 진짜로 끊은 연결이 영영 막힌다(교차검증 반영)
-                digest = hashlib.sha1(",".join(map(str, sorted(ids))).encode()).hexdigest()
-                prow = w.execute("SELECT pending_hash, pending_since FROM erp_link_sync WHERE id = 1").fetchone()
-                since = None
-                if prow and prow[0] == digest and prow[1]:
-                    try:
-                        since = datetime.fromisoformat(prow[1])
-                    except ValueError:
-                        since = None
-                if since is None or (datetime.now() - since).total_seconds() < CONFIRM_HOURS * 3600:
-                    if since is None:
-                        w.execute("UPDATE erp_link_sync SET pending_hash=?, pending_since=? WHERE id = 1", (digest, now))
-                    w.execute("COMMIT")
-                    logger.warning(f"[전산 연결 목록] {'새 목록이 비어' if reason == 'empty' else f'저장된 {len(old)}곳 중 {dropped}곳이 한꺼번에 빠져'} "
-                                   f"저장하지 않음(같은 목록이 {CONFIRM_HOURS}시간 넘게 이어지면 받아들임 · 전산 쪽 확인 필요)")
-                    return {"saved": False, "reason": reason, "kept": len(old), "dropped": dropped}
-                logger.info(f"[전산 연결 목록] 거절했던 목록이 {CONFIRM_HOURS}시간 넘게 이어져 진짜 변화로 받아들임({reason} · {dropped}곳 빠짐)")
-            w.execute("DELETE FROM erp_linked_clients")
-            w.executemany("INSERT INTO erp_linked_clients(client_id, seen_at) VALUES (?, ?)", [(i, now) for i in sorted(ids)])
-            w.execute("INSERT INTO erp_link_sync(id, synced_at, linked_count, fetch_started, pending_hash, pending_since) "
-                      "VALUES (1, ?, ?, ?, NULL, NULL) "
-                      "ON CONFLICT(id) DO UPDATE SET synced_at=excluded.synced_at, linked_count=excluded.linked_count, "
-                      "fetch_started=excluded.fetch_started, pending_hash=NULL, pending_since=NULL", (now, len(ids), started_at))
+            for i in fresh:
+                w.execute("INSERT INTO erp_linked_clients(client_id, seen_at, seen_started) VALUES (?, ?, ?) "
+                          "ON CONFLICT(client_id) DO UPDATE SET seen_at=excluded.seen_at, "
+                          "seen_started=MAX(COALESCE(seen_started, 0), excluded.seen_started)", (i, now, started_at))
+            if held:
+                if not x.get("pending_same"):
+                    w.execute("INSERT INTO erp_link_sync(id, synced_at, linked_count, pending_hash, pending_since) VALUES (1, ?, ?, ?, ?) "
+                              "ON CONFLICT(id) DO UPDATE SET pending_hash=excluded.pending_hash, pending_since=excluded.pending_since",
+                              (now, len(old), x["digest"], now))
+                why = "새 목록이 비어" if reason == "empty" else "저장된 %s곳 중 %s곳이 한꺼번에 빠져" % (len(old), len(remove))
+                logger.warning(f"[전산 연결 목록] {why} 해제를 보류(새 연결은 더함 · 같은 목록이 {CONFIRM_HOURS}시간 넘게 이어지면 해제 · 전산 쪽 확인 필요)")
+            else:
+                if remove:
+                    marks = ",".join("?" * len(remove))
+                    # 지우는 순간에도 이 응답보다 늦게 본 연결은 남긴다(잠금 안이라 위 계산과 같지만 한 번 더)
+                    w.execute(f"DELETE FROM erp_linked_clients WHERE client_id IN ({marks}) AND COALESCE(seen_started, 0) < ?",
+                              list(remove) + [started_at])
+                if reason:
+                    logger.info(f"[전산 연결 목록] 보류했던 해제를 {CONFIRM_HOURS}시간 넘게 같은 목록이라 반영({reason} · {len(remove)}곳)")
+            count = w.execute("SELECT COUNT(*) FROM erp_linked_clients").fetchone()[0]
+            w.execute("INSERT INTO erp_link_sync(id, synced_at, linked_count, pending_hash, pending_since) VALUES (1, ?, ?, NULL, NULL) "
+                      "ON CONFLICT(id) DO UPDATE SET synced_at=excluded.synced_at, linked_count=excluded.linked_count"
+                      + ("" if held else ", pending_hash=NULL, pending_since=NULL"), (now, count))
             w.execute("COMMIT")
-            return {"saved": True, "count": len(ids), "synced_at": now}
+            return {"saved": not held, "held": held, "reason": reason, "added": len(fresh - set(old)),
+                    "removed": 0 if held else len(remove), "count": count}
         except Exception:
             try:
                 w.execute("ROLLBACK")
@@ -140,15 +181,13 @@ def save_linked_set(conn: sqlite3.Connection, ids, started_at: float | None = No
             w.close()
 
 
-def _has_tables(conn: sqlite3.Connection) -> bool:
-    try:
-        return conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='erp_linked_clients'").fetchone()[0] == 1
-    except sqlite3.Error:
-        return False
+def save_linked_set(conn: sqlite3.Connection, ids, started_at: float | None = None) -> dict:
+    """온전한 연결 목록 하나를 반영(apply_response 와 같음 · 받기 시작 시각을 모르면 지금)."""
+    return apply_response(conn, ids, time.time() if started_at is None else started_at)
 
 
 def sync_info(conn: sqlite3.Connection):
-    """마지막으로 저장한 때와 곳 수(없으면 None). 읽기만 — 표가 없어도 만들지 않는다."""
+    """마지막으로 반영한 때와 곳 수(없으면 None). 읽기만 — 표가 없어도 만들지 않는다."""
     if not _has_tables(conn):
         return None
     row = conn.execute("SELECT synced_at, linked_count FROM erp_link_sync WHERE id = 1").fetchone()
@@ -164,7 +203,7 @@ def _stored_linked(conn: sqlite3.Connection, ids) -> set[int]:
 
 
 def stored_linked(conn: sqlite3.Connection, ids) -> set[int]:
-    """전산에 묻지 않고 저장본만으로."""
+    """전산에 묻지 않고 저장본만으로 — 지우는 쓰기 트랜잭션 안에서 마지막으로 다시 확인할 때 쓴다."""
     return _stored_linked(conn, ids)
 
 
@@ -173,7 +212,7 @@ def _fetch_ids(fetch):
     try:
         items = fetch()
     except Exception as e:
-        # 외부 예외 원문은 남기지 않는다(주소·헤더 값이 섞일 수 있다) — 우리가 만든 문구(LinkFetchError)만 남긴다
+        # 외부 예외 원문·응답 값은 남기지 않는다 — 우리가 만든 문구(LinkFetchError)만 남긴다
         detail = f": {e}" if isinstance(e, LinkFetchError) else ""
         logger.warning(f"[전산 연결 목록] 받기 실패 — 연결 여부 미확인 ({type(e).__name__}{detail})")
         return None
@@ -181,14 +220,14 @@ def _fetch_ids(fetch):
 
 
 def _default_fetch():
-    """전산에서 연결 목록을 받는다 — 온전한 목록만 돌려주고, 일부만 오면 실패로 본다."""
+    """전산에서 연결 목록을 받는다 — 온전한 목록만 돌려주고, 일부만 오거나 모양이 다르면 실패로 본다."""
     api_key = os.getenv("ERP_AD_SYNC_API_KEY", "")
     if not api_key:
         raise LinkFetchError("ERP_AD_SYNC_API_KEY 미설정")
     from report_owner_sync import fetch_client_managers_payload
     items, total = fetch_client_managers_payload(os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr"), api_key, timeout=8)
     if not complete(items, total):
-        raise LinkFetchError(f"전산 연결 목록이 온전하지 않음(total={total!r} · items={len(items) if isinstance(items, list) else '?'})")
+        raise LinkFetchError("전산 연결 목록이 온전하지 않음(개수가 맞지 않거나 형식이 다름)")
     return items
 
 
@@ -196,20 +235,25 @@ def link_status(conn: sqlite3.Connection, ids, fetch=None, save: bool = True):
     """(ids 가운데 전산과 연결된 번호들, 지금 전산이 확인해 줬나).
 
     원칙: **지금 전산이 「연결 안 됨」이라고 확인해 준 업체만 지운다**(교차검증 반영).
-      - 매번 전산에 새로 묻는다. 온전한 목록을 받았을 때만 known=True.
-      - 연결로 보는 것 = 방금 받은 목록 ∪ 저장본. 저장을 거절한 경우(늦게 온 옛 응답 · 빈 목록 · 대량 누락)에도
-        방금 받은 목록의 연결은 막는다 — 저장 거절이 보호를 줄이지 않게.
-      - 받기 실패·불완전이면 known=False — 사람이 지울 땐 「잠시 후 다시」, 자동 삭제는 그 회차를 건너뛴다.
-        저장본이 오래됐어도 「확인됨」으로 치지 않는다.
-      - save=False(삭제 미리보기)면 아무것도 쓰지 않는다(표가 없어도 만들지 않음).
+      - 매번 전산에 새로 묻는다. 온전한 목록을 받았을 때만 known=True. 실패·불완전이면 known=False —
+        사람이 지울 땐 「잠시 후 다시」, 자동 삭제는 그 회차를 건너뛴다.
+      - save=True 면 응답을 저장본에 반영(apply_response)한 뒤 저장본으로 답한다. save=False(삭제 미리보기)면
+        아무것도 쓰지 않고 같은 규칙(_plan)으로 반영했을 때의 결과를 계산한다 — 미리보기와 실제 삭제가 같은 답을 낸다.
+      ⚠️ 이 답은 네트워크를 다녀온 시점의 것이다 — 지우는 쪽은 쓰기 트랜잭션 안에서 stored_linked 로 한 번 더 본다.
     """
     want = {int(i) for i in ids}
     started = time.time()
     fresh = _fetch_ids(fetch or _default_fetch)
-    if fresh is not None and save:
-        save_linked_set(conn, fresh, started_at=started)
-    hit = _stored_linked(conn, want) | (fresh & want if fresh is not None else set())
-    return hit, fresh is not None
+    if fresh is None:
+        return _stored_linked(conn, want), False
+    if save:
+        apply_response(conn, fresh, started)
+        return _stored_linked(conn, want), True
+    old, remove, held, _, _ = _plan(conn, fresh, started)
+    effective = set(old) | fresh
+    if not held:
+        effective -= remove
+    return effective & want, True
 
 
 def linked_among(conn: sqlite3.Connection, ids, fetch=None) -> set[int]:
