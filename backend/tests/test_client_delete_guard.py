@@ -84,10 +84,31 @@ def tick():
     return _t.time()
 
 
+def age_pending(c, hours=21):
+    """보류 시계(번호마다)를 hours 만큼 과거로 — 20시간 확인을 시험에서 흉내 낸다."""
+    import json as _json
+    row = c.execute("SELECT pending_remove FROM erp_link_sync WHERE id = 1").fetchone()
+    if row and row[0]:
+        d = {k: v - hours * 3600 for k, v in _json.loads(row[0]).items()}
+        c.execute("UPDATE erp_link_sync SET pending_remove=? WHERE id = 1", (_json.dumps(d),))
+    c.commit()
+
+
+def pending_ids(c):
+    import json as _json
+    row = c.execute("SELECT pending_remove FROM erp_link_sync WHERE id = 1").fetchone()
+    return {int(k) for k in _json.loads(row[0])} if row and row[0] else set()
+
+
 # ① 저장 — 응답에 보인 연결은 더하고, 기록한 뒤에 시작한 응답이 빠뜨린 연결은 해제
 reset_guard()
 c = conn()
 ok(g.ids_from_items([{"logic_client_id": 3}, {"logic_client_id": "4"}, {"logic_client_id": None}, {}]) == {3, 4}, "응답에서 숫자 번호만 고른다")
+ok(g.ids_from_items([{"logic_client_id": 3.5}, {"logic_client_id": " 6"}, {"logic_client_id": "\uff17"}, {"logic_client_id": True},
+                     {"logic_client_id": -1}, {"logic_client_id": "8.0"}]) == set(),
+   "소수(3.5)·공백·전각 숫자·참거짓·음수·「8.0」 은 번호로 받지 않는다(교차검증 반영 — 3.5 가 3 으로 잘렸다)")
+ok(g.complete([{"logic_client_id": 3.5}], 1) is False and g.complete([{"logic_client_id": "3"}, {"logic_client_id": 4}], 2) is True,
+   "소수 번호가 하나라도 있으면 온전하지 않다 · 숫자 글자·정수는 온전")
 g.save_linked_set(c, {1, 2, 3})
 tick()
 g.save_linked_set(c, {2, 5})
@@ -96,8 +117,7 @@ tick()
 r = g.save_linked_set(c, set())
 ok(r.get("held") is True and g.stored_linked(c, [2, 5]) == {2, 5}, "빈 목록은 해제를 보류한다(전산 오류로 보호가 한꺼번에 풀리지 않게)")
 ok(g.sync_info(c)["count"] == 2, "반영한 때와 곳 수를 남긴다")
-c.execute("UPDATE erp_link_sync SET pending_since=?", ((datetime.now() - timedelta(hours=21)).isoformat(),))
-c.commit()
+age_pending(c)
 tick()
 ok(g.save_linked_set(c, set()).get("saved") is True and g.stored_linked(c, [2, 5]) == set(), "빈 목록도 그 번호들이 20시간 넘게 계속 빠져 있으면 해제")
 c.close()
@@ -199,13 +219,12 @@ tick()
 ok(g.save_linked_set(c, shrunk).get("held") is True, "20시간 안에 같은 응답이 또 와도 보류")
 tick()
 r = g.save_linked_set(c, shrunk | {2029})
-ok(r.get("held") is True and g.stored_linked(c, [2029, 2010]) == {2029, 2010}, "다시 나타난 번호(2029)는 보류에서 빠지고 나머지 보류는 그대로")
-c.execute("UPDATE erp_link_sync SET pending_since=?", ((datetime.now() - timedelta(hours=21)).isoformat(),))
-c.commit()
+ok(r.get("held") is True and g.stored_linked(c, [2029, 2010]) == {2029, 2010}, "다시 나타난 번호(2029)는 남고 나머지 보류는 그대로")
+age_pending(c)
 tick()
 ok(g.save_linked_set(c, shrunk | {2029}).get("saved") is True and g.stored_linked(c, [2010]) == set() and g.stored_linked(c, [2029]) == {2029},
    "보류된 번호들이 20시간 넘게 계속 빠져 있으면 해제(다시 나타난 2029 는 남음)")
-ok(c.execute("SELECT pending_remove FROM erp_link_sync").fetchone()[0] is None, "해제하면 보류 표시를 지운다")
+ok(pending_ids(c) == {2029}, "해제한 번호는 보류에서 빠지고, 다시 보인 2029 만 보류(시계 새로)로 남는다")
 c.close()
 
 # 같은 대량 해제 응답이 곧바로 한 번 더 와도 보류가 풀리지 않는다(교차검증 재현 — 새 연결이 더해져 비율이 낮아지며 풀렸다)
@@ -636,6 +655,132 @@ g.link_status = _real_ls
 ok(exists(312), "판정 중 연결된 부모(310)로 옮겨진 기한 지난 경쟁사는 지우지 않는다")
 
 # ⑥ 화면
+
+# 교차검증 5차 반례 — 보류를 바꿀 자격이 없는 늦은 응답이 보류를 비우지 못한다
+reset_guard()
+c = conn()
+t_a = tick()                                   # A 는 보호 20곳 기록 전에 시작(오래 걸림)
+tick()
+base = set(range(7300, 7320))
+g.save_linked_set(c, base)
+tick()
+b_list = set(range(7305, 7320)) | set(range(7400, 7405))      # 기존 5개 빠짐 + 새 5개
+rb = g.save_linked_set(c, b_list)
+ok(rb.get("held") is True and pending_ids(c) == set(range(7300, 7305)), f"B: 5/20 = 25% 라 보류: {rb}")
+ra = g.save_linked_set(c, b_list, started_at=t_a)
+ok(pending_ids(c) == set(range(7300, 7305)), f"늦게 온 A(같은 목록 · 해제 자격 없음)가 보류를 비우지 못한다: {ra}")
+tick()
+rc = g.save_linked_set(c, b_list)
+ok(rc.get("held") is True and g.stored_linked(c, range(7300, 7305)) == set(range(7300, 7305)),
+   f"그 뒤 같은 목록(5/25 = 20%)이 와도 20시간 전에는 해제하지 않는다: {rc}")
+ok(g.link_status(c, [7300], fetch=fake_fetch(sorted(b_list)))[0] == {7300}, "그동안 지우려 해도 연결로 막힌다")
+c.close()
+
+# 보류 중 늦게 온 「보임」 응답 — 보류는 그대로, 그 번호의 시계만 새로(그 뒤로 다시 20시간)
+reset_guard()
+c = conn()
+g.save_linked_set(c, set(range(7500, 7520)))
+t_old = tick()
+tick()
+g.save_linked_set(c, set(range(7505, 7520)))   # 5개 보류
+age_pending(c)                                  # 21시간 지난 셈
+g.save_linked_set(c, set(range(7500, 7520)), started_at=t_old)   # 보류 전에 시작한 응답이 5개를 「보임」으로
+ok(pending_ids(c) == set(range(7500, 7505)), "늦게 온 「보임」 응답은 보류를 풀지 않는다")
+tick()
+g.save_linked_set(c, set(range(7505, 7520)))
+ok(g.stored_linked(c, range(7500, 7505)) == set(range(7500, 7505)), "보인 뒤로 20시간이 지나지 않았으니 다시 빠져도 해제하지 않는다")
+age_pending(c)
+tick()
+g.save_linked_set(c, set(range(7505, 7520)))
+ok(g.stored_linked(c, range(7500, 7505)) == set() and pending_ids(c) == set(), "보인 뒤로 20시간 넘게 계속 빠지면 해제")
+c.close()
+
+# 무작위 엇갈림 — 요청 여러 개가 겹쳐 시작·전산 읽기·반영 순서가 뒤섞여도 규칙이 깨지지 않는다(가짜 시계)
+import random as _rnd   # noqa: E402
+import types as _types  # noqa: E402
+_real_time = g.time
+HOUR = 3600.0
+viol = []
+runs = 0
+n_held = n_confirmed = n_stale = 0
+for seed in range(60):
+    rnd = _rnd.Random(seed)
+    reset_guard()
+    c = conn()
+    clock = [1_000_000.0]
+    g.time = _types.SimpleNamespace(time=lambda: clock[0])
+    U = list(range(9000, 9040))
+    truth_changes = []                     # (시각, 연결 집합)
+    cur = set(rnd.sample(U, 25))
+    t = clock[0]
+    for _ in range(40):
+        truth_changes.append((t, set(cur)))
+        t += rnd.choice([60, 600, HOUR, 3 * HOUR, 8 * HOUR, 21 * HOUR])
+        for _ in range(rnd.randint(0, 3)):
+            i = rnd.choice(U)
+            cur.symmetric_difference_update({i})
+
+    def truth_at(x):
+        st = truth_changes[0][1]
+        for tt, ss in truth_changes:
+            if tt <= x:
+                st = ss
+        return st
+
+    end_t = t
+    reqs = []
+    for _ in range(70):
+        s0 = rnd.uniform(clock[0], end_t)
+        r0 = s0 + rnd.uniform(0, rnd.choice([1, 30, HOUR]))
+        e0 = r0 + rnd.uniform(0, rnd.choice([1, 30, HOUR, 6 * HOUR]))
+        seen = set(truth_at(r0))
+        k = rnd.random()
+        if k < 0.12:
+            seen = set()                                        # 전산 오류 — 빈 목록
+        elif k < 0.30:
+            seen = set(rnd.sample(sorted(seen), max(0, int(len(seen) * rnd.uniform(0.4, 0.85)))))   # 일부만 옴(대량 누락)
+        reqs.append((e0, s0, seen))
+    reqs.sort(key=lambda x: x[0])
+    last_present, hold_start = {}, {}
+    for e0, s0, seen in reqs:
+        clock[0] = e0
+        before = g._stored_linked(c, U)
+        pend_before = pending_ids(c)
+        res = g.apply_response(c, seen, s0)
+        runs += 1
+        n_held += bool(res.get("held"))
+        n_confirmed += res.get("reason") == "confirmed"
+        n_stale += any(last_present.get(i, -1) >= s0 for i in before)
+        after = g._stored_linked(c, U)
+        pend_after = pending_ids(c)
+        removed = before - after
+        if not seen <= after:
+            viol.append((seed, "응답에 보인 연결이 저장되지 않음"))
+        for i in removed:
+            if last_present.get(i, -1) >= s0:
+                viol.append((seed, f"기록 뒤에 시작하지 않은 응답이 해제 {i}"))
+            if i in hold_start and e0 - max(hold_start[i], last_present.get(i, -1)) < 20 * HOUR - 1e-6:
+                viol.append((seed, f"보류된 번호를 20시간 전에 해제 {i}"))
+        if (pend_before & after) - pend_after:
+            viol.append((seed, f"지우지 않은 번호의 보류가 풀림 {sorted((pend_before & after) - pend_after)[:3]}"))
+        unheld = removed - pend_before
+        if unheld and not seen:
+            viol.append((seed, "빈 목록이 보류 없이 해제"))
+        if len(before) >= 20 and len(unheld) > len(before) * 0.2:
+            viol.append((seed, f"한 응답이 보류 없이 {len(unheld)}/{len(before)} 해제"))
+        for i in seen:
+            last_present[i] = e0
+        for i in removed:
+            hold_start.pop(i, None)
+        for i in pend_after:
+            hold_start.setdefault(i, e0)
+    c.close()
+g.time = _real_time
+ok(n_held >= 100 and n_confirmed >= 10 and n_stale >= 100,
+   f"무작위 시험이 보류·20시간 뒤 해제·늦게 온 응답을 충분히 거쳤다(보류 {n_held} · 20시간 뒤 해제 {n_confirmed} · 늦은 응답 {n_stale})")
+print(f"  무작위 엇갈림: 반영 {runs}회 · 보류 {n_held} · 20시간 뒤 해제 {n_confirmed} · 늦은 응답 {n_stale}")
+ok(not viol, f"무작위 엇갈림 {runs}회 반영 — 규칙 위반 없음(기록 뒤 시작한 응답만 해제 · 보류는 지울 때만 풀림 · 보류 20시간 · 빈 목록·대량 해제 보류): {viol[:5]}")
+
 src = open(os.path.join(HERE, "..", "..", "frontend", "js", "components", "ClientDashboard.jsx"), encoding="utf-8").read()
 ok("\\u2715" not in src and "deleteClient(c, e)" not in src, "업체 목록 줄의 ✕ 삭제 버튼이 없다")
 ok("openDeleteDialog(selectedClient)" in src and "'업체 삭제'" in src, "업체를 고른 뒤 머리에 「업체 삭제」 버튼")

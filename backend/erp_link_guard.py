@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import re
 import logging
 import os
 import sqlite3
@@ -53,28 +54,34 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
                  "pending_remove TEXT, pending_since TEXT)")
 
 
+_ID_TEXT = re.compile(r"[0-9]+")
+
+
+def _parse_id(v):
+    """전산 계약의 업체 번호 하나 → 정수(아니면 None).
+    전산은 logic_client_id 를 **숫자로 된 글자**로 준다(ReportSyncDto · String). 정수도 받되(시험·자료형 변경 대비)
+    ⚠️ 소수(3.5 → 3 으로 잘리던 것 · 교차검증 반영) · 참/거짓 · 공백·부호·전각 숫자가 섞인 글자는 받지 않는다."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if v >= 0 else None
+    if isinstance(v, str) and _ID_TEXT.fullmatch(v):
+        return int(v)
+    return None
+
+
 def ids_from_items(items) -> set[int]:
-    """전산 응답 items → 연결된 로직분석 업체 번호들(숫자가 아닌 것은 버림)."""
+    """전산 응답 items → 연결된 로직분석 업체 번호들(계약대로 읽히는 것만)."""
     out = set()
     for it in items or []:
-        try:
-            out.add(int((it or {}).get("logic_client_id")))
-        except (TypeError, ValueError):
-            continue
+        v = _parse_id(it.get("logic_client_id")) if isinstance(it, dict) else None
+        if v is not None:
+            out.add(v)
     return out
 
 
 def _valid_id(it) -> bool:
-    if not isinstance(it, dict):
-        return False
-    v = it.get("logic_client_id")
-    if isinstance(v, bool):
-        return False
-    try:
-        int(v)
-        return True
-    except (TypeError, ValueError):
-        return False
+    return isinstance(it, dict) and _parse_id(it.get("logic_client_id")) is not None
 
 
 def complete(items, total) -> bool:
@@ -104,52 +111,65 @@ def _writer(conn: sqlite3.Connection):
     return w, True
 
 
-def _plan(c: sqlite3.Connection, fresh: set[int], started_at: float):
+def _load_pending(c: sqlite3.Connection, now_ts: float) -> dict[int, float]:
+    """보류 중인 번호 → 그 번호의 보류 시계(시각). 옛 모양(번호 목록)이면 기록된 보류 시각(없으면 지금)으로 읽는다."""
+    row = c.execute("SELECT pending_remove, pending_since FROM erp_link_sync WHERE id = 1").fetchone()
+    if not row or not row[0]:
+        return {}
+    try:
+        raw = json.loads(row[0])
+    except (ValueError, TypeError):
+        return {}
+    try:
+        if isinstance(raw, dict):
+            return {int(k): float(v) for k, v in raw.items()}
+        base = datetime.fromisoformat(row[1]).timestamp() if row[1] else now_ts
+        return {int(x): base for x in raw}
+    except (ValueError, TypeError):
+        return {}
+
+
+def _plan(c: sqlite3.Connection, fresh: set[int], started_at: float, now_ts: float):
     """한 응답을 반영하면 무엇이 바뀌는지 계산만 한다(읽기만 · 표가 없으면 빈 저장본).
-    반환: dict(old={번호: seen_mark}, remove=지금 해제할 번호들, held=해제를 보류한 번호들, reason, pending=보류 번호들, since)
+    반환: dict(old={번호: seen_mark}, remove=지금 해제할 번호들, held=해제를 보류한 번호들, reason, pending={번호: 보류 시계})
       - 해제 후보 = 저장본에 있는데 이 응답에 없고, 마지막으로 기록한 시각(seen_mark)이 이 응답의 받기 시작 시각보다 이른 것
         (기록한 뒤에 시작한 응답만 그 연결을 해제할 수 있다 — 먼저 시작했거나 기록 전에 시작한 응답은 못 한다)
-      - ⚠️ 보류는 「보류된 번호들」에 건다(교차검증 반영 — 목록 모양에 걸었더니 같은 응답이 한 번 더 오면 새 연결이 더해져
-        비율이 낮아지고 보류가 곧바로 풀렸다). 한 번 보류된 번호는 CONFIRM_HOURS 넘게 계속 빠져 있어야 해제된다.
-      - 보류 밖의 해제가 빈 목록이거나 저장본(20곳 이상)의 20% 를 넘으면 그것도 보류에 더한다(시계는 새로 시작)."""
-    old, pending, since = {}, set(), None
+      - ⚠️ 보류는 번호마다 시계를 따로 둔다. 한 번 보류된 번호는 **어느 응답에서도 보이지 않은 채 CONFIRM_HOURS 가 지나야**
+        해제된다(교차검증 반영 — ① 목록 모양에 걸었더니 같은 응답이 다시 와 비율이 낮아지며 풀렸고, ② 보류를 바꿀 자격이
+        없는 늦은 응답이 보류를 비워 다음 응답이 20시간 전에 지웠다).
+          · 이 응답이 해제할 자격이 없는 보류 번호(후보가 아님) → 보류와 시계를 그대로 둔다
+          · 다시 보인 번호 → 보류는 그대로, 시계만 새로 시작(그 응답이 언제 읽었는지 모르니 그 뒤로 다시 20시간)
+          · 해제 자격 있는 응답에 빠졌고 시계가 20시간을 넘김 → 해제
+      - 보류 밖의 해제가 빈 목록이거나 저장본(20곳 이상)의 20% 를 넘으면 그 번호들도 보류에 더한다(각자 시계 시작)."""
+    old, pending = {}, {}
     if _has_tables(c):
         old = {int(r[0]): (float(r[1]) if r[1] is not None else 0.0)
                for r in c.execute("SELECT client_id, seen_mark FROM erp_linked_clients")}
-        row = c.execute("SELECT pending_remove, pending_since FROM erp_link_sync WHERE id = 1").fetchone()
-        if row and row[0]:
-            try:
-                pending = {int(x) for x in json.loads(row[0])}
-            except (ValueError, TypeError):
-                pending = set()
-            since = row[1]
+        pending = _load_pending(c, now_ts)
+    pending = {i: m for i, m in pending.items() if i in old}      # 이미 없는 번호만 뺀다
+    for i in pending:
+        if i in fresh:
+            pending[i] = now_ts                                     # 다시 보임 → 시계를 새로 시작(보류는 유지)
     cand = {i for i, seen in old.items() if i not in fresh and seen < started_at}
-    pending = (pending & set(old)) - fresh          # 다시 보였거나 이미 없는 번호는 보류에서 뺀다
-    confirmed = False
-    if pending and since:
-        try:
-            confirmed = (datetime.now() - datetime.fromisoformat(since)).total_seconds() >= CONFIRM_HOURS * 3600
-        except ValueError:
-            confirmed = False
-    held = set() if confirmed else (cand & pending)
-    free = cand - pending
+    in_hold = cand & set(pending)
+    confirmed = {i for i in in_hold if now_ts - pending[i] >= CONFIRM_HOURS * 3600}
+    held = in_hold - confirmed
+    free = cand - set(pending)
     reason = None
     if free and not fresh:
         reason = "empty"
     elif len(old) >= DROP_GUARD_MIN and len(free) > len(old) * DROP_GUARD_RATIO:
         reason = "mass-drop"
-    new_since = since if pending else None
     if reason:
         held |= free
-        new_since = None            # 보류에 새 번호가 더해지면 시계를 새로 시작
-    remove = cand - held
-    new_pending = held
-    if new_pending and not new_since:
-        new_since = "NOW"
-    if not new_pending:
-        new_since = None
-    return {"old": old, "remove": remove, "held": held, "reason": reason or ("confirmed" if confirmed and cand & pending else None),
-            "pending": new_pending, "since": new_since}
+        for i in free:
+            pending[i] = now_ts
+        remove = confirmed
+    else:
+        remove = confirmed | free
+    new_pending = {i: m for i, m in pending.items() if i not in remove}
+    return {"old": old, "remove": remove, "held": held, "reason": reason or ("confirmed" if confirmed else None),
+            "pending": new_pending}
 
 
 def apply_response(conn: sqlite3.Connection, fresh, started_at: float) -> dict:
@@ -162,9 +182,9 @@ def apply_response(conn: sqlite3.Connection, fresh, started_at: float) -> dict:
         ensure_tables(w)
         w.execute("BEGIN IMMEDIATE")
         try:
-            pl = _plan(w, fresh, started_at)
-            now = datetime.now().isoformat(timespec="seconds")
             mark = time.time()      # 기록하는 시각 — 쓰기 잠금 안이라 이 기록 뒤에 시작한 요청만 이 연결을 해제할 수 있다
+            pl = _plan(w, fresh, started_at, mark)
+            now = datetime.now().isoformat(timespec="seconds")
             if pl["remove"]:
                 marks = ",".join("?" * len(pl["remove"]))
                 # 지우는 순간에도 이 응답이 시작된 뒤에 기록된 연결은 남긴다(잠금 안이라 위 계산과 같지만 한 번 더)
@@ -174,8 +194,9 @@ def apply_response(conn: sqlite3.Connection, fresh, started_at: float) -> dict:
                 w.execute("INSERT INTO erp_linked_clients(client_id, seen_at, seen_mark) VALUES (?, ?, ?) "
                           "ON CONFLICT(client_id) DO UPDATE SET seen_at=excluded.seen_at, "
                           "seen_mark=MAX(COALESCE(seen_mark, 0), excluded.seen_mark)", (i, now, mark))
-            since = now if pl["since"] == "NOW" else pl["since"]
-            pend = json.dumps(sorted(pl["pending"])) if pl["pending"] else None
+            pend = json.dumps({str(k): v for k, v in sorted(pl["pending"].items())}) if pl["pending"] else None
+            since = (datetime.fromtimestamp(min(pl["pending"].values())).isoformat(timespec="seconds")
+                     if pl["pending"] else None)          # 사람이 읽는 참고용(가장 오래된 보류 시계) — 판정은 번호마다의 시계로
             count = w.execute("SELECT COUNT(*) FROM erp_linked_clients").fetchone()[0]
             w.execute("INSERT INTO erp_link_sync(id, synced_at, linked_count, pending_remove, pending_since) VALUES (1, ?, ?, ?, ?) "
                       "ON CONFLICT(id) DO UPDATE SET synced_at=excluded.synced_at, linked_count=excluded.linked_count, "
@@ -266,7 +287,7 @@ def link_status(conn: sqlite3.Connection, ids, fetch=None, save: bool = True):
     if save:
         apply_response(conn, fresh, started)
         return _stored_linked(conn, want), True
-    pl = _plan(conn, fresh, started)
+    pl = _plan(conn, fresh, started, time.time())
     effective = (set(pl["old"]) | fresh) - pl["remove"]
     return effective & want, True
 
