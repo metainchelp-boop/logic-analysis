@@ -3000,3 +3000,31 @@ jobs:
             echo "  -- 컨테이너가 보는 상대 주소 종류(도커 게이트웨이) --"
             docker network inspect bridge -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null | sed -E 's/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/<게이트웨이 있음>/'
             docker inspect -f '{{.HostConfig.NetworkMode}} · 포트 {{json .HostConfig.PortBindings}}' logic-analysis 2>/dev/null | sed -E 's/"HostIp":"[0-9.]*"/"HostIp":"<IP>"/g'
+            echo
+            echo "== [K] #384 배포 반영 · 배포 뒤 로그인 기록 주소 종류 (읽기 전용 · IP 원문 미출력) =="
+            docker inspect -f '  컨테이너 기동 {{.State.StartedAt}} · 재시작 {{.RestartCount}}' logic-analysis
+            for m in 'client_ip.py:_PROXY_NETS = tuple' 'client_ip.py:a = a.ipv4_mapped' 'auth.py:from client_ip import client_ip' 'reports.py:with _view_lock:' 'reports.py:viewer_ip = client_ip(request, "unknown")'; do
+              f=${m%%:*}; pat=${m#*:}
+              printf "    %-12s %-44s %s\n" "$f" "$pat" "$(docker exec logic-analysis grep -cF "$pat" /app/$f 2>/dev/null || echo 못읽음)"
+            done
+            docker exec -i logic-analysis python3 - <<'PYK' || echo "  ⚠️ [K] 실행 실패"
+            import os, sqlite3, ipaddress, subprocess
+            DB = os.environ.get("PROBE_DB", "/app/data/logic_data.db")
+            con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=15)
+            for label, since in (("배포 전(11/28 00:00~18:03)", ("2026-11-28T00:00", "2026-11-28T18:03")), ("배포 뒤(18:03~)", ("2026-11-28T18:03", "2099"))):
+                kinds, distinct, n = {}, set(), 0
+                for (ip,) in con.execute("SELECT ip_address FROM login_logs WHERE login_at >= ? AND login_at < ?", since):
+                    n += 1
+                    raw = str(ip or "")
+                    v = raw[4:] if raw.startswith("SSO:") else raw
+                    distinct.add(v)
+                    try:
+                        a = ipaddress.ip_address(v)
+                        k = "내부망·루프백" if (a.is_private or a.is_loopback) else "공인"
+                    except Exception:
+                        k = "빈값" if not v else "모양 아님"
+                    kinds[k] = kinds.get(k, 0) + 1
+                print(f"  {label}: 로그인 {n}건 · 서로 다른 주소 {len(distinct)}개 · 종류별 {kinds}")
+            PYK
+            echo "  -- 배포 뒤 앱 오류 줄 수(500 · Traceback) --"
+            echo "    $(docker logs --since 2026-11-28T09:03:00Z logic-analysis 2>&1 | grep -cE ' 500 |Traceback|KeyError' || true)"
