@@ -37,6 +37,10 @@ function rankCellLabel(r) {
         try { localStorage.setItem('cdVertical', v); } catch (e) {}
     };
     const [showExportMenu, setShowExportMenu] = useState(false);
+    // 업체 삭제 확인 창 — { client, loading, data, error, deleting } · null 이면 닫힘(2026-11-28)
+    const [delDialog, setDelDialog] = useState(null);
+    // 창마다 번호 — 닫았다 다른 업체 창을 연 뒤 늦게 온 옛 응답이 새 창을 덮지 않게(교차검증 반영)
+    const delReqRef = React.useRef(0);
     const exportMenuRef = React.useRef(null);
     const [aiInsights, setAiInsights] = useState(null);
     const [aiLoading, setAiLoading] = useState(false);
@@ -93,26 +97,41 @@ function rankCellLabel(r) {
         }
     }, [initialSearch, clients]);
 
-    /* 업체 삭제 */
-    var deleteClient = function(client, e) {
-        e.stopPropagation();
+    /* 업체 삭제 — 업체를 고른 뒤 머리의 「업체 삭제」에서만(2026-11-28 · 대표 결정 ①ⓐ ②ⓐ ③ⓐ).
+       ⚠️ 목록 줄의 ✕ 를 뺐다 — 자동 분석 멈춤(▶/⏸) 바로 옆에 붙어 잘못 누르기 쉬웠다(신고 #262: 전산 연결 업체 5곳이 지워짐).
+       누르면 서버가 함께 지워지는 건수와 전산 연결 여부를 알려 주고(/cd/{id}/delete-preview), 전산 연결 업체는 지울 수 없다고 막는다.
+       최종 판정은 서버(삭제 경로가 다시 막음) — 이 창은 안내다. */
+    var openDeleteDialog = function(client) {
         var _isViewer = currentUser && currentUser.role === 'viewer';
         // 관리팀(canEdit)뿐 아니라 영업사원도 '본인 영업 대상'을 삭제할 수 있다(완전 개인 모드).
         if (canEdit === false && !_isViewer) { toast.error('삭제 권한이 없습니다.'); return; }
-        var _label = _isViewer ? '영업 대상' : '업체';
-        if (!confirm("'" + client.name + "' " + _label + "을(를) 삭제하시겠습니까?\n\n관련된 모든 분석 데이터·순위 이력과 여기에 붙인 경쟁사도 함께 삭제됩니다.\n이 작업은 되돌릴 수 없습니다.")) return;
-        api.del('/cd/' + client.id).then(function(res) {
-            if (res.success) {
-                if (selectedClient && selectedClient.id === client.id) {
+        var req = ++delReqRef.current;
+        var mine = function(next) { setDelDialog(function(prev) { return (prev && prev.req === req) ? next : prev; }); };
+        setDelDialog({ client: client, loading: true, req: req });
+        api.get('/cd/' + client.id + '/delete-preview').then(function(res) {
+            if (res && res.success) mine({ client: client, data: res, req: req });
+            else mine({ client: client, error: (res && res.detail) || '삭제할 수 있는지 확인하지 못했어요. 잠시 후 다시 시도해 주세요.', req: req });
+        }).catch(function() { mine({ client: client, error: '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.', req: req }); });
+    };
+    var confirmDelete = function() {
+        var d = delDialog;
+        if (!d || !d.data || d.deleting || !d.data.erp_known || d.data.erp_linked) return;
+        var mine = function(next) { setDelDialog(function(prev) { return (prev && prev.req === d.req) ? next : prev; }); };
+        setDelDialog(Object.assign({}, d, { deleting: true }));
+        api.del('/cd/' + d.client.id).then(function(res) {
+            if (res && res.success) {
+                if (selectedClient && selectedClient.id === d.client.id) {
                     setSelectedClient(null);
                     setActiveKeyword(null);
                     setActiveAnalysis(null);
                 }
+                mine(null);
+                toast.success("'" + d.client.name + "'을(를) 삭제했어요.");
                 loadClients();
             } else {
-                alert(res.detail || '삭제에 실패했습니다.');
+                mine(Object.assign({}, d, { deleting: false, data: null, error: (res && res.detail) || '삭제하지 못했어요.' }));
             }
-        }).catch(function() { alert('서버 오류가 발생했습니다.'); });
+        }).catch(function() { mine(Object.assign({}, d, { deleting: false, data: null, error: '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.' })); });
     };
 
     /* 업체 종류 — 'place' 가 아니면 전부 스토어(옛 행은 vertical 이 비어 있다).
@@ -483,16 +502,7 @@ function rankCellLabel(r) {
                                                 color: c.auto_analysis === 0 ? '#f59e0b' : (isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1'),
                                             }}
                                         >{c.auto_analysis === 0 ? '⏸' : '▶'}</button>}
-                                        {(canEdit !== false || (currentUser && currentUser.role === 'viewer')) && <button onClick={function(e) { deleteClient(c, e); }}
-                                            title={(currentUser && currentUser.role === 'viewer') ? '영업 대상 삭제' : '업체 삭제'}
-                                            style={{
-                                                background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px',
-                                                fontSize: 14, color: isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1',
-                                                flexShrink: 0, lineHeight: 1,
-                                            }}
-                                            onMouseOver={function(e) { e.target.style.color = '#ef4444'; }}
-                                            onMouseOut={function(e) { e.target.style.color = isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1'; }}
-                                        >{'\u2715'}</button>}
+                                        {/* ✕ 삭제 버튼은 2026-11-28 에 뺐다 — 업체를 고른 뒤 머리의 「업체 삭제」로(대표 결정 ③ⓐ) */}
                                     </div>
                                 </div>
                             );
@@ -527,8 +537,17 @@ function rankCellLabel(r) {
                                             {selectedClient.naver_store_url && <span style={{ marginLeft: 12 }}>URL: {(function() { try { var u = new URL(selectedClient.naver_store_url); if (u.hostname.indexOf('smartstore.naver.com') !== -1) return u.origin + u.pathname; } catch(e) {} return selectedClient.naver_store_url.length > 60 ? selectedClient.naver_store_url.slice(0, 60) + '...' : selectedClient.naver_store_url; })()}</span>}
                                         </div>
                                     </div>
-                                    <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                                        {selectedClient.last_analyzed && '마지막 분석: ' + selectedClient.last_analyzed.slice(0, 10)}
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+                                        <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                                            {selectedClient.last_analyzed && '마지막 분석: ' + selectedClient.last_analyzed.slice(0, 10)}
+                                        </div>
+                                        {(canEdit !== false || (currentUser && currentUser.role === 'viewer')) && (
+                                            <button type="button" className="cd-delete-btn" onClick={function() { openDeleteDialog(selectedClient); }}
+                                                style={{ background: '#fff', border: '1px solid #fecaca', color: '#dc2626', borderRadius: 8,
+                                                         padding: '6px 12px', fontSize: 13, fontWeight: 600, cursor: 'pointer', minHeight: 36 }}>
+                                                {(currentUser && currentUser.role === 'viewer') ? '영업 대상 삭제' : '업체 삭제'}
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             </div>
@@ -811,6 +830,80 @@ function rankCellLabel(r) {
                         </div>
                     )}
                 </div>
+            </div>
+            {delDialog && React.createElement(window.ClientDeleteDialog, {
+                state: delDialog,
+                label: (currentUser && currentUser.role === 'viewer') ? '영업 대상' : '업체',
+                onCancel: function() { if (!delDialog.deleting) setDelDialog(null); },
+                onConfirm: confirmDelete,
+            })}
+        </div>
+    );
+};
+
+/* ==================== 업체 삭제 확인 창 (2026-11-28) ====================
+   - 전산 연결 업체: 지울 수 없다고만 알린다(버튼 하나 「확인」).
+   - 그 밖: 함께 지워지는 것을 건수로 보여 주고, 빨간 버튼 이름에 보고서 건수를 넣는다(무엇이 지워지는지 알고 누르게).
+   UX/UI [46] 되돌릴 수 없는 일은 확인 · [47] 위험 버튼은 떨어뜨리고 색 다르게 · 사전 p11 모달(버튼 두 개까지). */
+window.ClientDeleteDialog = function ClientDeleteDialog({ state, label, onCancel, onConfirm }) {
+    const { useEffect, useRef } = React;
+    const firstBtn = useRef(null);
+    useEffect(function() {
+        var onKey = function(e) { if (e.key === 'Escape') onCancel(); };
+        document.addEventListener('keydown', onKey);
+        return function() { document.removeEventListener('keydown', onKey); };
+    }, [onCancel]);
+    useEffect(function() { if (firstBtn.current) firstBtn.current.focus(); }, [state.loading, state.error, state.data]);
+    var d = state.data;
+    var name = (state.client && state.client.name) || label;
+    var btn = function(kind) {
+        var base = { fontSize: 14, borderRadius: 8, padding: '9px 14px', cursor: 'pointer', minHeight: 44 };
+        if (kind === 'danger') return Object.assign(base, { background: '#dc2626', border: '1px solid #dc2626', color: '#fff', fontWeight: 700 });
+        if (kind === 'primary') return Object.assign(base, { background: '#2563eb', border: '1px solid #2563eb', color: '#fff', fontWeight: 700 });
+        return Object.assign(base, { background: '#fff', border: '1px solid #e2e8f0', color: '#0f172a' });
+    };
+    var row = function(k, v) {
+        return [<span key={k + 'k'}>{k}</span>, <b key={k + 'v'} style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{v}</b>];
+    };
+    var body;
+    if (state.loading) {
+        body = [<h3 key="t" style={{ margin: 0, fontSize: 18 }}>삭제할 수 있는지 확인하고 있어요</h3>,
+                <p key="p" style={{ margin: 0, color: '#64748b', fontSize: 14 }}>잠시만 기다려 주세요.</p>,
+                <div key="a" style={{ display: 'flex', justifyContent: 'flex-end' }}><button type="button" ref={firstBtn} style={btn()} onClick={onCancel}>취소</button></div>];
+    } else if (state.error) {
+        body = [<h3 key="t" style={{ margin: 0, fontSize: 18 }}>'{name}'을(를) 삭제하지 못했어요</h3>,
+                <p key="p" style={{ margin: 0, color: '#334155', fontSize: 14, lineHeight: 1.6 }}>{state.error}</p>,
+                <div key="a" style={{ display: 'flex', justifyContent: 'flex-end' }}><button type="button" ref={firstBtn} style={btn('primary')} onClick={onCancel}>확인</button></div>];
+    } else if (d && !d.erp_linked && d.erp_known === false) {
+        body = [<h3 key="t" style={{ margin: 0, fontSize: 18 }}>지금은 지울 수 없어요</h3>,
+                <p key="p" style={{ margin: 0, color: '#334155', fontSize: 14, lineHeight: 1.6 }}>전산과 연결된 {label}인지 지금 확인하지 못했어요. 연결된 {label}를 모르고 지우지 않도록, 잠시 후 다시 눌러 주세요.</p>,
+                <div key="a" style={{ display: 'flex', justifyContent: 'flex-end' }}><button type="button" ref={firstBtn} style={btn('primary')} onClick={onCancel}>확인</button></div>];
+    } else if (d && d.erp_linked) {
+        body = [<div key="i" aria-hidden="true" style={{ fontSize: 28, lineHeight: 1 }}>🔒</div>,
+                <h3 key="t" style={{ margin: 0, fontSize: 18 }}>전산과 연결된 {label}{label === '업체' ? '라' : '이라'} 지울 수 없어요</h3>,
+                <p key="p" style={{ margin: 0, color: '#334155', fontSize: 14, lineHeight: 1.6 }}>'{name}'은(는) 전산 광고주 화면에 보고서가 이어져 있어요. 지우면 그 보고서가 사라지고 연결이 끊겨요.</p>,
+                <p key="p2" style={{ margin: 0, color: '#334155', fontSize: 14, lineHeight: 1.6 }}>정말 지워야 하면 전산에서 로직분석 연결을 먼저 끊은 뒤 다시 눌러 주세요.</p>,
+                <div key="a" style={{ display: 'flex', justifyContent: 'flex-end' }}><button type="button" ref={firstBtn} style={btn('primary')} onClick={onCancel}>확인</button></div>];
+    } else if (d) {
+        var n = function(v, unit) { return (v === null || v === undefined) ? '확인 못함' : v + unit; };   // 조회 실패는 0건과 다르다
+        var cnt = [].concat(row('보고서', n(d.reports, '건')), row('키워드 분석', n(d.analyses, '건')), row('순위 기록', n(d.rank_days, '일')));
+        if (d.competitors) cnt = cnt.concat(row('붙인 경쟁사', d.competitors + '곳'));
+        body = [<h3 key="t" style={{ margin: 0, fontSize: 18 }}>'{name}' {label}을(를) 삭제할까요?</h3>,
+                <p key="p" style={{ margin: 0, color: '#334155', fontSize: 14 }}>아래 기록이 함께 지워지고, 되돌릴 수 없어요.{d.competitors ? ' 붙인 경쟁사의 기록도 함께 세었어요.' : ''}</p>,
+                <div key="c" style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '4px 16px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px', fontSize: 14 }}>{cnt}</div>,
+                <div key="a" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+                    <button type="button" ref={firstBtn} style={btn()} onClick={onCancel} disabled={state.deleting}>취소</button>
+                    <button type="button" style={btn('danger')} onClick={onConfirm} disabled={state.deleting}>
+                        {state.deleting ? '삭제하는 중…' : (typeof d.reports === 'number' && d.reports > 0 ? '보고서 ' + d.reports + '건과 함께 삭제' : label + ' 삭제')}
+                    </button>
+                </div>];
+    }
+    return (
+        <div onClick={function(e) { if (e.target === e.currentTarget) onCancel(); }}
+             style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 1000 }}>
+            <div role="dialog" aria-modal="true" aria-label={label + ' 삭제'}
+                 style={{ background: '#fff', borderRadius: 14, maxWidth: 440, width: '100%', padding: 22, boxShadow: '0 20px 50px rgba(15,23,42,0.25)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {body}
             </div>
         </div>
     );

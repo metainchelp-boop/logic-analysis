@@ -1293,6 +1293,52 @@ def _parse_analysis_row_light(row):
 
 # ==================== 업체 삭제 ====================
 
+@router.get("/{client_id}/delete-preview")
+def delete_preview(client_id: int, current_user: dict = Depends(get_current_user)):
+    """삭제 확인 창용 — 함께 지워지는 건수와 전산 연결 여부(2026-11-28 · 대표 결정 ①ⓐ ②ⓐ).
+    권한은 삭제와 같다(관리자는 전체, 그 외는 본인 등록분만). 읽기만 한다 — 전산에 새로 묻지만 저장하지 않고 표도 만들지 않는다.
+    건수는 실제 삭제와 같은 범위(업체 + 붙은 경쟁사)로 센다(교차검증 반영 — 부모만 세면 창과 실제가 달랐다)."""
+    conn = _get_conn()
+    try:
+        client = conn.execute("SELECT id, name, created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
+        if not client:
+            raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
+        if not _is_admin(current_user) and client['created_by'] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="본인이 등록한 업체만 삭제할 수 있습니다.")
+        linked = [r["id"] for r in conn.execute(
+            "SELECT id FROM clients WHERE COALESCE(role,'advertiser')='competitor' AND competitor_of = ?",
+            (client_id,)
+        ).fetchall()]
+
+        ids = [client_id] + linked
+        marks = ",".join("?" * len(ids))
+
+        def _count(sql):
+            # 조회 실패는 0 이 아니라 None(「확인하지 못함」) — 0건과 구분한다(교차검증 반영)
+            try:
+                return int(conn.execute(sql.format(marks=marks), ids).fetchone()[0] or 0)
+            except sqlite3.Error:
+                return None
+
+        from erp_link_guard import link_status, BLOCK_MESSAGE, UNKNOWN_MESSAGE
+        _linked, erp_known = link_status(conn, ids, save=False)   # 미리보기는 아무것도 쓰지 않는다
+        erp_linked = bool(_linked)
+        return {
+            "success": True,
+            "name": client['name'],
+            "reports": _count("SELECT COUNT(*) FROM reports WHERE client_id IN ({marks})"),
+            "analyses": _count("SELECT COUNT(*) FROM client_analyses WHERE client_id IN ({marks})"),
+            "rank_days": _count("SELECT COUNT(*) FROM (SELECT DISTINCT client_id, substr(checked_at,1,10) "
+                                "FROM client_rank_history WHERE client_id IN ({marks}) AND checked_at IS NOT NULL)"),
+            "competitors": len(linked),
+            "erp_linked": erp_linked,
+            "erp_known": bool(erp_known),
+            "blocked_message": BLOCK_MESSAGE if erp_linked else (None if erp_known else UNKNOWN_MESSAGE),
+        }
+    finally:
+        conn.close()
+
+
 @router.delete("/{client_id}")
 def delete_client(client_id: int, current_user: dict = Depends(get_current_user)):
     """업체 삭제 (본인 소유분만 — 관리팀 광고주 + 영업사원 영업 대상/경쟁사).
@@ -1316,6 +1362,35 @@ def delete_client(client_id: int, current_user: dict = Depends(get_current_user)
             (client_id,)
         ).fetchall()]
         del_ids = [client_id] + linked
+        # 전산(①)과 연결된 업체는 지우지 않는다(2026-11-28 · 신고 #262 · 대표 결정 ①ⓐ — 최고관리자 포함).
+        # 함께 지워질 경쟁사가 연결돼 있어도 막는다. 판정은 erp_link_guard 한 곳.
+        from erp_link_guard import link_status, BLOCK_MESSAGE, UNKNOWN_MESSAGE
+        _linked, _known = link_status(conn, del_ids)
+        if _linked:
+            logger.info(f"[delete-client] 전산 연결 업체라 삭제 막음 (id={client_id}) by user {user_id}")
+            raise HTTPException(status_code=409, detail=BLOCK_MESSAGE)
+        if not _known:
+            logger.warning(f"[delete-client] 전산 연결 여부를 확인하지 못해 삭제 보류 (id={client_id})")
+            raise HTTPException(status_code=409, detail=UNKNOWN_MESSAGE)
+        # ⚠️ 위 판정은 네트워크를 다녀온 시점의 것 — 쓰기 잠금을 잡은 뒤 지울 대상·소유·연결을 한 번 더 확인한다(교차검증 반영)
+        from erp_link_guard import stored_linked
+        conn.execute("BEGIN IMMEDIATE")
+        client = conn.execute("SELECT id, name, created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
+        if not client:
+            conn.rollback()
+            raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
+        if not is_adm and client['created_by'] != user_id:
+            conn.rollback()
+            raise HTTPException(status_code=403, detail="본인이 등록한 업체만 삭제할 수 있습니다.")
+        linked = [r["id"] for r in conn.execute(
+            "SELECT id FROM clients WHERE COALESCE(role,'advertiser')='competitor' AND competitor_of = ?",
+            (client_id,)
+        ).fetchall()]
+        del_ids = [client_id] + linked
+        if stored_linked(conn, del_ids):
+            conn.rollback()
+            logger.info(f"[delete-client] 판정 뒤 전산 연결이 기록돼 삭제 막음 (id={client_id})")
+            raise HTTPException(status_code=409, detail=BLOCK_MESSAGE)
         for cid in del_ids:
             # 관련 데이터 삭제 (FOREIGN KEY CASCADE가 안 될 수 있으므로 명시적 삭제)
             conn.execute("DELETE FROM client_analyses WHERE client_id = ?", (cid,))
@@ -2367,42 +2442,122 @@ def list_competitors(client_id: int, current_user: dict = Depends(get_current_us
 def cleanup_expired_competitors():
     """만료된(영업사원 등록·30일 경과) 영업 대상·경쟁사 자동 삭제. 스케줄러 일일 호출.
     영업 대상(prospect) 삭제 시 그에 연결된 경쟁사도 함께 정리한다.
-    client_analyses는 FK ON DELETE CASCADE로 함께 삭제. 반환: 삭제 건수."""
+    client_analyses는 FK ON DELETE CASCADE로 함께 삭제. 반환: 삭제 건수.
+
+    전산(①)과 연결된 업체는 지우지 않는다(2026-11-28 · 대표 결정 ①ⓐ) — 업체 찾기 화면에 역할 구분이 없어
+    영업 대상·경쟁사도 연결될 수 있다. 기한 지난 업체마다 아래 가운데 연결이 하나라도 있으면 남긴다:
+      · 그 업체 자신
+      · (부모라면) 지금 붙은 경쟁사 — 부모만 지우면 연결 경쟁사의 비교가 끊긴다(사람이 지울 때 409 와 같은 범위)
+      · (경쟁사라면) 지금 부모 — 연결 업체의 비교 자료라 남긴다(사람이 지울 때보다 넓게 · 자동 정리는 사람이 안 보므로)
+    ⚠️ 같은 부모의 **다른 경쟁사(형제)는 범위가 아니다** — 형제 가운데 연결이 있어도, 연결 안 된 경쟁사가 스스로 30일이
+       지나면 지운다. 연결 업체·그 보고서·부모와의 비교는 그대로이고, 그 경쟁사 하나를 사람이 지울 때도 막지 않는다.
+    ⚠️ 교차검증 반영:
+      - 후보(만료분 + 붙은 경쟁사 + 만료 경쟁사의 부모)를 한 번에 전산에 묻고, 지금 전산이 확인해 주지 못하면 이 회차를 건너뛴다.
+      - 전산을 기다리는 사이 사람이 기한을 늘리거나 바꿀 수 있으므로, 지우는 쓰기 트랜잭션 안에서 줄마다 다시 확인한다.
+      - 기다리는 사이 경쟁사가 새로 붙은 업체는 이번 회차에 남긴다(그 경쟁사는 전산에 묻지 않았고, 부모만 지우면 고아가 된다).
+    """
     conn = _get_conn()
     try:
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         # 만료된 영업 대상·경쟁사(영업사원 등록·30일 경과)
         rows = conn.execute(
-            "SELECT id, name FROM clients WHERE COALESCE(role,'advertiser') IN ('prospect','competitor') "
+            "SELECT id, name, COALESCE(role,'advertiser') AS role, competitor_of FROM clients "
+            "WHERE COALESCE(role,'advertiser') IN ('prospect','competitor') "
             "AND expires_at IS NOT NULL AND expires_at < ?", (now,)
         ).fetchall()
-        expired_ids = {r["id"] for r in rows}
+        if not rows:
+            return 0
         # 만료된 영업 대상에 매달린 경쟁사(아직 만료 전이라도)도 함께 삭제 — 고아 방지
-        for r in list(rows):
+        expired_ids = {r["id"] for r in rows}
+        attached = []   # (경쟁사 번호, 이름, 부모 번호)
+        for r in rows:
             for c in conn.execute(
                 "SELECT id, name FROM clients WHERE COALESCE(role,'advertiser')='competitor' AND competitor_of = ?",
                 (r["id"],)
             ).fetchall():
                 if c["id"] not in expired_ids:
-                    expired_ids.add(c["id"])
-                    rows.append(c)
+                    attached.append((c["id"], c["name"], r["id"]))
+        parents = {r["competitor_of"] for r in rows if r["role"] == "competitor" and r["competitor_of"]}
+        ask = expired_ids | {cid for cid, _, _ in attached} | parents
+        # 전산에 묻기 전에 본 「붙은 경쟁사」 — 기다리는 사이 새로 붙은 것이 있으면 그 부모는 이번 회차에 남긴다
+        known_kids = {}
+        for cid, _, par in attached:
+            known_kids.setdefault(par, set()).add(cid)
         for r in rows:
-            # ⚠️ 2026-09-11 — 여기엔 client_rank_history 가 빠져 있었다.
-            #    이 연결은 foreign_keys=ON 이라 CASCADE 가 돌긴 하지만, 목록을 한 곳에서
-            #    정해 두면 PRAGMA 가 어떻든 같은 결과가 난다.
-            try:
-                from client_purge import purge_client_children
-                purge_client_children(conn, r["id"])
-            except Exception as _pe:
-                logger.warning(f"[cleanup] 자식 정리 실패(계속): {_pe}")
-            conn.execute("DELETE FROM clients WHERE id = ?", (r["id"],))
-        conn.commit()
-        if rows:
-            logger.info(f"[cleanup] 만료 영업 대상·경쟁사 {len(rows)}건 자동 삭제: {[r['name'] for r in rows]}")
-        return len(rows)
+            if r["competitor_of"] in expired_ids:
+                known_kids.setdefault(r["competitor_of"], set()).add(r["id"])
+        try:
+            from erp_link_guard import link_status
+            keep, known = link_status(conn, list(ask))
+        except Exception as _ge:
+            logger.warning(f"[cleanup] 전산 연결 확인 실패 — 이번 회차 자동 삭제를 건너뜀: {_ge}")
+            return 0
+        if not known:
+            logger.warning("[cleanup] 지금 전산 연결 목록을 받지 못해 이번 회차 자동 삭제를 건너뜀")
+            return 0
+        if keep:
+            logger.info(f"[cleanup] 전산 연결 업체 {len(keep & ask)}곳(과 거기 붙은 경쟁사)은 기한이 지나도 지우지 않음")
+
+        # 지우는 쓰기 트랜잭션 — 줄마다 지금도 지울 대상인지 다시 확인한다(전산을 기다리는 사이 바뀌었을 수 있다)
+        conn.execute("BEGIN IMMEDIATE")
+        deleted, gone_parents, new_kid_hold = [], set(), 0
+        try:
+            from erp_link_guard import stored_linked
+            keep = set(keep) | stored_linked(conn, list(ask))   # 전산을 기다리는 사이 다른 연결이 기록한 보호도 본다
+            for r in rows:
+                if r["id"] in keep or (r["competitor_of"] in keep):
+                    continue
+                still = conn.execute(
+                    "SELECT 1 FROM clients WHERE id = ? AND COALESCE(role,'advertiser') IN ('prospect','competitor') "
+                    "AND expires_at IS NOT NULL AND expires_at < ?", (r["id"], now)).fetchone()
+                if not still:
+                    continue
+                cur_parent = conn.execute("SELECT competitor_of FROM clients WHERE id = ?", (r["id"],)).fetchone()
+                # 전산을 기다리는 사이 다른 부모로 옮겨졌을 수 있다 — 지금 부모가 연결이면(저장본으로도) 남긴다(교차검증 반영)
+                if cur_parent and cur_parent[0] and (cur_parent[0] in keep or stored_linked(conn, [cur_parent[0]])):
+                    continue
+                # 전산을 기다리는 사이 이 업체에 경쟁사가 새로 붙었으면(전산에 묻지 않은 업체) 이번 회차엔 남긴다 —
+                # 부모만 지우면 새 경쟁사가 없는 부모를 가리키는 고아가 된다(교차검증 재현). 다음 회차에 함께 묻고 정리한다.
+                kids_now = {k[0] for k in conn.execute(
+                    "SELECT id FROM clients WHERE COALESCE(role,'advertiser')='competitor' AND competitor_of = ?", (r["id"],))}
+                if kids_now - known_kids.get(r["id"], set()):
+                    new_kid_hold += 1
+                    continue
+                # 붙은 경쟁사 가운데 연결 업체가 있으면 부모도 남긴다 — 부모만 지우면 그 경쟁사의 비교 자료가 끊긴다.
+                # 사람이 지울 때(업체 + 붙은 경쟁사 중 하나라도 연결이면 409)와 같은 규칙(교차검증 반영)
+                if kids_now & keep:
+                    continue
+                deleted.append((r["id"], r["name"]))
+                gone_parents.add(r["id"])
+            for cid, cname, parent in attached:
+                if cid in keep or parent in keep or parent not in gone_parents:
+                    continue
+                still = conn.execute(
+                    "SELECT 1 FROM clients WHERE id = ? AND COALESCE(role,'advertiser')='competitor' AND competitor_of = ?",
+                    (cid, parent)).fetchone()
+                if still:
+                    deleted.append((cid, cname))
+            for cid, _ in deleted:
+                # ⚠️ 2026-09-11 — 여기엔 client_rank_history 가 빠져 있었다.
+                #    이 연결은 foreign_keys=ON 이라 CASCADE 가 돌긴 하지만, 목록을 한 곳에서
+                #    정해 두면 PRAGMA 가 어떻든 같은 결과가 난다.
+                try:
+                    from client_purge import purge_client_children
+                    purge_client_children(conn, cid)
+                except Exception as _pe:
+                    logger.warning(f"[cleanup] 자식 정리 실패(계속): {_pe}")
+                conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        if new_kid_hold:
+            logger.info(f"[cleanup] 판정 중 경쟁사가 새로 붙은 {new_kid_hold}곳은 이번 회차에 남김(다음 회차에 함께 확인)")
+        if deleted:
+            logger.info(f"[cleanup] 만료 영업 대상·경쟁사 {len(deleted)}건 자동 삭제: {[n for _, n in deleted]}")
+        return len(deleted)
     finally:
         conn.close()
-
 
 @router.get("/compare")
 def compare_clients(advertiser_id: int, competitor_id: int,

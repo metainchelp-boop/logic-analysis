@@ -82,15 +82,25 @@ def plan_owner_changes(items, clients_owner, users_by_login):
     return plan
 
 
-def fetch_client_managers(base: str, api_key: str, timeout: int = 15):
-    """전산 ① 에서 연결 광고주별 현재 담당자 로그인을 받아 온다(읽기 전용)."""
+def fetch_client_managers_payload(base: str, api_key: str, timeout: int = 15):
+    """전산 ① 연결 목록 원문 → (items, total). total 은 전산이 items 개수로 준다 — 연결 목록 저장(erp_link_guard)이 온전한지 확인한다."""
     resp = requests.get(
         f"{base.rstrip('/')}/api/report-sync/client-managers",
         headers={"X-Api-Key": api_key}, timeout=timeout,
     )
     if resp.status_code != 200:
         raise RuntimeError(f"전산 담당자 조회 실패 (HTTP {resp.status_code})")
-    return ((resp.json() or {}).get("result") or {}).get("items") or []
+    result = (resp.json() or {}).get("result")
+    if not isinstance(result, dict):
+        return None, None
+    # ⚠️ items 가 없을 때 [] 로 채우지 않는다 — 「연결 0곳」으로 오판해 보호가 풀린다(교차검증 재현). 모양 판단은 받는 쪽(erp_link_guard.complete).
+    return result.get("items"), result.get("total")
+
+
+def fetch_client_managers(base: str, api_key: str, timeout: int = 15):
+    """전산 ① 에서 연결 광고주별 현재 담당자 로그인을 받아 온다(읽기 전용)."""
+    items = fetch_client_managers_payload(base, api_key, timeout)[0]
+    return items if isinstance(items, list) else []
 
 
 def _ensure_log_table(conn: sqlite3.Connection) -> None:
@@ -145,11 +155,33 @@ def run_report_owner_sync(db_path: str | None = None, base: str | None = None,
         logger.info("보고서 담당자 정렬: ERP_AD_SYNC_API_KEY 미설정 — 건너뜀")
         return {"ok": False, "error": "전산 연동 키가 서버에 설정돼 있지 않습니다."}
 
+    import time as _time
+    _fetch_started = _time.time()   # 연결 목록 저장 순서 보호(늦게 도착한 옛 응답이 새 목록을 덮지 않게)
     try:
-        items = fetch_client_managers(base, api_key)
+        items, total = fetch_client_managers_payload(base, api_key)
     except Exception as e:
         logger.warning(f"보고서 담당자 정렬: 전산 조회 실패 — 무동작 ({e})")
         return {"ok": False, "error": "전산 담당자 조회에 실패했습니다(잠시 뒤 다시 시도해 주세요)."}
+
+    # 전산 연결 목록을 저장한다 — 연결된 업체 삭제 막기(erp_link_guard)가 쓴다(2026-11-28).
+    #   담당자 정렬이 실패해도 목록 저장은 따로 한다 · 미리보기(dry_run)는 아무것도 저장하지 않는다.
+    if not dry_run:
+        try:
+            from erp_link_guard import save_linked_set, ids_from_items, complete
+            if not complete(items, total):
+                logger.warning("전산 연결 목록이 온전하지 않아 저장하지 않음(개수가 맞지 않거나 형식이 다름) — 담당자 정렬은 계속")
+            else:
+                _lc = sqlite3.connect(db_path, timeout=30)
+                try:
+                    _lc.execute("PRAGMA busy_timeout=30000")
+                    _saved = save_linked_set(_lc, ids_from_items(items), started_at=_fetch_started)
+                finally:
+                    _lc.close()
+                logger.info(f"전산 연결 목록 저장: {_saved}")
+        except Exception as e:
+            logger.warning(f"전산 연결 목록 저장 실패(담당자 정렬은 계속): {type(e).__name__}: {e}")
+
+    items = items if isinstance(items, list) else []   # 담당자 정렬은 종전처럼(없으면 빈 목록)
 
     # baseline 백업·original_created_by 보존은 인수인계 서비스와 같은 표를 재사용(멱등).
     HandoverTransferService(db_path).initialize()

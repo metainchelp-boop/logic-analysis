@@ -513,8 +513,8 @@ def update_client(
         raise
 
 
-def delete_client(client_id: int) -> bool:
-    """Delete a client"""
+def delete_client(client_id: int, guard=None) -> bool:
+    """Delete a client. guard(conn) 가 있으면 쓰기 잠금 안에서 지우기 직전에 부른다(예외를 던지면 지우지 않음)."""
     try:
         # Verify client exists
         existing_client = get_client_by_id(client_id)
@@ -522,6 +522,9 @@ def delete_client(client_id: int) -> bool:
             raise ValueError("클라이언트를 찾을 수 없습니다")
 
         with get_db_connection() as conn:
+            if guard is not None:
+                conn.execute("BEGIN IMMEDIATE")
+                guard(conn)
             # ⚠️ 2026-09-11 — 종전엔 `clients` 행만 지웠다. 이 연결은
             #    `PRAGMA foreign_keys=ON` 을 켜지 않으므로 **ON DELETE CASCADE 가 안 돈다**
             #    (database.py·client_dashboard.py 의 연결은 켠다 — 이 파일만 빠져 있었다).
@@ -921,12 +924,33 @@ def delete_existing_client(
             raise HTTPException(status_code=404, detail="클라이언트를 찾을 수 없습니다")
         _check_ownership(existing, current_user)
 
-        delete_client(client_id)
+        # 전산(①)과 연결된 업체는 지우지 않는다(2026-11-28 · 대표 결정 ①ⓐ — 화면 삭제와 같은 판정)
+        from erp_link_guard import link_status, BLOCK_MESSAGE, UNKNOWN_MESSAGE
+        with get_db_connection() as _gconn:
+            _linked, _known = link_status(_gconn, [client_id])
+        if _linked:
+            raise HTTPException(status_code=409, detail=BLOCK_MESSAGE)
+        if not _known:
+            raise HTTPException(status_code=409, detail=UNKNOWN_MESSAGE)
+
+        def _last_check(gconn):
+            # 판정은 네트워크를 다녀온 시점의 것 — 쓰기 잠금 안에서 업체·소유·연결을 한 번 더(교차검증 반영)
+            from erp_link_guard import stored_linked
+            row = gconn.execute("SELECT created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="클라이언트를 찾을 수 없습니다")
+            _check_ownership({"created_by": row["created_by"]}, current_user)
+            if stored_linked(gconn, [client_id]):
+                raise HTTPException(status_code=409, detail=BLOCK_MESSAGE)
+
+        delete_client(client_id, guard=_last_check)
 
         return ClientDeleteResponse(
             success=True,
             message="클라이언트가 삭제되었습니다",
         )
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
