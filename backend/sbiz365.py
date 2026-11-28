@@ -59,6 +59,25 @@ def _env_keys() -> dict:
 # ============================================================
 # 1. HTTP — 단일 진입점(오프라인 테스트의 monkeypatch 지점)
 # ============================================================
+# 소상공인365 쪽 장애 신호(2026-11-28) — 502·503·504 와 연결 실패·시간 초과.
+# ⚠️ 500 은 넣지 않는다 — 지역 표기 후보를 고를 때(_pick_simple_loc) 틀린 표기에 늘 500 이 와서
+#    평상시에도 생긴다. 장애로 셌다간 「통계 없음」이 전부 「장애」로 뒤바뀐다.
+# 2026-11-28 실측: 분류표·통계 API(/gis/…)가 503 을 돌려주는 동안 화면이 「업종 분류를 찾지 못했다 ·
+#    다른 업종으로 다시」·「집계 자료가 없다」라고 안내했다 — 기관 장애를 우리 판정처럼 말한 셈이다.
+_OUTAGE_STATUSES = (502, 503, 504)
+_last_outage_at = 0.0
+
+
+def _mark_outage():
+    global _last_outage_at
+    _last_outage_at = time.monotonic()
+
+
+def _outage_since(t0: float) -> bool:
+    """t0(time.monotonic) 이후 소상공인365 장애 신호가 있었나."""
+    return _last_outage_at >= t0 > 0
+
+
 def _http_json(method: str, url: str, params=None, data=None):
     """비공식 JSON 호출. 실패는 어떤 형태든 None + warning 1줄."""
     try:
@@ -69,11 +88,15 @@ def _http_json(method: str, url: str, params=None, data=None):
             resp = requests.get(url, params=params,
                                 headers=_HEADERS, timeout=_TIMEOUT)
         if resp.status_code != 200:
+            if resp.status_code in _OUTAGE_STATUSES:
+                _mark_outage()
             logger.warning(f"[sbiz365] HTTP {resp.status_code}: {url}")
             return None
         return resp.json()
     except Exception as e:
-        logger.warning(f"[sbiz365] 요청 실패({url}): {e}")
+        if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+            _mark_outage()
+        logger.warning(f"[sbiz365] 요청 실패({url}): {type(e).__name__}")
         return None
 
 
@@ -92,7 +115,11 @@ _cache_table_ready = False
 # 앞으로 **가공 규칙을 바꾸면 이 숫자를 올릴 것** — 전 캐시가 한 번에 무효화된다.
 # v4 (2026-11-22) — 업종 사전을 분류표에 맞게 고쳐 맨 앞 후보가 바뀌었다(병원·의원: 동물병원 → 의원 ·
 #   주점·바: 유흥 주점 → 요리 주점). 옛 후보로 계산해 둔 상권 결과(14일 캐시)가 그대로 나가지 않게 올린다.
+# ⚠️ 업종 분류표 저장본은 이 판 번호와 따로 둔다(TREE_CACHE_KEY · 2026-11-28).
+#    분류표는 가공 결과가 아니라 기관이 준 원문이라 판을 올려도 버릴 이유가 없는데, v4 로 올릴 때 함께 지워졌다.
+#    바로 그날 밤 분류표 API 가 503 으로 막혀 다시 받지 못했고, 업종 13종이 하나도 이어지지 않았다.
 CACHE_NS = "v4"
+TREE_CACHE_KEY = "tree:sbiz:upjong-tree"
 
 
 def _cache_conn():
@@ -108,7 +135,9 @@ def _cache_conn():
             )
         """)
         # 옛 네임스페이스 잔재 정리(읽히지 않는 행이 계속 쌓이지 않게) — 프로세스당 1회
-        conn.execute("DELETE FROM sbiz_cache WHERE cache_key NOT LIKE ?", (f"{CACHE_NS}:%",))
+        # 분류표 저장본(tree:…)과 옛 판의 분류표 저장본(…:sbiz:upjong-tree)은 남긴다 — 분류표를 못 받을 때 쓴다
+        conn.execute("DELETE FROM sbiz_cache WHERE cache_key NOT LIKE ? AND cache_key NOT LIKE 'tree:%' "
+                     "AND cache_key NOT LIKE '%:sbiz:upjong-tree'", (f"{CACHE_NS}:%",))
         conn.commit()
         _cache_table_ready = True
     return conn
@@ -617,11 +646,70 @@ def _flatten_upjong(node, out):
             _flatten_upjong(v, out)
 
 
-def _upjong_pairs():
-    """계층 업종 코드 트리 1회 호출 → (code, name) 쌍 목록. 30일 캐시. 실패 시 None."""
-    cached = _cache_get("sbiz:upjong-tree", SBIZ_TREE_TTL)
-    if cached:
-        return [tuple(p) for p in cached]
+# 업종 분류표를 못 받을 때의 마지막 대비 — 2026-11-22 운영 분류표 사본(공개 업종 이름 247개 · 업체 정보 아님).
+# ⚠️ backend/data 에 두지 않는다 — 운영에서 /app/data 는 DB 볼륨이 덮어써 이미지에 넣은 파일이 안 보인다.
+TREE_SNAPSHOT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sbiz_upjong_tree_snapshot.tsv")
+TREE_SNAPSHOT_DATE = "2026-11-22"
+TREE_RETRY_AFTER = 600   # 분류표 받기에 실패하면 10분은 다시 부르지 않는다(분석마다 막힌 API 를 두드리지 않게)
+
+# 지금 쓰는 분류표가 어디서 왔나 — cache(30일 안 저장본) · live(방금 받음) · stale(30일 지난 저장본) · snapshot(내장 사본)
+_tree_state = {"source": None, "fetched_at": None, "failed_at": 0.0}
+_tree_snapshot_pairs = None
+
+
+def _parse_dt(v):
+    try:
+        return datetime.fromisoformat(str(v))
+    except Exception:
+        return None
+
+
+def _tree_cache_read():
+    """분류표 저장본 → (쌍 목록, 받은 시각). 판 무관 키를 먼저, 없으면 옛 판 키(…:sbiz:upjong-tree) 중 최신. 없으면 (None, None)."""
+    try:
+        conn = _cache_conn()
+        row = conn.execute("SELECT payload, fetched_at FROM sbiz_cache WHERE cache_key = ?",
+                           (TREE_CACHE_KEY,)).fetchone()
+        if not row:
+            row = conn.execute("SELECT payload, fetched_at FROM sbiz_cache WHERE cache_key LIKE '%:sbiz:upjong-tree' "
+                               "AND cache_key != ? ORDER BY fetched_at DESC LIMIT 1", (TREE_CACHE_KEY,)).fetchone()
+        conn.close()
+        if not row:
+            return None, None
+        pairs = [tuple(p) for p in json.loads(row["payload"]) if isinstance(p, (list, tuple)) and len(p) == 2]
+        return (pairs or None), _parse_dt(row["fetched_at"])
+    except Exception as e:
+        logger.warning(f"[sbiz365] 분류표 저장본 조회 실패(무시): {e}")
+        return None, None
+
+
+def _tree_cache_write(pairs):
+    try:
+        conn = _cache_conn()
+        conn.execute("INSERT OR REPLACE INTO sbiz_cache (cache_key, payload, fetched_at) VALUES (?, ?, ?)",
+                     (TREE_CACHE_KEY, json.dumps([list(p) for p in pairs], ensure_ascii=False),
+                      datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"[sbiz365] 분류표 저장 실패(무시): {e}")
+
+
+def _tree_snapshot():
+    """내장 분류표 사본 → 쌍 목록(한 번 읽어 둔다). 못 읽으면 None."""
+    global _tree_snapshot_pairs
+    if _tree_snapshot_pairs is None:
+        try:
+            with open(TREE_SNAPSHOT_PATH, encoding="utf-8") as f:
+                _tree_snapshot_pairs = [tuple(line.rstrip("\n").split("\t", 1)) for line in f if "\t" in line]
+        except Exception as e:
+            logger.warning(f"[sbiz365] 내장 분류표 사본을 못 읽었다(무시): {type(e).__name__}")
+            _tree_snapshot_pairs = []
+    return list(_tree_snapshot_pairs) or None
+
+
+def _fetch_upjong_tree():
+    """분류표 API 1회 → 쌍 목록. 실패 시 None."""
     resp = _http_json("GET", f"{_BASE}/gis/api/getHierarchyTpbizCode",
                       params={"certKey": _env_keys()["simple"]})
     if resp is None:
@@ -632,10 +720,48 @@ def _upjong_pairs():
     except Exception as e:
         logger.warning(f"[sbiz365] 업종 트리 평탄화 실패(무시): {e}")
         return None
-    pairs = list(dict.fromkeys(out))  # 중복 제거(순서 보존)
+    return list(dict.fromkeys(out)) or None  # 중복 제거(순서 보존)
+
+
+def _upjong_pairs():
+    """계층 업종 코드 트리 → (code, name) 쌍 목록. 30일 저장본 → 새로 받기 → 지난 저장본 → 내장 사본 순.
+
+    ⚠️ 2026-11-28 — 분류표 API 가 503 으로 막히자 업종 13종이 하나도 이어지지 않았다(저장본이 판 번호 변경으로
+       지워져 있었다). 업종 이름은 몇 달에 한 번 바뀔까 말까 하므로, 새로 못 받으면 지난 것으로라도 잇는 편이 낫다.
+       분류표가 바뀌어 어긋나면 05:00 업종 사전 점검이 따로 알려 준다."""
+    pairs, fetched = _tree_cache_read()
+    if pairs and fetched and (datetime.now() - fetched).total_seconds() <= SBIZ_TREE_TTL:
+        _tree_state.update(source="cache", fetched_at=fetched)
+        return pairs
+    if time.time() - _tree_state["failed_at"] >= TREE_RETRY_AFTER:
+        fresh = _fetch_upjong_tree()
+        if fresh:
+            _tree_cache_write(fresh)
+            _tree_state.update(source="live", fetched_at=datetime.now(), failed_at=0.0)
+            return fresh
+        _tree_state["failed_at"] = time.time()
+        failed_now = True
+    else:
+        failed_now = False
     if pairs:
-        _cache_put("sbiz:upjong-tree", [list(p) for p in pairs])
-    return pairs or None
+        _tree_state.update(source="stale", fetched_at=fetched)
+        out = pairs
+    else:
+        snap = _tree_snapshot()
+        _tree_state.update(source=("snapshot" if snap else None), fetched_at=None)
+        out = snap
+    if failed_now:
+        where = {"stale": "지난 저장본으로 잇는다", "snapshot": "내장 사본으로 잇는다"}.get(
+            _tree_state["source"], "저장본·내장 사본도 없다 — 상권 카드가 빠진다")
+        logger.warning(f"[sbiz365] 업종 분류표를 새로 받지 못했다 — {where}(10분 뒤 다시 받는다)")
+    return out
+
+
+def upjong_tree_status() -> dict:
+    """마지막으로 쓴 분류표의 출처 — {"source": cache|live|stale|snapshot|None, "fetched_at": 'YYYY-MM-DD HH:MM'|None}."""
+    fa = _tree_state.get("fetched_at")
+    return {"source": _tree_state.get("source"),
+            "fetched_at": fa.strftime("%Y-%m-%d %H:%M") if isinstance(fa, datetime) else None}
 
 
 def _is_residual_bucket(name: str) -> bool:
@@ -936,6 +1062,14 @@ def _why(reason, code: str):
         reason["code"] = code
 
 
+def _stats_reason(t0: float) -> str:
+    """상권 통계를 못 얻었을 때의 사유 — 이 호출 동안 기관 장애 신호가 있었으면 error(잠시 후 다시), 아니면 no-stats(집계 없음)."""
+    if _outage_since(t0):
+        logger.warning("[sbiz365] 소상공인365 응답 장애(5xx·연결 실패)로 상권 생략 — 「집계 없음」이 아니다")
+        return "error"
+    return "no-stats"
+
+
 def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
                          biz_name: str = "", reason: dict | None = None) -> dict | None:
     """지역명×업종 라벨 → 상권 데이터 블록(제안서 sbiz).
@@ -947,6 +1081,7 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
     shops(업소현황)·sns(SNS 분석)·theme(테마상권)·salesSeries(매출 추이)는
     실응답 검증 후 채울 자리 — 지금은 항상 null.
     SIMPLE 키 미설정·매칭 실패·API 파손 등 어떤 실패도 None(제안서 상권 블록 생략)."""
+    t0 = time.monotonic()   # 이 호출 동안 기관 장애 신호(5xx·연결 실패)가 있었나 가르는 기준 시각
     try:
         if not _env_keys()["simple"]:
             _why(reason, "no-key")
@@ -966,7 +1101,12 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
             return None
         candidates = _resolve_upjong_candidates(label, limit=3, hint=hint)
         if not candidates:
-            _why(reason, "industry-unmapped")
+            # 분류표 자체가 없으면(받지도 못하고 저장본·내장 사본도 없음) 업종 탓이 아니다 — 기관 장애로 알린다
+            if not _upjong_pairs():
+                logger.warning("[sbiz365] 업종 분류표가 없어 상권 생략(소상공인365 응답 없음)")
+                _why(reason, "error")
+            else:
+                _why(reason, "industry-unmapped")
             return None
 
         # 힌트가 후보를 바꾸므로 캐시 키에도 넣는다(같은 동네 같은 라벨이어도 삼겹살집/칼국수집이 다른 업종).
@@ -985,7 +1125,7 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
         #    (표기 확정에 최대 4콜 · 업종 후보에 최대 3콜 — 첫 표기가 맞으면 1콜로 끝난다)
         loc, avg, upjong = _pick_simple_loc(admi, region, candidates[0]["code"]), None, None
         if not loc:
-            _why(reason, "no-stats")
+            _why(reason, _stats_reason(t0))
             return None
 
         # 후보 업종을 순서대로 시도하고, 점포당 매출이 실제로 잡히는 첫 후보를 채택한다
@@ -1009,7 +1149,7 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
         dong_no_stats = False
         if avg is None:
             if gu_only is None:
-                _why(reason, "no-stats")
+                _why(reason, _stats_reason(t0))
                 return None
             upjong, avg = gu_only
             dong_no_stats = True   # 동은 맞혔다 — 그 동네에 그 업종 통계가 없을 뿐
@@ -1026,7 +1166,7 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
         is_gu = (admi.get("scope") == "gu") or dong_no_stats
         if is_gu and _num(avg.get("guAmt")) is None:
             logger.warning("[sbiz365] 시군구 후퇴인데 시군구 평균이 없다 → 상권 생략")
-            _why(reason, "no-stats")
+            _why(reason, _stats_reason(t0))
             return None
 
         # 유동인구: topFive 에 우리 행정동이 있으면 dayAvg 확보(없으면 null — 가짜 값 금지)
@@ -1136,8 +1276,9 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
 #    매일 실패가 한 건씩 쌓여, 정작 진짜 장애 때 그 신호가 묻혔을 것이다.
 #    ⇒ **경보를 만들 때는 「정상인 날에 무엇이 기록되는가」를 먼저 재 볼 것.**
 #
-# ⚠️ industry-unmapped 는 일부러 남겨 둔다 — 업종 트리는 소상공인365 에서 받아 오므로
-#    (30일 캐시) 그 API 가 죽으면 이 사유로 나타날 수 있다. 애매하지만 API 쪽이다.
+# ⚠️ industry-unmapped 는 일부러 남겨 둔다 — 사전이 분류표와 어긋난 것도 알아야 할 장애다.
+#    (2026-11-28 부터 분류표 API 가 죽은 경우는 이 사유가 아니라 error 로 나간다 — 지난 저장본·내장 사본으로 잇고,
+#    그것도 없을 때만 error. 통계 API 의 502·503·504·연결 실패도 「집계 없음」이 아니라 error 다.)
 _SBIZ_NOT_TRIED = {"no-key", "no-industry", "no-region", "region-unresolved"}
 
 

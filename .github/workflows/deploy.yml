@@ -276,6 +276,12 @@ jobs:
       - name: 회귀 — 업종 13종과 상권 업종 분류 짝 맞춤
         run: python backend/tests/test_sbiz_upjong_map.py
 
+      # 2026-11-28 — 소상공인365 분류표·통계 API 가 503 으로 막힌 날, 판 번호 변경으로 분류표 저장본까지 지워져 있어
+      #    업종 13종이 하나도 안 이어졌다(화면은 「다른 업종으로 다시」라고 틀리게 안내 · 05:00 점검은 조용).
+      #    분류표 저장본을 판과 따로 두고 · 못 받으면 지난 저장본 → 내장 사본 · 기관 장애는 error 로 알리는지 확인한다. 네트워크 0.
+      - name: 회귀 — 소상공인365 분류표·통계 API 장애 때 대비
+        run: python backend/tests/test_sbiz_tree_fallback.py
+
       - name: Proposal facts product and analysis isolation
         run: node frontend/tests/proposal-facts-scope.test.cjs
 

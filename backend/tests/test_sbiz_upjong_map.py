@@ -130,7 +130,8 @@ ok(sbiz_health.check_industry_map(lg) == ["베이커리·제과"] and len(lg.lin
    f"어긋난 업종을 경고 한 줄로 남긴다: {lg.lines}")
 sb._upjong_pairs = lambda: None
 lg = _Log()
-ok(sbiz_health.check_industry_map(lg) is None and not lg.lines, "분류표를 못 받으면 None · 경고 없음(판정 못 함)")
+ok(sbiz_health.check_industry_map(lg) is None and len(lg.lines) == 1 and "판정하지 못했다" in lg.lines[0],
+   f"분류표를 못 받으면 None + 「판정 못 함」 경고 한 줄(2026-11-28 — 조용히 넘어가지 않는다): {lg.lines}")
 
 
 def _boom():
