@@ -13,6 +13,7 @@ from pathlib import Path
 
 from competitor_mask import build_alias_map, mask_html
 from report_access import can_manage_report, managed_report_predicate
+from client_ip import client_ip  # nginx 뒤 실제 접속 주소 — 분당 열람 제한이 열람자 전체를 한 주소로 묶지 않게(2026-11-28)
 from typing import Optional, List, Dict, Any
 import hashlib
 import hmac
@@ -1180,8 +1181,8 @@ def view_public_report(report_hash: str, request: Request):
     """
     try:
         # 레이트 리밋 체크
-        client_ip = request.client.host if request.client else "unknown"
-        if not _check_view_rate(client_ip):
+        viewer_ip = client_ip(request, "unknown")
+        if not _check_view_rate(viewer_ip):
             raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 잠시 후 다시 시도해주세요.")
         conn = get_db()
         cursor = conn.cursor()
@@ -1243,8 +1244,8 @@ def view_public_analysis_report(analysis_id: int, token: str, request: Request):
     ⚠️ 인증은 토큰뿐이다 — 주간 보고서(/view/{hash})와 동일한 공개 모델이고, 같은 레이트 리밋을 쓴다.
     """
     try:
-        client_ip = request.client.host if request.client else "unknown"
-        if not _check_view_rate(client_ip):
+        viewer_ip = client_ip(request, "unknown")
+        if not _check_view_rate(viewer_ip):
             raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 잠시 후 다시 시도해주세요.")
 
         # 토큰 검증 — 길이가 달라도 시간차가 안 나게 compare_digest.
