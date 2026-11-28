@@ -37,6 +37,8 @@ def _from_proxy(peer: str) -> bool:
         a = ipaddress.ip_address(peer)
     except ValueError:
         return False
+    if getattr(a, "ipv4_mapped", None):     # ::ffff:172.18.0.1 처럼 IPv6 로 감싼 IPv4 상대
+        a = a.ipv4_mapped
     return any(a.version == n.version and a in n for n in _PROXY_NETS)
 
 

@@ -7,6 +7,7 @@ import sqlite3
 import json
 import logging
 import os
+import threading
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,21 +24,27 @@ import html as html_module
 
 # ===== 인메모리 레이트 리밋 (공개 보고서 조회용) =====
 _view_tracker = defaultdict(list)
+# ⚠️ 조회·한도 검사·증가·정리를 한 잠금으로 묶는다(2026-11-28 교차검증 재현). 실제 접속 주소로 세면서 키가
+#    1,000개를 넘기 쉬워졌는데, 두 요청이 같은 만료 키를 함께 지우면 한쪽이 KeyError 로 500 이었다.
+#    로그인 시도 제한(auth._login_rate_ok)과 같은 방식이다.
+_view_lock = threading.Lock()
 
 def _check_view_rate(ip: str, limit: int = 30, window_sec: int = 60) -> bool:
     """IP 기준 분당 최대 limit회 허용. 초과 시 False 반환."""
     now = datetime.now()
     cutoff = now - timedelta(seconds=window_sec)
-    _view_tracker[ip] = [t for t in _view_tracker[ip] if t > cutoff]
-    if len(_view_tracker[ip]) >= limit:
-        return False
-    _view_tracker[ip].append(now)
-    # 오래된 IP 엔트리 정리 (메모리 누적 방지)
-    if len(_view_tracker) > 1000:
-        stale_ips = [k for k, v in _view_tracker.items() if not v or v[-1] < cutoff]
-        for k in stale_ips:
-            del _view_tracker[k]
-    return True
+    with _view_lock:
+        bucket = [t for t in _view_tracker.get(ip, []) if t > cutoff]
+        if len(bucket) >= limit:
+            _view_tracker[ip] = bucket
+            return False
+        bucket.append(now)
+        _view_tracker[ip] = bucket
+        # 오래된 IP 엔트리 정리 (메모리 누적 방지)
+        if len(_view_tracker) > 1000:
+            for k in [k for k, v in list(_view_tracker.items()) if not v or v[-1] < cutoff]:
+                _view_tracker.pop(k, None)
+        return True
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse

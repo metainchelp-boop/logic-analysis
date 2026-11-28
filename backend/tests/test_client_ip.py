@@ -83,7 +83,7 @@ import tempfile     # noqa: E402
 
 TMP = tempfile.mkdtemp(prefix="client-ip-")
 os.environ["DB_PATH"] = os.path.join(TMP, "t.db")
-os.environ.setdefault("DEFAULT_ADMIN_PASSWORD", "test-only-not-a-secret")   # 임시 관리자 비밀번호를 로그에 찍지 않게
+os.environ["DEFAULT_ADMIN_PASSWORD"] = "test-only-not-a-secret"   # 합성값 고정 — 실제 환경값을 쓰지 않고 임시 관리자 비밀번호도 로그에 안 찍힘
 import auth          # noqa: E402
 auth.DB_PATH = os.environ["DB_PATH"]
 try:
@@ -108,6 +108,72 @@ try:
     ok(ips == ["198.51.100.77", "1.1.1.1"], f"로그인 기록 = nginx 뒤면 실제 주소 · 바깥 상대면 상대 주소: {ips}")
 except Exception as e:
     ok(False, f"실제 로그인 경로 시험 실행 실패: {type(e).__name__}: {e}")
+
+# ⑥ 공개 열람 분당 제한 — 겹친 요청에도 500 이 없고 한도가 정확하다(2026-11-28 교차검증 재현)
+#    실제 주소로 세면 키가 1,000개를 넘기 쉬워 정리 분기에 들어간다 — 옛 코드는 두 요청이 같은 만료 키를 함께 지워 KeyError.
+import threading     # noqa: E402
+import time          # noqa: E402
+from collections import defaultdict     # noqa: E402
+from datetime import datetime, timedelta   # noqa: E402
+
+os.environ["REPORTS_DIR"] = os.path.join(TMP, "reports")
+try:
+    import reports   # noqa: E402
+
+    class _SlowTracker(defaultdict):
+        """경합 창을 넓힌 집계표 — 읽기마다 잠깐 쉰다(잠금이 없으면 겹친 요청이 서로 끼어든다)."""
+        def items(self):
+            out = list(super().items())
+            time.sleep(0.05)
+            return out
+
+        def get(self, k, d=None):
+            v = super().get(k, d)
+            time.sleep(0.002)
+            return v
+
+        def __getitem__(self, k):
+            v = super().__getitem__(k)
+            time.sleep(0.002)
+            return v
+
+    old_ts = datetime.now() - timedelta(minutes=10)
+    reports._view_tracker = _SlowTracker(list, {f"10.9.{i // 250}.{i % 250}": [old_ts] for i in range(1001)})
+    errors, results = [], []
+    gate = threading.Barrier(2)
+
+    def _view(ip):
+        try:
+            gate.wait(5)
+            results.append(reports._check_view_rate(ip))
+        except Exception as e:
+            errors.append(type(e).__name__)
+
+    ts = [threading.Thread(target=_view, args=(ip,)) for ip in ("198.51.100.1", "198.51.100.2")]
+    [t.start() for t in ts]
+    [t.join(10) for t in ts]
+    ok(not errors and results == [True, True], f"만료 키 정리가 겹쳐도 예외 없이 둘 다 열람: 예외 {errors} · 결과 {results}")
+    ok(len(reports._view_tracker) == 2, f"만료된 1,001개는 정리되고 지금 두 주소만 남는다: {len(reports._view_tracker)}")
+
+    reports._view_tracker = _SlowTracker(list)
+    oks = []
+    lock = threading.Lock()
+    gate2 = threading.Barrier(40)
+
+    def _same(ip):
+        gate2.wait(5)
+        r = reports._check_view_rate(ip, limit=30)
+        with lock:
+            oks.append(r)
+
+    ts = [threading.Thread(target=_same, args=("198.51.100.9",)) for _ in range(40)]
+    [t.start() for t in ts]
+    [t.join(20) for t in ts]
+    ok(oks.count(True) == 30 and oks.count(False) == 10, f"같은 주소 40번이 겹쳐도 분당 30번만 통과: 통과 {oks.count(True)} · 막힘 {oks.count(False)}")
+except Exception as e:
+    ok(False, f"공개 열람 제한 경합 시험 실행 실패: {type(e).__name__}: {e}")
+ok(client_ip(_Req("::ffff:172.18.0.1", {"X-Real-IP": "198.51.100.33"})) == "198.51.100.33", "IPv6 로 감싼 내부 주소 상대도 nginx 로 본다")
+ok(client_ip(_Req("::ffff:1.1.1.1", {"X-Real-IP": "8.8.8.8"})) == "::ffff:1.1.1.1", "IPv6 로 감싼 공인 주소 상대의 헤더는 믿지 않는다")
 
 print(f"client_ip: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
