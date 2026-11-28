@@ -2449,6 +2449,7 @@ def cleanup_expired_competitors():
     ⚠️ 교차검증 반영:
       - 후보(만료분 + 붙은 경쟁사 + 만료 경쟁사의 부모)를 한 번에 전산에 묻고, 지금 전산이 확인해 주지 못하면 이 회차를 건너뛴다.
       - 전산을 기다리는 사이 사람이 기한을 늘리거나 바꿀 수 있으므로, 지우는 쓰기 트랜잭션 안에서 줄마다 다시 확인한다.
+      - 기다리는 사이 경쟁사가 새로 붙은 업체는 이번 회차에 남긴다(그 경쟁사는 전산에 묻지 않았고, 부모만 지우면 고아가 된다).
     """
     conn = _get_conn()
     try:
@@ -2473,6 +2474,13 @@ def cleanup_expired_competitors():
                     attached.append((c["id"], c["name"], r["id"]))
         parents = {r["competitor_of"] for r in rows if r["role"] == "competitor" and r["competitor_of"]}
         ask = expired_ids | {cid for cid, _, _ in attached} | parents
+        # 전산에 묻기 전에 본 「붙은 경쟁사」 — 기다리는 사이 새로 붙은 것이 있으면 그 부모는 이번 회차에 남긴다
+        known_kids = {}
+        for cid, _, par in attached:
+            known_kids.setdefault(par, set()).add(cid)
+        for r in rows:
+            if r["competitor_of"] in expired_ids:
+                known_kids.setdefault(r["competitor_of"], set()).add(r["id"])
         try:
             from erp_link_guard import link_status
             keep, known = link_status(conn, list(ask))
@@ -2487,7 +2495,7 @@ def cleanup_expired_competitors():
 
         # 지우는 쓰기 트랜잭션 — 줄마다 지금도 지울 대상인지 다시 확인한다(전산을 기다리는 사이 바뀌었을 수 있다)
         conn.execute("BEGIN IMMEDIATE")
-        deleted, gone_parents = [], set()
+        deleted, gone_parents, new_kid_hold = [], set(), 0
         try:
             from erp_link_guard import stored_linked
             keep = set(keep) | stored_linked(conn, list(ask))   # 전산을 기다리는 사이 다른 연결이 기록한 보호도 본다
@@ -2502,6 +2510,13 @@ def cleanup_expired_competitors():
                 cur_parent = conn.execute("SELECT competitor_of FROM clients WHERE id = ?", (r["id"],)).fetchone()
                 # 전산을 기다리는 사이 다른 부모로 옮겨졌을 수 있다 — 지금 부모가 연결이면(저장본으로도) 남긴다(교차검증 반영)
                 if cur_parent and cur_parent[0] and (cur_parent[0] in keep or stored_linked(conn, [cur_parent[0]])):
+                    continue
+                # 전산을 기다리는 사이 이 업체에 경쟁사가 새로 붙었으면(전산에 묻지 않은 업체) 이번 회차엔 남긴다 —
+                # 부모만 지우면 새 경쟁사가 없는 부모를 가리키는 고아가 된다(교차검증 재현). 다음 회차에 함께 묻고 정리한다.
+                kids_now = {k[0] for k in conn.execute(
+                    "SELECT id FROM clients WHERE COALESCE(role,'advertiser')='competitor' AND competitor_of = ?", (r["id"],))}
+                if kids_now - known_kids.get(r["id"], set()):
+                    new_kid_hold += 1
                     continue
                 deleted.append((r["id"], r["name"]))
                 gone_parents.add(r["id"])
@@ -2527,6 +2542,8 @@ def cleanup_expired_competitors():
         except Exception:
             conn.rollback()
             raise
+        if new_kid_hold:
+            logger.info(f"[cleanup] 판정 중 경쟁사가 새로 붙은 {new_kid_hold}곳은 이번 회차에 남김(다음 회차에 함께 확인)")
         if deleted:
             logger.info(f"[cleanup] 만료 영업 대상·경쟁사 {len(deleted)}건 자동 삭제: {[n for _, n in deleted]}")
         return len(deleted)

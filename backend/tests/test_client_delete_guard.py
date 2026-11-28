@@ -670,6 +670,37 @@ cd.cleanup_expired_competitors()
 g.link_status = _real_ls
 ok(exists(312), "판정 중 연결된 부모(310)로 옮겨진 기한 지난 경쟁사는 지우지 않는다")
 
+# 전산을 기다리는 사이 기한 지난 영업 대상에 경쟁사가 새로 붙으면 부모를 남긴다 — 고아 방지(교차검증 7차 재현)
+reset_guard()
+g._default_fetch = fake_fetch([999])
+c = conn()
+c.execute("INSERT INTO clients (id, name, created_by, role, expires_at) VALUES (320, '기한 지난 영업 대상', 1, 'prospect', ?)", (past,))
+c.execute("INSERT INTO clients (id, name, created_by, role, competitor_of) VALUES (321, '먼저 붙어 있던 경쟁사', 1, 'competitor', 320)")
+c.commit()
+c.close()
+
+
+def _register_during(cn, ids, fetch=None, save=True):
+    out = _real_ls(cn, ids, fetch, save)
+    other = conn()
+    other.execute("INSERT INTO clients (id, name, created_by, role, competitor_of) VALUES (322, '기다리는 사이 새로 붙은 경쟁사', 2, 'competitor', 320)")
+    other.commit()
+    other.close()
+    return out
+
+
+g.link_status = _register_during
+n = cd.cleanup_expired_competitors()
+g.link_status = _real_ls
+c = conn()
+_par = c.execute("SELECT competitor_of FROM clients WHERE id = 322").fetchone()
+c.close()
+ok(exists(320) and exists(321) and exists(322) and _par and _par[0] == 320,
+   f"판정 중 경쟁사가 새로 붙은 영업 대상은 이번 회차에 남긴다 — 새 경쟁사가 없는 부모를 가리키지 않는다: 지운 {n}건")
+n = cd.cleanup_expired_competitors()
+ok(not exists(320) and not exists(321) and not exists(322) and n == 3,
+   f"다음 회차에는 새 경쟁사까지 함께 전산에 묻고 정리한다: 지운 {n}건")
+
 # ⑥ 화면
 
 # 교차검증 5차 반례 — 보류를 바꿀 자격이 없는 늦은 응답이 보류를 비우지 못한다
