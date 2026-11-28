@@ -110,11 +110,79 @@ ok(r.get("saved") is False and r.get("reason") == "mass-drop" and len(g.stored_l
    "저장된 100곳 중 30곳이 한꺼번에 빠지면 저장하지 않는다(전산 쪽 오류 대비)")
 r = g.save_linked_set(c, set(range(1000, 1090)))
 ok(r.get("saved") is True, "10% 정도 빠지는 보통 변화는 저장한다")
+# 저장을 거절해도 방금 받은 목록의 연결은 막는다(교차검증 재현 — 대량 누락으로 거절되자 새 연결까지 버렸다)
+fresh = set(range(1000, 1060)) | {5000}
+st, known = g.link_status(c, [5000, 1085], fetch=fake_fetch(sorted(fresh)))
+ok(st == {5000, 1085} and known is True and len(g.stored_linked(c, list(range(1000, 1090)))) == 90,
+   "대량 누락이라 저장은 거절해도, 방금 받은 목록의 새 연결(5000)과 저장본의 연결(1085)을 모두 막는다")
+# 늦게 도착한 옛 응답은 새 목록을 덮지 않는다
+import time as _t   # noqa: E402
+t_new = _t.time()
+r1 = g.save_linked_set(c, set(range(1000, 1090)) | {6000}, started_at=t_new)
+r2 = g.save_linked_set(c, set(range(1000, 1090)), started_at=t_new - 5)
+ok(r1.get("saved") and r2.get("reason") == "stale" and g.stored_linked(c, [6000]) == {6000},
+   "먼저 받기 시작한 옛 응답이 나중에 도착해도 새 목록(6000 포함)을 덮지 않는다")
+r3 = g.save_linked_set(c, set(), started_at=t_new - 1)
+ok(r3.get("saved") is False and g.stored_linked(c, [6000]) == {6000}, "옛 빈 응답도 새 보호를 지우지 못한다")
 c.close()
+
+# 거절한 목록이 20시간 넘게 똑같이 이어지면 진짜 변화로 받아들인다(교차검증 반영 — 거절만 하면 진짜 끊은 연결이 영영 막힘)
+reset_guard()
+c = conn()
+g.save_linked_set(c, set(range(2000, 2030)))
+shrunk = set(range(2000, 2010))
+ok(g.save_linked_set(c, shrunk).get("reason") == "mass-drop", "대량 누락 첫 번째 = 거절")
+ok(g.save_linked_set(c, shrunk).get("reason") == "mass-drop", "20시간 안에 같은 목록이 또 와도 거절")
+c.execute("UPDATE erp_link_sync SET pending_since=?", ((datetime.now() - timedelta(hours=21)).isoformat(),))
+c.commit()
+ok(g.save_linked_set(c, shrunk).get("saved") is True and g.stored_linked(c, [2020]) == set(),
+   "같은 목록이 20시간 넘게 이어지면 받아들인다(다음 날 04:20) — 끊은 연결 2020 이 풀린다")
+ok(c.execute("SELECT pending_hash FROM erp_link_sync").fetchone()[0] is None, "받아들이면 대기 표시를 지운다")
+g.save_linked_set(c, set(range(2000, 2030)))
+ok(g.save_linked_set(c, set(range(2000, 2005))).get("saved") is False, "다른 목록이면 대기를 새로 시작")
+c.execute("UPDATE erp_link_sync SET pending_since=?", ((datetime.now() - timedelta(hours=21)).isoformat(),))
+c.commit()
+ok(g.save_linked_set(c, set(range(2000, 2006))).get("saved") is False, "20시간 지났어도 목록이 바뀌었으면 다시 거절")
+g.save_linked_set(c, {1})   # 작은 목록으로(빈 목록 규칙 시험용)
+c.execute("DELETE FROM erp_linked_clients")
+c.execute("INSERT INTO erp_linked_clients VALUES (3000, 'x')")
+c.commit()
+ok(g.save_linked_set(c, set()).get("reason") == "empty", "빈 목록 첫 번째 = 거절")
+c.execute("UPDATE erp_link_sync SET pending_since=?", ((datetime.now() - timedelta(hours=21)).isoformat(),))
+c.commit()
+ok(g.save_linked_set(c, set()).get("saved") is True and g.stored_linked(c, [3000]) == set(), "빈 목록도 20시간 넘게 이어지면 받아들인다")
+c.close()
+
+# 받기 실패 로그에 외부 예외 원문을 남기지 않는다
+import logging   # noqa: E402
+
+
+class _Cap(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.msgs = []
+
+    def emit(self, record):
+        self.msgs.append(record.getMessage())
+
+
+cap = _Cap()
+g.logger.addHandler(cap)
+
+
+def _leaky():
+    raise ConnectionError("http://x/?k=SYNTH-SECRET-777")
+
+
+c = conn()
+g.link_status(c, [1], fetch=_leaky)
+c.close()
+g.logger.removeHandler(cap)
+ok(cap.msgs and not any("SYNTH-SECRET-777" in m for m in cap.msgs), f"받기 실패 로그에 외부 예외 원문이 없다: {cap.msgs[-1:]}")
 reset_guard()
 c = conn()
 st, known = g.link_status(c, [30], fetch=fake_fetch([], fail=True))
-ok(st == set() and known is False, "한 번도 못 받았고 지금도 못 받으면 근거 없음(known=False) — 사람이 지울 땐 막지 않는다(종전처럼)")
+ok(st == set() and known is False, "지금 전산이 확인해 주지 못하면 known=False(지우지 않는다)")
 c.close()
 
 # ① 04:20 담당자 정렬이 목록을 저장한다
@@ -192,6 +260,7 @@ c.executemany("INSERT INTO reports (client_id) VALUES (?)", [(102,), (102,), (10
 c.executemany("INSERT INTO client_analyses (client_id, keyword) VALUES (?, ?)", [(102, "가"), (102, "나"), (103, "다")])
 c.executemany("INSERT INTO client_rank_history (client_id, keyword, checked_at) VALUES (?,?,?)",
               [(102, "가", "2026-11-01 08:00"), (102, "가", "2026-11-01 09:00"), (102, "나", "2026-11-02 08:00"), (103, "다", "2026-11-01 08:00")])
+c.execute("INSERT INTO client_rank_history (client_id, keyword, checked_at) VALUES (102, '가', NULL)")   # 날짜 빈 기록은 하루로 세지 않는다
 c.commit()
 c.close()
 reset_guard()
@@ -256,6 +325,43 @@ g._default_fetch = fake_fetch([105, 201, 202])
 r = req("DELETE", "/api/cd/101")
 ok(r.status_code == 200 and not exists(101), f"전산에서 연결을 끊은 뒤 다시 누르면 바로 지워진다: {r.status_code}")
 
+# 근거 없음 — 저장본이 있어도 지금 전산이 확인 못 해 주면 지우지 않는다(교차검증 재현)
+c = conn()
+c.execute("INSERT INTO clients (id, name, created_by, role) VALUES (120, '확인 못 할 때 보통 업체', 1, 'advertiser')")
+c.commit()
+c.close()
+g._default_fetch = fake_fetch([], fail=True)
+r = req("GET", "/api/cd/120/delete-preview")
+ok(r.status_code == 200 and r.json().get("erp_known") is False and r.json().get("erp_linked") is False,
+   f"전산이 응답 없으면 미리보기 = 확인 못 함: {r.json()}")
+r = req("DELETE", "/api/cd/120")
+ok(r.status_code == 409 and "확인하지 못해" in r.json().get("detail", "") and exists(120),
+   f"전산이 응답 없으면(저장본이 있어도) 연결 안 된 업체도 지우지 않고 「잠시 후 다시」: {r.status_code}")
+g._default_fetch = fake_fetch([105, 201, 202])
+
+# 미리보기는 아무것도 쓰지 않는다 — 표가 없으면 만들지도 않는다
+c = conn()
+c.execute("DROP TABLE erp_linked_clients")
+c.execute("DROP TABLE erp_link_sync")
+c.commit()
+c.close()
+r = req("GET", "/api/cd/120/delete-preview")
+c = conn()
+made = c.execute("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('erp_linked_clients','erp_link_sync')").fetchone()[0]
+c.close()
+ok(r.status_code == 200 and made == 0, f"미리보기는 연결 표를 만들거나 저장하지 않는다: 표 {made}개")
+# 건수 조회 실패는 0건이 아니라 「확인 못 함」(None)
+c = conn()
+c.execute("ALTER TABLE reports RENAME TO reports_x")
+c.commit()
+c.close()
+r = req("GET", "/api/cd/120/delete-preview")
+c = conn()
+c.execute("ALTER TABLE reports_x RENAME TO reports")
+c.commit()
+c.close()
+ok(r.status_code == 200 and r.json().get("reports") is None, f"건수를 못 세면 None(0건과 구분): {r.json().get('reports')!r}")
+
 # 옛 업체 API 삭제 경로
 c = conn()
 c.execute("INSERT INTO clients (id, name, created_by, role) VALUES (201, '옛 경로 연결 업체', 9, 'advertiser'), (203, '옛 경로 보통 업체', 9, 'advertiser')")
@@ -286,8 +392,13 @@ ok(exists(202) and exists(205) and not exists(204) and not exists(206) and not e
    f"자동 삭제는 기한 지난 연결 업체(와 그 경쟁사)를 남기고 보통 업체(와 그 경쟁사)만 지운다: 지운 {n}건")
 ok(exists(207) and n == 3, f"연결 안 된 영업 대상을 지울 때 붙어 있던 연결 경쟁사는 남긴다: 지운 {n}건")
 
-# 자동 삭제 — 연결 목록 근거가 전혀 없으면(저장본 없음 + 받기 실패) 그 회차를 건너뛴다(교차검증 재현)
+# 자동 삭제 — 지금 전산이 확인해 주지 못하면(저장본이 오래됐어도) 그 회차를 건너뛴다(교차검증 재현)
 reset_guard()
+c = conn()
+g.save_linked_set(c, {999})
+c.execute("UPDATE erp_link_sync SET synced_at=?", ((datetime.now() - timedelta(days=10)).isoformat(),))
+c.commit()
+c.close()
 g._default_fetch = fake_fetch([], fail=True)
 c = conn()
 c.execute("INSERT INTO clients (id, name, created_by, role, expires_at) VALUES (209, '근거 없을 때 기한 지난 영업 대상', 1, 'prospect', ?)", (past,))
@@ -295,7 +406,7 @@ c.execute("INSERT INTO clients (id, name, created_by, role, competitor_of) VALUE
 c.commit()
 c.close()
 n = cd.cleanup_expired_competitors()
-ok(n == 0 and exists(209) and exists(210), f"연결 여부를 알 근거가 없으면 자동 삭제는 그 회차를 건너뛴다: 지운 {n}건")
+ok(n == 0 and exists(209) and exists(210), f"오래된 저장본만 있고 지금 못 받으면 자동 삭제는 그 회차를 건너뛴다: 지운 {n}건")
 
 # ⑥ 화면
 src = open(os.path.join(HERE, "..", "..", "frontend", "js", "components", "ClientDashboard.jsx"), encoding="utf-8").read()
@@ -303,6 +414,11 @@ ok("\\u2715" not in src and "deleteClient(c, e)" not in src, "업체 목록 줄�
 ok("openDeleteDialog(selectedClient)" in src and "'업체 삭제'" in src, "업체를 고른 뒤 머리에 「업체 삭제」 버튼")
 ok("'/delete-preview'" in src and "window.ClientDeleteDialog" in src and "d.erp_linked" in src, "확인 창이 미리보기를 묻고 연결 업체면 막는다")
 ok("'보고서 ' + d.reports + '건과 함께 삭제'" in src, "빨간 버튼 이름에 함께 지워지는 보고서 건수")
+ok(src.count("prev.req === req") == 1 and src.count("prev.req === d.req") == 1 and "++delReqRef.current" in src,
+   "창마다 번호를 붙여 늦게 온 옛 응답이 다른 업체 창을 덮지 않는다(교차검증 재현)")
+ok("d.erp_known === false" in src and "지금은 지울 수 없어요" in src and "!d.data.erp_known" in src,
+   "전산 확인을 못 하면 「지금은 지울 수 없어요」 · 삭제 버튼 없음")
+ok("'확인 못함'" in src, "건수를 못 세면 「확인 못함」")
 import json   # noqa: E402
 bj = json.load(open(os.path.join(HERE, "..", "..", "frontend", "dist", "bundle.json"), encoding="utf-8"))
 bundle = open(os.path.join(HERE, "..", "..", "frontend", "dist", bj.get("file") or bj.get("bundle") or ""), encoding="utf-8").read() \

@@ -20583,6 +20583,8 @@ window.ClientDashboard = function ClientDashboard({
   const [showExportMenu, setShowExportMenu] = useState(false);
   // 업체 삭제 확인 창 — { client, loading, data, error, deleting } · null 이면 닫힘(2026-11-28)
   const [delDialog, setDelDialog] = useState(null);
+  // 창마다 번호 — 닫았다 다른 업체 창을 연 뒤 늦게 온 옛 응답이 새 창을 덮지 않게(교차검증 반영)
+  const delReqRef = React.useRef(0);
   const exportMenuRef = React.useRef(null);
   const [aiInsights, setAiInsights] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -20656,28 +20658,43 @@ window.ClientDashboard = function ClientDashboard({
       toast.error('삭제 권한이 없습니다.');
       return;
     }
+    var req = ++delReqRef.current;
+    var mine = function (next) {
+      setDelDialog(function (prev) {
+        return prev && prev.req === req ? next : prev;
+      });
+    };
     setDelDialog({
       client: client,
-      loading: true
+      loading: true,
+      req: req
     });
     api.get('/cd/' + client.id + '/delete-preview').then(function (res) {
-      if (res && res.success) setDelDialog({
+      if (res && res.success) mine({
         client: client,
-        data: res
-      });else setDelDialog({
+        data: res,
+        req: req
+      });else mine({
         client: client,
-        error: res && res.detail || '삭제할 수 있는지 확인하지 못했어요. 잠시 후 다시 시도해 주세요.'
+        error: res && res.detail || '삭제할 수 있는지 확인하지 못했어요. 잠시 후 다시 시도해 주세요.',
+        req: req
       });
     }).catch(function () {
-      setDelDialog({
+      mine({
         client: client,
-        error: '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.'
+        error: '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.',
+        req: req
       });
     });
   };
   var confirmDelete = function () {
     var d = delDialog;
-    if (!d || !d.data || d.deleting) return;
+    if (!d || !d.data || d.deleting || !d.data.erp_known || d.data.erp_linked) return;
+    var mine = function (next) {
+      setDelDialog(function (prev) {
+        return prev && prev.req === d.req ? next : prev;
+      });
+    };
     setDelDialog(Object.assign({}, d, {
       deleting: true
     }));
@@ -20688,18 +20705,18 @@ window.ClientDashboard = function ClientDashboard({
           setActiveKeyword(null);
           setActiveAnalysis(null);
         }
-        setDelDialog(null);
+        mine(null);
         toast.success("'" + d.client.name + "'을(를) 삭제했어요.");
         loadClients();
       } else {
-        setDelDialog(Object.assign({}, d, {
+        mine(Object.assign({}, d, {
           deleting: false,
           data: null,
           error: res && res.detail || '삭제하지 못했어요.'
         }));
       }
     }).catch(function () {
-      setDelDialog(Object.assign({}, d, {
+      mine(Object.assign({}, d, {
         deleting: false,
         data: null,
         error: '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.'
@@ -21915,6 +21932,33 @@ window.ClientDeleteDialog = function ClientDeleteDialog({
       style: btn('primary'),
       onClick: onCancel
     }, "확인"))];
+  } else if (d && !d.erp_linked && d.erp_known === false) {
+    body = [/*#__PURE__*/React.createElement("h3", {
+      key: "t",
+      style: {
+        margin: 0,
+        fontSize: 18
+      }
+    }, "지금은 지울 수 없어요"), /*#__PURE__*/React.createElement("p", {
+      key: "p",
+      style: {
+        margin: 0,
+        color: '#334155',
+        fontSize: 14,
+        lineHeight: 1.6
+      }
+    }, "전산과 연결된 ", label, "인지 지금 확인하지 못했어요. 연결된 ", label, "를 모르고 지우지 않도록, 잠시 후 다시 눌러 주세요."), /*#__PURE__*/React.createElement("div", {
+      key: "a",
+      style: {
+        display: 'flex',
+        justifyContent: 'flex-end'
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      ref: firstBtn,
+      style: btn('primary'),
+      onClick: onCancel
+    }, "확인"))];
   } else if (d && d.erp_linked) {
     body = [/*#__PURE__*/React.createElement("div", {
       key: "i",
@@ -21958,7 +22002,10 @@ window.ClientDeleteDialog = function ClientDeleteDialog({
       onClick: onCancel
     }, "확인"))];
   } else if (d) {
-    var cnt = [].concat(row('보고서', d.reports + '건'), row('키워드 분석', d.analyses + '건'), row('순위 기록', d.rank_days + '일'));
+    var n = function (v, unit) {
+      return v === null || v === undefined ? '확인 못함' : v + unit;
+    }; // 조회 실패는 0건과 다르다
+    var cnt = [].concat(row('보고서', n(d.reports, '건')), row('키워드 분석', n(d.analyses, '건')), row('순위 기록', n(d.rank_days, '일')));
     if (d.competitors) cnt = cnt.concat(row('붙인 경쟁사', d.competitors + '곳'));
     body = [/*#__PURE__*/React.createElement("h3", {
       key: "t",
@@ -22004,7 +22051,7 @@ window.ClientDeleteDialog = function ClientDeleteDialog({
       style: btn('danger'),
       onClick: onConfirm,
       disabled: state.deleting
-    }, state.deleting ? '삭제하는 중…' : d.reports > 0 ? '보고서 ' + d.reports + '건과 함께 삭제' : label + ' 삭제'))];
+    }, state.deleting ? '삭제하는 중…' : typeof d.reports === 'number' && d.reports > 0 ? '보고서 ' + d.reports + '건과 함께 삭제' : label + ' 삭제'))];
   }
   return /*#__PURE__*/React.createElement("div", {
     onClick: function (e) {

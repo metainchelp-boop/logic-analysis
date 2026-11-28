@@ -39,6 +39,8 @@ function rankCellLabel(r) {
     const [showExportMenu, setShowExportMenu] = useState(false);
     // 업체 삭제 확인 창 — { client, loading, data, error, deleting } · null 이면 닫힘(2026-11-28)
     const [delDialog, setDelDialog] = useState(null);
+    // 창마다 번호 — 닫았다 다른 업체 창을 연 뒤 늦게 온 옛 응답이 새 창을 덮지 않게(교차검증 반영)
+    const delReqRef = React.useRef(0);
     const exportMenuRef = React.useRef(null);
     const [aiInsights, setAiInsights] = useState(null);
     const [aiLoading, setAiLoading] = useState(false);
@@ -103,15 +105,18 @@ function rankCellLabel(r) {
         var _isViewer = currentUser && currentUser.role === 'viewer';
         // 관리팀(canEdit)뿐 아니라 영업사원도 '본인 영업 대상'을 삭제할 수 있다(완전 개인 모드).
         if (canEdit === false && !_isViewer) { toast.error('삭제 권한이 없습니다.'); return; }
-        setDelDialog({ client: client, loading: true });
+        var req = ++delReqRef.current;
+        var mine = function(next) { setDelDialog(function(prev) { return (prev && prev.req === req) ? next : prev; }); };
+        setDelDialog({ client: client, loading: true, req: req });
         api.get('/cd/' + client.id + '/delete-preview').then(function(res) {
-            if (res && res.success) setDelDialog({ client: client, data: res });
-            else setDelDialog({ client: client, error: (res && res.detail) || '삭제할 수 있는지 확인하지 못했어요. 잠시 후 다시 시도해 주세요.' });
-        }).catch(function() { setDelDialog({ client: client, error: '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.' }); });
+            if (res && res.success) mine({ client: client, data: res, req: req });
+            else mine({ client: client, error: (res && res.detail) || '삭제할 수 있는지 확인하지 못했어요. 잠시 후 다시 시도해 주세요.', req: req });
+        }).catch(function() { mine({ client: client, error: '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.', req: req }); });
     };
     var confirmDelete = function() {
         var d = delDialog;
-        if (!d || !d.data || d.deleting) return;
+        if (!d || !d.data || d.deleting || !d.data.erp_known || d.data.erp_linked) return;
+        var mine = function(next) { setDelDialog(function(prev) { return (prev && prev.req === d.req) ? next : prev; }); };
         setDelDialog(Object.assign({}, d, { deleting: true }));
         api.del('/cd/' + d.client.id).then(function(res) {
             if (res && res.success) {
@@ -120,13 +125,13 @@ function rankCellLabel(r) {
                     setActiveKeyword(null);
                     setActiveAnalysis(null);
                 }
-                setDelDialog(null);
+                mine(null);
                 toast.success("'" + d.client.name + "'을(를) 삭제했어요.");
                 loadClients();
             } else {
-                setDelDialog(Object.assign({}, d, { deleting: false, data: null, error: (res && res.detail) || '삭제하지 못했어요.' }));
+                mine(Object.assign({}, d, { deleting: false, data: null, error: (res && res.detail) || '삭제하지 못했어요.' }));
             }
-        }).catch(function() { setDelDialog(Object.assign({}, d, { deleting: false, data: null, error: '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.' })); });
+        }).catch(function() { mine(Object.assign({}, d, { deleting: false, data: null, error: '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.' })); });
     };
 
     /* 업체 종류 — 'place' 가 아니면 전부 스토어(옛 행은 vertical 이 비어 있다).
@@ -869,6 +874,10 @@ window.ClientDeleteDialog = function ClientDeleteDialog({ state, label, onCancel
         body = [<h3 key="t" style={{ margin: 0, fontSize: 18 }}>'{name}'을(를) 삭제하지 못했어요</h3>,
                 <p key="p" style={{ margin: 0, color: '#334155', fontSize: 14, lineHeight: 1.6 }}>{state.error}</p>,
                 <div key="a" style={{ display: 'flex', justifyContent: 'flex-end' }}><button type="button" ref={firstBtn} style={btn('primary')} onClick={onCancel}>확인</button></div>];
+    } else if (d && !d.erp_linked && d.erp_known === false) {
+        body = [<h3 key="t" style={{ margin: 0, fontSize: 18 }}>지금은 지울 수 없어요</h3>,
+                <p key="p" style={{ margin: 0, color: '#334155', fontSize: 14, lineHeight: 1.6 }}>전산과 연결된 {label}인지 지금 확인하지 못했어요. 연결된 {label}를 모르고 지우지 않도록, 잠시 후 다시 눌러 주세요.</p>,
+                <div key="a" style={{ display: 'flex', justifyContent: 'flex-end' }}><button type="button" ref={firstBtn} style={btn('primary')} onClick={onCancel}>확인</button></div>];
     } else if (d && d.erp_linked) {
         body = [<div key="i" aria-hidden="true" style={{ fontSize: 28, lineHeight: 1 }}>🔒</div>,
                 <h3 key="t" style={{ margin: 0, fontSize: 18 }}>전산과 연결된 {label}{label === '업체' ? '라' : '이라'} 지울 수 없어요</h3>,
@@ -876,7 +885,8 @@ window.ClientDeleteDialog = function ClientDeleteDialog({ state, label, onCancel
                 <p key="p2" style={{ margin: 0, color: '#334155', fontSize: 14, lineHeight: 1.6 }}>정말 지워야 하면 전산에서 로직분석 연결을 먼저 끊은 뒤 다시 눌러 주세요.</p>,
                 <div key="a" style={{ display: 'flex', justifyContent: 'flex-end' }}><button type="button" ref={firstBtn} style={btn('primary')} onClick={onCancel}>확인</button></div>];
     } else if (d) {
-        var cnt = [].concat(row('보고서', d.reports + '건'), row('키워드 분석', d.analyses + '건'), row('순위 기록', d.rank_days + '일'));
+        var n = function(v, unit) { return (v === null || v === undefined) ? '확인 못함' : v + unit; };   // 조회 실패는 0건과 다르다
+        var cnt = [].concat(row('보고서', n(d.reports, '건')), row('키워드 분석', n(d.analyses, '건')), row('순위 기록', n(d.rank_days, '일')));
         if (d.competitors) cnt = cnt.concat(row('붙인 경쟁사', d.competitors + '곳'));
         body = [<h3 key="t" style={{ margin: 0, fontSize: 18 }}>'{name}' {label}을(를) 삭제할까요?</h3>,
                 <p key="p" style={{ margin: 0, color: '#334155', fontSize: 14 }}>아래 기록이 함께 지워지고, 되돌릴 수 없어요.{d.competitors ? ' 붙인 경쟁사의 기록도 함께 세었어요.' : ''}</p>,
@@ -884,7 +894,7 @@ window.ClientDeleteDialog = function ClientDeleteDialog({ state, label, onCancel
                 <div key="a" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
                     <button type="button" ref={firstBtn} style={btn()} onClick={onCancel} disabled={state.deleting}>취소</button>
                     <button type="button" style={btn('danger')} onClick={onConfirm} disabled={state.deleting}>
-                        {state.deleting ? '삭제하는 중…' : (d.reports > 0 ? '보고서 ' + d.reports + '건과 함께 삭제' : label + ' 삭제')}
+                        {state.deleting ? '삭제하는 중…' : (typeof d.reports === 'number' && d.reports > 0 ? '보고서 ' + d.reports + '건과 함께 삭제' : label + ' 삭제')}
                     </button>
                 </div>];
     }

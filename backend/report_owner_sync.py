@@ -151,6 +151,8 @@ def run_report_owner_sync(db_path: str | None = None, base: str | None = None,
         logger.info("보고서 담당자 정렬: ERP_AD_SYNC_API_KEY 미설정 — 건너뜀")
         return {"ok": False, "error": "전산 연동 키가 서버에 설정돼 있지 않습니다."}
 
+    import time as _time
+    _fetch_started = _time.time()   # 연결 목록 저장 순서 보호(늦게 도착한 옛 응답이 새 목록을 덮지 않게)
     try:
         items, total = fetch_client_managers_payload(base, api_key)
     except Exception as e:
@@ -168,7 +170,7 @@ def run_report_owner_sync(db_path: str | None = None, base: str | None = None,
                 _lc = sqlite3.connect(db_path, timeout=30)
                 try:
                     _lc.execute("PRAGMA busy_timeout=30000")
-                    _saved = save_linked_set(_lc, ids_from_items(items))
+                    _saved = save_linked_set(_lc, ids_from_items(items), started_at=_fetch_started)
                 finally:
                     _lc.close()
                 logger.info(f"전산 연결 목록 저장: {_saved}")

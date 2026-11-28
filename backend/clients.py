@@ -922,11 +922,13 @@ def delete_existing_client(
         _check_ownership(existing, current_user)
 
         # 전산(①)과 연결된 업체는 지우지 않는다(2026-11-28 · 대표 결정 ①ⓐ — 화면 삭제와 같은 판정)
-        from erp_link_guard import linked_among, BLOCK_MESSAGE
+        from erp_link_guard import link_status, BLOCK_MESSAGE, UNKNOWN_MESSAGE
         with get_db_connection() as _gconn:
-            _erp_linked = bool(linked_among(_gconn, [client_id]))
-        if _erp_linked:
+            _linked, _known = link_status(_gconn, [client_id])
+        if _linked:
             raise HTTPException(status_code=409, detail=BLOCK_MESSAGE)
+        if not _known:
+            raise HTTPException(status_code=409, detail=UNKNOWN_MESSAGE)
 
         delete_client(client_id)
 
