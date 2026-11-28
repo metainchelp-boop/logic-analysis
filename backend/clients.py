@@ -921,12 +921,21 @@ def delete_existing_client(
             raise HTTPException(status_code=404, detail="클라이언트를 찾을 수 없습니다")
         _check_ownership(existing, current_user)
 
+        # 전산(①)과 연결된 업체는 지우지 않는다(2026-11-28 · 대표 결정 ①ⓐ — 화면 삭제와 같은 판정)
+        from erp_link_guard import linked_among, BLOCK_MESSAGE
+        with get_db_connection() as _gconn:
+            _erp_linked = bool(linked_among(_gconn, [client_id]))
+        if _erp_linked:
+            raise HTTPException(status_code=409, detail=BLOCK_MESSAGE)
+
         delete_client(client_id)
 
         return ClientDeleteResponse(
             success=True,
             message="클라이언트가 삭제되었습니다",
         )
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -1293,6 +1293,44 @@ def _parse_analysis_row_light(row):
 
 # ==================== 업체 삭제 ====================
 
+@router.get("/{client_id}/delete-preview")
+def delete_preview(client_id: int, current_user: dict = Depends(get_current_user)):
+    """삭제 확인 창용 — 함께 지워지는 건수와 전산 연결 여부(2026-11-28 · 대표 결정 ①ⓐ ②ⓐ).
+    권한은 삭제와 같다(관리자는 전체, 그 외는 본인 등록분만). 아무것도 바꾸지 않는다."""
+    conn = _get_conn()
+    try:
+        client = conn.execute("SELECT id, name, created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
+        if not client:
+            raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
+        if not _is_admin(current_user) and client['created_by'] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="본인이 등록한 업체만 삭제할 수 있습니다.")
+        linked = [r["id"] for r in conn.execute(
+            "SELECT id FROM clients WHERE COALESCE(role,'advertiser')='competitor' AND competitor_of = ?",
+            (client_id,)
+        ).fetchall()]
+
+        def _count(sql):
+            try:
+                return int(conn.execute(sql, (client_id,)).fetchone()[0] or 0)
+            except sqlite3.Error:
+                return 0
+
+        from erp_link_guard import linked_among, BLOCK_MESSAGE
+        erp_linked = bool(linked_among(conn, [client_id] + linked))
+        return {
+            "success": True,
+            "name": client['name'],
+            "reports": _count("SELECT COUNT(*) FROM reports WHERE client_id = ?"),
+            "analyses": _count("SELECT COUNT(*) FROM client_analyses WHERE client_id = ?"),
+            "rank_days": _count("SELECT COUNT(DISTINCT substr(checked_at,1,10)) FROM client_rank_history WHERE client_id = ?"),
+            "competitors": len(linked),
+            "erp_linked": erp_linked,
+            "blocked_message": BLOCK_MESSAGE if erp_linked else None,
+        }
+    finally:
+        conn.close()
+
+
 @router.delete("/{client_id}")
 def delete_client(client_id: int, current_user: dict = Depends(get_current_user)):
     """업체 삭제 (본인 소유분만 — 관리팀 광고주 + 영업사원 영업 대상/경쟁사).
@@ -1316,6 +1354,12 @@ def delete_client(client_id: int, current_user: dict = Depends(get_current_user)
             (client_id,)
         ).fetchall()]
         del_ids = [client_id] + linked
+        # 전산(①)과 연결된 업체는 지우지 않는다(2026-11-28 · 신고 #262 · 대표 결정 ①ⓐ — 최고관리자 포함).
+        # 함께 지워질 경쟁사가 연결돼 있어도 막는다. 판정은 erp_link_guard 한 곳.
+        from erp_link_guard import linked_among, BLOCK_MESSAGE
+        if linked_among(conn, del_ids):
+            logger.info(f"[delete-client] 전산 연결 업체라 삭제 막음 (id={client_id}) by user {user_id}")
+            raise HTTPException(status_code=409, detail=BLOCK_MESSAGE)
         for cid in del_ids:
             # 관련 데이터 삭제 (FOREIGN KEY CASCADE가 안 될 수 있으므로 명시적 삭제)
             conn.execute("DELETE FROM client_analyses WHERE client_id = ?", (cid,))
@@ -2376,6 +2420,17 @@ def cleanup_expired_competitors():
             "SELECT id, name FROM clients WHERE COALESCE(role,'advertiser') IN ('prospect','competitor') "
             "AND expires_at IS NOT NULL AND expires_at < ?", (now,)
         ).fetchall()
+        # 전산(①)과 연결된 업체는 기한이 지나도 지우지 않는다(2026-11-28 · 대표 결정 ①ⓐ).
+        # 업체 찾기 화면에 역할 구분이 없어 영업 대상·경쟁사도 전산에 연결될 수 있다.
+        try:
+            from erp_link_guard import linked_among
+            keep = linked_among(conn, [r["id"] for r in rows]) if rows else set()
+        except Exception as _ge:
+            logger.warning(f"[cleanup] 전산 연결 확인 실패 — 이번 회차 자동 삭제를 건너뜀: {_ge}")
+            return 0
+        if keep:
+            logger.info(f"[cleanup] 전산 연결 업체 {len(keep)}곳은 기한이 지나도 지우지 않음")
+            rows = [r for r in rows if r["id"] not in keep]
         expired_ids = {r["id"] for r in rows}
         # 만료된 영업 대상에 매달린 경쟁사(아직 만료 전이라도)도 함께 삭제 — 고아 방지
         for r in list(rows):
@@ -2386,6 +2441,16 @@ def cleanup_expired_competitors():
                 if c["id"] not in expired_ids:
                     expired_ids.add(c["id"])
                     rows.append(c)
+        # 함께 지울 경쟁사 가운데 전산에 연결된 것도 남긴다(부모 영업 대상만 보고 거르면 붙은 연결 경쟁사가 지워진다 — 시험이 잡음)
+        attached = [r["id"] for r in rows]
+        try:
+            keep2 = linked_among(conn, attached) if attached else set()
+        except Exception as _ge:
+            logger.warning(f"[cleanup] 전산 연결 확인 실패 — 이번 회차 자동 삭제를 건너뜀: {_ge}")
+            return 0
+        if keep2:
+            logger.info(f"[cleanup] 함께 지울 경쟁사 중 전산 연결 {len(keep2)}곳은 남김")
+            rows = [r for r in rows if r["id"] not in keep2]
         for r in rows:
             # ⚠️ 2026-09-11 — 여기엔 client_rank_history 가 빠져 있었다.
             #    이 연결은 foreign_keys=ON 이라 CASCADE 가 돌긴 하지만, 목록을 한 곳에서

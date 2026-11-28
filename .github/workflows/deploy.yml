@@ -287,6 +287,11 @@ jobs:
       - name: 회귀 — 로그인 기록·공개 열람 제한의 실제 접속 주소
         run: python backend/tests/test_client_ip.py
 
+      # 2026-11-28 — 전산 연결 업체 5곳이 로직분석 화면 삭제로 지워진 사고(신고 #262 · 섹션 소식판 ①→② 9/24 요청).
+      #    대표 결정 ①ⓐ ②ⓐ ③ⓐ: 연결 업체는 세 삭제 경로 모두에서 막고 · 확인 창에 함께 지워지는 건수 · 삭제 버튼은 업체를 고른 뒤에만. 네트워크 0.
+      - name: 회귀 — 전산 연결 업체 삭제 막기 · 삭제 확인 창
+        run: python backend/tests/test_client_delete_guard.py
+
       - name: Proposal facts product and analysis isolation
         run: node frontend/tests/proposal-facts-scope.test.cjs
 

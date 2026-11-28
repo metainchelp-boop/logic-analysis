@@ -151,6 +151,21 @@ def run_report_owner_sync(db_path: str | None = None, base: str | None = None,
         logger.warning(f"보고서 담당자 정렬: 전산 조회 실패 — 무동작 ({e})")
         return {"ok": False, "error": "전산 담당자 조회에 실패했습니다(잠시 뒤 다시 시도해 주세요)."}
 
+    # 전산 연결 목록을 저장한다 — 연결된 업체 삭제 막기(erp_link_guard)가 쓴다(2026-11-28).
+    #   담당자 정렬이 실패해도 목록 저장은 따로 한다 · 미리보기(dry_run)는 아무것도 저장하지 않는다.
+    if not dry_run:
+        try:
+            from erp_link_guard import save_linked_set, ids_from_items
+            _lc = sqlite3.connect(db_path, timeout=30)
+            try:
+                _lc.execute("PRAGMA busy_timeout=30000")
+                _saved = save_linked_set(_lc, ids_from_items(items))
+            finally:
+                _lc.close()
+            logger.info(f"전산 연결 목록 저장: {_saved}")
+        except Exception as e:
+            logger.warning(f"전산 연결 목록 저장 실패(담당자 정렬은 계속): {type(e).__name__}: {e}")
+
     # baseline 백업·original_created_by 보존은 인수인계 서비스와 같은 표를 재사용(멱등).
     HandoverTransferService(db_path).initialize()
 
