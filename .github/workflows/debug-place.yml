@@ -2943,3 +2943,30 @@ jobs:
                 else:
                     print(f"  표본 {'AB'[i]} {label}: ❌ 사유 {why.get('code')} · {dt:.1f}초")
             PYH2
+            echo
+            echo "== [I] #382 배포 반영 · 운영 코드 경로 그대로 스모크 (분류표는 운영 함수로 · 상권 결과 캐시 쓰기 0 · 상권 기록 0 · 지역 미출력) =="
+            docker inspect -f '  컨테이너 기동 {{.State.StartedAt}} · 재시작 {{.RestartCount}}' logic-analysis
+            for m in 'sbiz365.py:TREE_CACHE_KEY = "tree:sbiz:upjong-tree"' 'sbiz365.py:_STATS_STATE = contextvars' 'sbiz365.py:def _get_place_sbiz_core' 'sbiz365.py:def upjong_tree_status' 'sbiz_health.py:unmapped_industry_labels(with_status=True)'; do
+              f=${m%%:*}; pat=${m#*:}
+              printf "    %-14s %-48s %s\n" "$f" "$pat" "$(docker exec logic-analysis grep -cF "$pat" /app/$f 2>/dev/null || echo 못읽음)"
+            done
+            echo "    내장 분류표 사본 줄 수: $(docker exec logic-analysis sh -c 'wc -l < /app/sbiz_upjong_tree_snapshot.tsv' 2>/dev/null || echo 없음)"
+            docker exec -i logic-analysis python3 - <<'PYI' || echo "  ⚠️ [I] 실행 실패 — 못 쟀다"
+            # ⚠️ #377 때 배포 뒤 확인이 캐시를 직접 읽어 함수를 바꿔 끼운 헛확인이었다 — 이번엔 운영 함수를 그대로 부른다.
+            #    분류표는 운영 함수(_upjong_pairs)가 정한다(받기 실패면 지난 저장본·내장 사본). 상권 결과 캐시만 쓰지·읽지 않는다.
+            import sys, time
+            sys.path.insert(0, "/app")
+            import sbiz365 as sb
+            miss, st = sb.unmapped_industry_labels(with_status=True)
+            print(f"  운영 함수로 13종 판정: 안 이어지는 업종 {None if miss is None else len(miss)}개 · 분류표 출처 {st}")
+            sb._cache_put = lambda *a, **k: None
+            sb._cache_get = lambda *a, **k: None
+            for i, (region, label) in enumerate((("서울 마포구 서교동", "카페·디저트"), ("서울 강남구 역삼동", "베이커리·제과"))):
+                why = {}
+                t0 = time.time()
+                blk = sb._get_place_sbiz_impl(region, label, reason=why)
+                if blk:
+                    print(f"  표본 {'AB'[i]} {label}: ✅ 상권 블록 옴 · 기준 {blk.get('industryNm')} · {time.time()-t0:.1f}초")
+                else:
+                    print(f"  표본 {'AB'[i]} {label}: 사유 {why.get('code')} · {time.time()-t0:.1f}초")
+            PYI
