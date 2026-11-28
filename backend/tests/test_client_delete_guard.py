@@ -731,6 +731,26 @@ ok(exists(330) and exists(331) and exists(332) and n == 0,
 r = req("GET", "/api/cd/330/competitors")
 ok(r.status_code == 200, f"그 영업 대상의 경쟁사 목록이 계속 열린다: {r.status_code}")
 
+# 범위 확인 — 같은 부모의 다른 경쟁사(형제)가 연결이어도, 연결 안 된 경쟁사가 스스로 기한이 지나면 지운다(의도한 범위)
+reset_guard()
+g._default_fetch = fake_fetch([999, 341])
+c = conn()
+c.execute("INSERT INTO clients (id, name, created_by, role, expires_at) VALUES (340, '기한 지난 영업 대상', 1, 'prospect', ?)", (past,))
+c.execute("INSERT INTO clients (id, name, created_by, role, competitor_of) VALUES (341, '연결된 경쟁사', 1, 'competitor', 340)")
+c.execute("INSERT INTO clients (id, name, created_by, role, competitor_of, expires_at) VALUES (342, '스스로 기한 지난 연결 안 된 경쟁사', 1, 'competitor', 340, ?)", (past,))
+c.execute("INSERT INTO clients (id, name, created_by, role, competitor_of) VALUES (343, '기한 전 연결 안 된 경쟁사', 1, 'competitor', 340)")
+c.commit()
+c.close()
+n = cd.cleanup_expired_competitors()
+ok(exists(340) and exists(341) and exists(343) and not exists(342),
+   f"연결 경쟁사가 붙은 부모·연결 경쟁사·기한 전 경쟁사는 남고, 스스로 기한 지난 연결 안 된 형제만 지운다: "
+   f"{[i for i in (340, 341, 342, 343) if exists(i)]}")
+r = req("GET", "/api/cd/340/competitors")
+ok(r.status_code == 200, f"부모의 경쟁사 목록은 계속 열린다(연결 경쟁사 비교 유지): {r.status_code}")
+who["u"] = ADMIN
+ok(req("DELETE", "/api/cd/342").status_code in (200, 404) and req("DELETE", "/api/cd/340").status_code == 409,
+   "사람이 지울 때도 같은 범위 — 부모는 409(붙은 연결 경쟁사), 연결 안 된 형제 하나는 막지 않는다")
+
 # ⑥ 화면
 
 # 교차검증 5차 반례 — 보류를 바꿀 자격이 없는 늦은 응답이 보류를 비우지 못한다
