@@ -15,16 +15,16 @@
   - 원칙: 지금 전산이 「연결 안 됨」이라고 확인해 준 업체만 지운다. 지우기 직전마다 새로 묻고,
     방금 받은 목록 ∪ 저장본을 연결로 본다 — 방금 연결된 업체도 막고, 방금 끊은 업체는 바로 풀어 준다.
   - 받기에 실패하거나 목록이 온전하지 않으면(items 없음 · total ≠ items 개수 · 번호 못 읽는 줄) 「확인 못 함」이다.
-  - 저장본은 「연결을 본 기록」이다. 응답에 보인 연결은 언제나 더하고(늦게 온 응답이라도), 해제는 그 연결을 마지막으로
-    본 응답보다 늦게 받기 시작한 응답만 한다. 빈 목록이나 한꺼번에 20% 넘는 해제는 보류하고, 같은 목록이 20시간 넘게
-    이어지면(다음 날 04:20) 해제한다.
+  - 저장본은 「연결을 본 기록」이다. 응답에 보인 연결은 언제나 더하고(늦게 온 응답이라도), 해제는 그 연결을 우리가
+    마지막으로 기록한 뒤에 받기 시작한 응답만 한다. 빈 목록이나 한꺼번에 20% 넘는 해제는 그 번호들을 보류하고, 그 번호들이
+    20시간 넘게 계속 빠져 있으면(다음 날 04:20) 해제한다.
   - 지우는 쪽은 네트워크를 다녀온 뒤 쓰기 트랜잭션 안에서 저장본으로 한 번 더 확인한다.
   - 근거가 전혀 없으면(저장본도 없고 지금도 못 받음) 지우지 않는다 — 사람이 지울 때는 「잠시 후 다시」 안내,
     30일 자동 삭제는 그 회차를 건너뛴다(교차검증 반영 · 모르는 채로 지우면 연결 업체일 수 있다).
 """
 from __future__ import annotations
 
-import hashlib
+import json
 import logging
 import os
 import sqlite3
@@ -43,12 +43,14 @@ class LinkFetchError(RuntimeError):
 
 
 def ensure_tables(conn: sqlite3.Connection) -> None:
-    # seen_started = 이 업체를 연결로 본 응답 중 가장 늦게 받기 시작한 시각 — 해제는 그보다 늦게 받기 시작한 응답만 할 수 있다
+    # seen_mark = 이 업체를 연결로 마지막으로 **기록한** 시각(쓰기 잠금 안의 시계) — 해제는 그 뒤에 받기 시작한 응답만 할 수 있다.
+    # ⚠️ 응답의 「받기 시작 시각」을 적으면 안 된다 — 먼저 시작한 요청이 전산을 더 늦게 읽을 수 있어, 늦게 시작했지만
+    #    먼저 읽은 「연결 없음」 응답이 보호를 풀었다(교차검증 재현). 기록한 뒤에 시작한 요청은 반드시 그 뒤의 전산을 읽는다.
     conn.execute("CREATE TABLE IF NOT EXISTS erp_linked_clients ("
-                 "client_id INTEGER PRIMARY KEY, seen_at TEXT NOT NULL, seen_started REAL)")
+                 "client_id INTEGER PRIMARY KEY, seen_at TEXT NOT NULL, seen_mark REAL)")
     conn.execute("CREATE TABLE IF NOT EXISTS erp_link_sync ("
                  "id INTEGER PRIMARY KEY CHECK (id = 1), synced_at TEXT NOT NULL, linked_count INTEGER NOT NULL, "
-                 "pending_hash TEXT, pending_since TEXT)")
+                 "pending_remove TEXT, pending_since TEXT)")
 
 
 def ids_from_items(items) -> set[int]:
@@ -104,72 +106,87 @@ def _writer(conn: sqlite3.Connection):
 
 def _plan(c: sqlite3.Connection, fresh: set[int], started_at: float):
     """한 응답을 반영하면 무엇이 바뀌는지 계산만 한다(읽기만 · 표가 없으면 빈 저장본).
-    반환: (지금 저장본 {번호: seen_started}, 해제할 번호들, 해제를 보류하나, 보류 이유, 덧정보)
-      - 해제 후보 = 저장본에 있는데 이 응답에 없고, 이 응답보다 먼저 받기 시작한 응답에서만 보인 것
-        (더 늦게 받기 시작한 응답이 본 연결은 늦게 도착한 옛 응답이 해제할 수 없다 — 교차검증 반영)
-      - 빈 목록이거나 저장본(20곳 이상)의 20% 넘게 한꺼번에 해제되면 보류 — 같은 목록이 CONFIRM_HOURS 넘게 이어지면 해제한다"""
-    old, row = {}, None
+    반환: dict(old={번호: seen_mark}, remove=지금 해제할 번호들, held=해제를 보류한 번호들, reason, pending=보류 번호들, since)
+      - 해제 후보 = 저장본에 있는데 이 응답에 없고, 마지막으로 기록한 시각(seen_mark)이 이 응답의 받기 시작 시각보다 이른 것
+        (기록한 뒤에 시작한 응답만 그 연결을 해제할 수 있다 — 먼저 시작했거나 기록 전에 시작한 응답은 못 한다)
+      - ⚠️ 보류는 「보류된 번호들」에 건다(교차검증 반영 — 목록 모양에 걸었더니 같은 응답이 한 번 더 오면 새 연결이 더해져
+        비율이 낮아지고 보류가 곧바로 풀렸다). 한 번 보류된 번호는 CONFIRM_HOURS 넘게 계속 빠져 있어야 해제된다.
+      - 보류 밖의 해제가 빈 목록이거나 저장본(20곳 이상)의 20% 를 넘으면 그것도 보류에 더한다(시계는 새로 시작)."""
+    old, pending, since = {}, set(), None
     if _has_tables(c):
         old = {int(r[0]): (float(r[1]) if r[1] is not None else 0.0)
-               for r in c.execute("SELECT client_id, seen_started FROM erp_linked_clients")}
-        row = c.execute("SELECT pending_hash, pending_since FROM erp_link_sync WHERE id = 1").fetchone()
-    remove = {i for i, seen in old.items() if i not in fresh and seen < started_at}
-    reason = None
-    if remove and not fresh:
-        reason = "empty"
-    elif len(old) >= DROP_GUARD_MIN and len(remove) > len(old) * DROP_GUARD_RATIO:
-        reason = "mass-drop"
-    if not reason:
-        return old, remove, False, None, {}
-    digest = hashlib.sha1(",".join(map(str, sorted(fresh))).encode()).hexdigest()
-    same = bool(row and row[0] == digest and row[1])
-    if same:
+               for r in c.execute("SELECT client_id, seen_mark FROM erp_linked_clients")}
+        row = c.execute("SELECT pending_remove, pending_since FROM erp_link_sync WHERE id = 1").fetchone()
+        if row and row[0]:
+            try:
+                pending = {int(x) for x in json.loads(row[0])}
+            except (ValueError, TypeError):
+                pending = set()
+            since = row[1]
+    cand = {i for i, seen in old.items() if i not in fresh and seen < started_at}
+    pending = (pending & set(old)) - fresh          # 다시 보였거나 이미 없는 번호는 보류에서 뺀다
+    confirmed = False
+    if pending and since:
         try:
-            if (datetime.now() - datetime.fromisoformat(row[1])).total_seconds() >= CONFIRM_HOURS * 3600:
-                return old, remove, False, reason + "-confirmed", {}
+            confirmed = (datetime.now() - datetime.fromisoformat(since)).total_seconds() >= CONFIRM_HOURS * 3600
         except ValueError:
-            pass
-    return old, remove, True, reason, {"digest": digest, "pending_same": same}
+            confirmed = False
+    held = set() if confirmed else (cand & pending)
+    free = cand - pending
+    reason = None
+    if free and not fresh:
+        reason = "empty"
+    elif len(old) >= DROP_GUARD_MIN and len(free) > len(old) * DROP_GUARD_RATIO:
+        reason = "mass-drop"
+    new_since = since if pending else None
+    if reason:
+        held |= free
+        new_since = None            # 보류에 새 번호가 더해지면 시계를 새로 시작
+    remove = cand - held
+    new_pending = held
+    if new_pending and not new_since:
+        new_since = "NOW"
+    if not new_pending:
+        new_since = None
+    return {"old": old, "remove": remove, "held": held, "reason": reason or ("confirmed" if confirmed and cand & pending else None),
+            "pending": new_pending, "since": new_since}
 
 
 def apply_response(conn: sqlite3.Connection, fresh, started_at: float) -> dict:
     """온전한 응답 하나를 저장본에 반영한다(따로 연 연결 · 쓰기 잠금 안).
     ① 이 응답에 보인 연결은 **언제나** 더한다(늦게 온 응답 · 보류된 응답이라도) — 관측한 보호를 잃지 않게.
-    ② 해제는 _plan 이 허락한 것만(이 응답보다 늦게 본 연결은 해제하지 않음 · 대량 해제는 보류)."""
+    ② 해제는 _plan 이 허락한 것만(이 응답보다 늦게 본 연결은 해제하지 않음 · 보류된 번호는 20시간 확인 뒤)."""
     fresh = {int(i) for i in fresh}
     w, own = _writer(conn)
     try:
         ensure_tables(w)
         w.execute("BEGIN IMMEDIATE")
         try:
-            old, remove, held, reason, x = _plan(w, fresh, started_at)
+            pl = _plan(w, fresh, started_at)
             now = datetime.now().isoformat(timespec="seconds")
+            mark = time.time()      # 기록하는 시각 — 쓰기 잠금 안이라 이 기록 뒤에 시작한 요청만 이 연결을 해제할 수 있다
+            if pl["remove"]:
+                marks = ",".join("?" * len(pl["remove"]))
+                # 지우는 순간에도 이 응답이 시작된 뒤에 기록된 연결은 남긴다(잠금 안이라 위 계산과 같지만 한 번 더)
+                w.execute(f"DELETE FROM erp_linked_clients WHERE client_id IN ({marks}) AND COALESCE(seen_mark, 0) < ?",
+                          list(pl["remove"]) + [started_at])
             for i in fresh:
-                w.execute("INSERT INTO erp_linked_clients(client_id, seen_at, seen_started) VALUES (?, ?, ?) "
+                w.execute("INSERT INTO erp_linked_clients(client_id, seen_at, seen_mark) VALUES (?, ?, ?) "
                           "ON CONFLICT(client_id) DO UPDATE SET seen_at=excluded.seen_at, "
-                          "seen_started=MAX(COALESCE(seen_started, 0), excluded.seen_started)", (i, now, started_at))
-            if held:
-                if not x.get("pending_same"):
-                    w.execute("INSERT INTO erp_link_sync(id, synced_at, linked_count, pending_hash, pending_since) VALUES (1, ?, ?, ?, ?) "
-                              "ON CONFLICT(id) DO UPDATE SET pending_hash=excluded.pending_hash, pending_since=excluded.pending_since",
-                              (now, len(old), x["digest"], now))
-                why = "새 목록이 비어" if reason == "empty" else "저장된 %s곳 중 %s곳이 한꺼번에 빠져" % (len(old), len(remove))
-                logger.warning(f"[전산 연결 목록] {why} 해제를 보류(새 연결은 더함 · 같은 목록이 {CONFIRM_HOURS}시간 넘게 이어지면 해제 · 전산 쪽 확인 필요)")
-            else:
-                if remove:
-                    marks = ",".join("?" * len(remove))
-                    # 지우는 순간에도 이 응답보다 늦게 본 연결은 남긴다(잠금 안이라 위 계산과 같지만 한 번 더)
-                    w.execute(f"DELETE FROM erp_linked_clients WHERE client_id IN ({marks}) AND COALESCE(seen_started, 0) < ?",
-                              list(remove) + [started_at])
-                if reason:
-                    logger.info(f"[전산 연결 목록] 보류했던 해제를 {CONFIRM_HOURS}시간 넘게 같은 목록이라 반영({reason} · {len(remove)}곳)")
+                          "seen_mark=MAX(COALESCE(seen_mark, 0), excluded.seen_mark)", (i, now, mark))
+            since = now if pl["since"] == "NOW" else pl["since"]
+            pend = json.dumps(sorted(pl["pending"])) if pl["pending"] else None
             count = w.execute("SELECT COUNT(*) FROM erp_linked_clients").fetchone()[0]
-            w.execute("INSERT INTO erp_link_sync(id, synced_at, linked_count, pending_hash, pending_since) VALUES (1, ?, ?, NULL, NULL) "
-                      "ON CONFLICT(id) DO UPDATE SET synced_at=excluded.synced_at, linked_count=excluded.linked_count"
-                      + ("" if held else ", pending_hash=NULL, pending_since=NULL"), (now, count))
+            w.execute("INSERT INTO erp_link_sync(id, synced_at, linked_count, pending_remove, pending_since) VALUES (1, ?, ?, ?, ?) "
+                      "ON CONFLICT(id) DO UPDATE SET synced_at=excluded.synced_at, linked_count=excluded.linked_count, "
+                      "pending_remove=excluded.pending_remove, pending_since=excluded.pending_since", (now, count, pend, since))
             w.execute("COMMIT")
-            return {"saved": not held, "held": held, "reason": reason, "added": len(fresh - set(old)),
-                    "removed": 0 if held else len(remove), "count": count}
+            if pl["held"]:
+                logger.warning(f"[전산 연결 목록] 연결 해제 {len(pl['held'])}곳을 보류(새 연결은 더함 · {CONFIRM_HOURS}시간 넘게 계속 빠져 있으면 해제 · 전산 쪽 확인 필요)")
+            if pl["reason"] == "confirmed":
+                logger.info(f"[전산 연결 목록] 보류했던 연결 해제를 {CONFIRM_HOURS}시간 확인 뒤 반영")
+            return {"saved": not pl["held"], "held": bool(pl["held"]), "reason": pl["reason"],
+                    "added": len(fresh - set(pl["old"])), "removed": len(pl["remove"]), "count": count}
         except Exception:
             try:
                 w.execute("ROLLBACK")
@@ -249,10 +266,8 @@ def link_status(conn: sqlite3.Connection, ids, fetch=None, save: bool = True):
     if save:
         apply_response(conn, fresh, started)
         return _stored_linked(conn, want), True
-    old, remove, held, _, _ = _plan(conn, fresh, started)
-    effective = set(old) | fresh
-    if not held:
-        effective -= remove
+    pl = _plan(conn, fresh, started)
+    effective = (set(pl["old"]) | fresh) - pl["remove"]
     return effective & want, True
 
 

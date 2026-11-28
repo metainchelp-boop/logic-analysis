@@ -75,97 +75,151 @@ def reset_guard():
     calls.clear()
 
 
-# ① 저장 — 통째로 바꿈 · 빈 목록은 저장된 것을 지우지 않음
+import time as _t   # noqa: E402
+
+
+def tick():
+    """시계를 조금 넘긴다 — 「기록한 뒤에 시작한 응답」 순서를 시험에서 확실히 만들려고."""
+    _t.sleep(0.005)
+    return _t.time()
+
+
+# ① 저장 — 응답에 보인 연결은 더하고, 기록한 뒤에 시작한 응답이 빠뜨린 연결은 해제
 reset_guard()
 c = conn()
 ok(g.ids_from_items([{"logic_client_id": 3}, {"logic_client_id": "4"}, {"logic_client_id": None}, {}]) == {3, 4}, "응답에서 숫자 번호만 고른다")
-ok(g.save_linked_set(c, {1, 2, 3}).get("count") == 3, "연결 목록 3곳 저장")
+g.save_linked_set(c, {1, 2, 3})
+tick()
 g.save_linked_set(c, {2, 5})
-ok({r[0] for r in c.execute("SELECT client_id FROM erp_linked_clients")} == {2, 5}, "새 목록으로 통째로 바꾼다")
+ok(g.stored_linked(c, [1, 2, 3, 5]) == {2, 5}, "기록한 뒤에 시작한 응답이 빠뜨린 연결(1·3)은 해제하고 새 연결(5)은 더한다")
+tick()
 r = g.save_linked_set(c, set())
-ok(r.get("saved") is False and {r2[0] for r2 in c.execute("SELECT client_id FROM erp_linked_clients")} == {2, 5},
-   "새 목록이 비면 저장된 목록을 지우지 않는다(전산 오류로 보호가 한꺼번에 풀리지 않게)")
-ok(g.sync_info(c)["count"] == 2, "받은 때와 곳 수를 남긴다")
+ok(r.get("held") is True and g.stored_linked(c, [2, 5]) == {2, 5}, "빈 목록은 해제를 보류한다(전산 오류로 보호가 한꺼번에 풀리지 않게)")
+ok(g.sync_info(c)["count"] == 2, "반영한 때와 곳 수를 남긴다")
+c.execute("UPDATE erp_link_sync SET pending_since=?", ((datetime.now() - timedelta(hours=21)).isoformat(),))
+c.commit()
+tick()
+ok(g.save_linked_set(c, set()).get("saved") is True and g.stored_linked(c, [2, 5]) == set(), "빈 목록도 그 번호들이 20시간 넘게 계속 빠져 있으면 해제")
 c.close()
 
 # ③ 지우기 직전마다 새로 묻는다 — 저장본에 없던 새 연결도 막고, 끊은 연결은 풀린다
 reset_guard()
 c = conn()
 g.save_linked_set(c, {10, 11})
+tick()
 ok(g.linked_among(c, [12], fetch=fake_fetch([10, 11, 12])) == {12} and len(calls) == 1,
    "저장본에 없던 새 연결도 지우기 직전에 물어 막는다(교차검증 재현 — 저장본만 보면 지워졌다)")
+tick()
 ok(g.linked_among(c, [10], fetch=fake_fetch([11, 12])) == set() and len(calls) == 2, "전산에서 방금 끊었으면 바로 풀린다")
 c.close()
 
-# ④ 받기 실패 · 온전하지 않은 목록 · 한꺼번에 빠진 목록은 저장하지 않고 저장본으로
+# ④ 받기 실패 · 불완전 목록
 reset_guard()
 c = conn()
 g.save_linked_set(c, {20, 21})
-ok(g.linked_among(c, [20, 21], fetch=fake_fetch([], fail=True)) == {20, 21}, "받기에 실패하면 저장본으로 판단(연결 업체는 계속 막음)")
+st, known = g.link_status(c, [20, 21], fetch=fake_fetch([], fail=True))
+ok(st == {20, 21} and known is False, "받기에 실패하면 저장본으로 막되 확인 못 함(known=False — 지우지 않는다)")
 _it = lambda n: [{"logic_client_id": i} for i in range(n)]
 ok(g.complete(_it(2), 2) and not g.complete(_it(1), 2) and not g.complete(_it(1), None) and not g.complete(_it(1), True), "total = items 개수일 때만 온전한 목록")
-big = set(range(1000, 1100))
-g.save_linked_set(c, big)
-r = g.save_linked_set(c, set(range(1000, 1070)))
-ok(r.get("saved") is False and r.get("reason") == "mass-drop" and len(g.stored_linked(c, list(big))) == 100,
-   "저장된 100곳 중 30곳이 한꺼번에 빠지면 저장하지 않는다(전산 쪽 오류 대비)")
-r = g.save_linked_set(c, set(range(1000, 1090)))
-ok(r.get("saved") is True, "10% 정도 빠지는 보통 변화는 저장한다")
-# 저장을 거절해도 방금 받은 목록의 연결은 막는다(교차검증 재현 — 대량 누락으로 거절되자 새 연결까지 버렸다)
-fresh = set(range(1000, 1060)) | {5000}
-st, known = g.link_status(c, [5000, 1085], fetch=fake_fetch(sorted(fresh)))
-ok(st == {5000, 1085} and known is True and len(g.stored_linked(c, list(range(1000, 1090)))) == 90,
-   "대량 누락이라 저장은 거절해도, 방금 받은 목록의 새 연결(5000)과 저장본의 연결(1085)을 모두 막는다")
-# 늦게 도착한 옛 응답은 새 목록을 덮지 않는다
-import time as _t   # noqa: E402
-t_new = _t.time()
-r1 = g.save_linked_set(c, set(range(1000, 1090)) | {6000}, started_at=t_new)
-r2 = g.save_linked_set(c, set(range(1000, 1090)), started_at=t_new - 5)
-ok(r1.get("saved") and g.stored_linked(c, [6000]) == {6000},
-   "먼저 받기 시작한 옛 응답이 나중에 도착해도 더 늦게 본 연결(6000)은 해제하지 못한다")
-r3 = g.save_linked_set(c, set(), started_at=t_new - 1)
-ok(g.stored_linked(c, [6000]) == {6000} and len(g.stored_linked(c, list(range(1000, 1090)))) == 90,
-   "옛 빈 응답도 새 보호를 지우지 못한다")
+c.close()
+reset_guard()
+c = conn()
+st, known = g.link_status(c, [30], fetch=fake_fetch([], fail=True))
+ok(st == set() and known is False, "지금 전산이 확인해 주지 못하면 known=False(지우지 않는다)")
 c.close()
 
-# 두 응답이 엇갈려 도착 — 새 응답(B · 대량 감소라 해제 보류)이 본 새 연결 P 를 옛 응답(A)이 지우지 못한다(교차검증 재현)
+# 대량 해제 — 보통 변화(10%)는 반영, 20% 넘으면 보류하되 방금 받은 새 연결은 더한다
+reset_guard()
+c = conn()
+big = set(range(1000, 1100))
+g.save_linked_set(c, big)
+tick()
+ok(g.save_linked_set(c, set(range(1000, 1090))).get("saved") is True and len(g.stored_linked(c, list(big))) == 90, "10% 정도 빠지는 보통 변화는 반영")
+reset_guard()
+c.close()
+c = conn()
+g.save_linked_set(c, big)
+tick()
+r = g.save_linked_set(c, set(range(1000, 1070)))
+ok(r.get("held") is True and len(g.stored_linked(c, list(big))) == 100, "저장된 100곳 중 30곳이 한꺼번에 빠지면 해제를 보류(전산 쪽 오류 대비)")
+tick()
+st, known = g.link_status(c, [5000, 1085], fetch=fake_fetch(sorted(set(range(1000, 1060)) | {5000})))
+ok(st == {5000, 1085} and known is True, "대량 해제라 보류해도 방금 받은 새 연결(5000)은 더하고 저장본의 연결(1085)도 막는다(교차검증 재현)")
+c.close()
+
+# 순서 — 기록한 뒤에 시작한 응답만 해제할 수 있다
+reset_guard()
+c = conn()
+t_old = _t.time()            # A: 먼저 시작한 요청(나중에 「연결 없음」으로 늦게 도착)
+tick()
+g.save_linked_set(c, {6000, 6001})   # 그 사이 다른 요청이 6000 연결을 기록
+r = g.save_linked_set(c, {6001}, started_at=t_old)
+ok(g.stored_linked(c, [6000]) == {6000}, "기록 전에 시작한 옛 응답은 그 연결을 해제하지 못한다")
+r = g.save_linked_set(c, set(), started_at=t_old)
+ok(g.stored_linked(c, [6000, 6001]) == {6000, 6001}, "기록 전에 시작한 옛 빈 응답도 보호를 지우지 못한다")
+c.close()
+
+# 순서 반례(교차검증 재현) — A 먼저 시작 → B 나중 시작했지만 「연결 없음」을 먼저 읽음 → A 가 「연결 있음」을 기록 → B 도착.
+# 받기 시작 시각만 비교하면 B(나중 시작)가 보호를 풀었다. 기록한 시각으로 비교하면 B 는 기록 전에 시작했으니 못 푼다.
+reset_guard()
+c = conn()
+g.save_linked_set(c, {7100})
+t_a = tick()                 # A 시작
+t_b = tick()                 # B 시작(A 보다 나중) — B 는 이때 전산에서 7200 없음을 읽었다고 하자
+tick()
+g.save_linked_set(c, {7100, 7200}, started_at=t_a)   # A 가 늦게 읽은 「7200 연결」을 기록(기록 시각 > t_b)
+g.save_linked_set(c, {7100}, started_at=t_b)          # B 의 지연된 「7200 없음」 도착
+ok(g.stored_linked(c, [7200]) == {7200}, "나중에 시작했어도 우리가 기록하기 전에 시작한 응답(B)은 그 연결을 해제하지 못한다")
+tick()
+g.save_linked_set(c, {7100})                           # 기록 뒤에 시작한 응답의 「7200 없음」 → 진짜 해제
+ok(g.stored_linked(c, [7200]) == set(), "기록한 뒤에 시작한 응답의 해제는 반영")
+c.close()
+
+# 두 응답이 엇갈려 도착 — B(대량 감소라 보류)가 본 새 연결 P 를 옛 응답 A 가 지우지 못한다(교차검증 재현)
 reset_guard()
 c = conn()
 base = set(range(7000, 7025))
-g.save_linked_set(c, base, started_at=100.0)
-t_b = 200.0
-rb = g.save_linked_set(c, set(range(7000, 7010)) | {7999}, started_at=t_b)
-ra = g.save_linked_set(c, base, started_at=t_b - 50)
+g.save_linked_set(c, base)
+t_a = tick()
+tick()
+rb = g.save_linked_set(c, set(range(7000, 7010)) | {7999})
+ra = g.save_linked_set(c, base, started_at=t_a)
 ok(rb.get("held") is True and g.stored_linked(c, [7999]) == {7999} and len(g.stored_linked(c, list(base))) == 25,
-   f"대량 감소라 해제는 보류해도 B 가 본 새 연결 7999 는 바로 기록되고, 늦게 온 옛 응답 A 도 지우지 못한다: {rb} {ra}")
+   f"대량 감소라 해제는 보류해도 B 가 본 새 연결 7999 는 기록되고, 옛 응답 A 도 지우지 못한다: {rb} {ra}")
 c.close()
 
-# 거절한 목록이 20시간 넘게 똑같이 이어지면 진짜 변화로 받아들인다(교차검증 반영 — 거절만 하면 진짜 끊은 연결이 영영 막힘)
+# 보류는 「보류된 번호들」에 건다 — 다시 나타난 번호는 빠지고, 나머지는 20시간 넘게 계속 빠져 있어야 해제
 reset_guard()
 c = conn()
 g.save_linked_set(c, set(range(2000, 2030)))
+tick()
 shrunk = set(range(2000, 2010))
-ok(g.save_linked_set(c, shrunk).get("reason") == "mass-drop", "대량 누락 첫 번째 = 거절")
-ok(g.save_linked_set(c, shrunk).get("reason") == "mass-drop", "20시간 안에 같은 목록이 또 와도 거절")
+ok(g.save_linked_set(c, shrunk).get("held") is True, "대량 해제 첫 번째 = 보류")
+tick()
+ok(g.save_linked_set(c, shrunk).get("held") is True, "20시간 안에 같은 응답이 또 와도 보류")
+tick()
+r = g.save_linked_set(c, shrunk | {2029})
+ok(r.get("held") is True and g.stored_linked(c, [2029, 2010]) == {2029, 2010}, "다시 나타난 번호(2029)는 보류에서 빠지고 나머지 보류는 그대로")
 c.execute("UPDATE erp_link_sync SET pending_since=?", ((datetime.now() - timedelta(hours=21)).isoformat(),))
 c.commit()
-ok(g.save_linked_set(c, shrunk).get("saved") is True and g.stored_linked(c, [2020]) == set(),
-   "같은 목록이 20시간 넘게 이어지면 받아들인다(다음 날 04:20) — 끊은 연결 2020 이 풀린다")
-ok(c.execute("SELECT pending_hash FROM erp_link_sync").fetchone()[0] is None, "받아들이면 대기 표시를 지운다")
-g.save_linked_set(c, set(range(2000, 2030)))
-ok(g.save_linked_set(c, set(range(2000, 2005))).get("saved") is False, "다른 목록이면 대기를 새로 시작")
-c.execute("UPDATE erp_link_sync SET pending_since=?", ((datetime.now() - timedelta(hours=21)).isoformat(),))
-c.commit()
-ok(g.save_linked_set(c, set(range(2000, 2006))).get("saved") is False, "20시간 지났어도 목록이 바뀌었으면 다시 거절")
-g.save_linked_set(c, {1})   # 작은 목록으로(빈 목록 규칙 시험용)
-c.execute("DELETE FROM erp_linked_clients")
-c.execute("INSERT INTO erp_linked_clients VALUES (3000, 'x', 0)")
-c.commit()
-ok(g.save_linked_set(c, set()).get("reason") == "empty", "빈 목록 첫 번째 = 거절")
-c.execute("UPDATE erp_link_sync SET pending_since=?", ((datetime.now() - timedelta(hours=21)).isoformat(),))
-c.commit()
-ok(g.save_linked_set(c, set()).get("saved") is True and g.stored_linked(c, [3000]) == set(), "빈 목록도 20시간 넘게 이어지면 받아들인다")
+tick()
+ok(g.save_linked_set(c, shrunk | {2029}).get("saved") is True and g.stored_linked(c, [2010]) == set() and g.stored_linked(c, [2029]) == {2029},
+   "보류된 번호들이 20시간 넘게 계속 빠져 있으면 해제(다시 나타난 2029 는 남음)")
+ok(c.execute("SELECT pending_remove FROM erp_link_sync").fetchone()[0] is None, "해제하면 보류 표시를 지운다")
 c.close()
+
+# 같은 대량 해제 응답이 곧바로 한 번 더 와도 보류가 풀리지 않는다(교차검증 재현 — 새 연결이 더해져 비율이 낮아지며 풀렸다)
+reset_guard()
+c2 = conn()
+g.save_linked_set(c2, set(range(4000, 4020)))
+tick()
+resp = (set(range(4000, 4020)) - set(range(4000, 4005))) | set(range(4100, 4105))
+r1 = g.save_linked_set(c2, resp)
+tick()
+r2 = g.save_linked_set(c2, resp)
+ok(r1.get("held") is True and r2.get("held") is True and g.stored_linked(c2, list(range(4000, 4005))) == set(range(4000, 4005)),
+   f"보류된 해제는 같은 응답이 다시 와도 20시간 전엔 풀리지 않는다: {r1} {r2}")
+c2.close()
 
 # 받기 실패 로그에 외부 예외 원문을 남기지 않는다
 import logging   # noqa: E402
@@ -472,6 +526,27 @@ g.link_status = _racy211
 r = req("DELETE", "/api/clients/211")
 g.link_status = _real_ls
 ok(r.status_code == 409 and exists(211), f"옛 업체 API 도 판정 뒤 기록된 연결을 지우기 직전에 다시 봐서 막는다: {r.status_code}")
+c = conn()
+c.execute("INSERT INTO clients (id, name, created_by, role) VALUES (212, '옛 경로 판정 중 주인 바뀜', 1, 'advertiser')")
+c.commit()
+c.close()
+
+
+def _owner_change(cn, ids, fetch=None, save=True):
+    out = _real_ls(cn, ids, fetch, save)
+    other = conn()
+    other.execute("UPDATE clients SET created_by=2 WHERE id=212")
+    other.commit()
+    other.close()
+    return out
+
+
+who["u"] = USER
+g.link_status = _owner_change
+r = req("DELETE", "/api/clients/212")
+g.link_status = _real_ls
+who["u"] = ADMIN
+ok(r.status_code == 403 and exists(212), f"옛 업체 API — 판정 중 주인이 바뀌면 지우기 직전에 다시 봐서 막는다(교차검증 재현): {r.status_code}")
 
 # 30일 지난 영업 대상·경쟁사 자동 삭제
 past = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
@@ -534,6 +609,31 @@ n = cd.cleanup_expired_competitors()
 g.link_status = _real_ls
 ok(exists(301), "연결된 광고주의 경쟁사는 따로 기한이 지나도 지우지 않는다")
 ok(exists(302) and exists(303), f"전산을 기다리는 사이 기한이 늘어난 영업 대상(과 그 경쟁사)은 지우지 않는다(쓰기 안에서 다시 확인 · 앞 시험의 다른 만료분 {n}건은 지움)")
+
+# 전산을 기다리는 사이 기한 지난 경쟁사가 다른 「연결된」 부모로 옮겨지면 남긴다(교차검증 재현)
+reset_guard()
+g._default_fetch = fake_fetch([300, 310])
+c = conn()
+c.execute("INSERT INTO clients (id, name, created_by, role) VALUES (310, '새로 연결된 광고주', 1, 'advertiser')")
+c.execute("INSERT INTO clients (id, name, created_by, role, expires_at) VALUES (311, '보통 영업 대상', 1, 'prospect', NULL)")
+c.execute("INSERT INTO clients (id, name, created_by, role, competitor_of, expires_at) VALUES (312, '옮겨질 기한 지난 경쟁사', 1, 'competitor', 311, ?)", (past,))
+c.commit()
+c.close()
+
+
+def _move_during(cn, ids, fetch=None, save=True):
+    out = _real_ls(cn, ids, fetch, save)
+    other = conn()
+    other.execute("UPDATE clients SET competitor_of=310 WHERE id=312")
+    other.commit()
+    other.close()
+    return out
+
+
+g.link_status = _move_during
+cd.cleanup_expired_competitors()
+g.link_status = _real_ls
+ok(exists(312), "판정 중 연결된 부모(310)로 옮겨진 기한 지난 경쟁사는 지우지 않는다")
 
 # ⑥ 화면
 src = open(os.path.join(HERE, "..", "..", "frontend", "js", "components", "ClientDashboard.jsx"), encoding="utf-8").read()

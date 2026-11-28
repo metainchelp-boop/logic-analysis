@@ -169,7 +169,7 @@ def run_report_owner_sync(db_path: str | None = None, base: str | None = None,
         try:
             from erp_link_guard import save_linked_set, ids_from_items, complete
             if not complete(items, total):
-                logger.warning(f"전산 연결 목록이 온전하지 않아 저장하지 않음(total={total!r} · items={len(items) if isinstance(items, list) else '없음'}) — 담당자 정렬은 계속")
+                logger.warning("전산 연결 목록이 온전하지 않아 저장하지 않음(개수가 맞지 않거나 형식이 다름) — 담당자 정렬은 계속")
             else:
                 _lc = sqlite3.connect(db_path, timeout=30)
                 try:

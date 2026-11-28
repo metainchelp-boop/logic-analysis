@@ -2500,7 +2500,8 @@ def cleanup_expired_competitors():
                 if not still:
                     continue
                 cur_parent = conn.execute("SELECT competitor_of FROM clients WHERE id = ?", (r["id"],)).fetchone()
-                if cur_parent and cur_parent[0] in keep:
+                # 전산을 기다리는 사이 다른 부모로 옮겨졌을 수 있다 — 지금 부모가 연결이면(저장본으로도) 남긴다(교차검증 반영)
+                if cur_parent and cur_parent[0] and (cur_parent[0] in keep or stored_linked(conn, [cur_parent[0]])):
                     continue
                 deleted.append((r["id"], r["name"]))
                 gone_parents.add(r["id"])

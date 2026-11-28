@@ -934,8 +934,12 @@ def delete_existing_client(
             raise HTTPException(status_code=409, detail=UNKNOWN_MESSAGE)
 
         def _last_check(gconn):
-            # 판정은 네트워크를 다녀온 시점의 것 — 쓰기 잠금 안에서 저장본으로 한 번 더(교차검증 반영)
+            # 판정은 네트워크를 다녀온 시점의 것 — 쓰기 잠금 안에서 업체·소유·연결을 한 번 더(교차검증 반영)
             from erp_link_guard import stored_linked
+            row = gconn.execute("SELECT created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="클라이언트를 찾을 수 없습니다")
+            _check_ownership({"created_by": row["created_by"]}, current_user)
             if stored_linked(gconn, [client_id]):
                 raise HTTPException(status_code=409, detail=BLOCK_MESSAGE)
 
