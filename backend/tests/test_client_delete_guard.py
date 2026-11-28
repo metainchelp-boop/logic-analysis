@@ -598,9 +598,10 @@ c = conn()
 g.save_linked_set(c, {105, 201, 202, 207})
 c.close()
 n = cd.cleanup_expired_competitors()
-ok(exists(202) and exists(205) and not exists(204) and not exists(206) and not exists(208),
-   f"자동 삭제는 기한 지난 연결 업체(와 그 경쟁사)를 남기고 보통 업체(와 그 경쟁사)만 지운다: 지운 {n}건")
-ok(exists(207) and n == 3, f"연결 안 된 영업 대상을 지울 때 붙어 있던 연결 경쟁사는 남긴다: 지운 {n}건")
+ok(exists(202) and exists(205) and not exists(204),
+   f"자동 삭제는 기한 지난 연결 업체(와 그 경쟁사)를 남기고 보통 업체만 지운다: 지운 {n}건")
+ok(exists(206) and exists(207) and exists(208) and n == 1,
+   f"연결된 경쟁사가 붙은 영업 대상은 묶음 전체를 남긴다 — 부모만 지워 비교가 끊기지 않게(사람이 지울 때 409 와 같은 규칙 · 교차검증 반영): 지운 {n}건")
 
 # 자동 삭제 — 지금 전산이 확인해 주지 못하면(저장본이 오래됐어도) 그 회차를 건너뛴다(교차검증 재현)
 reset_guard()
@@ -700,6 +701,35 @@ ok(exists(320) and exists(321) and exists(322) and _par and _par[0] == 320,
 n = cd.cleanup_expired_competitors()
 ok(not exists(320) and not exists(321) and not exists(322) and n == 3,
    f"다음 회차에는 새 경쟁사까지 함께 전산에 묻고 정리한다: 지운 {n}건")
+
+# 판정 중 새로 붙은 경쟁사가 다음 회차에 전산 연결로 확인되면 부모를 남긴다(교차검증 8차 재현)
+reset_guard()
+g._default_fetch = fake_fetch([999])
+c = conn()
+c.execute("INSERT INTO clients (id, name, created_by, role, expires_at) VALUES (330, '기한 지난 영업 대상', 1, 'prospect', ?)", (past,))
+c.execute("INSERT INTO clients (id, name, created_by, role, competitor_of) VALUES (331, '먼저 붙어 있던 경쟁사', 1, 'competitor', 330)")
+c.commit()
+c.close()
+
+
+def _register_during2(cn, ids, fetch=None, save=True):
+    out = _real_ls(cn, ids, fetch, save)
+    other = conn()
+    other.execute("INSERT INTO clients (id, name, created_by, role, competitor_of) VALUES (332, '기다리는 사이 새로 붙은 경쟁사', 2, 'competitor', 330)")
+    other.commit()
+    other.close()
+    return out
+
+
+g.link_status = _register_during2
+cd.cleanup_expired_competitors()
+g.link_status = _real_ls
+g._default_fetch = fake_fetch([999, 332])
+n = cd.cleanup_expired_competitors()
+ok(exists(330) and exists(331) and exists(332) and n == 0,
+   f"다음 회차에 새 경쟁사가 전산 연결로 확인되면 부모·다른 경쟁사도 남긴다 — 연결 경쟁사의 비교가 끊기지 않게: 지운 {n}건")
+r = req("GET", "/api/cd/330/competitors")
+ok(r.status_code == 200, f"그 영업 대상의 경쟁사 목록이 계속 열린다: {r.status_code}")
 
 # ⑥ 화면
 

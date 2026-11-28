@@ -2445,7 +2445,8 @@ def cleanup_expired_competitors():
     client_analyses는 FK ON DELETE CASCADE로 함께 삭제. 반환: 삭제 건수.
 
     전산(①)과 연결된 업체는 지우지 않는다(2026-11-28 · 대표 결정 ①ⓐ) — 업체 찾기 화면에 역할 구분이 없어
-    영업 대상·경쟁사도 연결될 수 있다. 연결된 업체에 붙은 경쟁사도 지우지 않는다(그 업체의 비교 자료).
+    영업 대상·경쟁사도 연결될 수 있다. 묶음(업체 + 붙은 경쟁사) 안에 연결 업체가 하나라도 있으면 묶음 전체를 남긴다
+    — 연결된 업체에 붙은 경쟁사도, 연결된 경쟁사가 붙은 부모도 지우지 않는다(사람이 지울 때 409 와 같은 규칙).
     ⚠️ 교차검증 반영:
       - 후보(만료분 + 붙은 경쟁사 + 만료 경쟁사의 부모)를 한 번에 전산에 묻고, 지금 전산이 확인해 주지 못하면 이 회차를 건너뛴다.
       - 전산을 기다리는 사이 사람이 기한을 늘리거나 바꿀 수 있으므로, 지우는 쓰기 트랜잭션 안에서 줄마다 다시 확인한다.
@@ -2517,6 +2518,10 @@ def cleanup_expired_competitors():
                     "SELECT id FROM clients WHERE COALESCE(role,'advertiser')='competitor' AND competitor_of = ?", (r["id"],))}
                 if kids_now - known_kids.get(r["id"], set()):
                     new_kid_hold += 1
+                    continue
+                # 붙은 경쟁사 가운데 연결 업체가 있으면 부모도 남긴다 — 부모만 지우면 그 경쟁사의 비교 자료가 끊긴다.
+                # 사람이 지울 때(업체 + 붙은 경쟁사 중 하나라도 연결이면 409)와 같은 규칙(교차검증 반영)
+                if kids_now & keep:
                     continue
                 deleted.append((r["id"], r["name"]))
                 gone_parents.add(r["id"])
