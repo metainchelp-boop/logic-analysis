@@ -1296,7 +1296,9 @@ def _parse_analysis_row_light(row):
 @router.get("/{client_id}/delete-preview")
 def delete_preview(client_id: int, current_user: dict = Depends(get_current_user)):
     """삭제 확인 창용 — 함께 지워지는 건수와 전산 연결 여부(2026-11-28 · 대표 결정 ①ⓐ ②ⓐ).
-    권한은 삭제와 같다(관리자는 전체, 그 외는 본인 등록분만). 아무것도 바꾸지 않는다."""
+    권한은 삭제와 같다(관리자는 전체, 그 외는 본인 등록분만).
+    업체·분석·보고서 자료는 바꾸지 않는다. 전산 연결 여부를 새로 물으면서 연결 목록 저장본(erp_linked_clients)은 새로 쓸 수 있다.
+    건수는 실제 삭제와 같은 범위(업체 + 붙은 경쟁사)로 센다(교차검증 반영 — 부모만 세면 창과 실제가 달랐다)."""
     conn = _get_conn()
     try:
         client = conn.execute("SELECT id, name, created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
@@ -1309,20 +1311,24 @@ def delete_preview(client_id: int, current_user: dict = Depends(get_current_user
             (client_id,)
         ).fetchall()]
 
+        ids = [client_id] + linked
+        marks = ",".join("?" * len(ids))
+
         def _count(sql):
             try:
-                return int(conn.execute(sql, (client_id,)).fetchone()[0] or 0)
+                return int(conn.execute(sql.format(marks=marks), ids).fetchone()[0] or 0)
             except sqlite3.Error:
                 return 0
 
         from erp_link_guard import linked_among, BLOCK_MESSAGE
-        erp_linked = bool(linked_among(conn, [client_id] + linked))
+        erp_linked = bool(linked_among(conn, ids))
         return {
             "success": True,
             "name": client['name'],
-            "reports": _count("SELECT COUNT(*) FROM reports WHERE client_id = ?"),
-            "analyses": _count("SELECT COUNT(*) FROM client_analyses WHERE client_id = ?"),
-            "rank_days": _count("SELECT COUNT(DISTINCT substr(checked_at,1,10)) FROM client_rank_history WHERE client_id = ?"),
+            "reports": _count("SELECT COUNT(*) FROM reports WHERE client_id IN ({marks})"),
+            "analyses": _count("SELECT COUNT(*) FROM client_analyses WHERE client_id IN ({marks})"),
+            "rank_days": _count("SELECT COUNT(*) FROM (SELECT DISTINCT client_id, substr(checked_at,1,10) "
+                                "FROM client_rank_history WHERE client_id IN ({marks}))"),
             "competitors": len(linked),
             "erp_linked": erp_linked,
             "blocked_message": BLOCK_MESSAGE if erp_linked else None,
@@ -2422,11 +2428,15 @@ def cleanup_expired_competitors():
         ).fetchall()
         # 전산(①)과 연결된 업체는 기한이 지나도 지우지 않는다(2026-11-28 · 대표 결정 ①ⓐ).
         # 업체 찾기 화면에 역할 구분이 없어 영업 대상·경쟁사도 전산에 연결될 수 있다.
+        # ⚠️ 자동 삭제는 사람이 지울 때와 달리, 연결 여부를 알 근거가 없으면(저장본도 없고 지금도 못 받음) 그 회차를 건너뛴다(교차검증 반영).
         try:
-            from erp_link_guard import linked_among
-            keep = linked_among(conn, [r["id"] for r in rows]) if rows else set()
+            from erp_link_guard import link_status
+            keep, known = link_status(conn, [r["id"] for r in rows]) if rows else (set(), True)
         except Exception as _ge:
             logger.warning(f"[cleanup] 전산 연결 확인 실패 — 이번 회차 자동 삭제를 건너뜀: {_ge}")
+            return 0
+        if not known:
+            logger.warning("[cleanup] 전산 연결 목록을 받은 적이 없고 지금도 못 받아 이번 회차 자동 삭제를 건너뜀")
             return 0
         if keep:
             logger.info(f"[cleanup] 전산 연결 업체 {len(keep)}곳은 기한이 지나도 지우지 않음")
@@ -2444,7 +2454,8 @@ def cleanup_expired_competitors():
         # 함께 지울 경쟁사 가운데 전산에 연결된 것도 남긴다(부모 영업 대상만 보고 거르면 붙은 연결 경쟁사가 지워진다 — 시험이 잡음)
         attached = [r["id"] for r in rows]
         try:
-            keep2 = linked_among(conn, attached) if attached else set()
+            from erp_link_guard import stored_linked
+            keep2 = stored_linked(conn, attached) if attached else set()   # 위에서 막 새로 받았다 — 다시 묻지 않는다
         except Exception as _ge:
             logger.warning(f"[cleanup] 전산 연결 확인 실패 — 이번 회차 자동 삭제를 건너뜀: {_ge}")
             return 0

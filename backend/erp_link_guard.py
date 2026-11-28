@@ -12,28 +12,24 @@
   모든 경로(화면 삭제 · 옛 업체 API 삭제 · 30일 지난 영업 대상·경쟁사 자동 삭제)가 여기 묻는다.
   ⚠️ 전산 쪽 변경은 없다(이미 있는 목록을 받아 저장만 한다).
 
-  - 저장된 목록에 있으면 「연결됨」. 그때만 전산에 한 번 더 물어(1분에 한 번까지) 방금 연결을 끊었으면
-    바로 풀어 준다 — 전산에서 끊고 다음 날까지 기다리지 않게.
-  - 목록을 한 번도 못 받았거나 36시간 넘게 못 받았으면 삭제할 때 한 번 받아 본다. 그래도 못 받으면
-    저장된 목록(있으면)으로 판단한다 — 전산이 잠깐 안 될 때 삭제가 통째로 막히지 않게.
-  - 새로 받은 목록이 비어 있는데 저장된 목록이 있으면 바꾸지 않는다(전산 쪽 오류로 보호가 한꺼번에
-    풀리지 않게 · 경고 로그).
+  - 지우기 직전마다 전산에 새로 묻는다 — 방금 연결된 업체도 막고, 방금 끊은 업체는 바로 풀어 준다.
+  - 받기에 실패하거나 목록이 온전하지 않으면(total ≠ items 개수) 저장된 목록으로 판단한다.
+  - 새 목록이 비었거나 저장된 목록에서 한꺼번에 20% 넘게 빠지면 바꾸지 않는다(전산 쪽 오류로 보호가
+    한꺼번에 풀리지 않게 · 경고 로그).
+  - 사람이 지울 때 근거가 전혀 없으면(한 번도 못 받았고 지금도 실패) 막지 않는다(종전처럼).
+    30일 자동 삭제는 근거가 없으면 그 회차를 건너뛴다.
 """
 from __future__ import annotations
 
 import logging
 import os
 import sqlite3
-import threading
-import time
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-STALE_HOURS = 36            # 이보다 오래 못 받았으면 삭제할 때 한 번 받아 본다
-RECHECK_MIN_SEC = 60        # 「연결됨」일 때 전산에 다시 묻는 간격(프로세스마다)
-_recheck_lock = threading.Lock()
-_last_recheck = 0.0
+DROP_GUARD_MIN = 20         # 저장된 목록이 이만큼 이상일 때
+DROP_GUARD_RATIO = 0.2      # 새 목록이 저장된 것의 20% 넘게 한꺼번에 빠지면 저장하지 않는다(전산 쪽 오류로 보호가 풀리지 않게)
 
 
 def ensure_tables(conn: sqlite3.Connection) -> None:
@@ -54,13 +50,23 @@ def ids_from_items(items) -> set[int]:
     return out
 
 
+def complete(items, total) -> bool:
+    """전산 응답이 온전한가 — 전산은 total = items 개수로 준다(ReportSyncService). 다르거나 total 이 없으면 일부만 온 것으로 본다."""
+    return isinstance(total, int) and not isinstance(total, bool) and isinstance(items, list) and total == len(items)
+
+
 def save_linked_set(conn: sqlite3.Connection, ids: set[int]) -> dict:
-    """연결 목록을 통째로 바꿔 저장(한 트랜잭션). 새 목록이 비었는데 저장된 것이 있으면 바꾸지 않는다."""
+    """연결 목록을 통째로 바꿔 저장(한 트랜잭션).
+    새 목록이 비었거나, 저장된 목록에서 한꺼번에 많이(20% 넘게) 빠지면 바꾸지 않는다 — 전산 쪽 오류로 보호가 풀리지 않게."""
     ensure_tables(conn)
-    old = conn.execute("SELECT COUNT(*) FROM erp_linked_clients").fetchone()[0]
+    old = {int(r[0]) for r in conn.execute("SELECT client_id FROM erp_linked_clients")}
     if not ids and old:
-        logger.warning(f"[전산 연결 목록] 새 목록이 비어 있어 저장하지 않음(저장된 {old}곳 유지 · 전산 쪽 확인 필요)")
-        return {"saved": False, "reason": "empty", "kept": old}
+        logger.warning(f"[전산 연결 목록] 새 목록이 비어 있어 저장하지 않음(저장된 {len(old)}곳 유지 · 전산 쪽 확인 필요)")
+        return {"saved": False, "reason": "empty", "kept": len(old)}
+    dropped = len(old - set(ids))
+    if len(old) >= DROP_GUARD_MIN and dropped > len(old) * DROP_GUARD_RATIO:
+        logger.warning(f"[전산 연결 목록] 저장된 {len(old)}곳 중 {dropped}곳이 한꺼번에 빠져 저장하지 않음(전산 쪽 확인 필요)")
+        return {"saved": False, "reason": "mass-drop", "kept": len(old), "dropped": dropped}
     now = datetime.now().isoformat(timespec="seconds")
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -94,45 +100,41 @@ def _fetch_and_save(conn: sqlite3.Connection, fetch) -> bool:
     try:
         items = fetch()
     except Exception as e:
-        logger.warning(f"[전산 연결 목록] 받기 실패 — 저장된 목록으로 판단 ({type(e).__name__})")
+        logger.warning(f"[전산 연결 목록] 받기 실패 — 저장된 목록으로 판단 ({type(e).__name__}: {str(e)[:80]})")
         return False
     return bool(save_linked_set(conn, ids_from_items(items)).get("saved"))
 
 
 def _default_fetch():
+    """전산에서 연결 목록을 받는다 — 온전한 목록만 돌려주고, 일부만 오면 실패로 본다."""
     api_key = os.getenv("ERP_AD_SYNC_API_KEY", "")
     if not api_key:
         raise RuntimeError("ERP_AD_SYNC_API_KEY 미설정")
-    from report_owner_sync import fetch_client_managers
-    return fetch_client_managers(os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr"), api_key, timeout=8)
+    from report_owner_sync import fetch_client_managers_payload
+    items, total = fetch_client_managers_payload(os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr"), api_key, timeout=8)
+    if not complete(items, total):
+        raise RuntimeError(f"전산 연결 목록이 온전하지 않음(total={total!r} · items={len(items) if isinstance(items, list) else '?'})")
+    return items
 
 
-def _is_stale(info) -> bool:
-    if not info:
-        return True
-    try:
-        age = (datetime.now() - datetime.fromisoformat(info["synced_at"])).total_seconds()
-    except Exception:
-        return True
-    return age > STALE_HOURS * 3600
+def link_status(conn: sqlite3.Connection, ids, fetch=None):
+    """(ids 가운데 전산과 연결된 번호들, 판단 근거가 있나).
+    ⚠️ 지우기 직전마다 전산에 새로 묻는다 — 저장본만 보면 방금 연결된 업체를 놓치고, 방금 끊은 업체를 계속 막는다
+       (2026-11-28 교차검증 재현: 저장본이 최신이라 묻지 않았고 새로 연결된 업체가 지워졌다).
+       받기에 실패하거나 목록이 온전하지 않으면 저장본으로 판단한다. 저장본도 없으면 근거 없음(known=False)."""
+    fresh = _fetch_and_save(conn, fetch or _default_fetch)
+    known = fresh or sync_info(conn) is not None
+    return _stored_linked(conn, ids), known
+
+
+def stored_linked(conn: sqlite3.Connection, ids) -> set[int]:
+    """전산에 묻지 않고 저장본만으로 — 같은 회차에 이미 새로 받았을 때 쓴다."""
+    return _stored_linked(conn, ids)
 
 
 def linked_among(conn: sqlite3.Connection, ids, fetch=None) -> set[int]:
-    """ids 가운데 전산과 연결된 업체 번호. 지우기 직전에 부른다."""
-    global _last_recheck
-    fetch = fetch or _default_fetch
-    if _is_stale(sync_info(conn)):
-        _fetch_and_save(conn, fetch)
-    hit = _stored_linked(conn, ids)
-    if hit:
-        # 방금 전산에서 연결을 끊었을 수 있다 — 한 번 더 물어 최신으로(1분에 한 번까지)
-        with _recheck_lock:
-            due = time.time() - _last_recheck >= RECHECK_MIN_SEC
-            if due:
-                _last_recheck = time.time()
-        if due and _fetch_and_save(conn, fetch):
-            hit = _stored_linked(conn, ids)
-    return hit
+    """사람이 지울 때 — 연결된 번호들. 근거가 전혀 없으면(한 번도 못 받았고 지금도 실패) 막지 않는다(종전처럼)."""
+    return link_status(conn, ids, fetch)[0]
 
 
 BLOCK_MESSAGE = ("전산과 연결된 업체라 지울 수 없어요. 지우면 전산 광고주 화면의 보고서가 사라지고 연결이 끊겨요. "

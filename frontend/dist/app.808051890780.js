@@ -21973,7 +21973,7 @@ window.ClientDeleteDialog = function ClientDeleteDialog({
         color: '#334155',
         fontSize: 14
       }
-    }, "아래 기록이 함께 지워지고, 되돌릴 수 없어요."), /*#__PURE__*/React.createElement("div", {
+    }, "아래 기록이 함께 지워지고, 되돌릴 수 없어요.", d.competitors ? ' 붙인 경쟁사의 기록도 함께 세었어요.' : ''), /*#__PURE__*/React.createElement("div", {
       key: "c",
       style: {
         display: 'grid',

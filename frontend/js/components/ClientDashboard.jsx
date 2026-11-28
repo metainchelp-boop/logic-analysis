@@ -879,7 +879,7 @@ window.ClientDeleteDialog = function ClientDeleteDialog({ state, label, onCancel
         var cnt = [].concat(row('보고서', d.reports + '건'), row('키워드 분석', d.analyses + '건'), row('순위 기록', d.rank_days + '일'));
         if (d.competitors) cnt = cnt.concat(row('붙인 경쟁사', d.competitors + '곳'));
         body = [<h3 key="t" style={{ margin: 0, fontSize: 18 }}>'{name}' {label}을(를) 삭제할까요?</h3>,
-                <p key="p" style={{ margin: 0, color: '#334155', fontSize: 14 }}>아래 기록이 함께 지워지고, 되돌릴 수 없어요.</p>,
+                <p key="p" style={{ margin: 0, color: '#334155', fontSize: 14 }}>아래 기록이 함께 지워지고, 되돌릴 수 없어요.{d.competitors ? ' 붙인 경쟁사의 기록도 함께 세었어요.' : ''}</p>,
                 <div key="c" style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '4px 16px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px', fontSize: 14 }}>{cnt}</div>,
                 <div key="a" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
                     <button type="button" ref={firstBtn} style={btn()} onClick={onCancel} disabled={state.deleting}>취소</button>
