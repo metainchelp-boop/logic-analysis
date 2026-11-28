@@ -2904,3 +2904,42 @@ jobs:
                     c = sb._resolve_upjong_candidates(lb, limit=1)
                     print(f"    {lb} → {(c[0]['name'].split('>')[-1].strip()) if c else '없음'}")
             PYH
+            echo
+            echo "== [H2] 분류표 말고 상권 통계 쪽도 막혔나 (분류표는 테스트 사본으로 이 프로세스 안에서만 대신 · 캐시 쓰기 0 · 상권 기록 0 · 지역 미출력) =="
+            docker exec -i logic-analysis python3 - <<'PYH2' || echo "  ⚠️ [H2] 실행 실패 — 못 쟀다"
+            import os, sys, time, requests
+            sys.path.insert(0, "/app")
+            import sbiz365 as sb
+            H = sb._HEADERS
+            for path in ("/", "/gis/api/getHierarchyTpbizCode"):
+                t0 = time.time()
+                try:
+                    r = requests.get(sb._BASE + path, params=({"certKey": sb._env_keys()["simple"]} if "gis" in path else None), headers=H, timeout=20)
+                    print(f"  GET {path:<34} HTTP {r.status_code} · {r.headers.get('content-type','')[:24]} · {len(r.content)}B · {time.time()-t0:.1f}초")
+                except Exception as e:
+                    print(f"  GET {path:<34} 예외 {type(e).__name__} · {time.time()-t0:.1f}초")
+            # 분류표는 저장소 테스트 사본(운영 분류표를 11/22 에 옮겨 둔 것 · 공개 업종 이름)으로 대신한다 — 이 프로세스 안에서만
+            pairs = []
+            for p in ("/app/tests/fixtures/sbiz_upjong_tree.tsv", "/app/backend/tests/fixtures/sbiz_upjong_tree.tsv"):
+                if os.path.exists(p):
+                    pairs = [tuple(l.rstrip("\n").split("\t", 1)) for l in open(p, encoding="utf-8") if "\t" in l]
+                    break
+            print(f"  테스트 사본 분류표: {len(pairs)}개" + ("" if pairs else " — 컨테이너에 사본이 없다(tests 미포함). 대신 코드 하나만 쓴다"))
+            if not pairs:
+                pairs = [("I21201", "음식 > 비알코올 > 카페"), ("I21001", "음식 > 제과 > 빵/도넛")]
+            sb._upjong_pairs = lambda: pairs
+            sb._cache_put = lambda *a, **k: None          # 캐시에 쓰지 않는다
+            sb._cache_get = lambda *a, **k: None          # 캐시에서 읽지도 않는다(지금 API 상태를 본다)
+            for i, (region, label) in enumerate((("서울 마포구 서교동", "카페·디저트"), ("서울 강남구 역삼동", "베이커리·제과"))):
+                why = {}
+                t0 = time.time()
+                try:
+                    blk = sb._get_place_sbiz_impl(region, label, reason=why)
+                except Exception as e:
+                    blk, why = None, {"code": f"예외 {type(e).__name__}"}
+                dt = time.time() - t0
+                if blk:
+                    print(f"  표본 {'AB'[i]} {label}: ✅ 상권 블록 옴 · 기준 {blk.get('industryNm')} · 범위 {blk.get('scope') or 'dong'} · {dt:.1f}초")
+                else:
+                    print(f"  표본 {'AB'[i]} {label}: ❌ 사유 {why.get('code')} · {dt:.1f}초")
+            PYH2
