@@ -2970,3 +2970,33 @@ jobs:
                 else:
                     print(f"  표본 {'AB'[i]} {label}: 사유 {why.get('code')} · {time.time()-t0:.1f}초")
             PYI
+            echo
+            echo "== [J] 로그인 기록 접속 주소 — nginx 가 실제 주소를 넘기나 · 기록된 주소 종류 (읽기 전용 · IP 원문 미출력) =="
+            NG=$(nginx -T 2>/dev/null || docker run --rm --network host nginx:alpine true 2>/dev/null)
+            if [ -z "$NG" ]; then echo "  nginx -T 못 읽음"; fi
+            printf '%s\n' "$NG" | awk '/server_name[^;]*logic\.metainc\.co\.kr/{f=1} f&&/^}/{f=0} f' | grep -E "^\s*(server_name|location|proxy_pass|include|proxy_set_header +(X-Real-IP|X-Forwarded-For|X-Forwarded-Proto|Host))" | sed -E 's/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/<IP>/g' | head -30
+            echo "  -- proxy_params 안의 주소 헤더 --"
+            printf '%s\n' "$NG" | awk '/configuration file .*proxy_params/{f=1;next} /configuration file/{f=0} f' | grep -E "X-Real-IP|X-Forwarded-For" | head -5
+            docker exec -i logic-analysis python3 - <<'PYJ' || echo "  ⚠️ [J] 실행 실패"
+            import os, sqlite3, ipaddress
+            DB = os.environ.get("PROBE_DB", "/app/data/logic_data.db")
+            con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=15)
+            kinds = {}
+            distinct = set()
+            n = 0
+            for (ip,) in con.execute("SELECT ip_address FROM login_logs WHERE login_at >= '2026-10-01'"):
+                n += 1
+                raw = str(ip or "")
+                v = raw[4:] if raw.startswith("SSO:") else raw
+                distinct.add(v)
+                try:
+                    a = ipaddress.ip_address(v)
+                    k = "loopback" if a.is_loopback else ("private" if a.is_private else "public")
+                except Exception:
+                    k = "empty" if not v else "unparsable"
+                kinds[k] = kinds.get(k, 0) + 1
+            print(f"  10/1 이후 로그인 기록 {n}건 · 서로 다른 주소 {len(distinct)}개 · 종류별 {kinds}")
+            PYJ
+            echo "  -- 컨테이너가 보는 상대 주소 종류(도커 게이트웨이) --"
+            docker network inspect bridge -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null | sed -E 's/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/<게이트웨이 있음>/'
+            docker inspect -f '{{.HostConfig.NetworkMode}} · 포트 {{json .HostConfig.PortBindings}}' logic-analysis 2>/dev/null | sed -E 's/"HostIp":"[0-9.]*"/"HostIp":"<IP>"/g'
