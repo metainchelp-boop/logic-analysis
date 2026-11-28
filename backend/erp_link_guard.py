@@ -55,6 +55,7 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
 
 
 _ID_TEXT = re.compile(r"[0-9]+")
+_ID_MAX = 2 ** 63 - 1          # SQLite INTEGER 가 담을 수 있는 가장 큰 수
 
 
 def _parse_id(v):
@@ -63,10 +64,14 @@ def _parse_id(v):
     ⚠️ 소수(3.5 → 3 으로 잘리던 것 · 교차검증 반영) · 참/거짓 · 공백·부호·전각 숫자가 섞인 글자는 받지 않는다."""
     if isinstance(v, bool):
         return None
-    if isinstance(v, int):
-        return v if v >= 0 else None
-    if isinstance(v, str) and _ID_TEXT.fullmatch(v):
-        return int(v)
+    if isinstance(v, str):
+        # 길이를 먼저 본다 — 아주 긴 숫자 글자는 int() 가 예외를 내고, DB(SQLite 정수 8바이트)에 못 담는 수는
+        # 삭제 때 500 이 났다(교차검증 반영)
+        if len(v) > 19 or not _ID_TEXT.fullmatch(v):
+            return None
+        v = int(v)
+    if isinstance(v, int) and 0 <= v <= _ID_MAX:
+        return v
     return None
 
 
@@ -139,7 +144,7 @@ def _plan(c: sqlite3.Connection, fresh: set[int], started_at: float, now_ts: flo
         없는 늦은 응답이 보류를 비워 다음 응답이 20시간 전에 지웠다).
           · 이 응답이 해제할 자격이 없는 보류 번호(후보가 아님) → 보류와 시계를 그대로 둔다
           · 다시 보인 번호 → 보류는 그대로, 시계만 새로 시작(그 응답이 언제 읽었는지 모르니 그 뒤로 다시 20시간)
-          · 해제 자격 있는 응답에 빠졌고 시계가 20시간을 넘김 → 해제
+          · 해제 자격 있는 응답에 빠졌고, 그 응답이 시계로부터 20시간이 지난 뒤에 **받기 시작한** 것 → 해제
       - 보류 밖의 해제가 빈 목록이거나 저장본(20곳 이상)의 20% 를 넘으면 그 번호들도 보류에 더한다(각자 시계 시작)."""
     old, pending = {}, {}
     if _has_tables(c):
@@ -152,7 +157,9 @@ def _plan(c: sqlite3.Connection, fresh: set[int], started_at: float, now_ts: flo
             pending[i] = now_ts                                     # 다시 보임 → 시계를 새로 시작(보류는 유지)
     cand = {i for i, seen in old.items() if i not in fresh and seen < started_at}
     in_hold = cand & set(pending)
-    confirmed = {i for i in in_hold if now_ts - pending[i] >= CONFIRM_HOURS * 3600}
+    # ⚠️ 20시간은 이 응답이 **받기 시작한 시각**으로 잰다 — 반영(도착) 시각으로 재면 20시간 직전에 전산을 읽은 응답이
+    #    20시간 뒤에 도착해 해제했다(교차검증 재현). 20시간이 지난 뒤 시작한 응답만 전산을 그 뒤에 읽었다고 말할 수 있다.
+    confirmed = {i for i in in_hold if started_at - pending[i] >= CONFIRM_HOURS * 3600}
     held = in_hold - confirmed
     free = cand - set(pending)
     reason = None

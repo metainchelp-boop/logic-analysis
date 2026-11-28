@@ -323,6 +323,22 @@ c = conn()
 st, known = g.link_status(c, [8])
 ok(known is False and st == {8}, "전산 응답에 목록 칸(items)이 없으면(total 0) 「연결 0곳」이 아니라 확인 못 함(교차검증 재현)")
 c.close()
+for _big in ("9223372036854775808", 2 ** 63, "1" * 5000):
+    ros.fetch_client_managers_payload = lambda base, key, timeout=8, _b=_big: ([{"logic_client_id": _b}], 1)
+    c = conn()
+    try:
+        st, known = g.link_status(c, [8])
+    except Exception as _e:          # 예외 = 운영에서는 500
+        st, known = type(_e).__name__, "예외"
+    ok(known is False and st == {8}, f"DB 에 못 담는 번호({str(_big)[:12]}…)가 오면 확인 못 함 — 삭제 500 이 아니라 409(교차검증 재현): {known}")
+    c.close()
+ok(g.complete([{"logic_client_id": "9223372036854775807"}], 1) and g._parse_id(2 ** 63 - 1) == 2 ** 63 - 1,
+   "DB 에 담기는 가장 큰 번호까지는 받는다")
+try:
+    _r_long = g.complete([{"logic_client_id": "1" * 5000}], 1)
+except Exception:
+    _r_long = "예외"
+ok(_r_long is False, f"아주 긴 숫자 글자는 예외 없이 온전하지 않음으로 본다(정기 정렬이 멈추지 않게): {_r_long}")
 ok(not g.complete(None, 0) and not g.complete([{"logic_client_id": "x"}], 1) and not g.complete([{}], 1) and g.complete([], 0),
    "목록이 아니거나 번호를 못 읽는 줄이 있으면 온전하지 않다")
 
@@ -695,6 +711,30 @@ g.save_linked_set(c, set(range(7505, 7520)))
 ok(g.stored_linked(c, range(7500, 7505)) == set() and pending_ids(c) == set(), "보인 뒤로 20시간 넘게 계속 빠지면 해제")
 c.close()
 
+
+# 20시간 경계 — 경계 직전에 시작해 경계 뒤에 도착한 응답은 해제하지 못한다(교차검증 6차 재현)
+import types as _types0  # noqa: E402
+_rt0 = g.time
+_clk = [3_000_000.0]
+g.time = _types0.SimpleNamespace(time=lambda: _clk[0])
+reset_guard()
+c = conn()
+g.save_linked_set(c, set(range(7600, 7620)))
+_clk[0] += 1
+g.save_linked_set(c, set(range(7601, 7620)) - {7602, 7603, 7604, 7605} | {7699})     # 5/20 → 보류
+hold_t = _clk[0]
+ok(pending_ids(c) == {7600, 7602, 7603, 7604, 7605}, "경계 시험 준비 — 5개 보류")
+early = hold_t + 20 * 3600 - 1
+_clk[0] = hold_t + 20 * 3600 + 1
+g.save_linked_set(c, set(range(7606, 7620)) | {7601, 7699}, started_at=early)
+ok(g.stored_linked(c, [7600]) == {7600} and 7600 in pending_ids(c),
+   "20시간 1초 전에 시작한 응답은 20시간 뒤에 도착해도 해제하지 못한다(반영 시각이 아니라 받기 시작 시각)")
+_clk[0] += 1
+g.save_linked_set(c, set(range(7606, 7620)) | {7601, 7699})
+ok(g.stored_linked(c, [7600, 7602]) == set() and pending_ids(c) == set(), "20시간이 지난 뒤 시작한 응답은 해제한다")
+c.close()
+g.time = _rt0
+
 # 무작위 엇갈림 — 요청 여러 개가 겹쳐 시작·전산 읽기·반영 순서가 뒤섞여도 규칙이 깨지지 않는다(가짜 시계)
 import random as _rnd   # noqa: E402
 import types as _types  # noqa: E402
@@ -702,7 +742,7 @@ _real_time = g.time
 HOUR = 3600.0
 viol = []
 runs = 0
-n_held = n_confirmed = n_stale = 0
+n_held = n_confirmed = n_stale = n_straddle = n_bad = 0
 for seed in range(60):
     rnd = _rnd.Random(seed)
     reset_guard()
@@ -739,13 +779,32 @@ for seed in range(60):
             seen = set()                                        # 전산 오류 — 빈 목록
         elif k < 0.30:
             seen = set(rnd.sample(sorted(seen), max(0, int(len(seen) * rnd.uniform(0.4, 0.85)))))   # 일부만 옴(대량 누락)
-        reqs.append((e0, s0, seen))
+        # 원본 응답 모양 — 번호는 숫자 글자 또는 정수, 가끔 계약 밖 값(소수·공백·너무 큰 수)이나 개수 불일치
+        items = [{"logic_client_id": (str(i) if rnd.random() < 0.8 else i)} for i in sorted(seen)]
+        total = len(items)
+        if rnd.random() < 0.06:
+            items.insert(rnd.randint(0, len(items)), {"logic_client_id": rnd.choice([3.5, " 9001", "9223372036854775808", 2 ** 63, "x", None])})
+            total = len(items)
+        elif rnd.random() < 0.04:
+            total = len(items) + 1
+        reqs.append((e0, s0, seen, items, total))
     reqs.sort(key=lambda x: x[0])
     last_present, hold_start = {}, {}
-    for e0, s0, seen in reqs:
+    for e0, s0, seen, items, total in reqs:
         clock[0] = e0
         before = g._stored_linked(c, U)
         pend_before = pending_ids(c)
+        if not g.complete(items, total):
+            n_bad += 1                      # 온전하지 않은 응답 — 지우는 쪽은 「확인 못 함」, 저장본은 그대로
+            continue
+        if g.ids_from_items(items) != seen:
+            viol.append((seed, "온전한 응답에서 읽은 번호가 보낸 번호와 다름"))
+        for i in pend_before:
+            clk_i = max(hold_start.get(i, -1), last_present.get(i, -1))
+            if s0 - clk_i < 20 * HOUR <= e0 - clk_i:
+                n_straddle += 1
+        pl = g._plan(c, seen, s0, e0)
+        predicted = (set(pl["old"]) | seen) - pl["remove"]
         res = g.apply_response(c, seen, s0)
         runs += 1
         n_held += bool(res.get("held"))
@@ -753,14 +812,16 @@ for seed in range(60):
         n_stale += any(last_present.get(i, -1) >= s0 for i in before)
         after = g._stored_linked(c, U)
         pend_after = pending_ids(c)
+        if after != predicted:
+            viol.append((seed, "미리보기(같은 규칙 계산)와 실제 반영 결과가 다름"))
         removed = before - after
         if not seen <= after:
             viol.append((seed, "응답에 보인 연결이 저장되지 않음"))
         for i in removed:
             if last_present.get(i, -1) >= s0:
                 viol.append((seed, f"기록 뒤에 시작하지 않은 응답이 해제 {i}"))
-            if i in hold_start and e0 - max(hold_start[i], last_present.get(i, -1)) < 20 * HOUR - 1e-6:
-                viol.append((seed, f"보류된 번호를 20시간 전에 해제 {i}"))
+            if i in hold_start and s0 - max(hold_start[i], last_present.get(i, -1)) < 20 * HOUR - 1e-6:
+                viol.append((seed, f"보류 시계 20시간 전에 시작한 응답이 해제 {i}"))
         if (pend_before & after) - pend_after:
             viol.append((seed, f"지우지 않은 번호의 보류가 풀림 {sorted((pend_before & after) - pend_after)[:3]}"))
         unheld = removed - pend_before
@@ -776,10 +837,11 @@ for seed in range(60):
             hold_start.setdefault(i, e0)
     c.close()
 g.time = _real_time
-ok(n_held >= 100 and n_confirmed >= 10 and n_stale >= 100,
-   f"무작위 시험이 보류·20시간 뒤 해제·늦게 온 응답을 충분히 거쳤다(보류 {n_held} · 20시간 뒤 해제 {n_confirmed} · 늦은 응답 {n_stale})")
-print(f"  무작위 엇갈림: 반영 {runs}회 · 보류 {n_held} · 20시간 뒤 해제 {n_confirmed} · 늦은 응답 {n_stale}")
-ok(not viol, f"무작위 엇갈림 {runs}회 반영 — 규칙 위반 없음(기록 뒤 시작한 응답만 해제 · 보류는 지울 때만 풀림 · 보류 20시간 · 빈 목록·대량 해제 보류): {viol[:5]}")
+ok(n_held >= 100 and n_confirmed >= 10 and n_stale >= 100 and n_straddle >= 20 and n_bad >= 100,
+   f"무작위 시험이 보류·20시간 뒤 해제·늦은 응답·20시간 경계 걸침·온전하지 않은 응답을 충분히 거쳤다"
+   f"(보류 {n_held} · 해제 {n_confirmed} · 늦은 {n_stale} · 경계 {n_straddle} · 불완전 {n_bad})")
+print(f"  무작위 엇갈림: 반영 {runs}회 · 보류 {n_held} · 20시간 뒤 해제 {n_confirmed} · 늦은 응답 {n_stale} · 경계 걸침 {n_straddle} · 불완전 {n_bad}")
+ok(not viol, f"무작위 엇갈림 {runs}회 반영 — 규칙 위반 없음(기록 뒤 시작한 응답만 해제 · 보류는 지울 때만 풀림 · 보류 뒤 20시간 지나 시작한 응답만 해제 · 빈 목록·대량 해제 보류 · 미리보기=반영 · 원본 번호 그대로): {viol[:5]}")
 
 src = open(os.path.join(HERE, "..", "..", "frontend", "js", "components", "ClientDashboard.jsx"), encoding="utf-8").read()
 ok("\\u2715" not in src and "deleteClient(c, e)" not in src, "업체 목록 줄의 ✕ 삭제 버튼이 없다")
