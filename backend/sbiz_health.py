@@ -184,15 +184,28 @@ def check_industry_map(logger=None):
 
     돌려주는 값: 분류에 이어지지 않는 업종 목록(없으면 []) · 분류표를 못 받았으면 None(「0개」와 다르다).
     어긋난 것이 있을 때만 경고 한 줄을 남긴다 — 그 업종은 상권 카드가 조용히 빠지므로 로그가 유일한 흔적이다.
+    분류표를 못 받았거나(None) 새로 못 받아 지난 저장본·내장 사본으로 판정했을 때도 경고 한 줄을 남긴다(2026-11-28).
     ⚠️ 예외를 밖으로 내지 않는다 — 점검이 다른 배치를 넘어뜨리면 안 된다.
     """
     try:
         from sbiz365 import unmapped_industry_labels
-        miss = unmapped_industry_labels()
+        # 판정에 쓴 분류표와 그 출처를 한 결과로 받는다 — 따로 읽으면 그 사이 다른 요청이 끼어 출처가 어긋난다
+        miss, st = unmapped_industry_labels(with_status=True)
     except Exception as e:
         if logger is not None:
             logger.warning(f"  🩺 업종 사전 점검 실행 실패(무시): {e}")
         return None
+    # ⚠️ 2026-11-28 — 분류표를 못 받았을 때 이 점검은 조용했다(None 이면 경고 없음). 그날 분류표 API 가 503 이라
+    #    업종 13종이 전부 안 이어졌는데 경고가 한 줄도 없었다. 「판정 못 함」도 알려야 할 일이다.
+    if logger is not None:
+        if miss is None:
+            logger.warning("  🩺 업종 사전 점검 — ⚠️ 업종 분류표를 받지 못해 판정하지 못했다"
+                           "(소상공인365 응답 없음 · 저장본·내장 사본도 없음 — 상권 카드가 전부 빠진다)")
+        elif st.get("source") in ("stale", "snapshot"):
+            where = (f"지난 저장본(받은 때 {st.get('fetched_at')})" if st.get("source") == "stale"
+                     else "내장 사본(2026-11-22)")
+            logger.warning(f"  🩺 업종 사전 점검 — ⚠️ 업종 분류표를 새로 받지 못해 {where}으로 판정했다"
+                           "(소상공인365 분류표 API 응답 확인 · 상권 카드는 그대로 나간다)")
     if miss and logger is not None:
         logger.warning(f"  🩺 업종 사전 점검 — ⚠️ 분류표에 이어지지 않는 업종 {len(miss)}개: {', '.join(miss)} "
                        f"(그 업종은 상권 카드가 빠진다 — sbiz365._UPJONG_SEARCH_TERMS 를 분류표에 맞출 것)")
