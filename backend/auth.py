@@ -14,6 +14,8 @@ from typing import Optional, Dict, Any, List
 from enum import Enum
 
 from fastapi import APIRouter, HTTPException, Request, Depends
+
+from client_ip import client_ip  # nginx 뒤 실제 접속 주소(2026-11-28)
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
@@ -544,10 +546,7 @@ def login(request: LoginRequest, request_obj: Request) -> LoginResponse:
     """
     try:
         # 무차별 대입 방지: (IP+username)당 5분 20회 초과 시 차단
-        try:
-            _ip = request_obj.client.host if (request_obj and request_obj.client) else ''
-        except Exception:
-            _ip = ''
+        _ip = client_ip(request_obj)
         if not _login_rate_ok(f"{_ip}|{request.username}"):
             logger.warning(f"로그인 시도 제한 초과: ip={_ip} user={request.username}")
             raise HTTPException(status_code=429, detail="로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.")
@@ -580,10 +579,7 @@ def login(request: LoginRequest, request_obj: Request) -> LoginResponse:
         )
 
         # 로그인 이력 저장
-        try:
-            ip = request_obj.client.host if hasattr(request_obj, 'client') and request_obj.client else ''
-        except Exception:
-            ip = ''
+        ip = client_ip(request_obj)
         try:
             log_conn = _get_db_connection()
             log_conn.execute(
@@ -709,10 +705,7 @@ def sso_login(request: SSORequest, request_obj: Request) -> LoginResponse:
             is_active=user["is_active"],
             created_at=user["created_at"],
         )
-        try:
-            ip = request_obj.client.host if hasattr(request_obj, 'client') and request_obj.client else ''
-        except Exception:
-            ip = ''
+        ip = client_ip(request_obj)
         try:
             log_conn = _get_db_connection()
             log_conn.execute(

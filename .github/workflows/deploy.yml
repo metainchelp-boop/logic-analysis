@@ -282,6 +282,11 @@ jobs:
       - name: 회귀 — 소상공인365 분류표·통계 API 장애 때 대비
         run: python backend/tests/test_sbiz_tree_fallback.py
 
+      # 2026-11-28 — nginx 뒤 도커라 로그인 기록이 전부 게이트웨이 주소 하나였다(섹션 소식판 ①→② 9/24 요청).
+      #    nginx 가 덮어쓴 X-Real-IP 를 상대가 사설·루프백일 때만 믿는지 · 로그인·공개 열람 제한 두 곳이 쓰는지 확인. 네트워크 0.
+      - name: 회귀 — 로그인 기록·공개 열람 제한의 실제 접속 주소
+        run: python backend/tests/test_client_ip.py
+
       - name: Proposal facts product and analysis isolation
         run: node frontend/tests/proposal-facts-scope.test.cjs
 
