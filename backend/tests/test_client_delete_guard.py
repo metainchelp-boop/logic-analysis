@@ -748,8 +748,19 @@ ok(exists(340) and exists(341) and exists(343) and not exists(342),
 r = req("GET", "/api/cd/340/competitors")
 ok(r.status_code == 200, f"부모의 경쟁사 목록은 계속 열린다(연결 경쟁사 비교 유지): {r.status_code}")
 who["u"] = ADMIN
-ok(req("DELETE", "/api/cd/342").status_code in (200, 404) and req("DELETE", "/api/cd/340").status_code == 409,
-   "사람이 지울 때도 같은 범위 — 부모는 409(붙은 연결 경쟁사), 연결 안 된 형제 하나는 막지 않는다")
+c = conn()
+c.execute("INSERT INTO clients (id, name, created_by, role, competitor_of) VALUES (344, '사람이 지울 연결 안 된 형제', 1, 'competitor', 340)")
+c.execute("INSERT INTO reports (client_id) VALUES (344)")
+c.commit()
+c.close()
+r344 = req("DELETE", "/api/cd/344")
+c = conn()
+_rep344 = c.execute("SELECT COUNT(*) FROM reports WHERE client_id = 344").fetchone()[0]
+c.close()
+ok(r344.status_code == 200 and not exists(344) and _rep344 == 0,
+   f"사람이 연결 안 된 형제 하나를 지우면 막지 않는다(행·보고서 정리 · 연결 형제가 있어도): {r344.status_code}")
+ok(req("DELETE", "/api/cd/340").status_code == 409 and req("DELETE", "/api/cd/341").status_code == 409 and exists(340) and exists(341),
+   "사람이 지울 때도 같은 범위 — 부모(붙은 연결 경쟁사)와 연결 경쟁사는 409")
 
 # ⑥ 화면
 
