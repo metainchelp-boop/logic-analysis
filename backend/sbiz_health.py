@@ -188,9 +188,9 @@ def check_industry_map(logger=None):
     ⚠️ 예외를 밖으로 내지 않는다 — 점검이 다른 배치를 넘어뜨리면 안 된다.
     """
     try:
-        from sbiz365 import unmapped_industry_labels, upjong_tree_status
-        miss = unmapped_industry_labels()
-        st = upjong_tree_status()
+        from sbiz365 import unmapped_industry_labels
+        # 판정에 쓴 분류표와 그 출처를 한 결과로 받는다 — 따로 읽으면 그 사이 다른 요청이 끼어 출처가 어긋난다
+        miss, st = unmapped_industry_labels(with_status=True)
     except Exception as e:
         if logger is not None:
             logger.warning(f"  🩺 업종 사전 점검 실행 실패(무시): {e}")

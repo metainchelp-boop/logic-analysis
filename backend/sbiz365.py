@@ -13,6 +13,7 @@ sbiz365.py — 소상공인365(bigdata.sbiz.or.kr) 상권 데이터 클라이언
 """
 import os
 import json
+import contextvars
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -65,21 +66,33 @@ def _env_keys() -> dict:
 # 2026-11-28 실측: 분류표·통계 API(/gis/…)가 503 을 돌려주는 동안 화면이 「업종 분류를 찾지 못했다 ·
 #    다른 업종으로 다시」·「집계 자료가 없다」라고 안내했다 — 기관 장애를 우리 판정처럼 말한 셈이다.
 _OUTAGE_STATUSES = (502, 503, 504)
-_last_outage_at = 0.0
+# ⚠️ 장애 신호는 **요청마다 · 통계 호출에만** 붙인다(2026-11-28 교차검증 재현).
+#    처음엔 모듈 전역 시각 하나로 셌더니, 동시에 돈 다른 분석의 503 이나 같은 분석의 분류표 받기 503 이
+#    섞여 「집계 없음」이 「장애」로 바뀌었다. 그래서 ① 방금 그 HTTP 호출이 장애였나(_CALL_OUTAGE)를
+#    호출한 스레드 안에서만 보고 ② 통계 호출(_fetch_avg)만 그 결과를 이 분석의 상태(_STATS_STATE)에 적는다.
+_CALL_OUTAGE = contextvars.ContextVar("sbiz365_call_outage", default=False)
+_STATS_STATE = contextvars.ContextVar("sbiz365_stats_state", default=None)
 
 
 def _mark_outage():
-    global _last_outage_at
-    _last_outage_at = time.monotonic()
+    """방금 그 HTTP 호출이 장애였다(502·503·504·연결 실패·시간 초과)."""
+    _CALL_OUTAGE.set(True)
 
 
-def _outage_since(t0: float) -> bool:
-    """t0(time.monotonic) 이후 소상공인365 장애 신호가 있었나."""
-    return _last_outage_at >= t0 > 0
+def _last_call_outage() -> bool:
+    return bool(_CALL_OUTAGE.get())
+
+
+def _note_stats_outage():
+    """이 분석(상권 블록 한 번 만들기)의 통계 호출이 장애를 만났다 — 분석 밖(점검·집계 스레드)에서는 아무 일도 안 한다."""
+    st = _STATS_STATE.get()
+    if isinstance(st, dict):
+        st["outage"] = st.get("outage", 0) + 1
 
 
 def _http_json(method: str, url: str, params=None, data=None):
     """비공식 JSON 호출. 실패는 어떤 형태든 None + warning 1줄."""
+    _CALL_OUTAGE.set(False)
     try:
         if str(method).upper() == "POST":
             resp = requests.post(url, params=params, data=data,
@@ -652,8 +665,16 @@ TREE_SNAPSHOT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "s
 TREE_SNAPSHOT_DATE = "2026-11-22"
 TREE_RETRY_AFTER = 600   # 분류표 받기에 실패하면 10분은 다시 부르지 않는다(분석마다 막힌 API 를 두드리지 않게)
 
-# 지금 쓰는 분류표가 어디서 왔나 — cache(30일 안 저장본) · live(방금 받음) · stale(30일 지난 저장본) · snapshot(내장 사본)
-_tree_state = {"source": None, "fetched_at": None, "failed_at": 0.0}
+# 분류표 받기 실패 시각(프로세스 안 공용 — 10분 쉬기용). ⚠️ 워커 프로세스마다 따로라 최악엔 워커 수만큼 부른다.
+_tree_state = {"failed_at": 0.0}
+# 이 흐름(스레드·요청)이 방금 쓴 분류표의 출처 — cache(30일 안 저장본) · live(방금 받음) · stale(30일 지난 저장본) · snapshot(내장 사본)
+# ⚠️ 출처를 모듈 공용 칸에 두면 동시에 돈 다른 요청이 덮어써, 05:00 점검이 판정에 쓴 분류표와 다른 출처를 읽는다
+#    (2026-11-28 교차검증 재현 — 점검은 내장 사본으로 판정했는데 다른 요청이 저장본을 읽어 경고 0줄).
+_TREE_USED = contextvars.ContextVar("sbiz365_tree_used", default=None)
+
+
+def _use_tree(source, fetched_at):
+    _TREE_USED.set({"source": source, "fetched_at": fetched_at})
 _tree_snapshot_pairs = None
 
 
@@ -731,36 +752,39 @@ def _upjong_pairs():
        분류표가 바뀌어 어긋나면 05:00 업종 사전 점검이 따로 알려 준다."""
     pairs, fetched = _tree_cache_read()
     if pairs and fetched and (datetime.now() - fetched).total_seconds() <= SBIZ_TREE_TTL:
-        _tree_state.update(source="cache", fetched_at=fetched)
+        _use_tree("cache", fetched)
         return pairs
     if time.time() - _tree_state["failed_at"] >= TREE_RETRY_AFTER:
         fresh = _fetch_upjong_tree()
         if fresh:
             _tree_cache_write(fresh)
-            _tree_state.update(source="live", fetched_at=datetime.now(), failed_at=0.0)
+            _tree_state["failed_at"] = 0.0
+            _use_tree("live", datetime.now())
             return fresh
         _tree_state["failed_at"] = time.time()
         failed_now = True
     else:
         failed_now = False
     if pairs:
-        _tree_state.update(source="stale", fetched_at=fetched)
-        out = pairs
+        source, out = "stale", pairs
+        _use_tree("stale", fetched)
     else:
-        snap = _tree_snapshot()
-        _tree_state.update(source=("snapshot" if snap else None), fetched_at=None)
-        out = snap
+        out = _tree_snapshot()
+        source = "snapshot" if out else None
+        _use_tree(source, None)
     if failed_now:
         where = {"stale": "지난 저장본으로 잇는다", "snapshot": "내장 사본으로 잇는다"}.get(
-            _tree_state["source"], "저장본·내장 사본도 없다 — 상권 카드가 빠진다")
+            source, "저장본·내장 사본도 없다 — 상권 카드가 빠진다")
         logger.warning(f"[sbiz365] 업종 분류표를 새로 받지 못했다 — {where}(10분 뒤 다시 받는다)")
     return out
 
 
 def upjong_tree_status() -> dict:
-    """마지막으로 쓴 분류표의 출처 — {"source": cache|live|stale|snapshot|None, "fetched_at": 'YYYY-MM-DD HH:MM'|None}."""
-    fa = _tree_state.get("fetched_at")
-    return {"source": _tree_state.get("source"),
+    """이 흐름이 마지막으로 쓴 분류표의 출처 — {"source": cache|live|stale|snapshot|None, "fetched_at": 'YYYY-MM-DD HH:MM'|None}.
+    다른 요청이 그 사이 분류표를 읽어도 바뀌지 않는다(흐름마다 따로)."""
+    used = _TREE_USED.get() or {}
+    fa = used.get("fetched_at")
+    return {"source": used.get("source"),
             "fetched_at": fa.strftime("%Y-%m-%d %H:%M") if isinstance(fa, datetime) else None}
 
 
@@ -807,7 +831,7 @@ _HINT_UPJONG = {
 }
 
 
-def _resolve_upjong_candidates(industry_label: str, limit: int = 3, hint: str = ""):
+def _resolve_upjong_candidates(industry_label: str, limit: int = 3, hint: str = "", pairs=None):
     """업종 라벨(+업체명·키워드 힌트) → 소분류 후보 목록(우선순위 순, 최대 limit개).
     ⚠️ 종전에는 후보 중 '코드가 가장 큰 것' 하나만 골랐는데, 그게 하필 '그 외 기타…' 잔여 버킷이라
     상권 매출이 항상 0으로 나왔다(2026-08-05 실측). 이제 잔여 버킷을 뒤로 미루고, 실제 값이
@@ -815,7 +839,8 @@ def _resolve_upjong_candidates(industry_label: str, limit: int = 3, hint: str = 
     label = (industry_label or "").strip()
     if not label and not hint:
         return []
-    pairs = _upjong_pairs()
+    if pairs is None:            # 부르는 쪽이 분류표 한 벌을 넘기면 그것으로만 판정한다(한 판정 안에서 출처가 섞이지 않게)
+        pairs = _upjong_pairs()
     if not pairs:
         return []
     hint_terms = list(_hint_terms(hint))   # 업체명·키워드에서 읽은 업종이 우선(아래 — 고른 업종의 큰 분류 안에서만)
@@ -855,12 +880,15 @@ def _resolve_upjong_candidates(industry_label: str, limit: int = 3, hint: str = 
     return [{"code": c, "name": n} for _, _, _, c, n in scored[:limit]]
 
 
-def unmapped_industry_labels(labels=None):
+def unmapped_industry_labels(labels=None, with_status=False):
     """업종 선택 목록 가운데 분류표에 이어지지 않는 것(업체명·키워드 힌트 없이 이름만으로). 분류표를 못 받으면 None.
-    분류표 이름이 바뀌어 사전이 어긋나면 그 업종은 상권 카드가 조용히 빠진다 — 매일 자가 점검이 이 목록을 로그에 남긴다."""
-    if not _upjong_pairs():
-        return None
-    return [lb for lb in (labels or PLACE_INDUSTRY_LABELS) if not _resolve_upjong_candidates(lb, limit=1)]
+    분류표 이름이 바뀌어 사전이 어긋나면 그 업종은 상권 카드가 조용히 빠진다 — 매일 자가 점검이 이 목록을 로그에 남긴다.
+    with_status=True 면 (목록, 그 판정에 쓴 분류표의 출처) — 분류표를 한 번만 읽어 13종 전부를 그 한 벌로 판정한다."""
+    pairs = _upjong_pairs()
+    status = upjong_tree_status()
+    miss = None if not pairs else [lb for lb in (labels or PLACE_INDUSTRY_LABELS)
+                                   if not _resolve_upjong_candidates(lb, limit=1, pairs=pairs)]
+    return (miss, status) if with_status else miss
 
 
 def _resolve_upjong(industry_label: str):
@@ -881,9 +909,12 @@ def _fetch_avg(admi_cd: str, upjong_cd: str, simple_loc: str):
       upjongTypeMap(업종명) · analyNo · amtStdYm/storeStdYm(기준연월) · baemin
     전 필드 optional — 실패 시 None."""
     key = _env_keys()["simple"]
+    _CALL_OUTAGE.set(False)
     resp = _http_json("GET", f"{_BASE}/gis/simpleAnls/getAvgAmtInfo.json",
                       params={"admiCd": admi_cd, "upjongCd": upjong_cd,
                               "simpleLoc": simple_loc, "certKey": key})
+    if resp is None and _last_call_outage():
+        _note_stats_outage()
     body = _pick(resp, ("saleAmt", "avgList", "analyNo"))
     if body is None:
         return None
@@ -1062,15 +1093,26 @@ def _why(reason, code: str):
         reason["code"] = code
 
 
-def _stats_reason(t0: float) -> str:
-    """상권 통계를 못 얻었을 때의 사유 — 이 호출 동안 기관 장애 신호가 있었으면 error(잠시 후 다시), 아니면 no-stats(집계 없음)."""
-    if _outage_since(t0):
+def _stats_reason() -> str:
+    """상권 통계를 못 얻었을 때의 사유 — 이 분석의 통계 호출이 장애를 만났으면 error(잠시 후 다시), 아니면 no-stats(집계 없음)."""
+    st = _STATS_STATE.get()
+    if isinstance(st, dict) and st.get("outage"):
         logger.warning("[sbiz365] 소상공인365 응답 장애(5xx·연결 실패)로 상권 생략 — 「집계 없음」이 아니다")
         return "error"
     return "no-stats"
 
 
 def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
+                         biz_name: str = "", reason: dict | None = None) -> dict | None:
+    """상권 블록 한 번 만들기 — 이 분석만의 통계 장애 상태를 세우고 본문을 부른다(요청끼리 섞이지 않게)."""
+    token = _STATS_STATE.set({"outage": 0})
+    try:
+        return _get_place_sbiz_core(region, industry_label, hint=hint, biz_name=biz_name, reason=reason)
+    finally:
+        _STATS_STATE.reset(token)
+
+
+def _get_place_sbiz_core(region: str, industry_label: str, hint: str = "",
                          biz_name: str = "", reason: dict | None = None) -> dict | None:
     """지역명×업종 라벨 → 상권 데이터 블록(제안서 sbiz).
     반환 스키마(전 필드 optional·없으면 null) — FE 5차 배선이 이 스키마에 고정:
@@ -1081,7 +1123,6 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
     shops(업소현황)·sns(SNS 분석)·theme(테마상권)·salesSeries(매출 추이)는
     실응답 검증 후 채울 자리 — 지금은 항상 null.
     SIMPLE 키 미설정·매칭 실패·API 파손 등 어떤 실패도 None(제안서 상권 블록 생략)."""
-    t0 = time.monotonic()   # 이 호출 동안 기관 장애 신호(5xx·연결 실패)가 있었나 가르는 기준 시각
     try:
         if not _env_keys()["simple"]:
             _why(reason, "no-key")
@@ -1099,10 +1140,11 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
         if not admi or not admi.get("admiCd"):
             _why(reason, "region-unresolved")
             return None
-        candidates = _resolve_upjong_candidates(label, limit=3, hint=hint)
+        tree = _upjong_pairs()
+        candidates = _resolve_upjong_candidates(label, limit=3, hint=hint, pairs=tree or [])
         if not candidates:
             # 분류표 자체가 없으면(받지도 못하고 저장본·내장 사본도 없음) 업종 탓이 아니다 — 기관 장애로 알린다
-            if not _upjong_pairs():
+            if not tree:
                 logger.warning("[sbiz365] 업종 분류표가 없어 상권 생략(소상공인365 응답 없음)")
                 _why(reason, "error")
             else:
@@ -1125,7 +1167,7 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
         #    (표기 확정에 최대 4콜 · 업종 후보에 최대 3콜 — 첫 표기가 맞으면 1콜로 끝난다)
         loc, avg, upjong = _pick_simple_loc(admi, region, candidates[0]["code"]), None, None
         if not loc:
-            _why(reason, _stats_reason(t0))
+            _why(reason, _stats_reason())
             return None
 
         # 후보 업종을 순서대로 시도하고, 점포당 매출이 실제로 잡히는 첫 후보를 채택한다
@@ -1149,7 +1191,7 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
         dong_no_stats = False
         if avg is None:
             if gu_only is None:
-                _why(reason, _stats_reason(t0))
+                _why(reason, _stats_reason())
                 return None
             upjong, avg = gu_only
             dong_no_stats = True   # 동은 맞혔다 — 그 동네에 그 업종 통계가 없을 뿐
@@ -1166,7 +1208,7 @@ def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
         is_gu = (admi.get("scope") == "gu") or dong_no_stats
         if is_gu and _num(avg.get("guAmt")) is None:
             logger.warning("[sbiz365] 시군구 후퇴인데 시군구 평균이 없다 → 상권 생략")
-            _why(reason, _stats_reason(t0))
+            _why(reason, _stats_reason())
             return None
 
         # 유동인구: topFive 에 우리 행정동이 있으면 dayAvg 확보(없으면 null — 가짜 값 금지)

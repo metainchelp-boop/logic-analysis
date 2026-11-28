@@ -83,10 +83,11 @@ def reset(snapshot=True):
     c.commit()
     c.close()
     sb._cache_table_ready = True
-    sb._tree_state.update(source=None, fetched_at=None, failed_at=0.0)
+    sb._tree_state["failed_at"] = 0.0
+    sb._TREE_USED.set(None)
     sb._tree_snapshot_pairs = None
     sb.TREE_SNAPSHOT_PATH = REAL_SNAPSHOT_PATH if snapshot else os.path.join(TMP, "없는-사본.tsv")
-    sb._last_outage_at = 0.0
+    sb._CALL_OUTAGE.set(False)
     sb._http_json = REAL_HTTP
 
 
@@ -205,6 +206,67 @@ ok(sb._get_place_sbiz_impl("가동", "카페·디저트", reason=why) is None an
    f"장애 신호 없이 응답이 없으면 종전대로 no-stats: {why}")
 
 
+# ⑤-2 장애 신호는 요청마다 · 통계 호출에만 (2026-11-28 교차검증 재현)
+import threading   # noqa: E402
+
+# 같은 분석 안에서 분류표 받기만 503 · 내장 사본 정상 · 통계는 200 빈 결과 → 첫 요청도 다음 요청도 no-stats
+reset()
+
+
+def tree503_stats_empty(method, url, params=None, data=None):
+    calls.append(url)
+    if "getHierarchyTpbizCode" in url:
+        sb._mark_outage()
+        return None
+    return {}
+
+
+sb._http_json = tree503_stats_empty
+w1, w2 = {}, {}
+sb._get_place_sbiz_impl("가동", "카페·디저트", reason=w1)
+sb._get_place_sbiz_impl("가동", "카페·디저트", reason=w2)
+ok(w1.get("code") == "no-stats" and w2.get("code") == "no-stats",
+   f"분류표 받기 503 은 통계 사유에 섞이지 않는다(첫 요청·다음 요청 모두 no-stats): {w1} {w2}")
+
+# 두 분석이 겹칠 때 — A 는 통계 200 빈 결과, B 는 통계 503. B 의 503 이 A 의 판정 전에 일어나도 A 는 no-stats
+reset()
+put(sb.TREE_CACHE_KEY, FIXTURE, days_ago=1)
+b_hit = threading.Event()
+lock = threading.Lock()
+
+
+def overlapped(method, url, params=None, data=None):
+    loc = (params or {}).get("simpleLoc", "")
+    if "B동" in loc:
+        sb._mark_outage()
+        b_hit.set()
+        return None
+    b_hit.wait(5)        # A 는 B 가 503 을 맞은 뒤에야 빈 결과를 받는다
+    return {}
+
+
+sb._http_json = overlapped
+sb._resolve_admi = lambda region, biz_name="": dict(ADMI, admiNm=region, simpleLoc=region)
+res = {}
+
+
+def run(name, region):
+    why = {}
+    sb._get_place_sbiz_impl(region, "카페·디저트", reason=why)
+    with lock:
+        res[name] = why.get("code")
+
+
+ta = threading.Thread(target=run, args=("A", "A동"))
+tb = threading.Thread(target=run, args=("B", "B동"))
+ta.start()
+tb.start()
+ta.join(10)
+tb.join(10)
+ok(res == {"A": "no-stats", "B": "error"}, f"겹친 두 분석의 장애 신호가 섞이지 않는다: {res}")
+sb._resolve_admi = lambda region, biz_name="": dict(ADMI)
+
+
 # 진짜 HTTP 함수가 장애 신호를 남기는지 — requests.get 만 가짜로
 class _Resp:
     def __init__(self, code):
@@ -230,9 +292,8 @@ try:
     for code, want in ((503, True), (502, True), (504, True), (500, False), (404, False)):
         reset()
         sb.requests.get = lambda *a, _c=code, **k: _Resp(_c)
-        t0 = __import__("time").monotonic()
         sb._http_json("GET", sb._BASE + "/gis/x", params={"certKey": os.environ["SBIZ365_KEY_SIMPLE"]})
-        ok(sb._outage_since(t0) is want, f"HTTP {code} → 장애 신호 {want}")
+        ok(sb._last_call_outage() is want, f"HTTP {code} → 장애 신호 {want}")
     for exc in (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout):
         reset()
 
@@ -240,14 +301,13 @@ try:
             raise _e("HTTPSConnectionPool: /gis/x?certKey=" + os.environ["SBIZ365_KEY_SIMPLE"])
 
         sb.requests.get = boom
-        t0 = __import__("time").monotonic()
         sb._http_json("GET", sb._BASE + "/gis/x", params={"certKey": os.environ["SBIZ365_KEY_SIMPLE"]})
-        ok(sb._outage_since(t0), f"{exc.__name__} → 장애 신호")
+        ok(sb._last_call_outage(), f"{exc.__name__} → 장애 신호")
     reset()
     sb.requests.get = lambda *a, **k: (_ for _ in ()).throw(ValueError("Expecting value"))
-    t0 = __import__("time").monotonic()
+    sb._mark_outage()
     sb._http_json("GET", sb._BASE + "/gis/x")
-    ok(not sb._outage_since(t0), "응답 해석 실패는 장애로 세지 않는다")
+    ok(not sb._last_call_outage(), "응답 해석 실패는 장애로 세지 않는다(앞선 호출의 신호도 이어받지 않는다)")
 finally:
     sb.requests.get = real_get
     sb.logger.removeHandler(cap)
@@ -284,6 +344,46 @@ sb._http_json = fake_http(None, outage=True)
 lg = _Log()
 ok(sbiz_health.check_industry_map(lg) is None and len(lg.lines) == 1 and "판정하지 못했다" in lg.lines[0],
    f"분류표가 아예 없으면 None + 경고 한 줄: {lg.lines}")
+
+
+# 판정에 쓴 분류표와 출처가 한 결과다 — A 점검이 내장 사본을 받은 바로 그 순간 B 요청이 새 저장본을 읽어도 A 경고는 남는다
+reset()
+sb._http_json = fake_http(None, outage=True)
+real_pairs0 = sb._upjong_pairs
+fired = []
+
+
+def pairs_then_b():
+    got = real_pairs0()              # A 는 내장 사본(받기 실패 · 저장본 없음)
+    if not fired:
+        fired.append(1)
+
+        def b():
+            put(sb.TREE_CACHE_KEY, FIXTURE, days_ago=0)
+            real_pairs0()            # B 는 30일 안 저장본(cache)을 읽는다 — A 가 출처를 읽기 전에
+
+        t = threading.Thread(target=b)
+        t.start()
+        t.join(5)
+    return got
+
+
+sb._upjong_pairs = pairs_then_b
+lg = _Log()
+miss = sbiz_health.check_industry_map(lg)
+sb._upjong_pairs = real_pairs0
+ok(fired and miss == [] and len(lg.lines) == 1 and "내장 사본" in lg.lines[0],
+   f"다른 요청이 끼어도 점검 경고는 판정에 쓴 분류표(내장 사본) 기준: {lg.lines}")
+reset()
+sb._http_json = fake_http(None, outage=True)
+miss, st = sb.unmapped_industry_labels(with_status=True)
+ok(miss == [] and st.get("source") == "snapshot", f"unmapped_industry_labels(with_status=True) = (목록, 판정에 쓴 출처): {st}")
+real_pairs = sb._upjong_pairs
+n_pairs = []
+sb._upjong_pairs = lambda: (n_pairs.append(1), real_pairs())[1]
+sb.unmapped_industry_labels()
+sb._upjong_pairs = real_pairs
+ok(len(n_pairs) == 1, f"업종 13종 판정은 분류표를 한 번만 읽어 그 한 벌로 한다: {len(n_pairs)}회")
 
 reset()
 print(f"sbiz_tree_fallback: {passed} passed, {failed} failed")
